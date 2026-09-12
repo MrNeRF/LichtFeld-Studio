@@ -504,9 +504,6 @@ EXPECTED_ADVANCED_IDS = (
     "growth_ratio_pow",
     "fill_pacing_iter",
     "far_seed_dose",
-    "ppisp_lr",
-    "ppisp_reg_weight",
-    "ppisp_warmup_steps",
 )
 
 
@@ -529,6 +526,7 @@ def _all_rows(lf):
 
 EXPECTED_RENDERED_PROP_IDS = (
     set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
+    | {"ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps"}
 ) - set(property_view.BESPOKE_OR_HIDDEN)
 
 
@@ -542,7 +540,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 85
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 84  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -559,6 +557,7 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
     for prop_id in EXPECTED_ADVANCED_IDS:
         assert properties[prop_id]["advanced"] is True
     assert set(property_view.BESPOKE_OR_HIDDEN) == {
+        "gut",
         "sh_degree",
         "lambda_dssim",
         "init_opacity",
@@ -826,6 +825,100 @@ def test_parse_clamp_and_invalid_commit_behavior():
     binding.update_draft("amount", "0.50")
     assert binding.cancel_edit("amount") is True
     assert buffers[binding.input_key("amount")] == "1.00"
+    # RmlUi blurs immediately after Escape, before deferred records are published.
+    binding.update_draft("amount", "0.50")
+    assert binding.commit("amount") is False
+    binding.finish_edit("amount")
+    assert params["amount"] == pytest.approx(1.0)
+    binding.begin_edit("amount")
+    binding.update_draft("amount", "0.75")
+    assert binding.commit("amount") is True
+    binding.finish_edit("amount")
+    assert params["amount"] == pytest.approx(0.75)
+
+
+def test_focused_numeric_sync_preserves_drafts_but_accepts_authoritative_changes():
+    params = {"amount": 0.25}
+    binding = property_view.SectionBinding("test", [_number_row()], params, {}, lambda _: None)
+    binding.begin_edit("amount")
+    for draft in ("", "0.", "0.50"):
+        binding.update_draft("amount", draft)
+        binding.sync_text_bufs(publish=False)
+        assert binding._records()[0]["text"] == draft
+    assert binding.commit("amount")
+    # Enter commits without ending focus; the next draft must survive refresh.
+    binding.update_draft("amount", "0.75")
+    binding.sync_text_bufs(publish=False)
+    assert binding._records()[0]["text"] == "0.75"
+    binding.cancel_edit("amount")
+    assert binding._records()[0]["text"] == "0.50"
+    binding.finish_edit("amount")
+    binding.begin_edit("amount")
+    binding.update_draft("amount", "0.90")
+    params["amount"] = 0.25
+    binding.sync_text_bufs(publish=False)
+    assert binding._records()[0]["text"] == "0.25"
+    binding.cancel_edit("amount")
+    assert binding._records()[0]["text"] == "0.25"
+
+
+@pytest.mark.parametrize("prop_id,section", [
+    ("means_lr", "optimization"), ("use_normal_loss", "normal"),
+    ("use_exposure_correction", "appearance"),
+])
+def test_search_ownership_and_advanced_ancestor(prop_id, section):
+    run = next(run for spec in property_view.SECTIONS for run in spec.runs if prop_id in run.prop_ids)
+    binding = property_view.SectionBinding(
+        run.id, [{**_number_row(), "id": prop_id}], {prop_id: 0.25}, {}, lambda _binding: None,
+        search_accessor=lambda: prop_id,
+    )
+    assert property_view.section_is_visible((binding,), section)
+    assert property_view.section_is_visible((binding,), "advanced_params") == (section not in {"camera", "appearance"})
+    assert not property_view.section_is_visible((binding,), "basic_params")
+
+
+@pytest.mark.parametrize("query", ["bilateral", "use_bilateral_grid"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_bilateral_search_keeps_toggle_and_advanced_ancestor_visible(lf, query, enabled):
+    section = next(spec for spec in property_view.SECTIONS if spec.id == "bilateral")
+    group_info = lf.ui.property_group_info("optimization")
+    defaults = lf.optimization_params()
+    params = {
+        prop_id: defaults.get(prop_id)
+        for run in section.runs for prop_id in run.prop_ids
+    }
+    params["use_bilateral_grid"] = enabled
+    bindings = [
+        property_view.SectionBinding(
+            run.id,
+            property_view.build_rows(group_info, run.prop_ids, params),
+            params,
+            {},
+            lambda _binding: None,
+            search_accessor=lambda: query,
+            visibility_condition_id=run.visibility_condition_id,
+            visibility_predicate=lambda condition: (
+                enabled if condition == "dep_bilateral" else False
+            ),
+        )
+        for run in section.runs
+    ]
+
+    records = [record for binding in bindings for record in binding._records()]
+    toggle = next(record for record in records if record["id"] == "use_bilateral_grid")
+    assert toggle["checked"] is enabled
+    if not enabled or query == "use_bilateral_grid":
+        assert [record["id"] for record in records] == ["use_bilateral_grid"]
+    assert property_view.section_is_visible(bindings, "bilateral")
+    assert property_view.section_is_visible(bindings, "advanced_params")
+
+
+def test_background_image_search_preserves_mode_selector():
+    binding = property_view.SectionBinding(
+        "background", [{**_number_row(), "id": "bg_mode"}], {"bg_mode": 0}, {}, lambda _binding: None,
+        search_accessor=lambda: "bg_image",
+    )
+    assert [row["id"] for row in binding._records()] == ["bg_mode"]
 
 
 class _RecordHandle:
@@ -973,6 +1066,33 @@ def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
 
     panel._on_toggle_section(None, None, ["losses"])
     assert panel._collapsed == {"losses"}
+
+
+@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "normal")])
+def test_search_opens_advanced_and_restores_collapsed_sections(monkeypatch, prop_id, section):
+    from lfs_plugins import training_panel
+
+    panel = object.__new__(training_panel.TrainingPanel)
+    panel._pv_search_query = prop_id
+    run = next(run for run in property_view.RUNS if prop_id in run.prop_ids)
+    panel._pv_bindings = (property_view.SectionBinding(
+        run.id, [{**_number_row(), "id": prop_id}], {prop_id: 0.25}, {}, lambda _binding: None,
+        search_accessor=lambda: panel._pv_search_query,
+    ),)
+    collapsed = {"advanced_params"}
+    if section in training_panel.SECTIONS:
+        collapsed.add(section)
+    panel._collapsed = collapsed.copy()
+    panel._get_section_elements = lambda name: (None, None, name)
+    expanded = {}
+    monkeypatch.setattr(training_panel.w, "sync_section_state",
+                        lambda content, visible, *_args: expanded.update({content: visible}))
+    panel._sync_section_states()
+    assert all(expanded[name] for name in collapsed)
+    assert panel._collapsed == collapsed
+    panel._pv_search_query = ""
+    panel._sync_section_states()
+    assert all(not expanded[name] for name in collapsed)
 
 
 def test_option_records_support_multiple_auto_placed_enums():

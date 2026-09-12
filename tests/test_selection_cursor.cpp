@@ -53,6 +53,26 @@ namespace {
         EXPECT_EQ(selectionOpForModifiers(bindings, ToolMode::SELECTION, MODIFIER_ALT), SelectionOp::Add);
     }
 
+    TEST(SelectionCursorStateTest, CurrentRingSuppressesFallbackWithoutPreviewEligibility) {
+        // Opaque identities only: this decision needs neither SDL initialization
+        // nor coordinates, a preview cache, or a compositor.
+        const int identities[3] = {};
+        const auto* ring = reinterpret_cast<const SDL_Cursor*>(&identities[0]);
+        const auto* replacement = reinterpret_cast<const SDL_Cursor*>(&identities[1]);
+        const auto* arrow = reinterpret_cast<const SDL_Cursor*>(&identities[2]);
+        using lfs::vis::gui::isSelectionRingCursorCurrent;
+
+        EXPECT_TRUE(isSelectionRingCursorCurrent(ring, ring, nullptr));
+        EXPECT_TRUE(isSelectionRingCursorCurrent(ring, replacement, ring));
+        EXPECT_TRUE(isSelectionRingCursorCurrent(ring, nullptr, ring));
+        EXPECT_TRUE(isSelectionRingCursorCurrent(replacement, replacement, ring));
+        // Prepared or previously selected cursors cannot hide the fallback.
+        EXPECT_FALSE(isSelectionRingCursorCurrent(arrow, replacement, ring));
+        EXPECT_FALSE(isSelectionRingCursorCurrent(arrow, nullptr, nullptr));
+        EXPECT_FALSE(isSelectionRingCursorCurrent(nullptr, ring, nullptr));
+        EXPECT_FALSE(isSelectionRingCursorCurrent(nullptr, nullptr, nullptr));
+    }
+
     TEST(SelectionCursorImageTest, BuildsCenteredAntiAliasedRingAndDot) {
         constexpr int radius = 24;
         const auto image = makeSelectionCursorImage(radius, {255, 32, 64, 204});

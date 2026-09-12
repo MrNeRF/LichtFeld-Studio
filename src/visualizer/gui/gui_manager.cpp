@@ -92,6 +92,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -3231,7 +3232,11 @@ namespace lfs::vis::gui {
         // collector drives. The math is byte-identical to its previous inline form (F7).
         void appendScreenWindowOverlay(VulkanViewportPassParams& params,
                                        const VulkanGuidePanelTarget& panel,
-                                       const RenderSettings& settings) {
+                                       const RenderSettings& settings,
+                                       const float scale_x,
+                                       const float scale_y,
+                                       const float offset_x,
+                                       const float offset_y) {
             if (!settings.depth_filter_enabled) {
                 return;
             }
@@ -3246,12 +3251,11 @@ namespace lfs::vis::gui {
             // containment boundary.
             const float W = static_cast<float>(std::max(panel.render_size.x, 1));
             const float H = static_cast<float>(std::max(panel.render_size.y, 1));
-            const float scale_x = settings.depth_filter_scale_x;
-            const float scale_y = settings.depth_filter_scale_y;
+
             const float half_w = 0.5f * scale_x * W;
             const float half_h = 0.5f * scale_y * H;
-            const float cx = 0.5f * W + settings.depth_filter_offset_x * (0.5f * W - half_w);
-            const float cy = 0.5f * H + settings.depth_filter_offset_y * (0.5f * H - half_h);
+            const float cx = 0.5f * W + offset_x * (0.5f * W - half_w);
+            const float cy = 0.5f * H + offset_y * (0.5f * H - half_h);
             const glm::vec2 min_screen =
                 renderToPanelScreen(panel, glm::vec2(cx - half_w, cy - half_h));
             const glm::vec2 max_screen =
@@ -3277,9 +3281,15 @@ namespace lfs::vis::gui {
                                          const SceneRenderState* scene_state,
                                          const SceneManager* scene_manager,
                                          const GizmoState& gizmo,
+                                         const float depth_window_scale_x,
+                                         const float depth_window_scale_y,
+                                         const float depth_window_offset_x,
+                                         const float depth_window_offset_y,
                                          const bool suppress_screen_window = false) {
             if (!suppress_screen_window) {
-                appendScreenWindowOverlay(params, panel, settings);
+                appendScreenWindowOverlay(params, panel, settings,
+                                          depth_window_scale_x, depth_window_scale_y,
+                                          depth_window_offset_x, depth_window_offset_y);
                 if (settings.depth_filter_enabled) {
                     const op::DepthWindowPanelMapping window_panel{
                         .panel = panel.panel,
@@ -3292,10 +3302,10 @@ namespace lfs::vis::gui {
                     };
                     const auto screen_rect = op::depthWindowScreenRect(
                         window_panel,
-                        settings.depth_filter_scale_x,
-                        settings.depth_filter_scale_y,
-                        settings.depth_filter_offset_x,
-                        settings.depth_filter_offset_y);
+                        depth_window_scale_x,
+                        depth_window_scale_y,
+                        depth_window_offset_x,
+                        depth_window_offset_y);
                     const auto& overlay_state = op::depthWindowOverlayState();
                     if (overlay_state.visible) {
                         const auto geometry = op::depthWindowHandleGeometry(screen_rect);
@@ -3509,6 +3519,7 @@ namespace lfs::vis::gui {
                                             const ViewportLayout& viewport_layout,
                                             const RenderSettings& settings,
                                             RenderingManager& rendering_manager,
+                                            const RenderingManager::DepthWindowOverlaySnapshot& depth_window_snapshot,
                                             SceneManager* scene_manager,
                                             const SceneRenderState* scene_state,
                                             const GizmoState& gizmo) {
@@ -3539,7 +3550,22 @@ namespace lfs::vis::gui {
 
                 // The depth window (rect + handles) draws on no panel while GT
                 // comparison mode is active — see depthWindowOverlaySuppressed.
+                const lfs::vis::DepthWindowState panel_depth_window =
+                    depth_window_snapshot.independent_dual_active
+                        ? depth_window_snapshot.panel_windows[splitViewPanelIndex(panel.panel)]
+                        : lfs::vis::DepthWindowState{
+                              .near_plane = -settings.depth_filter_max.z,
+                              .far_plane = -settings.depth_filter_min.z,
+                              .scale_x = settings.depth_filter_scale_x,
+                              .scale_y = settings.depth_filter_scale_y,
+                              .offset_x = settings.depth_filter_offset_x,
+                              .offset_y = settings.depth_filter_offset_y,
+                          };
                 appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo,
+                                            panel_depth_window.scale_x,
+                                            panel_depth_window.scale_y,
+                                            panel_depth_window.offset_x,
+                                            panel_depth_window.offset_y,
                                             op::depthWindowOverlaySuppressed(rendering_manager.isGTComparisonActive()));
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
@@ -3877,6 +3903,10 @@ namespace lfs::vis::gui {
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
         rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
+        rml_progress_overlay_ = std::make_unique<RmlProgressOverlay>(
+            &rmlui_manager_,
+            [this] { async_tasks_.dismissImport(); },
+            [this] { async_tasks_.cancelVideoExport(); });
         rml_toast_overlay_ = std::make_unique<RmlToastOverlay>(&rmlui_manager_);
         global_context_menu_ = std::make_unique<GlobalContextMenu>(&rmlui_manager_);
         lfs::python::set_global_context_menu(global_context_menu_.get());
@@ -4277,6 +4307,19 @@ namespace lfs::vis::gui {
             return std::nullopt;
         }
 
+        // Some Wayland compositors independently present the custom SDL cursor
+        // and the Vulkan selection-brush fallback. SDL may use XWayland inside a
+        // Wayland desktop, so consult the session markers as well as its active
+        // video driver. The fallback has identical selection semantics, so keep
+        // hardware brush cursors off in these sessions to avoid a duplicate ring.
+        const char* const video_driver = SDL_GetCurrentVideoDriver();
+        const char* const session_type = std::getenv("XDG_SESSION_TYPE");
+        if ((video_driver && std::strcmp(video_driver, "wayland") == 0) ||
+            (session_type && std::strcmp(session_type, "wayland") == 0) ||
+            std::getenv("WAYLAND_DISPLAY")) {
+            return std::nullopt;
+        }
+
         const auto* const selection_tool = viewer_->getSelectionTool();
         if (!selection_tool || !selection_tool->isEnabled() ||
             viewer_->getEditorContext().getActiveTool() != ToolType::Selection) {
@@ -4389,21 +4432,18 @@ namespace lfs::vis::gui {
         return selection_ring_cursor_cache_.parameters;
     }
 
-    bool GuiManager::selectionRingCursorActive(const float mouse_x, const float mouse_y) const {
-        const SDL_Cursor* const current_cursor = SDL_GetCursor();
-        const bool ring_is_current = current_cursor == selection_ring_cursor_ ||
-                                     current_cursor == selection_ring_cursor_pending_destroy_;
-        const bool ring_was_selected = last_selection_cursor_ == selection_ring_cursor_ ||
-                                       last_selection_cursor_ == selection_ring_cursor_pending_destroy_;
-        return selection_ring_cursor_ && (ring_is_current || ring_was_selected) &&
-               selectionRingCursorParameters(mouse_x, mouse_y).has_value();
+    bool GuiManager::isHardwareSelectionRingActive() const {
+        // Eligibility decides which cursor to install, not whether an installed
+        // ring still suppresses the software fallback (including during replacement).
+        return isSelectionRingCursorCurrent(SDL_GetCursor(), selection_ring_cursor_,
+                                            selection_ring_cursor_pending_destroy_);
     }
 
-    bool GuiManager::isHardwareSelectionRingActive() const {
-        if (!selection_ring_cursor_ || !viewer_ || !viewer_->getWindowManager())
-            return false;
-        const auto& input = viewer_->getWindowManager()->frameInput();
-        return selectionRingCursorParameters(input.mouse_x, input.mouse_y).has_value();
+    bool GuiManager::selectionCursorNeedsRender(const float mouse_x, const float mouse_y) const {
+        // A current ring suppresses overlays, but leaving its eligible region
+        // must still wake the GUI so it can install the appropriate cursor.
+        return !isHardwareSelectionRingActive() ||
+               !selectionRingCursorParameters(mouse_x, mouse_y).has_value();
     }
 
     void GuiManager::prepareSelectionRingCursor(const float mouse_x, const float mouse_y) {
@@ -5105,6 +5145,8 @@ namespace lfs::vis::gui {
 
         if (rml_modal_overlay_)
             rml_modal_overlay_->reloadResources();
+        if (rml_progress_overlay_)
+            rml_progress_overlay_->reloadResources();
         if (rml_toast_overlay_)
             rml_toast_overlay_->reloadResources();
         if (global_context_menu_)
@@ -5127,6 +5169,8 @@ namespace lfs::vis::gui {
         if (global_context_menu_ && global_context_menu_->isOpen())
             return true;
         if (rml_modal_overlay_ && rml_modal_overlay_->isOpen())
+            return true;
+        if (rml_progress_overlay_ && rml_progress_overlay_->isVisible())
             return true;
 
         return false;
@@ -5209,6 +5253,7 @@ namespace lfs::vis::gui {
         lfs::python::set_global_context_menu(nullptr);
 
         rml_modal_overlay_.reset();
+        rml_progress_overlay_.reset();
         rml_toast_overlay_.reset();
         global_context_menu_.reset();
         panels::ShutdownPythonConsoleRml();
@@ -5375,6 +5420,7 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
+            const auto depth_window_snapshot = rendering_manager->getDepthWindowOverlaySnapshot();
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
             params.background_color = settings.background_color;
@@ -5439,6 +5485,7 @@ namespace lfs::vis::gui {
                                                viewport_layout_,
                                                settings,
                                                *rendering_manager,
+                                               depth_window_snapshot,
                                                scene_manager,
                                                overlay_scene_state ? &*overlay_scene_state : nullptr,
                                                gizmo_state);
@@ -5691,10 +5738,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay
-        // queueing and just before the GPU command buffer is recorded. Global polling hits
-        // the OS directly, so the cursor ring tracks the hardware pointer without waiting
-        // for another event-pump tick.
+        // Use the same window-relative snapshot as cursor selection and hit tests.
+        // Wayland global coordinates are synthesized, not a late pointer sample.
         if (viewer_ && !ui_hidden_ && !guiFocusState().want_capture_mouse) {
             if (auto* const sel = viewer_->getSelectionTool(); sel && sel->isEnabled()) {
                 const SDL_Keymod suppress_mods = SDL_GetModState();
@@ -5704,22 +5749,14 @@ namespace lfs::vis::gui {
                 auto* const chord_rm = viewer_->getRenderingManager();
                 const bool chord_gt_active = chord_rm && chord_rm->isGTComparisonActive();
                 if (!(depth_window_chord && sel->isDepthFilterEnabled() && !chord_gt_active)) {
-                    SDL_Window* const window = viewer_->getWindow();
-                    int win_x = 0;
-                    int win_y = 0;
-                    if (window) {
-                        SDL_GetWindowPosition(window, &win_x, &win_y);
-                    }
-                    float gx = 0.0f;
-                    float gy = 0.0f;
-                    SDL_GetGlobalMouseState(&gx, &gy);
-                    const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
+                    const auto& input = viewer_->getWindowManager()->frameInput();
+                    const glm::vec2 mp{input.mouse_x, input.mouse_y};
                     if (isPositionInViewport(mp.x, mp.y)) {
                         auto* const rm = viewer_->getRenderingManager();
                         const auto mode = rm ? rm->getSelectionPreviewMode()
                                              : lfs::vis::SelectionPreviewMode::Centers;
                         const bool hardware_selection_ring =
-                            selectionRingCursorActive(mp.x, mp.y);
+                            isHardwareSelectionRingActive();
                         const auto& palette = lfs::vis::theme().palette;
                         const auto& base = (SDL_GetModState() & SDL_KMOD_CTRL) ? palette.error : palette.primary;
                         const glm::vec4 color{base.x * 0.85f, base.y * 0.85f, base.z * 0.85f, 0.85f};
@@ -6218,6 +6255,8 @@ namespace lfs::vis::gui {
                 global_context_menu_->preload();
             if (rml_modal_overlay_)
                 rml_modal_overlay_->preload();
+            if (rml_progress_overlay_)
+                rml_progress_overlay_->preload();
             warmupNativeFileDialogBackend();
             {
                 LOG_TIMER_THRESHOLD("gui_render.panel_setup.preferences_preload", 2.0);
@@ -6293,6 +6332,7 @@ namespace lfs::vis::gui {
 
         bool modal_overlay_open = false;
         bool modal_overlay_pending = false;
+        bool progress_overlay_visible = false;
         bool context_menu_open = false;
         bool startup_overlay_blocking = startup_overlay_.blocksUnderlayInput();
         bool block_underlay_input = startup_overlay_blocking;
@@ -6301,8 +6341,10 @@ namespace lfs::vis::gui {
             rmlui_manager_.beginFrameCursorTracking();
             modal_overlay_open = rml_modal_overlay_->isOpen();
             modal_overlay_pending = rml_modal_overlay_->hasPendingRequest();
+            progress_overlay_visible = rml_progress_overlay_ && rml_progress_overlay_->isVisible();
             context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
-            block_underlay_input = block_underlay_input || modal_overlay_open || modal_overlay_pending || context_menu_open;
+            block_underlay_input = block_underlay_input || modal_overlay_open || modal_overlay_pending ||
+                                   progress_overlay_visible || context_menu_open;
             if (block_underlay_input) {
                 auto& focus = guiFocusState();
                 focus.want_capture_mouse = true;
@@ -6461,6 +6503,9 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_input", 0.25);
             frame_input = buildPanelInputFromSDL(sdl_input);
             startup_overlay_input = frame_input;
+            if (modal_overlay_open || modal_overlay_pending || progress_overlay_visible ||
+                context_menu_open)
+                startup_overlay_input = maskInputForBlockedUi(std::move(startup_overlay_input));
             if (startup_overlay_blocking)
                 frame_input = maskInputForBlockedUi(std::move(frame_input));
             else if (menu_blocks_underlay_pointer)
@@ -6957,28 +7002,28 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_live_capture_ = false;
 
         // ── Left Dock ─────────────────────────────────────────────
+        // The body uses this width; the resize strip gets the private icon-bar
+        // width from PanelLayoutManager::leftDockResizeRect().
         constexpr float ICON_BAR_WIDTH = 40.0f;
         const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
         const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
         const float left_dock_h = show_main_panel_ && !ui_hidden_
                                       ? screen.work_size.y
                                       : screen.work_size.y;
-        const float left_dock_edge_grab_w =
-            std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
-                     8.0f * current_ui_scale_);
         const float left_dock_x = screen.work_pos.x + icon_bar_w;
-        const float left_dock_right_x = panel_layout_.isLeftDockVisible() ? left_dock_x + left_dock_panel_w : -1.0f;
         const bool pointer_over_left_dock =
             panel_layout_.isLeftDockVisible() &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                         glm::vec2{left_dock_x, screen.work_pos.y},
                         glm::vec2{left_dock_panel_w, left_dock_h});
+        // Use the same strip rectangle as the render-time hover and press hit tests,
+        // including its inclusive bottom edge.
         const bool pointer_over_left_dock_edge =
             panel_layout_.isLeftDockVisible() &&
-            panel_input.mouse_x >= left_dock_right_x - left_dock_edge_grab_w &&
-            panel_input.mouse_x <= left_dock_right_x + left_dock_edge_grab_w &&
-            panel_input.mouse_y >= screen.work_pos.y &&
-            panel_input.mouse_y < screen.work_pos.y + left_dock_h;
+            PanelLayoutManager::leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
+                                                   left_dock_h, current_ui_scale_,
+                                                   left_dock_panel_w)
+                .contains(panel_input.mouse_x, panel_input.mouse_y);
         const bool pointer_targets_left_dock =
             pointer_over_left_dock || pointer_over_left_dock_edge;
         if (pointer_targets_left_dock &&
@@ -7305,25 +7350,62 @@ namespace lfs::vis::gui {
             });
         };
         resolve_project_asset_drag();
-        PanelInputState viewport_overlay_input = panel_input;
-        if (has_floating_panels &&
-            reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
-            viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
-        }
+        // Other underlay consumers use masked copies. The overlay must retain
+        // the canonical stream so an already delivered DOWN can receive its UP.
+        const PanelInputState viewport_overlay_input = buildPanelInputFromSDL(sdl_input);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
-            if (!block_underlay_input)
-                rml_viewport_overlay_.processInput(viewport_overlay_input);
+            rml_viewport_overlay_.processInput(viewport_overlay_input, {
+                                                                           .startup = startup_overlay_blocking,
+                                                                           .progress = progress_overlay_visible,
+                                                                           .modal = modal_overlay_open,
+                                                                           .pending_modal = modal_overlay_pending,
+                                                                           .context_menu = context_menu_open,
+                                                                           .menu_pointer = menu_blocks_underlay_pointer,
+                                                                           .floating_panel = has_floating_panels &&
+                                                                                             reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
+                                                                       });
         }
-        if (rml_viewport_overlay_.wantsInput() && viewport_overlay_input.mouse_clicked[0]) {
+        // Apply overlayPressMayFocusPanel (rml_viewport_overlay.hpp) after processInput,
+        // so text blur and its commit handler run before focus moves.
+        // Match overlay entry i to this frame's i-th left DOWN, using that event's
+        // coordinates and GUI ownership together. The overlay spans the dock, and the
+        // latest cursor position or wantsInput alone cannot identify where a press landed.
+        // Process every left DOWN in SDL order. Refused presses (controls, GUI-owned
+        // or outside the viewport) leave focus unchanged; the last eligible press wins.
+        // With no eligible press, keep the existing focus.
+        // Explicit blockers or invalid bounds produce no classifications. External
+        // capture still classifies earlier viewport presses before blocking motion,
+        // allowing their text edits to commit before the corresponding focus changes.
+        const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
+        std::size_t overlay_press_index = 0;
+        for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
+            if (!overlay_event.down || overlay_event.button != 0)
+                continue;
+            if (overlay_press_index >= overlay_left_presses.size())
+                break;
+            const auto& overlay_press_class = overlay_left_presses[overlay_press_index++];
+            const auto* const overlay_press = &overlay_event;
+            const glm::vec2 overlay_press_point{overlay_press->x, overlay_press->y};
+            if (!overlayPressMayFocusPanel({
+                    .left_pressed = true,
+                    .overlay_wants_input = rml_viewport_overlay_.wantsInput(),
+                    .pressed_interactive_control = overlay_press_class.on_interactive_control,
+                    .press_blurred_text_input = overlay_press_class.blurred_text_input,
+                    .press_inside_viewport = pointInsideViewport(overlay_press_point,
+                                                                 viewport_layout_.pos,
+                                                                 viewport_layout_.size),
+                    .press_gui_owned = overlay_press->gui_owned,
+                })) {
+                continue;
+            }
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
                 rendering && rendering->isIndependentSplitViewActive()) {
                 if (const auto target_panel = rendering->resolveViewerPanel(
                         viewer_->getViewport(),
                         viewport_layout_.pos,
                         viewport_layout_.size,
-                        glm::vec2(viewport_overlay_input.mouse_x,
-                                  viewport_overlay_input.mouse_y))) {
+                        overlay_press_point)) {
                     if (auto* const input_controller = viewer_->getInputController()) {
                         input_controller->setFocusedSplitPanel(target_panel->panel);
                     } else {
@@ -7462,6 +7544,11 @@ namespace lfs::vis::gui {
             python::draw_python_modals(scene);
         }
 
+        if (rml_progress_overlay_) {
+            LOG_TIMER_THRESHOLD("gui_render.rml_progress_processInput", 0.25);
+            rml_progress_overlay_->processInput(
+                raw_panel_input, rml_modal_overlay_->isOpen() || rml_modal_overlay_->hasPendingRequest());
+        }
         if (rml_modal_overlay_->isOpen()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_modal_processInput", 0.25);
             rml_modal_overlay_->processInput(raw_panel_input);
@@ -7574,6 +7661,13 @@ namespace lfs::vis::gui {
         if (!vulkan_gui_)
             renderFloatingPanelDragCursor();
         if (overlay_renderer && needs_screen_overlay_frame) {
+            // Selection labels must observe the final cursor too, otherwise a
+            // label queued before installing a ring can persist on idle frames.
+            if (!ui_hidden_ && !isViewportExportLocked()) {
+                if (auto* const tool = viewer_->getSelectionTool(); tool && tool->isEnabled()) {
+                    tool->renderUI(ctx, nullptr);
+                }
+            }
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
             overlay_renderer->endFrame();
         }
@@ -7601,6 +7695,20 @@ namespace lfs::vis::gui {
                                            panel_input.screen_y,
                                            static_cast<float>(panel_input.screen_w),
                                            static_cast<float>(panel_input.screen_h));
+            }
+            if (rml_progress_overlay_ &&
+                !rml_modal_overlay_->isOpen() &&
+                !rml_modal_overlay_->hasPendingRequest() &&
+                rml_progress_overlay_->hasPendingRenderWork()) {
+                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.progress_overlay", 0.25);
+                rml_progress_overlay_->render(panel_input.screen_w,
+                                              panel_input.screen_h,
+                                              panel_input.screen_x,
+                                              panel_input.screen_y,
+                                              viewport_layout_.pos.x,
+                                              viewport_layout_.pos.y,
+                                              viewport_layout_.size.x,
+                                              viewport_layout_.size.y);
             }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
@@ -7798,7 +7906,8 @@ namespace lfs::vis::gui {
             } else if (vulkan_context) {
                 rmlui_manager_.clearVulkanQueue();
                 clearLineRendererCommands();
-                if (!vulkan_context->lastError().empty()) {
+                if (vulkan_context->rendererTerminalState() == RendererTerminalState::Running &&
+                    !vulkan_context->lastError().empty()) {
                     LOG_WARN("Vulkan GUI frame begin failed: {} (ui_hidden={}, fullscreen_pending={}, ui_pending={}, settling={}, resume_training_pending={})",
                              vulkan_context->lastError(),
                              ui_hidden_,
@@ -7839,10 +7948,6 @@ namespace lfs::vis::gui {
     void GuiManager::renderSelectionOverlays(const UIContext& ctx) {
         if (isViewportExportLocked()) {
             return;
-        }
-
-        if (auto* const tool = ctx.viewer->getSelectionTool(); tool && tool->isEnabled() && !ui_hidden_) {
-            tool->renderUI(ctx, nullptr);
         }
 
         // Node rectangle-drag outline. Uses the same ScreenOverlayRenderer path
@@ -7960,7 +8065,11 @@ namespace lfs::vis::gui {
             };
 
             const bool hardware_selection_ring = isHardwareSelectionRingActive();
-            if (rm && rm->isCursorPreviewActive() && !hardware_selection_ring) {
+            // The Centers brush fallback is emitted once by the late shape pass,
+            // after the final SDL cursor is chosen. Queuing it here can leave a
+            // software ring underneath a hardware ring installed later this frame.
+            if (rm && rm->getSelectionPreviewMode() != SelectionPreviewMode::Centers &&
+                rm->isCursorPreviewActive() && !hardware_selection_ring) {
                 const auto& t = theme();
                 float bx, by, br;
                 bool add_mode;
@@ -8315,6 +8424,22 @@ namespace lfs::vis::gui {
                y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
     }
 
+    GuiHitTestResult GuiManager::hitTestMouseButton(const double x, const double y) const {
+        const auto hit = hitTestPointer(x, y);
+        if (hit.blocks_pointer || hit.blocks_mouse_button)
+            return hit;
+
+        // The resize hover latch may lag a press in the same SDL batch as motion.
+        // Hit-test the shared strip geometry so its viewport-overlapping half is
+        // GUI-owned even before the next renderLeftDock().
+        if (panel_layout_.isPositionOverLeftDockResizeEdge(
+                static_cast<float>(x), static_cast<float>(y),
+                last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
+                last_ui_layout_work_size_.y))
+            return {.blocks_mouse_button = true};
+        return hit;
+    }
+
     GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {
         if (isCapturingInput() || isModalWindowOpen() || startup_overlay_.blocksUnderlayInput() ||
             (global_context_menu_ && global_context_menu_->isOpen())) {
@@ -8569,7 +8694,8 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isModalWindowOpen() const {
-        return rml_modal_overlay_->isOpen();
+        return rml_modal_overlay_->isOpen() ||
+               (rml_progress_overlay_ && rml_progress_overlay_->blocksUnderlayInput());
     }
 
     bool GuiManager::passiveMouseMoveNeedsRender(const float mouse_x, const float mouse_y) const {
@@ -8592,7 +8718,7 @@ namespace lfs::vis::gui {
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (auto* const sel = viewer_ ? viewer_->getSelectionTool() : nullptr; sel && sel->isEnabled()) {
-                return !selectionRingCursorActive(mouse_x, mouse_y);
+                return selectionCursorNeedsRender(mouse_x, mouse_y);
             }
         }
 

@@ -7,8 +7,11 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "rendering/depth_window_state.hpp"
 #include "rendering/dirty_flags.hpp"
+#include "rendering/rendering_types.hpp"
 #include <any>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -69,10 +72,12 @@ namespace lfs::vis::op {
     };
 
     struct SceneTopologyProof {
+        std::vector<lfs::core::Uuid> roots;
         std::vector<SceneTopologyNodeProof> nodes;
         lfs::core::Uuid training_model_uuid;
         bool consolidated = false;
         std::size_t consolidated_extent = 0;
+        bool scoped = false;
 
         friend bool operator==(
             const SceneTopologyProof&,
@@ -322,13 +327,23 @@ namespace lfs::vis::op {
     };
 
     struct DepthWindowSettingsState {
-        float scale_x = 1.0f;
-        float scale_y = 1.0f;
-        float offset_x = 0.0f;
-        float offset_y = 0.0f;
+        std::array<DepthWindowState, 2> panels{};
+        DepthWindowState projection{};
+        bool sync = false;
+        SplitViewPanelId panel = SplitViewPanelId::Left;
+        std::uint64_t mode_epoch = 0;
+        bool independent_dual_snapshot = false;
 
         friend bool operator==(const DepthWindowSettingsState&,
                                const DepthWindowSettingsState&) = default;
+    };
+
+    struct DepthWindowModeSnapshot {
+        std::array<DepthWindowState, 2> panels{};
+        bool sync = false;
+        DepthWindowState projection{};
+        std::uint64_t mode_epoch = 0;
+        bool independent_dual = false;
     };
 
     class LFS_VIS_API DepthWindowSettingsUndoEntry : public UndoEntry {
@@ -346,12 +361,35 @@ namespace lfs::vis::op {
         [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SELECTION; }
 
     private:
-        void apply(const DepthWindowSettingsState& state);
+        [[nodiscard]] bool isExpired() const;
+        bool apply(const DepthWindowSettingsState& state);
 
         RenderingManager& rendering_manager_;
         DepthWindowSettingsState before_;
         DepthWindowSettingsState after_;
         bool rebase_readout_ = false;
+    };
+
+    class LFS_VIS_API DepthWindowSyncUndoEntry : public UndoEntry {
+    public:
+        DepthWindowSyncUndoEntry(RenderingManager& rendering_manager,
+                                 DepthWindowModeSnapshot before,
+                                 DepthWindowModeSnapshot after);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return "selection.depth_window_sync"; }
+        [[nodiscard]] UndoMetadata metadata() const override;
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+        [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SELECTION; }
+
+    private:
+        [[nodiscard]] bool isExpired() const;
+        bool apply(const DepthWindowModeSnapshot& snapshot);
+
+        RenderingManager& rendering_manager_;
+        DepthWindowModeSnapshot before_;
+        DepthWindowModeSnapshot after_;
     };
 
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
@@ -463,6 +501,11 @@ namespace lfs::vis::op {
         SceneGraphCaptureMode mode = SceneGraphCaptureMode::FULL;
         bool include_selected_nodes = true;
         bool include_scene_context = true;
+        bool preserve_node_ids = false;
+        bool scoped_topology = false;
+        // A missing allowlist preserves the legacy FULL capture behavior. An
+        // engaged allowlist captures payloads only for these node UUIDs.
+        std::optional<std::vector<lfs::core::Uuid>> payload_uuids;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -498,6 +541,7 @@ namespace lfs::vis::op {
         ~SceneGraphNodeSnapshot();
 
         lfs::core::Uuid uuid;
+        lfs::core::NodeId id = lfs::core::NULL_NODE;
         lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
@@ -509,11 +553,13 @@ namespace lfs::vis::op {
         bool payload_diverged = false;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
+        int order_index = -1;
         lfs::core::Device payload_device = lfs::core::Device::CUDA;
         lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
         std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;
+        std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
@@ -532,6 +578,9 @@ namespace lfs::vis::op {
 
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
+        bool preserve_node_ids = false;
+        bool complete_root_order = false;
+        bool scoped_topology = false;
         std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;

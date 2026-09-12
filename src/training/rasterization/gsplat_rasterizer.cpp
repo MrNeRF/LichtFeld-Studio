@@ -129,9 +129,10 @@ namespace lfs::training {
 
             const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
 
-            // Convert from lfs::core::CameraModelType (enum class) to global CameraModelType (plain enum) for CUDA kernels
-            const ::CameraModelType camera_model = static_cast<::CameraModelType>(
-                static_cast<int>(viewpoint_camera.camera_model_type()));
+            // Prepared undistortion already supplies pinhole intrinsics and undistorted images.
+            // Ignore the retained camera model and coefficients to avoid applying distortion twice.
+            const bool undistorted = viewpoint_camera.is_undistort_prepared();
+            const ::CameraModelType camera_model = undistorted ? CameraModelType::PINHOLE : static_cast<::CameraModelType>(static_cast<int>(viewpoint_camera.camera_model_type()));
 
             // Build K directly from intrinsics to avoid extra CUDA->CPU->CUDA roundtrips.
             const auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
@@ -301,40 +302,42 @@ namespace lfs::training {
                 gsplat_thread_caches.staging.copy_to(dest, host.ptr<float>(), copy_n, fwd_stream);
             };
 
-            switch (camera_model) {
-            case CameraModelType::THIN_PRISM_FISHEYE:
-                if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                    upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
+            if (!undistorted) {
+                switch (camera_model) {
+                case CameraModelType::THIN_PRISM_FISHEYE:
+                    if (radial_dist.is_valid() && radial_dist.numel() == 4) {
+                        upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
+                        upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
+                        thin_prism_cuda = gsplat_thread_caches.thin_prism;
+                    }
+                    break;
+                case CameraModelType::FISHEYE:
+                    if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
+                        upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
+                                    4, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    break;
+                case CameraModelType::PINHOLE: {
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
+                        upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
+                                    n_rad, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
+                        upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
+                                    2, gsplat_thread_caches.tangential);
+                        tangential_cuda = gsplat_thread_caches.tangential;
+                    }
+                    break;
                 }
-                if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                    upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
-                    thin_prism_cuda = gsplat_thread_caches.thin_prism;
+                default:
+                    break;
                 }
-                break;
-            case CameraModelType::FISHEYE:
-                if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                    upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
-                                4, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
-                }
-                break;
-            case CameraModelType::PINHOLE: {
-                if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                    const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
-                    upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
-                                n_rad, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
-                }
-                if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                    upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
-                                2, gsplat_thread_caches.tangential);
-                    tangential_cuda = gsplat_thread_caches.tangential;
-                }
-                break;
-            }
-            default:
-                break;
             }
             if (radial_cuda.is_valid() && radial_cuda.numel() > 0) {
                 radial_ptr = radial_cuda.ptr<float>();

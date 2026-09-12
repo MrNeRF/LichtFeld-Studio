@@ -1840,6 +1840,10 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
+    void SelectionService::setTestingPanel(const SplitViewPanelId panel) {
+        testing_panel_ = panel;
+    }
+
     bool SelectionService::hasTestingScreenPositionsForCamera(const int camera_index) const {
         if (camera_index < 0) {
             return false;
@@ -2094,6 +2098,7 @@ namespace lfs::vis {
 
         if (testing_viewport_ && testing_viewport_->valid()) {
             static Viewport testing_viewport_source(1, 1);
+            context.panel = testing_panel_.value_or(SplitViewPanelId::Left);
             context.info = *testing_viewport_;
             context.viewport = &testing_viewport_source;
             return context;
@@ -4157,6 +4162,25 @@ namespace lfs::vis {
                 (std::isfinite(viewport.ortho_scale) && viewport.ortho_scale > 1.0e-5f)
                     ? viewport.ortho_scale
                     : lfs::rendering::DEFAULT_ORTHO_SCALE;
+            const bool use_panel_depth_window =
+                settings.split_view_mode == SplitViewMode::IndependentDual &&
+                projection_context.panel.has_value();
+            float depth_near = -settings.depth_filter_max.z;
+            float depth_far = -settings.depth_filter_min.z;
+            float scale_x = settings.depth_filter_scale_x;
+            float scale_y = settings.depth_filter_scale_y;
+            float offset_x = settings.depth_filter_offset_x;
+            float offset_y = settings.depth_filter_offset_y;
+            if (use_panel_depth_window) {
+                const auto panel_window =
+                    rendering_manager_->getDepthWindowForPanel(*projection_context.panel);
+                depth_near = panel_window.near_plane;
+                depth_far = panel_window.far_plane;
+                scale_x = panel_window.scale_x;
+                scale_y = panel_window.scale_y;
+                offset_x = panel_window.offset_x;
+                offset_y = panel_window.offset_y;
+            }
             rendering::filter_selection_by_screen_window(
                 selection,
                 means,
@@ -4170,12 +4194,12 @@ namespace lfs::vis {
                 center_x,
                 center_y,
                 sanitized_ortho_scale,
-                -settings.depth_filter_max.z,
-                -settings.depth_filter_min.z,
-                settings.depth_filter_scale_x,
-                settings.depth_filter_scale_y,
-                settings.depth_filter_offset_x,
-                settings.depth_filter_offset_y,
+                depth_near,
+                depth_far,
+                scale_x,
+                scale_y,
+                offset_x,
+                offset_y,
                 model_transforms_ptr,
                 transform_indices_ptr);
         }

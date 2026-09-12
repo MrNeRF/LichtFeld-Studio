@@ -92,6 +92,8 @@ namespace lfs::vis {
             return processing_render_work_;
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
+        void set_evaluation_weights_preparer(
+            std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) override;
         std::expected<void, std::string> startTraining() override;
         [[nodiscard]] ProjectTrainingSessionState
         projectTrainingSessionState() const override;
@@ -267,8 +269,11 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend class ::DepthWindowDragLifecycleTest;
+        friend class DepthWindowPanelsInteractionTest;
         friend class DepthWindowGtHookTest;
+        friend class P5SessionCaptureTestAccess;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_StartWhileProjectIsLoadingReturnsRetryReason_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
@@ -334,6 +339,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingUntitledCreatesRealProjectInProjectLocation_Test;
         friend class VisualizerImplResetTest_PrepareTrainingStartProjectSucceedsAfterInitPlyLoad_Test;
+        friend class VisualizerImplResetTest_InvalidStartReturnsReasonBeforeCreatingProject_Test;
         friend class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
         friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
@@ -392,6 +398,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
         friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
+        friend class VisualizerImplResetTest_StoredTrainingBackendComesFromCheckpointBeforeTrainerRestore_Test;
         friend class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
@@ -605,6 +612,7 @@ namespace lfs::vis {
         std::unique_ptr<MainLoop> main_loop_;
 
         // Frame exception boundary state (viewer thread only).
+        friend class VisualizerImplResetTest_RendererDeadCancelsGpuWorkWithoutDrawing_Test;
         FrameStateMachine frame_state_;
         uint64_t suppressed_frame_errors_ = 0;
         std::chrono::steady_clock::time_point last_frame_error_log_{};

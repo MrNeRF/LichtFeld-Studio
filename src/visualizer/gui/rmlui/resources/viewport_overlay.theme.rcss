@@ -497,24 +497,6 @@
     background-color: @{primary};
 }
 
-.viewport-status-backdrop {
-    background-color: @{viewport.status_backdrop};
-}
-
-.viewport-status-panel {
-    background-color: @{viewport.panel_bg};
-    border-color: @{viewport.panel_border};
-    border-radius: @{num(size.window_rounding)}dp;
-}
-
-.viewport-status-title {
-    color: @{text};
-}
-
-.viewport-status-path,
-.viewport-status-stage {
-    color: @{text_dim};
-}
 
 .perf-hud-strip {
     background-color: @{viewport.panel_bg};
@@ -539,4 +521,11 @@
 }
 .perf-hud-meter-track {
     background-color: @{statusbar.progress_bg};
+}
+
+/* Give the independent-dual L/R chip a faint wash of the palette's text color.
+   Like toolbar icon borders, this follows the theme instead of fixed white,
+   keeping the chip distinct in light themes without competing with sliders. */
+#selection-block .viewport-selection-depth-panel-chip {
+    background-color: @{alpha(text,0.125)};
 }

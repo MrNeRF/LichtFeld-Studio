@@ -332,6 +332,10 @@ class SceneNode:
         """Node type (SPLAT, GROUP, CAMERA, etc.)"""
 
     @property
+    def local_transform(self) -> tuple:
+        """Local transform as 4x4 row-major tuple"""
+
+    @property
     def world_transform(self) -> tuple:
         """World-space transform as 4x4 row-major tuple"""
 

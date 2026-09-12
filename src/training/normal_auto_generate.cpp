@@ -162,6 +162,10 @@ namespace lfs::training {
 
     } // namespace
 
+    bool training_normal_priors_enabled(const lfs::core::param::OptimizationParameters& opt) {
+        return !opt.gut && opt.use_normal_loss && opt.normal_loss_weight > 0.0f;
+    }
+
     bool normal_auto_generate_needed(
         const bool use_normal_loss,
         const bool normal_auto_generate,
@@ -182,7 +186,7 @@ namespace lfs::training {
         const NormalEstimator& estimator) {
         NormalAutoGenerateOutcome outcome;
         const auto& opt = params.optimization;
-        if (!opt.use_normal_loss || opt.normal_loss_weight <= 0.0f)
+        if (!training_normal_priors_enabled(opt))
             return outcome;
 
         for (const auto& cam : cameras) {

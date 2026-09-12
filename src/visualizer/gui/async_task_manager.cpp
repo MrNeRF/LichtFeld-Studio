@@ -45,10 +45,12 @@
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
+#include <limits>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
@@ -110,6 +112,7 @@ namespace lfs::vis::gui {
         switch (format) {
         case ExportFormat::PLY: return "PLY";
         case ExportFormat::SOG: return "SOG";
+        case ExportFormat::SSOG: return "SSOG";
         case ExportFormat::SPZ: return "SPZ";
         case ExportFormat::HTML_VIEWER: return "HTML";
         case ExportFormat::USD: return "USD";
@@ -1283,6 +1286,15 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            const auto reconstruction_fallback =
+                io::video::videoReconstructionFallbackFromId(evt.reconstruction_fallback);
+            options.reconstruction = {
+                .backend_id = evt.reconstruction_backend_id,
+                .preset_id = evt.reconstruction_preset_id,
+                .fallback = reconstruction_fallback.value_or(
+                    static_cast<io::video::VideoReconstructionFallback>(
+                        std::numeric_limits<std::uint8_t>::max())),
+            };
             if (evt.include_provenance) {
                 if (const auto* const scene_manager = viewer_->getSceneManager()) {
                     options.provenance = make_gui_export_stamp(*scene_manager);
@@ -1327,7 +1339,8 @@ namespace lfs::vis::gui {
                                          bool rad_flip_y,
                                          bool rad_streamable,
                                          int spz_version,
-                                         bool include_provenance) {
+                                         bool include_provenance,
+                                         int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (isExporting())
             return;
 
@@ -1415,7 +1428,7 @@ namespace lfs::vis::gui {
                          rad_flip_y,
                          rad_streamable,
                          spz_version,
-                         std::move(provenance));
+                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -1541,7 +1554,8 @@ namespace lfs::vis::gui {
                                             bool rad_flip_y,
                                             bool rad_streamable,
                                             int spz_version,
-                                            core::ProvenanceStamp provenance) {
+                                            core::ProvenanceStamp provenance,
+                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -1575,7 +1589,7 @@ namespace lfs::vis::gui {
              rad_flip_y,
              rad_streamable,
              spz_version,
-             provenance](
+             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -1686,6 +1700,25 @@ namespace lfs::vis::gui {
                                 .progress_callback = update_progress,
                                 .provenance = provenance};
                             if (auto result = lfs::io::save_sog(*splat_data, options); result) {
+                                success = true;
+                            } else {
+                                error_msg = result.error().message;
+                                cancelled = result.error().code == lfs::io::ErrorCode::CANCELLED;
+                            }
+                            break;
+                        }
+                        case ExportFormat::SSOG: {
+                            const lfs::io::SsogSaveOptions options{
+                                .output_path = path,
+                                .lod_levels = lod_levels,
+                                .lod_ratio = lod_ratio,
+                                .chunk_count_k = chunk_count_k,
+                                .chunk_extent = chunk_extent,
+                                .chunk_min_k = chunk_min_k,
+                                .kmeans_iterations = kmeans_iterations,
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
+                            if (auto result = lfs::io::save_ssog(*splat_data, options); result) {
                                 success = true;
                             } else {
                                 error_msg = result.error().message;
@@ -2458,6 +2491,28 @@ namespace lfs::vis::gui {
             return;
         }
 
+        const auto render_settings = rendering_manager->getSettings();
+        const auto reconstruction_plan = io::video::resolveVideoReconstructionPlan({
+            .selection = validated_options->reconstruction,
+            .output_width = validated_options->width,
+            .output_height = validated_options->height,
+            .projection = render_settings.equirectangular
+                              ? io::video::VideoReconstructionProjection::Equirectangular
+                              : io::video::VideoReconstructionProjection::Perspective,
+        });
+        if (!reconstruction_plan) {
+            LOG_ERROR(
+                "Video reconstruction plan resolution failed: issue={}, detail={}",
+                io::video::videoReconstructionResolutionIssueId(
+                    reconstruction_plan.error().issue),
+                reconstruction_plan.error().message);
+            fail_start(LOCF(
+                lichtfeld::Strings::Runtime::VIDEO_RECONSTRUCTION_SELECTION_UNAVAILABLE,
+                validated_options->reconstruction.backend_id,
+                validated_options->reconstruction.preset_id));
+            return;
+        }
+
         const auto snapshot_result = captureVideoExportSceneSnapshot(*scene_manager);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
@@ -2471,7 +2526,6 @@ namespace lfs::vis::gui {
         }
 
         const auto export_options = *validated_options;
-        const auto render_settings = rendering_manager->getSettings();
         const float duration = timeline.duration();
         const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
         const int width = export_options.width;
@@ -2505,9 +2559,19 @@ namespace lfs::vis::gui {
             video_export_mesh_renderer_state_ = std::make_unique<VideoExportMeshRendererState>();
         }
 
-        LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
+        LOG_INFO(
+            "Starting video export: {} frames at {}x{}, reconstruction requested={}/{}, effective={}/{}",
+            total_frames,
+            width,
+            height,
+            reconstruction_plan->provenance().requested_backend_id,
+            reconstruction_plan->provenance().requested_preset_id,
+            reconstruction_plan->provenance().effective_backend_id,
+            reconstruction_plan->provenance().effective_preset_id);
 
         const auto job = video_export_state_.job;
+        if (auto notification = videoReconstructionFallbackNotification(*reconstruction_plan))
+            lfs::ErrorBus::instance().publish(std::move(*notification));
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings, start_time, time_step,

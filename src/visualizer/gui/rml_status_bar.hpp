@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/reactive/store.hpp"
+#include "core/training_backend.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Rml {
@@ -34,6 +36,10 @@ namespace lfs::vis {
     struct Theme;
 }
 namespace lfs::vis::gui {
+
+    [[nodiscard]] LFS_VIS_API std::string trainingBackendStatusLabel(
+        std::optional<lfs::core::param::RasterBackendId> active_backend,
+        std::string_view stored_backend);
 
     class RmlStatusBarTestAccess;
 

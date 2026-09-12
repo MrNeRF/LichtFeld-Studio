@@ -869,7 +869,8 @@ namespace {
     make_training_autosave_checkpoint_payload(
         const lfs::core::Uuid& checkpoint_uuid,
         const std::filesystem::path& dataset_path = {},
-        const int sh_degree = 0) {
+        const int sh_degree = 0,
+        const bool gut = false) {
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
                          ? make_degree1_splat(count)
@@ -880,6 +881,7 @@ namespace {
             lfs::core::param::OptimizationParameters::
                 mcmc_defaults();
         parameters.optimization.sh_degree = sh_degree;
+        parameters.optimization.gut = gut;
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -1023,7 +1025,8 @@ namespace {
                 lfs::io::project::
                     TrainingFinishReason::None,
         const int sh_degree = 0,
-        const int prms_iterations = -1) {
+        const int prms_iterations = -1,
+        const bool gut = false) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1073,7 +1076,7 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree)));
+                    sh_degree, gut)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -8258,7 +8261,7 @@ namespace lfs::vis {
         viewer.getDataLoader()->setParameters(params);
 
         auto trainer = std::make_unique<lfs::training::Trainer>(viewer.getScene());
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         viewer.getTrainerManager()->setTrainer(std::move(trainer));
 
         // Hold the worker before its first scene snapshot so ResetTraining is
@@ -8510,7 +8513,7 @@ namespace lfs::vis {
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
             params.dataset.output_path_explicit = false;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8610,7 +8613,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto trainer_params = trainer->getParams();
             trainer_params.dataset.output_path = output_path;
-            trainer->setParams(trainer_params);
+            ASSERT_TRUE(trainer->setParams(trainer_params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8618,6 +8621,42 @@ namespace lfs::vis {
                 << lfs::format_for_developer(
                        prepared.error());
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           InvalidStartReturnsReasonBeforeCreatingProject) {
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        auto* const parameter_manager = viewer.getParameterManager();
+        ASSERT_NE(parameter_manager, nullptr);
+        ASSERT_TRUE(parameter_manager->ensureLoaded());
+        parameter_manager->setActiveStrategy("mcmc");
+        parameter_manager->modifyActiveParams([](auto& params) {
+            params.gut = true;
+            params.use_depth_loss = true;
+        });
+        viewer.input_controller_ =
+            std::make_unique<InputController>(nullptr, viewer.getViewport());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        ASSERT_FALSE(lifecycle->hasSourcePath());
+
+        auto& scene = viewer.getScene();
+        const auto cameras = scene.addGroup("Train cameras");
+        scene.addCamera(
+            "camera.png", cameras,
+            make_project_request_test_camera());
+        auto* const trainer_manager = viewer.getTrainerManager();
+        ASSERT_NE(trainer_manager, nullptr);
+        trainer_manager->setTrainer(
+            std::make_unique<lfs::training::Trainer>(scene));
+
+        const auto started = viewer.startTraining();
+
+        ASSERT_FALSE(started.has_value());
+        EXPECT_NE(started.error().find("Depth Loss"), std::string::npos);
+        EXPECT_FALSE(lifecycle->hasSourcePath());
+        EXPECT_FALSE(trainer_manager->isCompletionPending());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -8654,7 +8693,7 @@ namespace lfs::vis {
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
             params.dataset.output_path_explicit = true;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8771,7 +8810,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             const auto ungranted =
                 trainer->trainer_project_save_policy();
             EXPECT_FALSE(ungranted.on_completion);
@@ -8978,7 +9017,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             EXPECT_FALSE(
                 lifecycle->trainingStartOverwriteConflict()
                     .has_value());
@@ -9488,7 +9527,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             const lfs::training::Trainer::
                 TrainerProjectSavePolicy granted{
                     .on_completion = true,
@@ -13373,7 +13412,12 @@ namespace lfs::vis {
                        info->hydration_state ==
                            "complete";
             }));
+        const auto editable_before =
+            viewer.getParameterManager()->copyActiveParams().to_json();
         ASSERT_TRUE(restoreTrainerAndWait(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        // Restoring CKPT must not replace independent editable PRMS settings.
+        EXPECT_EQ(viewer.getParameterManager()->copyActiveParams().to_json(),
+                  editable_before);
 
         auto* const manager =
             viewer.getTrainerManager();
@@ -13433,6 +13477,35 @@ namespace lfs::vis {
         EXPECT_EQ(manager->checkpointBaselineIteration(),
                   std::optional<int>{11});
         EXPECT_EQ(manager->getCurrentIteration(), 11);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StoredTrainingBackendComesFromCheckpointBeforeTrainerRestore) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        for (const bool gut : {false, true}) {
+            const auto project_path = temporary_.path / (gut ? "gut-backend.licht" : "gs-backend.licht");
+            const auto dataset_path = temporary_.path / (gut ? "gut-dataset" : "gs-dataset");
+            write_minimal_transforms_dataset(dataset_path);
+            write_resumable_project_with_checkpoint(
+                project_path, lfs::core::generate_uuid_v4(), lfs::core::generate_uuid_v4(),
+                dataset_path, lfs::io::project::TrainingFinishReason::Completed, 0, -1, gut);
+            auto options = projectOptions();
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.getWindowManager()->init());
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info && info->hydration_state == "complete";
+            }));
+            const auto session = viewer.projectTrainingSessionState();
+            ASSERT_TRUE(session.available);
+            EXPECT_EQ(session.raster_backend, gut ? "3dgut" : "3dgs");
+            EXPECT_FALSE(viewer.getTrainerManager()->hasTrainer());
+        }
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -13668,6 +13741,35 @@ namespace lfs::vis {
             checkpoint_identity(project_path);
         EXPECT_EQ(after_save.first, before.first);
         EXPECT_EQ(after_save.second, before.second);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartWhileProjectIsLoadingReturnsRetryReason) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "start-loading.licht";
+        const auto dataset_path = temporary_.path / "start-loading-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        // The viewer queue has not committed hydration yet.
+        const auto loading_start = viewer.startTraining();
+        ASSERT_FALSE(loading_start);
+        EXPECT_NE(loading_start.error().find("loading"), std::string::npos);
+        EXPECT_EQ(loading_start.error().find("No dataset"), std::string::npos);
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto restore_start = viewer.startTraining();
+        ASSERT_FALSE(restore_start);
+        EXPECT_NE(restore_start.error().find("being restored"), std::string::npos);
+        EXPECT_FALSE(viewer.getTrainerManager()->isRunning());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -14876,3 +14978,18 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::vis {
+    TEST_F(VisualizerImplResetTest, RendererDeadCancelsGpuWorkWithoutDrawing) {
+        VisualizerImpl viewer(projectOptions());
+        (void)viewer.frame_state_.on_fault(FrameFault::DeviceLost);
+        int ran = 0, cancelled = 0;
+        viewer.render_work_queue_.push_back({.run = [&] { ++ran; }, .cancel = [&] { ++cancelled; }});
+        // No initialized window or Vulkan device: touching a GPU frame would fail.
+        EXPECT_NO_THROW(viewer.render());
+        EXPECT_EQ(ran, 0);
+        EXPECT_EQ(cancelled, 1);
+        EXPECT_FALSE(viewer.hasPendingRenderWork());
+        EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
+    }
+} // namespace lfs::vis

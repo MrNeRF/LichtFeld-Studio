@@ -71,6 +71,7 @@ namespace lfs::training {
 
         // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
+        virtual std::shared_ptr<CameraDataset> get_training_dataset() const { return {}; }
 
         virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
 

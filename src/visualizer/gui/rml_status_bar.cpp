@@ -23,6 +23,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
@@ -42,6 +43,15 @@
 #include "git_version.h"
 
 namespace lfs::vis::gui {
+
+    std::string trainingBackendStatusLabel(
+        const std::optional<lfs::core::param::RasterBackendId> active_backend,
+        const std::string_view stored_backend) {
+        const auto backend = active_backend ? active_backend
+                                            : lfs::core::param::parse_training_backend(stored_backend);
+        return backend ? std::string(lfs::core::param::training_backend_descriptor(*backend).label)
+                       : std::string{};
+    }
 
     using rml_theme::colorToRml;
     using rml_theme::colorToRmlAlpha;
@@ -608,6 +618,7 @@ namespace lfs::vis::gui {
         bind(store.trainer_loaded);
         bind(store.eval_psnr);
         bind(store.eval_ssim);
+        bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
@@ -1242,12 +1253,14 @@ namespace lfs::vis::gui {
         auto content_type = sm ? sm->getContentType() : SceneManager::ContentType::Empty;
         auto training_state = tm ? tm->getState() : TrainingState::Idle;
         std::string stored_strategy;
+        std::string stored_backend;
         if (viewer && (!tm || !tm->hasTrainer())) {
             const auto session = viewer->projectTrainingSessionState();
             if (session.available) {
                 training_state = session.completed ? TrainingState::Finished
                                                    : TrainingState::Paused;
                 stored_strategy = session.strategy;
+                stored_backend = session.raster_backend;
             }
         }
 
@@ -1265,8 +1278,11 @@ namespace lfs::vis::gui {
                                            ? stored_strategy.c_str()
                                        : tm ? tm->getStrategyType()
                                             : "default";
-            bool gut = tm && tm->isGutEnabled();
-            std::string method = gut ? "GUT" : "3DGS";
+            const auto* trainer = tm ? tm->getTrainer() : nullptr;
+            const auto method = trainingBackendStatusLabel(
+                trainer ? std::optional{trainer->getParams().optimization.raster_backend()}
+                        : std::nullopt,
+                stored_backend);
             std::string strat_name;
             const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
             if (strategy == "mcmc") {
@@ -1279,7 +1295,8 @@ namespace lfs::vis::gui {
                 strat_name = LOC("status_bar.strategy_default");
             }
 
-            auto suffix = std::format(" ({}/{})", strat_name, method);
+            auto suffix = method.empty() ? std::format(" ({})", strat_name)
+                                         : std::format(" ({}/{})", strat_name, method);
 
             switch (training_state) {
             case TrainingState::Running:
@@ -1418,12 +1435,16 @@ namespace lfs::vis::gui {
             const auto eval_metrics = tm->getLastEvaluationMetrics();
             setModelBool("show_eval_metrics", model_.show_eval_metrics, eval_metrics.has_value());
             if (eval_metrics) {
-                setModelString("eval_metrics_value", model_.eval_metrics_value,
-                               std::format("{} {:.2f} / {} {:.4f}",
-                                           LOC(lichtfeld::Strings::Status::PSNR),
-                                           eval_metrics->psnr,
-                                           LOC(lichtfeld::Strings::Status::SSIM),
-                                           eval_metrics->ssim));
+                auto eval_text = std::format("{} {:.2f} / {} {:.4f}",
+                                             LOC(lichtfeld::Strings::Status::PSNR),
+                                             eval_metrics->psnr,
+                                             LOC(lichtfeld::Strings::Status::SSIM),
+                                             eval_metrics->ssim);
+                if (eval_metrics->lpips)
+                    eval_text += std::format(" / {} {:.4f}",
+                                             LOC(lichtfeld::Strings::Status::LPIPS),
+                                             *eval_metrics->lpips);
+                setModelString("eval_metrics_value", model_.eval_metrics_value, eval_text);
             } else {
                 setModelString("eval_metrics_value", model_.eval_metrics_value, "");
             }

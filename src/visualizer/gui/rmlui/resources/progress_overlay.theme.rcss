@@ -1,0 +1,32 @@
+.progress-backdrop {
+    background-color: @{modal.backdrop};
+}
+
+.progress-dialog {
+    background-color: @{modal.surface};
+    border-color: @{modal.border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.progress-title,
+.progress-detail {
+    color: @{text};
+}
+
+.progress-title.status-success,
+.progress-detail.status-success {
+    color: @{success};
+}
+
+.progress-title.status-error {
+    color: @{error};
+}
+
+.progress-path,
+.progress-stage {
+    color: @{text_dim};
+}
+
+.progress-error {
+    color: @{error};
+}

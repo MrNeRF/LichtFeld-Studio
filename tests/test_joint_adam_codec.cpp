@@ -140,6 +140,45 @@ TEST(JointAdamCodecTest, ZeroFixedPointDecodesToZero) {
     }
 }
 
+namespace {
+    template <int Bits>
+    void check_mixed_block_zero_moments() {
+        using C = Codec<Bits>;
+        std::vector<uint8_t> packed(C::kBytesPerCell);
+        // This is also the pre-fix encoding: no new sentinel or codebook.
+        C::encode_us(packed.data(), 0, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 25.0f);
+        float u, s, m, v;
+        C::decode_us(packed.data(), 0, -1.0f, 1.0f, 0.0f, 25.0f, u, s);
+        ASSERT_NE(u, 0.0f); // Zero lies between the two central u codes.
+        ASSERT_EQ(s, 0.0f);
+        C::decode_g1g2(packed.data(), 0, -1.0f, 1.0f, 0.0f, 25.0f, m, v);
+        EXPECT_EQ(m, 0.0f);
+        EXPECT_EQ(v, 0.0f);
+
+        // A zero s code with positive smin still carries real variance/history.
+        C::encode_us(packed.data(), 0, 0.5f, 1.0f, -1.0f, 1.0f, 1.0f, 25.0f);
+        C::decode_g1g2(packed.data(), 0, -1.0f, 1.0f, 1.0f, 25.0f, m, v);
+        EXPECT_GT(m, 0.0f);
+        EXPECT_GT(v, 0.0f);
+        EXPECT_LT(v, 1e-28f); // No positive variance floor.
+
+        // Near-zero u with nonzero variance must retain the usual reconstruction.
+        C::decode_us(packed.data(), 0, -1.0f, 1.0f, 1.0f, 25.0f, u, s);
+        EXPECT_FLOAT_EQ(m, u * (C::inverse_sqrt_g2(s) + kEps));
+        C::us_to_g1g2(1e-12f, 1.0f, m, v);
+        EXPECT_GT(m, 0.0f);
+        EXPECT_GT(v, 0.0f);
+    }
+} // namespace
+
+TEST(JointAdamCodecTest, MixedSignBlockPreservesZero16Bit) {
+    check_mixed_block_zero_moments<16>();
+}
+
+TEST(JointAdamCodecTest, MixedSignBlockPreservesZero8Bit) {
+    check_mixed_block_zero_moments<8>();
+}
+
 TEST(JointAdamCodecTest, EndpointExactRoundtrip) {
     // Single cell: encode endpoints of a range, decode must hit lo/hi exactly for u,log_s.
     float g1s[2] = {-0.5f, 1.25f};

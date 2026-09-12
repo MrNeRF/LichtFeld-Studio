@@ -511,9 +511,11 @@ body {
     flex-shrink: 1;
 }
 
-/* Narrow-width behavior, breakpoint style: sliders and number inputs
-   compress first; below ~1150dp the row wraps to two lines; below ~700dp
-   the slider row hides, leaving the icon toolbar. */
+/* Depth toolbar width tiers:
+   >1480dp: Near/Far and Size/X/Y on one line.
+   >960dp through 1480dp: Near/Far above Size/X/Y.
+   <=960dp: icons only; depth fields hidden. No taller stack.
+   Breakpoints derive from the effective cascade; see calculations above each @media. */
 #selection-block .viewport-selection-depth-axis {
     flex-grow: 1;
     flex-shrink: 1;
@@ -541,21 +543,58 @@ body {
     min-width: 50dp;
 }
 
+/* The chip labels the depth sliders' target panel in independent-dual only.
+   Keep it inside Near/Far to avoid an extra wrapped line with the sync toggle.
+   Keep this selector a descendant match so styling applies at every width. */
+#selection-block .viewport-selection-depth-panel-chip {
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 20dp;
+    height: 20dp;
+    line-height: 20dp;
+    text-align: center;
+    font-size: 12dp;
+    font-weight: bold;
+    border-radius: 4dp;
+    /* Palette fill belongs in viewport_overlay.theme.rcss; see
+       docs/docs/development/rmlui-styling.md, Theme Tokens. */
+}
+
 #selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
     /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */
     width: 104dp;
     min-width: 104dp;
 }
 
-@media (max-width: 1150dp) {
-    /* Deterministic 2+3 wrap: the Near/Far group takes the first line, the
-       Size/X/Y group the second, each centered, with UNIFORM slider lengths
-       on both lines. The viz-mode button is pinned to the top-right
-       (document order would put it on the last line; this RmlUi has no
-       flex `order`). */
+/* Wrap uses context width M (viewport + left dock), in every split mode.
+   RmlUi media queries use context dimensions; top-level #selection-block has
+   left 52dp/right 12dp, so its panel content width is A(M) = .65 * (M - 64).
+
+   One-line minimum, with in-flow buttons (all dimensions in dp):
+     Near/Far/X/Y axis = label 24 + gap 6 + slider 56 + gap 6 + input 50 = 142
+     Size axis        = 24 + 6 + 56 + 6 + input 104                    = 196
+     Near/Far group   = chip 20 + 10 + 142 + 10 + 142                  = 324
+     Size/X/Y group   = 196 + 10 + 142 + 10 + 142                      = 500
+     Full row         = 324 + 10 + 500 + 10 + button 30 + 10 + 30      = 914
+
+   Fit requires M >= 914/.65 + 64 = 1470.154; 1471dp is the first whole dp.
+   Wrap at 1480dp gives A=920.4dp, with 6.4dp spare. Without chip and sync
+   (Primary/Secondary comparison), the 844dp row needs M>=1362.462, so this
+   breakpoint covers it too. */
+@media (max-width: 1480dp) {
+    /* Center Near/Far above Size/X/Y with equal slider lengths.
+       Pin one action button to the right of each line; this RmlUi has no flex
+       `order`, so flow would place both on the last line.
+       Sync shares the chip's independent-dual visibility and sits beside Near/Far.
+       Viz stays beside Size/X/Y whenever the depth row is shown. */
     #selection-block .viewport-selection-depth-fields {
         flex-wrap: wrap;
+        /* Reserve 36dp on the right for one 30dp button plus 6dp clearance.
+           Mirror it on the left to keep both lines centered. Buttons use the padding
+           box (right: 0), while flex-basis:100% uses the content box. Include both
+           reserves (72dp total) when calculating line width and the hide breakpoint. */
         padding-right: 36dp;
+        padding-left: 36dp;
     }
     #selection-block .depth-axis-group {
         flex-basis: 100%;
@@ -568,14 +607,60 @@ body {
     }
     #selection-block .viewport-selection-depth-fields > .viewport-transform-action {
         position: absolute;
-        top: 0;
         right: 0;
+    }
+    /* Keep one button per line on the same right edge. Center each 30dp button
+       on its 24dp line with -3dp outer offsets. The 58dp row (24 + 10 + 24)
+       then has a 4dp button gap; flush top/bottom placement would overlap by 2dp.
+       The 3dp overhang fits inside the 4dp upper gap and 5dp bottom padding,
+       leaving row height and panel-bottom clearance unchanged. */
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-sync-action {
+        top: -3dp;
+    }
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-viz-action {
+        bottom: -3dp;
+    }
+    /* With depth fields visible, the panel (z-index 9, pointer-events auto)
+       can cover the viewport gizmos (z-index 8). The 72dp row reserve protects
+       only its own buttons. A split divider can put primary gizmos at any x,
+       so horizontal clearance cannot protect them.
+
+       Panel bottom = top 5 + border 1 + padding 5 + icon row 32 + gap 4
+                      + fields height + padding 5 + border 1 = 53 + fields.
+       One line: max(axis 24, in-flow button 30) = 30; bottom 83, leaving 25dp
+       below the stock gizmo top 108. Two lines: 24 + gap 10 + 24 = 58; bottom
+       111, so top 120 leaves 9dp. Three lines cannot clear stock top 108.
+       Absolute buttons add no row height; the lower button ends at 108,
+       inside the panel. Move gizmos in this tier and restore top when fields
+       hide. These width rules also move gizmos when depth/GT state hides fields. */
+    .viewport-gizmo-controls {
+        top: 120dp;
     }
 }
 
-@media (max-width: 650dp) {
+/* Hide is the final tier: widths that cannot fit two lines hide the row.
+   Size/X/Y is the binding line at 500dp. Two 36dp reserves leave
+     L(M) = .65 * (M - 64) - 72.
+   Each reserve is button 30 + clearance 6; the buttons occupy one line
+   each, and matching left padding centers the groups.
+   The exact fit is M = (500 + 72)/.65 + 64 = 944dp. At 960dp, L=510.4dp
+   leaves 10.4dp spare. Sliders are already at their 56dp floor, so
+   332 + 3*56 = 500dp cannot shrink further.
+
+   Near/Far needs 324dp, fitting at M=(324+72)/.65+64=673.231dp. These
+   minima use #selection-block's ID-qualified axis rules: gap 6dp and
+   flex-shrink 1, overriding generic gap 3dp/shrink 0. The chosen 960dp
+   clears both lines. Above 1480dp buttons return to flow; reserves no
+   longer apply. */
+@media (max-width: 960dp) {
     #selection-block .viewport-selection-depth-fields {
         display: none;
+    }
+    /* The wrap query also matches here, so restore the controls' top from 120dp
+       to 108dp. With only the icon row, the panel bottom is
+       5 + 1 + 5 + 32 + 5 + 1 = 49dp, leaving 59dp clearance. */
+    .viewport-gizmo-controls {
+        top: 108dp;
     }
 }
 
@@ -1294,17 +1379,6 @@ body {
     margin: 0 5dp;
 }
 
-.viewport-status-overlay {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
 .viewport-metrics-overlay {
     position: absolute;
     pointer-events: none;
@@ -1987,54 +2061,6 @@ body {
 .vram-hud-empty {
     padding: 4dp 6dp;
     font-size: 11dp;
-}
-
-.viewport-status-backdrop {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
-}
-
-.viewport-status-panel {
-    position: relative;
-    min-width: 320dp;
-    max-width: 420dp;
-    padding: 16dp 18dp;
-    border-width: 1dp;
-    display: flex;
-    flex-direction: column;
-    gap: 8dp;
-}
-
-.viewport-status-title {
-    font-size: 13dp;
-    font-weight: bold;
-}
-
-.viewport-status-path,
-.viewport-status-stage,
-.viewport-status-panel .status-success,
-.viewport-status-panel .status-error {
-    line-height: 1.3;
-    min-width: 0;
-    word-break: break-word;
-}
-
-.viewport-status-progress {
-    position: relative;
-    width: 100%;
-}
-
-.viewport-status-progress progress {
-    width: 100%;
-}
-
-.viewport-status-actions {
-    display: flex;
-    justify-content: center;
-    margin-top: 4dp;
 }
 
 .hidden {

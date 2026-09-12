@@ -1,0 +1,75 @@
+body {
+    font-family: Inter;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.progress-backdrop {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.progress-dialog {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    padding: 16dp 18dp;
+    border-width: 1dp;
+    min-width: 0;
+    max-height: 80%;
+    overflow-y: auto;
+}
+
+.progress-title {
+    display: block;
+    font-size: 13dp;
+    font-weight: bold;
+    text-align: center;
+}
+
+.progress-path,
+.progress-stage,
+.progress-detail,
+.progress-error {
+    display: block;
+    min-width: 0;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.progress-row {
+    position: relative;
+    display: block;
+    width: 100%;
+}
+
+.progress-row progress {
+    width: 100%;
+}
+
+.progress-text {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    text-align: center;
+    pointer-events: none;
+}
+
+.progress-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 4dp;
+}
+
+.progress-actions .btn {
+    min-width: 90dp;
+}

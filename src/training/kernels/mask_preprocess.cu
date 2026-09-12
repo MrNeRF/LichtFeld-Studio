@@ -27,10 +27,11 @@ namespace lfs::training::kernels {
             return std::min(num_blocks_1d(total), kMaxReduceBlocks);
         }
 
+        /// Float32 band masks are normalized; UInt8 masks retain their 0..255 scale.
         template <typename MaskT>
-        __device__ __forceinline__ float load_mask_raw(const MaskT* mask, const int idx) {
+        __device__ __forceinline__ float load_mask_normalized(const MaskT* mask, const int idx) {
             if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>) {
-                return static_cast<float>(mask[idx]);
+                return static_cast<float>(mask[idx]) / 255.0f;
             } else {
                 return mask[idx];
             }
@@ -51,17 +52,17 @@ namespace lfs::training::kernels {
             const MaskT* mask,
             const int idx,
             const MaskPhotoMode mode) {
-            const float v = load_mask_raw(mask, idx);
             if (mode == MaskPhotoMode::SegmentAndIgnore) {
-                // After trainer remap: >250 kept as 255 → weight 1; else 0.
-                return v > 250.0f ? 1.0f : 0.0f;
+                const float v = load_mask_normalized(mask, idx);
+                // Keep band (authored > 250) is the only photometric contributor.
+                return v > kMaskKeepMin ? 1.0f : 0.0f;
             }
             // BinaryGt0 matches the reference weight composition:
             //   UInt8/Bool → (v != 0) as float; Float32 → pass-through.
             if constexpr (std::is_same_v<std::remove_cv_t<MaskT>, uint8_t>) {
                 return mask[idx] != 0 ? 1.0f : 0.0f;
             } else {
-                return v;
+                return mask[idx];
             }
         }
 
@@ -72,9 +73,9 @@ namespace lfs::training::kernels {
             const int idx,
             const MaskOpacityMode mode) {
             if (mode == MaskOpacityMode::SegmentAndIgnore) {
-                const float v = load_mask_raw(mask, idx);
-                // After trainer remaps: [128,250] → BG (penalty), else FG (no penalty).
-                return (v >= 128.0f && v <= 250.0f) ? 1.0f : 0.0f;
+                const float v = load_mask_normalized(mask, idx);
+                // Segment band (authored [128,250]) → BG (penalty), else FG (no penalty).
+                return (v >= kMaskSegmentMin && v <= kMaskKeepMin) ? 1.0f : 0.0f;
             }
             return 1.0f - mask_as_float(mask, idx);
         }

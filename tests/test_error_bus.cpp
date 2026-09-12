@@ -5,6 +5,7 @@
 #include "core/error_bus.hpp"
 #include "core/error_codes.hpp"
 #include "core/error_reporter.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/frame_state_machine.hpp"
 #include "core/modal_request.hpp"
@@ -12,9 +13,11 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_error_consumer.hpp"
+#include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/string_keys.hpp"
+#include "io/video/video_reconstruction.hpp"
 
 #include <gtest/gtest.h>
 
@@ -244,6 +247,18 @@ TEST(ErrorEventBridgeTest, TrainingFailureSurfacesAsModalError) {
     EXPECT_EQ(notification->error.code(), lfs::ErrorCode::Internal);
 }
 
+TEST(ErrorEventBridgeTest, TrainingCommandRejectionSurfacesWithoutFailedRunModal) {
+    lfs::core::events::state::TrainingStartRejected rejected{};
+    rejected.error = "3DGUT does not support Mip Filter";
+    const auto notification = lfs::vis::gui::translateTrainingStartRejected(rejected);
+    ASSERT_TRUE(notification);
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification->error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification->error.user_message(), rejected.error);
+    ASSERT_EQ(notification->actions.size(), 1);
+    EXPECT_EQ(notification->actions.front().kind, lfs::ErrorActionKind::Dismiss);
+}
+
 TEST(ErrorEventBridgeTest, TrainingOomMapsToResourceExhausted) {
     lfs::core::events::state::TrainingCompleted oom{};
     oom.success = false;
@@ -317,6 +332,31 @@ TEST(ErrorEventBridgeTest, CudaVersionUnsupportedMapsToToast) {
     ASSERT_TRUE(notification.has_value());
     EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
     EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, VideoReconstructionFallbackIsVisibleButNativeExportIsQuiet) {
+    using namespace lfs::io::video;
+    auto plan = resolveVideoReconstructionPlan({.output_width = 1920, .output_height = 1080});
+    ASSERT_TRUE(plan);
+    EXPECT_FALSE(lfs::vis::gui::videoReconstructionFallbackNotification(*plan));
+    plan = resolveVideoReconstructionPlan({.selection = {.backend_id = "missing", .preset_id = "quality", .fallback = VideoReconstructionFallback::Native},
+                                           .output_width = 1920,
+                                           .output_height = 1080});
+    ASSERT_TRUE(plan);
+    const auto notification = lfs::vis::gui::videoReconstructionFallbackNotification(*plan);
+    ASSERT_TRUE(notification);
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification->error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification->error.code(), lfs::ErrorCode::Unavailable);
+    EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, FutureVideoReconstructionVersionIsNonBlockingWarning) {
+    const auto notification = lfs::vis::gui::unsupportedVideoReconstructionVersionNotification();
+    EXPECT_EQ(notification.surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification.error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification.error.code(), lfs::ErrorCode::Unsupported);
+    EXPECT_TRUE(notification.actions.empty());
 }
 
 namespace {
@@ -419,6 +459,104 @@ TEST(ToastStackTest, AlphaFadesInFinalWindow) {
     EXPECT_NEAR(lfs::vis::gui::ToastStack::alpha(entry, near_end), 0.5f, 1e-3f);
     EXPECT_FLOAT_EQ(
         lfs::vis::gui::ToastStack::alpha(entry, kBase + lfs::vis::gui::ToastStack::kDuration), 0.0f);
+}
+
+TEST(ProgressOverlayPresentationTest, ImportHasPriorityAndClampsProgress) {
+    lfs::vis::AppStore::ImportOverlayState import_state;
+    import_state.active = true;
+    import_state.progress = 1.5f;
+    import_state.dataset_type = "COLMAP";
+    import_state.path = "bicycle";
+    import_state.stage = "Reading cameras";
+
+    lfs::vis::AppStore::VideoExportOverlayState video_state;
+    video_state.active = true;
+    video_state.progress = 0.5f;
+
+    const auto presentation =
+        lfs::vis::gui::makeProgressOverlayPresentation(import_state, video_state);
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::Import);
+    EXPECT_EQ(presentation.action,
+              lfs::vis::gui::ProgressOverlayPresentation::Action::None);
+    EXPECT_FLOAT_EQ(presentation.progress, 1.0f);
+    EXPECT_TRUE(presentation.show_progress);
+    EXPECT_EQ(presentation.path, "bicycle");
+    EXPECT_EQ(presentation.stage, "Reading cameras");
+}
+
+TEST(ProgressOverlayPresentationTest, FailedImportCanBeDismissed) {
+    lfs::vis::AppStore::ImportOverlayState import_state;
+    import_state.show_completion = true;
+    import_state.error = "Invalid cameras";
+    import_state.num_images = 12;
+    import_state.num_points = 34;
+
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation(import_state, {});
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::Import);
+    EXPECT_EQ(presentation.action,
+              lfs::vis::gui::ProgressOverlayPresentation::Action::DismissImport);
+    EXPECT_FALSE(presentation.show_progress);
+    EXPECT_FALSE(presentation.success);
+    EXPECT_EQ(presentation.error, "Invalid cameras");
+    EXPECT_FALSE(presentation.detail.empty());
+}
+
+TEST(ProgressOverlayPresentationTest, SuccessfulImportShowsCompletedProgress) {
+    lfs::vis::AppStore::ImportOverlayState import_state;
+    import_state.show_completion = true;
+    import_state.success = true;
+    import_state.progress = 0.25f;
+    import_state.num_images = 12;
+    import_state.num_points = 34;
+
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation(import_state, {});
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::Import);
+    EXPECT_EQ(presentation.action,
+              lfs::vis::gui::ProgressOverlayPresentation::Action::None);
+    EXPECT_TRUE(presentation.show_progress);
+    EXPECT_TRUE(presentation.success);
+    EXPECT_FLOAT_EQ(presentation.progress, 1.0f);
+    EXPECT_FALSE(presentation.detail.empty());
+}
+
+TEST(ProgressOverlayPresentationTest, ProjectImportKeepsItsDedicatedTitle) {
+    lfs::vis::AppStore::ImportOverlayState import_state;
+    import_state.active = true;
+    import_state.dataset_type = "project";
+
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation(import_state, {});
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::Import);
+    EXPECT_EQ(presentation.title, LOC(lichtfeld::Strings::Progress::OPENING_PROJECT));
+}
+
+TEST(ProgressOverlayPresentationTest, VideoExportCanBeCancelled) {
+    lfs::vis::AppStore::VideoExportOverlayState video_state;
+    video_state.active = true;
+    video_state.progress = -0.5f;
+    video_state.current_frame = 3;
+    video_state.total_frames = 10;
+    video_state.stage = "Encoding";
+
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation({}, video_state);
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::VideoExport);
+    EXPECT_EQ(presentation.action,
+              lfs::vis::gui::ProgressOverlayPresentation::Action::CancelVideoExport);
+    EXPECT_FLOAT_EQ(presentation.progress, 0.0f);
+    EXPECT_TRUE(presentation.show_progress);
+    EXPECT_EQ(presentation.stage, "Encoding");
+}
+
+TEST(ProgressOverlayPresentationTest, IdleStateIsHidden) {
+    const auto presentation = lfs::vis::gui::makeProgressOverlayPresentation({}, {});
+    EXPECT_EQ(presentation.kind,
+              lfs::vis::gui::ProgressOverlayPresentation::Kind::None);
+    EXPECT_EQ(presentation.action,
+              lfs::vis::gui::ProgressOverlayPresentation::Action::None);
 }
 
 TEST(StatusMessageStateTest, PostThenSnapshotVisible) {

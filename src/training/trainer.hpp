@@ -309,7 +309,10 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             return params_;
         }
-        void setParams(const lfs::core::param::TrainingParameters& params);
+        [[nodiscard]] lfs::Status
+        setParams(
+            const lfs::core::param::TrainingParameters& params);
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
@@ -400,7 +403,8 @@ namespace lfs::training {
             std::optional<std::filesystem::path> path,
             std::function<std::optional<
                 ProjectSnapshotDocumentContext>()>
-                context_provider = {});
+                context_provider = {},
+            std::optional<std::filesystem::path> headless_source_path = std::nullopt);
         [[nodiscard]] bool can_flush_project_snapshot() const {
             return project_snapshot_service_ && strategy_ &&
                    scene_;
@@ -562,6 +566,7 @@ namespace lfs::training {
             lfs::core::Tensor grad_corrected;
             lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
+            lfs::core::Tensor normal_pixel_weight;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -828,6 +833,8 @@ namespace lfs::training {
             last_project_writer_typed_error_;
         std::optional<std::filesystem::path>
             live_project_path_;
+        // Used only to seed a fresh headless destination; never a GUI context.
+        std::optional<std::filesystem::path> headless_project_source_path_;
         TrainerProjectSavePolicy trainer_project_save_policy_{};
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
@@ -909,6 +916,7 @@ namespace lfs::training {
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
+        std::optional<std::filesystem::path> lpips_weights_path_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;

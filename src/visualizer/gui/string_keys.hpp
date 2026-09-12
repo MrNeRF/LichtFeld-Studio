@@ -333,6 +333,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ETA = "status.eta";
         inline constexpr const char* PSNR = "status.psnr";
         inline constexpr const char* SSIM = "status.ssim";
+        inline constexpr const char* LPIPS = "status.lpips";
         inline constexpr const char* UNKNOWN = "status.unknown";
     } // namespace Status
 
@@ -461,6 +462,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* INSTRUCTIONS = "ellipsoid.instructions";
     } // namespace Ellipsoid
 
+    namespace Selection {
+        // Undo-history entry labels: rendered verbatim in the history panel and
+        // on the Undo/Redo buttons (scene_panel_native.cpp), so they localize.
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_EXPIRED =
+            "selection.history_depth_window_expired";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_DRAG =
+            "selection.history_depth_window_drag";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_SYNC =
+            "selection.history_depth_window_sync";
+    } // namespace Selection
+
     namespace TrainingPanel {
         inline constexpr const char* START_TRAINING = "training_panel.start_training";
         inline constexpr const char* RESUME_TRAINING = "training_panel.resume_training";
@@ -542,7 +554,11 @@ namespace lichtfeld::Strings {
 
     namespace Progress {
         inline constexpr const char* EXPORTING = "progress.exporting";
+        inline constexpr const char* EXPORTING_VIDEO = "progress.exporting_video";
         inline constexpr const char* IMPORTING = "progress.importing";
+        inline constexpr const char* PATH = "progress.path";
+        inline constexpr const char* IMPORT_COUNTS = "progress.import_counts";
+        inline constexpr const char* VIDEO_FRAME = "progress.video_frame";
         inline constexpr const char* OPENING_PROJECT = "progress.opening_project";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";
@@ -907,6 +923,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_GUI_MANAGER_UNAVAILABLE = "runtime.video_gui_manager_unavailable";
         inline constexpr const char* VIDEO_NO_KEYFRAMES = "runtime.video_no_keyframes";
         inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_SELECTION_UNAVAILABLE = "runtime.video_reconstruction_selection_unavailable";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_NATIVE_FALLBACK = "runtime.video_reconstruction_native_fallback";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_VERSION_UNSUPPORTED = "runtime.video_reconstruction_version_unsupported";
         inline constexpr const char* VIDEO_SPLAT_PREPARATION_FAILED = "runtime.video_splat_preparation_failed";
         inline constexpr const char* VIDEO_NO_RENDERABLE_CONTENT = "runtime.video_no_renderable_content";
         inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";

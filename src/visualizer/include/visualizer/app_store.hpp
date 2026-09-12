@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "core/reactive/observable.hpp"
 #include "core/reactive/store.hpp"
+#include "rendering/rendering_types.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -162,6 +163,13 @@ namespace lfs::vis {
             }
         };
 
+        struct DepthWindowDrawCommit {
+            std::uint64_t generation = 0;
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+
+            [[nodiscard]] bool operator==(const DepthWindowDrawCommit&) const = default;
+        };
+
         enum Field : std::uint32_t {
             Iteration = 1,
             TotalIterations,
@@ -173,6 +181,7 @@ namespace lfs::vis {
             TrainerLoaded,
             EvalPsnr,
             EvalSsim,
+            EvalLpips,
             SceneGeneration,
             SelectionGeneration,
             Fps,
@@ -197,6 +206,7 @@ namespace lfs::vis {
             RenderSettingsGeneration,
             ViewportToolbarGeneration,
             DepthWindowDrawGeneration,
+            DepthWindowDrawCommitValue,
         };
 
         AppStore();
@@ -214,6 +224,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<bool> trainer_loaded;
         lfs::core::reactive::Observable<std::optional<float>> eval_psnr;
         lfs::core::reactive::Observable<std::optional<float>> eval_ssim;
+        lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<float> fps;
@@ -238,6 +249,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> depth_window_draw_generation;
+        lfs::core::reactive::Observable<DepthWindowDrawCommit> depth_window_draw_commit;
 
     private:
         lfs::core::reactive::Store store_;
@@ -246,6 +258,6 @@ namespace lfs::vis {
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
-    LFS_VIS_API void publish_depth_window_draw_commit();
+    LFS_VIS_API void publish_depth_window_draw_commit(SplitViewPanelId panel = SplitViewPanelId::Left);
 
 } // namespace lfs::vis

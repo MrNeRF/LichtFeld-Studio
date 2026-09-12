@@ -178,9 +178,19 @@ redundant verification and belongs in a debug-only round-trip validator.
 
 ## ABI tripwire
 
-CMake generates `lfs_core_abi_stamp.h` from the core implementation and build
-inputs. The application compares its compiled stamp with the loaded
-`lfs_core` stamp before argument parsing or CUDA initialization. A mismatch
+CMake initially generates `lfs_core_abi_stamp.h` from the core implementation and
+build inputs during configuration, so IDEs and syntax checks can read it before
+the first build. Each actual configuration gets its own header under
+`build/include/core-abi/<config>/`; an unnamed single-config build uses the
+`core-abi/` directory itself. Configuration removes the legacy shared header
+from `build/include/` to prevent stale fallback through the public include path.
+
+An always-run build helper refreshes the stamp before its consumers compile.
+Both generation paths write the header only when its content changes, without
+forcing CMake to regenerate the project graph for ordinary core edits. The
+application compares its compiled
+stamp with the loaded `lfs_core` stamp before argument parsing or CUDA
+initialization. A mismatch
 prints both stamps, tells the user to remove stale binaries and rebuild, and
 exits with status 2. This is an always-on startup boundary and must remain the
 first executable check.

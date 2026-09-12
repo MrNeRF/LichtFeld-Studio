@@ -98,6 +98,7 @@ MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 # These registered properties are intentionally represented by bespoke widgets or
 # are runtime-only. Keep the reasons here so registry auto-placement stays auditable.
 BESPOKE_OR_HIDDEN = {
+    "gut": "backend selector through the compatibility adapter",
     "sh_degree": "finite-value select with bespoke labels and tooltips",
     "lambda_dssim": "scrub slider",
     "init_opacity": "scrub slider",
@@ -136,24 +137,20 @@ BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
     _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
-        "basic_exposure_correction",
-        "use_exposure_correction",
-    ),
-    _run(
         "basic_bilateral_toggle",
         "use_bilateral_grid",
     ),
     _run(
         "basic_live_start",
         "mask_mode",
-        "use_depth_loss",
     ),
     _run(
         "basic_depth_weight",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
-    _run("basic_normal_toggle", "use_normal_loss"),
+    _run("basic_depth_toggle", "use_depth_loss", disabled_condition_id="gut_depth_supervision_disabled"),
+    _run("basic_normal_toggle", "use_normal_loss", disabled_condition_id="gut_normal_supervision_disabled"),
     _run(
         "basic_normal_weights",
         "normal_auto_generate",
@@ -183,8 +180,8 @@ BASIC_RUNS = (
         visibility_condition_id="dep_mask_segment",
     ),
     _run("basic_sparsity_toggle", "enable_sparsity"),
-    _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
-    _run("basic_after_gut", "undistort", "mip_filter"),
+    _run("basic_undistort", "undistort"),
+    _run("basic_mip_filter", "mip_filter", disabled_condition_id="gut_mip_filter_disabled"),
     _run(
         "basic_ppisp_toggle",
         "ppisp",
@@ -271,7 +268,7 @@ BILATERAL_RUNS = (
 LOSS_RUNS = (_run("loss_numbers", "opacity_reg", "scale_reg", "tv_loss_weight"),)
 
 INIT_RUNS = (
-    _run("init_main", "init_scaling", "random"),
+    _run("init_main", "init_scaling"),
     _run(
         "init_random",
         "init_num_pts",
@@ -289,41 +286,64 @@ SPARSITY_RUNS = (
     ),
 )
 
+# Keep row definitions and their editing/lock contracts; only move ownership.
+def _basic_runs(*ids):
+    by_id = {run.id: run for run in BASIC_RUNS}
+    return tuple(by_id[name] for name in ids)
+
+
+METHOD_RUNS = _basic_runs("basic_struct")
+CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
+MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
+BACKGROUND_RUNS = _basic_runs("basic_background", "bg_mode")
+EXPOSURE_ACTIVATION_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),)
+APPEARANCE_RUNS = _basic_runs(
+    "ppisp_exif", "ppisp_freeze",
+    "ppisp_controller", "ppisp_controller_tail",
+) + (
+    _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
+         visibility_condition_id="dep_ppisp_params"),
+)
+EVALUATION_RUNS = (next(run for run in DATASET_RUNS if run.id == "dataset_eval"),)
+DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id != "dataset_eval")
+
 SECTIONS = (
-    SectionSpec("basic_params", "training.section.basic_params", BASIC_RUNS),
-    SectionSpec("advanced_params", "training.section.advanced_params"),
+    SectionSpec("basic_params", "training.section.method", METHOD_RUNS),
+    SectionSpec("camera", "training.section.camera", CAMERA_RUNS),
+    SectionSpec("background", "training.section.background", BACKGROUND_RUNS),
+    SectionSpec("appearance", "training.section.exposure_appearance", EXPOSURE_ACTIVATION_RUNS),
+    SectionSpec("masking", "training.section.masking", MASK_RUNS),
     SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
+    SectionSpec("depth", "training_params.use_depth_loss", _basic_runs("basic_depth_toggle", "basic_depth_weight")),
+    SectionSpec("normal", "training_params.use_normal_loss", _basic_runs("basic_normal_toggle", "basic_normal_weights")),
+    SectionSpec("ppisp", "training_params.ppisp", _basic_runs("basic_ppisp_toggle") + APPEARANCE_RUNS),
+    SectionSpec("bilateral", "training.section.bilateral_grid", _basic_runs("basic_bilateral_toggle") + BILATERAL_RUNS),
+    SectionSpec("exposure", "training_params.exposure_correction"),
+    SectionSpec("evaluation", "training_params.enable_eval", EVALUATION_RUNS),
+    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
+    SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
+    SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
     SectionSpec("refinement", "training.section.refinement"),
-    SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
-    SectionSpec("init", "training.section.initialization", INIT_RUNS),
-    SectionSpec("sparsity", "training_panel.sparsity", SPARSITY_RUNS),
+    SectionSpec("init", "training.section.initialization", INIT_RUNS[:1]),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
-    SectionSpec(
-        "advanced_registry",
-        "training.section.advanced_registry",
-        (_run(AUTO_ADVANCED_RUN_ID),),
-    ),
+    SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )
 
 RUNS = tuple(run for section in SECTIONS for run in section.runs)
-
 SEARCH_SECTION_RUN_IDS = {
-    "basic_params": tuple(run.id for run in BASIC_RUNS),
-    "advanced_registry": (AUTO_ADVANCED_RUN_ID,),
-    "dataset": tuple(run.id for run in DATASET_RUNS),
-    "optimization": tuple(run.id for run in OPTIMIZATION_RUNS),
-    "learning_rates": ("learning_rates",),
-    "refinement": tuple(
-        run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"
-    ),
-    "bilateral": tuple(run.id for run in BILATERAL_RUNS),
-    "losses": tuple(run.id for run in LOSS_RUNS),
-    "init": tuple(run.id for run in INIT_RUNS),
-    "sparsity": tuple(run.id for run in SPARSITY_RUNS),
+    section.id: tuple(run.id for run in section.runs)
+    for section in SECTIONS if section.id != "advanced_params"
 }
+SEARCH_SECTION_RUN_IDS.update(
+    dataset=tuple(run.id for run in DATASET_RUNS),
+    learning_rates=("learning_rates",),
+    refinement=tuple(run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"),
+    exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
+)
+ADVANCED_SECTIONS = ("depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random_init", "sparsity", "optimization", "losses", "init", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)
@@ -605,6 +625,7 @@ class SectionBinding:
         self._visibility_predicate = visibility_predicate
         self._handle = None
         self._edit_snapshots = {}
+        self._cancelled_edits = set()
         self.sync_text_bufs(publish=False)
 
     def input_key(self, prop_id):
@@ -673,14 +694,24 @@ class SectionBinding:
         )
 
     def sync_text_bufs(self, publish=True):
+        changed = False
         for row in self.rows:
             if row["kind"] != "number":
                 continue
-            self._text_bufs[self.input_key(row["id"])] = self.canonical_text(
-                row["id"]
-            )
+            prop_id = row["id"]
+            canonical = self.canonical_text(prop_id)
+            if prop_id in self._edit_snapshots:
+                # Unrelated refreshes must not replace an uncommitted draft.
+                # A changed authoritative value (including rollback) still wins.
+                if self._edit_snapshots[prop_id] == canonical:
+                    continue
+                self._edit_snapshots[prop_id] = canonical
+            key = self.input_key(prop_id)
+            changed |= self._text_bufs.get(key) != canonical
+            self._text_bufs[key] = canonical
         if publish:
             self._request_publish()
+        return changed
 
     def update_draft(self, prop_id, value):
         prop_id = str(prop_id)
@@ -695,6 +726,7 @@ class SectionBinding:
 
     def begin_edit(self, prop_id):
         prop_id = str(prop_id)
+        self._cancelled_edits.discard(prop_id)
         row = self._rows_by_id.get(prop_id)
         if row is None or row["kind"] != "number":
             return False
@@ -703,6 +735,7 @@ class SectionBinding:
 
     def finish_edit(self, prop_id):
         self._edit_snapshots.pop(str(prop_id), None)
+        self._cancelled_edits.discard(str(prop_id))
 
     def cancel_edit(self, prop_id):
         prop_id = str(prop_id)
@@ -712,6 +745,7 @@ class SectionBinding:
         if snapshot is None:
             snapshot = self.capture(prop_id)
         self.restore(prop_id, snapshot)
+        self._cancelled_edits.add(prop_id)
         return True
 
     def restore(self, prop_id, snapshot):
@@ -723,6 +757,9 @@ class SectionBinding:
 
     def commit(self, prop_id):
         prop_id = str(prop_id)
+        if prop_id in self._cancelled_edits:
+            self.restore(prop_id, self.capture(prop_id))
+            return False
         row = self._rows_by_id.get(prop_id)
         if row is None or row["kind"] != "number":
             return False
@@ -743,6 +780,8 @@ class SectionBinding:
                 pass
 
         self._text_bufs[key] = self.canonical_text(prop_id)
+        if prop_id in self._edit_snapshots:
+            self._edit_snapshots[prop_id] = self._text_bufs[key]
         self._request_publish()
         return updated
 
@@ -772,6 +811,8 @@ class SectionBinding:
             return False
 
         self._text_bufs[self.input_key(prop_id)] = self.canonical_text(prop_id)
+        if prop_id in self._edit_snapshots:
+            self._edit_snapshots[prop_id] = self._text_bufs[self.input_key(prop_id)]
         self._request_publish()
         return True
 
@@ -816,7 +857,8 @@ class SectionBinding:
                 if not bool(self._visibility_predicate(prop_condition)):
                     continue
             label = _localized(row["label_key"], row["name"])
-            if not row_matches_query(row["id"], label, query):
+            search_id = "bg_mode bg_color bg_image" if row["id"] == "bg_mode" else row["id"]
+            if not row_matches_query(search_id, label, query):
                 continue
             record = {
                 "id": row["id"],
@@ -921,29 +963,30 @@ def bind_run(
     return binding
 
 
-def section_is_visible(bindings, section_id):
+def section_is_visible(bindings, section_id, bespoke_predicate=None):
+    if section_id == "advanced_params":
+        return any(section_is_visible(bindings, section, bespoke_predicate)
+                   for section in ADVANCED_SECTIONS)
+    if callable(bespoke_predicate) and bespoke_predicate(section_id):
+        return True
     run_ids = set(SEARCH_SECTION_RUN_IDS.get(str(section_id), ()))
     selected = [binding for binding in bindings if binding.section_id in run_ids]
     return any(binding.is_visible() for binding in selected)
 
 
-def _bind_search_visibility(model, bindings, search_accessor):
+def _bind_search_visibility(model, bindings, search_accessor, bespoke_predicate=None):
     for section_id in SEARCH_SECTION_RUN_IDS:
         model.bind_func(
             f"pv_section_{section_id}_visible",
-            lambda section=section_id: section_is_visible(bindings, section),
+            lambda section=section_id: section_is_visible(bindings, section, bespoke_predicate),
         )
 
-    advanced_sections = tuple(
-        section_id
-        for section_id in SEARCH_SECTION_RUN_IDS
-        if section_id != "basic_params"
-    )
+    advanced_sections = ADVANCED_SECTIONS
     model.bind_func(
         "pv_section_advanced_params_visible",
         lambda: (
             not str(search_accessor() or "").strip()
-            or any(section_is_visible(bindings, section) for section in advanced_sections)
+            or any(section_is_visible(bindings, section, bespoke_predicate) for section in advanced_sections)
         ),
     )
 
@@ -956,6 +999,7 @@ def bind_sections(
     value_setter=None,
     search_accessor=None,
     visibility_predicate=None,
+    bespoke_predicate=None,
 ):
     """Bind the complete training property-view schema."""
     bind_headers(model)
@@ -976,5 +1020,5 @@ def bind_sections(
     )
     if not callable(search_accessor):
         search_accessor = lambda: ""
-    _bind_search_visibility(model, bindings, search_accessor)
+    _bind_search_visibility(model, bindings, search_accessor, bespoke_predicate)
     return bindings

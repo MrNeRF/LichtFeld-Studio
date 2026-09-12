@@ -192,6 +192,7 @@ namespace lfs::io {
             LOG_DEBUG("Creating {} camera objects", camera_infos.size());
 
             // Convert CameraData to Camera objects
+            PriorResolutionSummary prior_resolutions;
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
             cameras.reserve(camera_infos.size());
 
@@ -310,18 +311,19 @@ namespace lfs::io {
                     if (info._has_image && options.load_depths && !depth_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
-                        if (img_w != depth_w || img_h != depth_h) {
+                        if (depth_c != 1 || !sidecar_dimensions_match_contract(depth_w, depth_h, img_w, img_h)) {
                             return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
-                                              std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
+                                              std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
                                                           lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
                                                           info._image_name, img_w, img_h),
                                               depth_path);
                         }
+                        prior_resolutions.add({depth_w, depth_h, img_w, img_h}, false);
                     }
                     if (info._has_image && options.load_normals && !normal_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
-                        if (img_w != normal_w || img_h != normal_h) {
+                        if (normal_c != 3 || !sidecar_dimensions_match_contract(normal_w, normal_h, img_w, img_h)) {
                             if (options.normal_auto_generate) {
                                 LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
                                          "ignoring it so auto-generate can overwrite that file",
@@ -330,12 +332,14 @@ namespace lfs::io {
                                 normal_path.clear();
                             } else {
                                 return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
-                                                  std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                  std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}; expected a 3-channel map with aspect ratio within 1%",
                                                               lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
                                                               info._image_name, img_w, img_h),
                                                   normal_path);
                             }
                         }
+                        if (!normal_path.empty())
+                            prior_resolutions.add({normal_w, normal_h, img_w, img_h}, true);
                     }
 
                     auto cam = std::make_shared<lfs::core::Camera>(
@@ -369,6 +373,8 @@ namespace lfs::io {
             if (!missing_images.empty()) {
                 notify_missing_dataset_images(missing_images);
             }
+
+            prior_resolutions.log();
 
             const bool images_have_alpha = detect_camera_alpha(cameras, options.cancel_requested);
 

@@ -7,6 +7,8 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
+#include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -1054,6 +1056,17 @@ namespace lfs::vis {
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
+            // Record GUI ownership at the press and carry it in the frame buffer.
+            // Frame-time bounds miss GUI edges overlapping the viewport (the dock resize
+            // strip) and layout changes. Input routing reuses this hit, including keyboard intent.
+            gui::GuiHitTestResult press_hit;
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                if (auto* const gui = services().guiOrNull())
+                    press_hit = gui->hitTestMouseButton(event.button.x, event.button.y);
+                frame_input_.notePressOwner(
+                    event.button.button,
+                    press_hit.blocks_pointer || press_hit.blocks_mouse_button);
+            }
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
@@ -1088,7 +1101,7 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
-            input_router_.beginMouseButton(action, event.button.x, event.button.y);
+            input_router_.beginMouseButton(action, event.button.x, event.button.y, press_hit);
             input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
             input_router_.endMouseButton(action);
             break;

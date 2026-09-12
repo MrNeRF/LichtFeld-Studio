@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -71,12 +73,23 @@ namespace lfs::vis {
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control
+        using EvaluationWeightsPreparer =
+            std::function<std::optional<std::filesystem::path>(bool allow_download)>;
+
+        void set_evaluation_weights_preparer(EvaluationWeightsPreparer preparer) {
+            evaluation_weights_preparer_ = std::move(preparer);
+        }
+
         bool startTraining();
+        [[nodiscard]] lfs::Status
+        preflightStartParameters();
+        [[nodiscard]] lfs::Error
+        rejectStart(std::string message, lfs::ErrorCode code);
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
         void pauseTraining();
-        void resumeTraining();
+        lfs::Status resumeTraining();
         void stopTraining();
         bool requestSaveProject();
         // Suppress the completion notification modal for the next TrainingCompleted
@@ -146,11 +159,12 @@ namespace lfs::vis {
             int iteration = 0;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            std::optional<float> lpips;
         };
 
         std::deque<float> getPSNRBuffer() const;
         void updatePSNR(float psnr);
-        void updateEvaluationMetrics(int iteration, float psnr, float ssim);
+        void updateEvaluationMetrics(int iteration, float psnr, float ssim, std::optional<float> lpips);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
         [[nodiscard]] lfs::io::project::MetricsChapter
@@ -198,7 +212,7 @@ namespace lfs::vis {
         const lfs::core::param::OptimizationParameters& getEditableOptParams() const { return pending_opt_params_; }
         lfs::core::param::DatasetConfig& getEditableDatasetParams() { return pending_dataset_params_; }
         const lfs::core::param::DatasetConfig& getEditableDatasetParams() const { return pending_dataset_params_; }
-        void applyPendingParams();
+        [[nodiscard]] lfs::Status applyPendingParams();
 
     private:
         struct TrainingCompletionData {
@@ -228,7 +242,6 @@ namespace lfs::vis {
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
         void dispatchTrainingCompleted(TrainingCompletionData completion);
-
         // State management
         void handleTrainingComplete(bool success, const std::string& error = "",
                                     bool resource_exhausted = false,
@@ -254,6 +267,7 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        EvaluationWeightsPreparer evaluation_weights_preparer_;
         std::unique_ptr<std::jthread> initialization_thread_;
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;
@@ -320,6 +334,10 @@ namespace lfs::vis {
             restored_accumulated_training_time_;
         std::optional<lfs::io::project::TrainingFinishReason>
             restored_finish_reason_;
+        // Frozen at Start so worker-side application cannot observe a newer
+        // ParameterManager state than the one synchronously validated.
+        std::optional<lfs::core::param::TrainingParameters>
+            start_params_candidate_;
         bool restored_finish_published_ = false;
         bool stored_session_presentation_active_ = false;
         bool stored_session_presentation_completed_ = false;
@@ -328,6 +346,7 @@ namespace lfs::vis {
         std::string stored_session_presentation_strategy_;
 
         [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;
+        [[nodiscard]] lfs::core::param::TrainingParameters pendingParamsCandidate() const;
         void applyRestoredCheckpointPresentation();
         void publishRestoredTrainingStore();
         void clearStoredSessionPresentation();

@@ -49,6 +49,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui/sequencer_ui_state.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -150,6 +151,19 @@ namespace lfs::python {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
             auto name = nb::cast<std::string>(cls.attr("__qualname__"));
             return mod + "." + name;
+        }
+
+        bool set_video_reconstruction_selection(const io::video::VideoReconstructionSelection& selection) {
+            return invoke_on_viewer(
+                [selection = selection]() mutable {
+                    auto* const viewer = get_visualizer();
+                    auto* const gui = get_gui_manager();
+                    if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                        return false;
+                    gui->getSequencerUIState().reconstruction = std::move(selection);
+                    return true;
+                },
+                false);
         }
 
         constexpr size_t INPUT_TEXT_BUFFER_SIZE = 1024;
@@ -3466,6 +3480,15 @@ namespace lfs::python {
             "Open a save file dialog for SOG files. Returns empty string if cancelled.");
 
         m.def(
+            "save_ssog_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveSsogFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for SSOG files. Returns empty string if cancelled.");
+
+        m.def(
             "save_spz_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSpzFileDialog(default_name);
@@ -3670,6 +3693,45 @@ namespace lfs::python {
                 lfs::event::LocalizationManager::getInstance().clearAllOverrides();
             },
             "Clear all localization overrides");
+
+        m.def(
+            "_loc_register_catalog",
+            [](const std::string& owner_id,
+               const std::string& language_code,
+               const nb::dict& translations) {
+                lfs::event::LocalizationManager::TranslationMap entries;
+                entries.reserve(translations.size());
+                for (const auto& item : translations) {
+                    if (!nb::isinstance<nb::str>(item.first) ||
+                        !nb::isinstance<nb::str>(item.second))
+                        throw nb::type_error("translations must be a dict[str, str]");
+                    entries.emplace(nb::cast<std::string>(item.first),
+                                    nb::cast<std::string>(item.second));
+                }
+
+                std::string error;
+                const auto token =
+                    lfs::event::LocalizationManager::getInstance().registerPluginCatalog(
+                        owner_id, language_code, entries, &error);
+                if (token == 0)
+                    throw nb::value_error(error.c_str());
+
+                lfs::vis::publish_language_generation();
+                return token;
+            },
+            nb::arg("owner_id"), nb::arg("language_code"), nb::arg("translations"),
+            "Register one validated, owner-scoped plugin localization catalog");
+
+        m.def(
+            "_loc_unregister_catalog",
+            [](const std::uint64_t token) {
+                const bool removed =
+                    lfs::event::LocalizationManager::getInstance().unregisterPluginCatalog(token);
+                if (removed)
+                    lfs::vis::publish_language_generation();
+                return removed;
+            },
+            nb::arg("token"), "Unregister one plugin localization catalog by ownership token");
 
         m.def(
             "register_popup_draw_callback",
@@ -4772,23 +4834,79 @@ namespace lfs::python {
               "Set sequencer playback speed");
 
         m.def(
+            "get_video_reconstruction_selection",
+            [] {
+                using Selection = io::video::VideoReconstructionSelection;
+                const auto selection = invoke_on_viewer(
+                    []() -> std::optional<Selection> {
+                        auto* const viewer = get_visualizer();
+                        auto* const gui = get_gui_manager();
+                        if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                            return std::nullopt;
+                        return gui->getSequencerUIState().reconstruction;
+                    },
+                    std::optional<Selection>{});
+                if (!selection)
+                    throw std::runtime_error("Viewer is unavailable");
+                nb::dict result;
+                result["backend_id"] = selection->backend_id;
+                result["preset_id"] = selection->preset_id;
+                result["fallback"] = std::string(io::video::videoReconstructionFallbackId(selection->fallback));
+                return result;
+            },
+            "Return the saved video reconstruction selection used by both export entry points.");
+
+        m.def(
+            "set_video_reconstruction_selection",
+            [](const std::string& backend_id, const std::string& preset_id, const std::string& fallback) {
+                const auto policy = io::video::videoReconstructionFallbackFromId(fallback);
+                if (!policy)
+                    throw nb::value_error("Video reconstruction fallback must be 'abort' or 'native'");
+                const io::video::VideoReconstructionSelection selection{
+                    .backend_id = backend_id,
+                    .preset_id = preset_id,
+                    .fallback = *policy};
+                if (const auto valid = io::video::validateVideoReconstructionSelection(selection); !valid)
+                    throw nb::value_error(valid.error().message.c_str());
+                if (!set_video_reconstruction_selection(selection))
+                    throw std::runtime_error("Viewer is unavailable");
+            },
+            nb::arg("backend_id"), nb::arg("preset_id"), nb::arg("fallback") = "abort",
+            "Set the persisted video reconstruction selection. Validates metadata only, without loading a backend.");
+
+        m.def(
+            "reset_video_reconstruction_selection",
+            [] {
+                if (!set_video_reconstruction_selection({}))
+                    throw std::runtime_error("Viewer is unavailable");
+            },
+            "Reset the saved video reconstruction selection to native/native with abort policy.");
+
+        m.def(
             "export_video",
             [](int width, int height, int framerate, int crf, const std::string& path,
                bool include_provenance) {
-                lfs::core::events::cmd::SequencerExportVideo{
-                    .width = width,
-                    .height = height,
-                    .framerate = framerate,
-                    .crf = crf,
-                    .path = path,
-                    .include_provenance = include_provenance}
-                    .emit();
+                const bool dispatched = invoke_on_viewer(
+                    [width, height, framerate, crf, path, include_provenance] {
+                        auto* const viewer = get_visualizer();
+                        auto* const gui = get_gui_manager();
+                        if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                            return false;
+                        gui->getSequencerUIState()
+                            .videoExportRequest(width, height, framerate, crf, path, include_provenance)
+                            .emit();
+                        return true;
+                    },
+                    false);
+                if (!dispatched)
+                    throw std::runtime_error("Viewer is unavailable");
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
             nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
+            "Uses the saved video reconstruction selection, as does the Sequencer button. "
             "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(
@@ -5754,6 +5872,115 @@ namespace lfs::python {
                 return d;
             },
             "Get split view info");
+
+        m.def(
+            "get_focused_split_panel", []() -> const char* {
+                // Read unprotected, main-thread-owned focused_panel_ on the viewer thread.
+                const bool right = invoke_on_viewer(
+                    [] {
+                        auto* const rm = get_rendering_manager();
+                        return rm && rm->getFocusedSplitPanel() == vis::SplitViewPanelId::Right;
+                    },
+                    false);
+                return right ? "right" : "left";
+            },
+            "Get the focused split-view panel ('left' or 'right').\n"
+            "Outside independent-dual split this reports the panel the depth\n"
+            "toolbar would address; it is 'left' with no rendering manager.");
+
+        m.def(
+            "get_depth_window_sync", []() -> bool {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getDepthWindowSync() : false;
+            },
+            "Is the per-panel depth-window sync flag on? While on, a depth-window\n"
+            "edit in either split panel writes both panels.");
+
+        m.def(
+            "get_depth_window_collapse_source", []() -> const char* {
+                // The getter holds settings_mutex_, so no viewer-thread marshal is needed.
+                auto* rm = get_rendering_manager();
+                return rm && rm->getDepthWindowCollapseSource() == vis::SplitViewPanelId::Right
+                           ? "right"
+                           : "left";
+            },
+            "Which panel the last LINEAGE EVENT took its surviving window from\n"
+            "('left' or 'right') -- not only a collapse. Leaving independent-dual\n"
+            "copies the PRE-transition focused panel's depth window into the\n"
+            "single remaining one, and the split service resets the observable\n"
+            "focus to Left in the same transition, so a poller cannot recover\n"
+            "that panel from get_focused_split_panel(). A sync-ON copy and a\n"
+            "project or sync-undo restore overwrite this field too, so it names\n"
+            "the source of whichever write stamped LAST; use\n"
+            "get_depth_window_collapse_record() to learn which kind that was.\n"
+            "Only meaningful once such a write has happened; it reports 'left'\n"
+            "before the first one and with no rendering manager.");
+
+        m.def(
+            "get_depth_window_collapse_record", []() -> nb::tuple {
+                // Read source, generation and kind together under the manager's settings lock.
+                auto* rm = get_rendering_manager();
+                if (!rm) {
+                    return nb::make_tuple("left", static_cast<uint64_t>(0), "leave_collapse");
+                }
+                const auto record = rm->getDepthWindowCollapseRecord();
+                const char* kind = "leave_collapse";
+                switch (record.kind) {
+                case vis::RenderingManager::DepthWindowLineageKind::SyncCopy:
+                    kind = "sync_copy";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::ProjectRestore:
+                    kind = "project_restore";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::RetainedPairDiscard:
+                    kind = "retained_pair_discard";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::LeaveCollapse:
+                    break;
+                }
+                return nb::make_tuple(
+                    record.source == vis::SplitViewPanelId::Right ? "right" : "left",
+                    record.generation,
+                    kind);
+            },
+            "The last depth-window reference-lineage stamp, as\n"
+            "('left'|'right', generation, kind).\n"
+            "kind is 'leave_collapse', 'sync_copy', 'project_restore' or\n"
+            "'retained_pair_discard'. These invalidate slot-derived references;\n"
+            "sync undo/redo also reports 'project_restore'. A retained-pair discard\n"
+            "requires fresh baselines from live windows, not from source. The\n"
+            "generation counts them, so a poller whose delta exceeds the\n"
+            "transitions it observed slept through boundaries and cannot replay\n"
+            "anything it cached; the kind says how to recover from the ones it\n"
+            "missed. 'leave_collapse' and 'sync_copy' leave ONE window, so every\n"
+            "cached reference recovers from it; 'project_restore' means\n"
+            "'fresh-baseline required' and can leave the two panel windows\n"
+            "DIFFERING, so a per-panel consumer must re-read each panel with\n"
+            "selection.get_depth_filter_window(panel=...) rather than reuse the\n"
+            "projection. source is the panel the surviving window came from and\n"
+            "is meaningful for 'leave_collapse' (the PRE-transition focus, which\n"
+            "get_focused_split_panel() can no longer report) and for 'sync_copy'\n"
+            "(the panel copied FROM); a 'project_restore' takes its windows from\n"
+            "the restored state, not from a panel. The generation is 0 before\n"
+            "the first such write and with no rendering manager.");
+
+        m.def(
+            "set_depth_window_sync", [](bool sync) -> bool {
+                auto* rm = get_rendering_manager();
+                if (!rm)
+                    return false;
+                rm->setDepthWindowSync(sync);
+                // Refused drag/parked-GT requests return the actual flag.
+                return rm->getDepthWindowSync();
+            },
+            nb::arg("sync"), "Set the per-panel depth-window sync flag. Turning it on with\n"
+                             "differing panels copies the focused panel's window to the other as\n"
+                             "one undo step. Both ON and OFF changes are silently ignored while a\n"
+                             "depth-window drag owns a panel, including subthreshold presses, or\n"
+                             "while an independent pair is parked in GT. GT without a parked pair\n"
+                             "is unaffected. In a retained Disabled interval an actual flag change\n"
+                             "discards the pair before applying; a same-value request preserves it.\n"
+                             "Returns the flag's actual state after the call, not the requested one.");
 
         m.def(
             "get_current_camera_id", []() -> int {

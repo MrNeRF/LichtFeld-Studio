@@ -335,7 +335,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -804,6 +804,47 @@ namespace {
         return viewer->projectTrainingSessionState();
     }
 
+    // Keyword-only panel= matches depth-window actions: None uses the legacy path;
+    // main explicitly requests focus; left/right name a panel. None and main
+    // coincide for focus_selection. For reset_camera, panel=None targets the
+    // primary viewport; panel='main' targets the focused panel.
+    [[nodiscard]] std::optional<lfs::vis::SplitViewPanelId>
+    parseGizmoPanelArg(const std::string& panel) {
+        if (panel == "left")
+            return lfs::vis::SplitViewPanelId::Left;
+        if (panel == "right")
+            return lfs::vis::SplitViewPanelId::Right;
+        if (panel == "main")
+            return std::nullopt; // resolved to the focused panel by the caller
+        throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
+    }
+
+    // Resolve main on the viewer thread: focused_panel_ is unprotected and
+    // main-thread-owned. Without a manager, use Left as get_focused_split_panel does.
+    [[nodiscard]] lfs::vis::SplitViewPanelId focusedGizmoPanel() {
+        const auto read = [] {
+            auto* const rm = lfs::python::get_rendering_manager();
+            return rm ? rm->getFocusedSplitPanel() : lfs::vis::SplitViewPanelId::Left;
+        };
+        auto* const viewer = lfs::python::get_visualizer();
+        if (!viewer || viewer->isOnViewerThread())
+            return read();
+        if (!viewer->acceptsPostedWork())
+            return lfs::vis::SplitViewPanelId::Left;
+
+        nb::gil_scoped_release release;
+        return lfs::vis::post_work_and_wait(
+            [viewer](lfs::vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+            read,
+            [] { return lfs::vis::SplitViewPanelId::Left; });
+    }
+
+    // Raise ValueError for unknown tokens before state access or partial application.
+    [[nodiscard]] lfs::vis::SplitViewPanelId resolveGizmoPanelArg(const std::string& panel) {
+        const auto parsed = parseGizmoPanelArg(panel);
+        return parsed ? *parsed : focusedGizmoPanel();
+    }
+
     int scene_training_gaussian_count() {
         if (auto* const scene = get_scene_internal()) {
             return static_cast<int>(scene->getTrainingModelGaussianCount());
@@ -1011,20 +1052,39 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const viewer = lfs::python::get_visualizer();
+            // Capture the caller's thread before marshalling the command. UI
+            // callbacks must return so initialization can post work back to
+            // the viewer; off-thread scripts retain the synchronous contract.
+            const bool called_on_viewer = viewer && viewer->isOnViewerThread();
             auto* const trainer_manager = lfs::python::get_trainer_manager();
+            std::optional<std::string> rejection;
             emit_project_cmd_marshaled(
-                "python.start_training", [] {
-                    lfs::core::events::cmd::StartTraining{}
-                        .emit();
+                "python.start_training", [&] {
+                    if (viewer) {
+                        if (auto started = viewer->startTraining(); !started)
+                            rejection = started.error();
+                    } else if (!trainer_manager) {
+                        rejection = "Trainer manager not initialized";
+                    } else if (!trainer_manager->startTraining()) {
+                        rejection = trainer_manager->getLastError().empty()
+                                        ? std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::Start))
+                                        : trainer_manager->getLastError();
+                    }
                 });
-            if (trainer_manager) {
+            if (rejection)
+                throw std::runtime_error(*rejection);
+            if (trainer_manager && !called_on_viewer) {
                 if (auto initialized = trainer_manager->waitForInitialization();
                     !initialized) {
-                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                    const auto& error = initialized.error();
+                    throw std::runtime_error(std::string(
+                        error.user_message().empty() ? error.detail() : error.user_message()));
                 }
             }
         },
-        "Start training with current parameters; waits for off-thread initialization");
+        "Start training with current parameters. Returns after dispatch on the viewer thread; "
+        "other callers wait for initialization. Asynchronous failures are reported through training state.");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {
@@ -1044,7 +1104,18 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "resume_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::ResumeTraining{}.emit();
+            std::optional<std::string> rejection;
+            emit_project_cmd_marshaled("python.resume_training", [&] {
+                auto* const manager = lfs::python::get_trainer_manager();
+                if (!manager) {
+                    rejection = "Trainer manager not initialized";
+                } else if (auto resumed = manager->resumeTraining(); !resumed) {
+                    const auto& error = resumed.error();
+                    rejection = std::string(error.user_message().empty() ? error.detail() : error.user_message());
+                }
+            });
+            if (rejection)
+                throw std::runtime_error(*rejection);
         },
         "Resume a paused training run");
     m.def(
@@ -1832,16 +1903,25 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
+           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance);
+                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        nb::kw_only(),
+        nb::arg("lod_levels") = 4,
+        nb::arg("lod_ratio") = 0.5f,
+        nb::arg("chunk_count_k") = 512,
+        nb::arg("chunk_extent") = 16.0f,
+        nb::arg("chunk_min_k") = 8,
+        nb::arg("kmeans_iterations") = 10,
+        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. "
+        "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");
@@ -2497,14 +2577,47 @@ NB_MODULE(lichtfeld, m) {
 
     // Camera commands
     m.def(
-        "reset_camera", []() { lfs::core::events::cmd::ResetCamera{}.emit(); },
-        "Reset camera to default position and orientation");
-    m.def(
-        "focus_selection", []() -> bool {
-            auto* const controller = lfs::vis::InputController::instance();
-            return controller ? controller->focusSelection() : false;
+        "reset_camera", [](const std::optional<std::string>& panel) {
+            if (!panel.has_value()) {
+                lfs::core::events::cmd::ResetCamera{}.emit();
+                return;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->resetCameraForPanel(panel_id);
         },
-        "Focus the active viewport on the selection, or the whole scene when nothing is selected");
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Reset the primary camera by default, even when another panel has focus.\n"
+                                                      "Use panel=\"main\" to reset the focused camera. Reset restores the camera's\n"
+                                                      "default position and orientation.\n"
+                                                      "\n"
+                                                      "Unlike focus_selection(), omitting panel (or passing None) does not follow focus.\n"
+                                                      "\n"
+                                                      "panel (keyword-only):\n"
+                                                      "- None (default): primary camera.\n"
+                                                      "- 'main': focused camera.\n"
+                                                      "- 'left' / 'right': named panel's camera.\n"
+                                                      "\n"
+                                                      "Outside independent-dual split, all choices target the primary camera.\n"
+                                                      "Addressing a panel never changes focus.");
+    m.def(
+        "focus_selection", [](const std::optional<std::string>& panel) -> bool {
+            if (!panel.has_value()) {
+                auto* const controller = lfs::vis::InputController::instance();
+                return controller ? controller->focusSelection() : false;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            auto* const controller = lfs::vis::InputController::instance();
+            return controller ? controller->focusSelectionForPanel(panel_id) : false;
+        },
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Focus the active viewport on the selection, or the whole scene when nothing is selected.\n"
+                                                      "\n"
+                                                      "panel (keyword-only) selects which split panel's camera is moved:\n"
+                                                      "- None (default): the focused panel, exactly as before.\n"
+                                                      "- 'main': the panel that currently has focus, requested explicitly.\n"
+                                                      "  Same panel as None here, reached through the panel-addressed path.\n"
+                                                      "- 'left' / 'right': that panel's own camera. Outside independent-dual\n"
+                                                      "  split every token resolves to the primary camera, because there is\n"
+                                                      "  only one. Addressing a panel never changes which panel has focus.");
     m.def(
         "get_camera_navigation_mode", []() -> std::string {
             const auto* controller = lfs::vis::InputController::instance();

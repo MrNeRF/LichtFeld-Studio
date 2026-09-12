@@ -8,6 +8,8 @@
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
+#include "gui/rmlui/rml_pointer_dispatch.hpp"
+#include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -24,7 +26,6 @@
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <cmath>
 #include <format>
@@ -144,6 +145,7 @@ namespace lfs::vis::gui {
         append(RenderReason::LeftDockResize, "left_dock_resize");
         append(RenderReason::ProjectDrag, "project_drag");
         append(RenderReason::ThemePresentation, "theme_presentation");
+        append(RenderReason::Tooltip, "tooltip");
         return sources.empty() ? "unknown" : sources;
     }
 
@@ -206,6 +208,10 @@ namespace lfs::vis::gui {
         hovered_interactive_ = false;
         last_hover_element_ = nullptr;
         mouse_pos_valid_ = false;
+        // Reset press ownership when its context is destroyed.
+        left_press_classifications_.clear();
+        std::fill(std::begin(pointer_down_delivered_), std::end(pointer_down_delivered_), false);
+        last_valid_input_origin_.reset();
     }
 
     void RmlViewportOverlay::reloadResources() {
@@ -241,6 +247,10 @@ namespace lfs::vis::gui {
         hovered_interactive_ = false;
         last_hover_element_ = nullptr;
         mouse_pos_valid_ = false;
+        // Reset press ownership when the pressed document is unloaded.
+        left_press_classifications_.clear();
+        std::fill(std::begin(pointer_down_delivered_), std::end(pointer_down_delivered_), false);
+        last_valid_input_origin_.reset();
         last_render_w_ = 0;
         last_render_h_ = 0;
         last_document_hook_run_ = {};
@@ -354,6 +364,8 @@ namespace lfs::vis::gui {
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
+        if (size.x > 0.0f && size.y > 0.0f)
+            last_valid_input_origin_ = pos;
         if (context_size_changed && project_drag_overlay_.visible)
             applyProjectDragOverlay();
     }
@@ -551,9 +563,6 @@ namespace lfs::vis::gui {
             }));
         document_sync_subscriptions_.push_back(
             store.language_generation.subscribe(mark_document_dirty));
-        document_sync_subscriptions_.push_back(
-            store.import_overlay_state.subscribe(mark_document_dirty));
-        document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));
     }
 
     void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {
@@ -1010,12 +1019,42 @@ namespace lfs::vis::gui {
         }
     }
 
-    void RmlViewportOverlay::processInput(const PanelInputState& input) {
+    void RmlViewportOverlay::processInput(const PanelInputState& input,
+                                          const ViewportOverlayInputBlockers& blockers) {
         wants_input_ = false;
+        // Clear before any early return: GuiManager consumes only this frame's
+        // left-press classifications, in arrival order.
+        left_press_classifications_.clear();
         if (!rml_context_ || !document_)
             return;
-        if (vp_size_.x <= 0 || vp_size_.y <= 0)
+        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                      input.key_alt, input.key_super);
+        const auto release_owned_buttons = [&](const glm::vec2 origin) {
+            (void)rml_input::replayButtonEvents(
+                *rml_context_, pointer_down_delivered_, input.mouse_button_events,
+                origin, vp_size_, mods, false,
+                [](const Rml::Element*) { return false; }, false);
+            if (!input.mouse_button_events.empty()) {
+                markRenderNeeded(RenderReason::PointerButton);
+            }
+            // Only real event-point moves were delivered. Frame-end hover and
+            // masked sentinel movement stay blocked until ordinary input resumes.
+            hovered_interactive_ = false;
+            last_hover_element_ = nullptr;
+            mouse_pos_valid_ = false;
+            tooltip_.setHover({}, nullptr);
+        };
+        if (vp_size_.x <= 0 || vp_size_.y <= 0) {
+            // renderCached() retains this context's dimensions; use its last valid
+            // input origin for releases while layout bounds are empty.
+            if (last_valid_input_origin_)
+                release_owned_buttons(*last_valid_input_origin_);
             return;
+        }
+        if (blockers.blocksInput()) {
+            release_owned_buttons(vp_pos_);
+            return;
+        }
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(vp_pos_.x - screen_origin_.x),
@@ -1025,8 +1064,6 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - vp_pos_.x;
         const float my = input.mouse_y - vp_pos_.y;
-        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                      input.key_alt, input.key_super);
         const int rml_mx = static_cast<int>(mx);
         const int rml_my = static_cast<int>(my);
 
@@ -1037,21 +1074,19 @@ namespace lfs::vis::gui {
                                rml_my >= 0 && rml_my < static_cast<int>(vp_size_.y);
         const bool mouse_moved =
             !mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_;
-        const bool mouse_clicked =
-            input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2];
         const bool pointer_event =
             input.mouse_clicked[0] || input.mouse_released[0] ||
             input.mouse_clicked[1] || input.mouse_released[1] ||
             input.mouse_clicked[2] || input.mouse_released[2] ||
-            input.mouse_wheel != 0.0f;
+            input.mouse_wheel != 0.0f || !input.mouse_button_events.empty();
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
             !input.keys_pressed.empty() || !input.keys_released.empty() ||
             !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
             !input.text_inputs.empty() || input.has_text_editing;
-        const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
-        const bool toolbar_drag_capture = toolbar_drag_active_;
+        bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
         const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
@@ -1088,18 +1123,88 @@ namespace lfs::vis::gui {
                            Rml::Vector2f(event_x, event_y))) != nullptr;
             });
         const bool hover_target_changed = point_element != last_hover_element_;
-        if (focused_text_target &&
-            mouse_clicked &&
-            is_inside &&
-            !isElementOrDescendantOf(point_element, focused_before)) {
+
+        // Classify each DOWN at its SDL coordinates, in arrival order. mx/my is the
+        // latest cursor position for hover/drag: using it here could turn a Right-panel
+        // press followed by motion onto the toolbar into a toolbar press, or vice versa.
+        // Different buttons or repeated presses can hit different targets in one frame.
+        // Read the canonical vector without coalescing, reordering or truncating;
+        // the replay below delivers each owned event in the same order.
+        struct PressClassification {
+            bool inside = false;
+            Rml::Element* element = nullptr;
+            bool on_overlay_control = false;
+            // This press dismisses the focused text field.
+            bool blurs_focused = false;
+        };
+        // Export every left DOWN in arrival order. GuiManager pairs entry i with the
+        // frame's i-th canonical left DOWN, keeping classification, coordinates and
+        // ownership tied to that press. Apply each in order; choosing one governing
+        // press could let a later toolbar press erase an earlier viewport focus change.
+        bool blur_press = false;
+        for (const auto& event : input.mouse_button_events) {
+            if (!event.down || event.button >= 3)
+                continue;
+            PressClassification press;
+            const float press_x = event.x - vp_pos_.x;
+            const float press_y = event.y - vp_pos_.y;
+            press.inside = press_x >= 0.0f && press_y >= 0.0f &&
+                           press_x < vp_size_.x && press_y < vp_size_.y;
+            press.element = press.inside
+                                ? rml_context_->GetElementAtPoint(
+                                      Rml::Vector2f(press_x, press_y))
+                                : nullptr;
+            press.on_overlay_control = viewportOverlayHoverRoot(press.element) != nullptr;
+            press.blurs_focused = focused_text_target && press.inside &&
+                                  !isElementOrDescendantOf(press.element, focused_before);
+            // Only the first press off the focused field dismisses it. Later presses in
+            // this frame cannot reuse that dismissal to move panel focus.
+            const bool dismisses_focused = press.blurs_focused && !blur_press;
+            if (press.blurs_focused)
+                blur_press = true;
+            if (event.button == 0) {
+                left_press_classifications_.push_back({
+                    .on_interactive_control = press.on_overlay_control,
+                    .blurred_text_input = dismisses_focused,
+                });
+            }
+        }
+
+        // Match input_controller.cpp: bare presses change panel focus only on left DOWN.
+        // Non-left camera gestures keep their own focus paths (beginPanDrag,
+        // CAMERA_ORBIT, CAMERA_SET_PIVOT).
+        // Export on_interactive_control and blurred_text_input per left press for
+        // GuiManager. Classify at that press's coordinates, not latest hover, so a
+        // toolbar control cannot focus the panel beneath it.
+        // Any button can still blur a field; dismissal alone does not focus a panel.
+        if (blur_press) {
             focused_before->Blur();
+            // Blur() dispatches synchronously, so its commit handler runs before
+            // GuiManager can move panel focus for this press.
             markRenderNeeded(RenderReason::Keyboard);
         }
+        // External capture describes the latest hover. Earlier viewport presses
+        // still classify and commit a focused edit before GuiManager moves focus.
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
             !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event) {
-            tooltip_.setHover({}, nullptr);
+            release_owned_buttons(vp_pos_);
             return;
         }
+        // Replay canonical events at their own coordinates, in arrival order.
+        // rml_pointer_dispatch.hpp exposes the loop for tests with their own context.
+        const bool replayed_button_events = rml_input::replayButtonEvents(
+            *rml_context_, pointer_down_delivered_, input.mouse_button_events, vp_pos_, vp_size_,
+            mods, false,
+            [this](const Rml::Element* const element) {
+                return (vram_hud_ && vram_hud_->isCapturingPointer()) ||
+                       toolbar_drag_active_ || viewportOverlayHoverRoot(element) != nullptr;
+            });
+        vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        toolbar_drag_capture = toolbar_drag_active_;
+        // Cancellation changes control state without delivering the replacement press.
+        if (!input.mouse_button_events.empty())
+            markRenderNeeded(RenderReason::PointerButton);
+
         const bool should_process_mouse_move =
             (mouse_moved || pointer_event) &&
             (was_inside || is_inside || vram_drag_capture || toolbar_drag_capture) &&
@@ -1144,37 +1249,15 @@ namespace lfs::vis::gui {
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
 
-        bool replayed_button_events = false;
-        for (const auto& event : input.mouse_button_events) {
-            if (event.button >= 3)
-                continue;
-            const float event_x = event.x - vp_pos_.x;
-            const float event_y = event.y - vp_pos_.y;
-            const bool event_inside = event_x >= 0.0f && event_x < vp_size_.x &&
-                                      event_y >= 0.0f && event_y < vp_size_.y;
-            const auto* const event_element = event_inside
-                                                  ? rml_context_->GetElementAtPoint(
-                                                        Rml::Vector2f(event_x, event_y))
-                                                  : nullptr;
-            if (!vram_drag_capture && !toolbar_drag_capture &&
-                viewportOverlayHoverRoot(event_element) == nullptr)
-                continue;
-            rml_context_->ProcessMouseMove(static_cast<int>(event_x),
-                                           static_cast<int>(event_y), mods);
-            markRenderNeeded(RenderReason::PointerButton);
-            if (event.down)
-                rml_context_->ProcessMouseButtonDown(event.button, mods);
-            else
-                rml_context_->ProcessMouseButtonUp(event.button, mods);
-            replayed_button_events = true;
-        }
-
         if (over_interactive || vram_drag_capture || toolbar_drag_capture ||
             replayed_button_events) {
             wants_input_ = true;
             guiFocusState().want_capture_mouse = true;
 
-            if (!replayed_button_events &&
+            // AGGREGATE FALLBACK: only when the canonical event stream is empty.
+            // Aggregate bits have no event coordinates or order. Replaying them after
+            // skipping unowned events would invent a press at the frame-end cursor.
+            if (input.mouse_button_events.empty() &&
                 (over_interactive || vram_drag_capture || toolbar_drag_capture)) {
                 if (input.mouse_clicked[0]) {
                     markRenderNeeded(RenderReason::PointerButton);
@@ -1209,7 +1292,11 @@ namespace lfs::vis::gui {
         // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
         // over_interactive, because a text input keeps focus even when the mouse roams away.
         if (auto* focused = rml_context_->GetFocusElement()) {
-            if (publishOverlayTextFocus(focused)) {
+            // Selects do not request text input, but must still receive keys and Escape.
+            // Admit them explicitly, as the sidebar's hasFocusedKeyboardTarget does.
+            const bool text_focus = publishOverlayTextFocus(focused);
+            const bool select_focus = !text_focus && rml_input::isSelectRelatedElement(focused);
+            if (text_focus || select_focus) {
                 wants_input_ = true;
                 // Numpad digit and period scancodes must be suppressed from
                 // ProcessKeyDown / ProcessKeyUp when a text input is focused,
@@ -1217,11 +1304,27 @@ namespace lfs::vis::gui {
                 // arrows, etc.). The actual digit text arrives via
                 // ProcessTextInput below. This mirrors the fix in
                 // rml_panel_host.cpp for the sidebar text inputs.
-                auto isNumpadTextKey = [](int sc) {
-                    return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
-                           sc == SDL_SCANCODE_KP_PERIOD;
+                auto isNumpadTextKey = [text_focus](int sc) {
+                    return text_focus &&
+                           ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
+                            sc == SDL_SCANCODE_KP_PERIOD);
                 };
+                // RmlUi text inputs do not handle Escape; cancel and blur as the sidebar
+                // host does. During IME composition, leave Escape to abort the composition.
+                auto* const text_input_handler =
+                    rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
+                const bool composing = text_input_handler && text_input_handler->isComposing();
+                bool escape_requested = false;
                 for (const int sc : input.keys_pressed) {
+                    if (sc == SDL_SCANCODE_ESCAPE) {
+                        if (rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(),
+                                                            composing)) {
+                            escape_requested = true;
+                            continue;
+                        }
+                        if (composing)
+                            continue;
+                    }
                     if (isNumpadTextKey(sc))
                         continue;
                     const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
@@ -1230,7 +1333,11 @@ namespace lfs::vis::gui {
                         rml_context_->ProcessKeyDown(rml_key, mods);
                     }
                 }
+                if (escape_requested && rml_input::cancelFocusedElement(*rml_context_))
+                    markRenderNeeded(RenderReason::Keyboard);
                 for (const int sc : input.keys_released) {
+                    if ((escape_requested || composing) && sc == SDL_SCANCODE_ESCAPE)
+                        continue;
                     if (isNumpadTextKey(sc))
                         continue;
                     const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
@@ -1484,6 +1591,10 @@ namespace lfs::vis::gui {
                                !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
                                !tooltip_changed && w == last_render_w_ && h == last_render_h_;
         if (!can_reuse) {
+            // Preserve the tooltip change as a render reason: render()'s second check
+            // sees it already applied, so an otherwise-idle frame would not rasterize it.
+            if (tooltip_changed)
+                markRenderNeeded(RenderReason::Tooltip);
             render();
             return;
         }

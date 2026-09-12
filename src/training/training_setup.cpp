@@ -22,6 +22,7 @@
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "normal_auto_generate.hpp"
 #include "trainer.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -733,9 +734,8 @@ namespace lfs::training {
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
-            .load_normals = (params.optimization.use_normal_loss &&
-                             params.optimization.normal_loss_weight > 0.0f) ||
-                            params.optimization.enable_eval,
+            .load_normals = training_normal_priors_enabled(params.optimization) ||
+                            (!params.optimization.gut && params.optimization.enable_eval),
             .normal_auto_generate = params.optimization.normal_auto_generate,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
@@ -1091,8 +1091,7 @@ namespace lfs::training {
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
-            .load_normals = params.optimization.use_normal_loss &&
-                            params.optimization.normal_loss_weight > 0.0f,
+            .load_normals = training_normal_priors_enabled(params.optimization),
             .normal_auto_generate = params.optimization.normal_auto_generate};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
@@ -1290,7 +1289,8 @@ namespace lfs::training {
     void grant_headless_project_saves(
         Trainer& trainer,
         const lfs::core::param::TrainingParameters& params,
-        const std::filesystem::path& destination) {
+        const std::filesystem::path& destination,
+        std::optional<std::filesystem::path> source_path) {
         if (destination.empty() &&
             params.dataset.output_path.empty()) {
             LOG_WARN(
@@ -1300,7 +1300,8 @@ namespace lfs::training {
         trainer.set_live_project_snapshot(
             destination.empty()
                 ? params.dataset.output_path / "project.licht"
-                : destination);
+                : destination,
+            {}, std::move(source_path));
         trainer.set_trainer_project_save_policy({
             .on_completion = true,
             .on_stop_or_error = true,
@@ -1314,6 +1315,7 @@ namespace lfs::training {
             switch (format) {
             case OutputFormat::PLY: return ".ply";
             case OutputFormat::SOG: return ".sog";
+            case OutputFormat::SSOG: return ".ssog";
             case OutputFormat::SPZ: return ".spz";
             case OutputFormat::HTML: return ".html";
             case OutputFormat::USD: return ".usd";
@@ -1327,11 +1329,21 @@ namespace lfs::training {
         lfs::io::Result<void> save_final_splat(const lfs::core::SplatData& splat,
                                                const std::filesystem::path& output,
                                                const lfs::core::param::OutputFormat format,
-                                               const lfs::core::ProvenanceStamp& provenance) {
+                                               const lfs::core::ProvenanceStamp& provenance,
+                                               const lfs::core::param::TrainingParameters& params) {
             using lfs::core::param::OutputFormat;
             switch (format) {
             case OutputFormat::PLY:
                 return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
+            case OutputFormat::SSOG:
+                return lfs::io::save_ssog(splat, {.output_path = output,
+                                                  .lod_levels = params.lod_levels,
+                                                  .lod_ratio = params.lod_ratio,
+                                                  .chunk_count_k = params.lod_chunk_count,
+                                                  .chunk_extent = params.lod_chunk_extent,
+                                                  .chunk_min_k = params.lod_chunk_min,
+                                                  .kmeans_iterations = params.sog_iterations,
+                                                  .provenance = provenance});
             case OutputFormat::SOG:
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
             case OutputFormat::SPZ:
@@ -1370,7 +1382,7 @@ namespace lfs::training {
 
         for (const auto format : params.export_formats) {
             const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
-            if (const auto result = save_final_splat(model, path, format, stamp); !result) {
+            if (const auto result = save_final_splat(model, path, format, stamp, params); !result) {
                 LOG_ERROR("Failed to export final splat to {}: {}",
                           lfs::core::path_to_utf8(path), result.error().message);
             } else {

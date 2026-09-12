@@ -18,6 +18,23 @@ LOCALES = ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
 RML_DIR = ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
 
 
+def test_locale_loader_rejects_nested_duplicates():
+    spec = importlib.util.spec_from_file_location("locale_checker", ROOT / "tools/check_locale_completeness.py")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "locale.json"
+        path.write_text('{"training":{"section.masking":"A","section.masking":"B"}}', encoding="utf-8")
+        try:
+            checker.load_locale(path)
+        except ValueError as error:
+            assert "duplicate JSON key 'section.masking'" in str(error)
+        else:
+            raise AssertionError("Duplicate locale keys were accepted")
+        path.write_text('{"training":{"name":"A"},"rendering":{"name":"B"}}', encoding="utf-8")
+        assert checker.load_locale(path) == {"training.name": "A", "rendering.name": "B"}
+
+
 def _flatten(value, prefix=""):
     if isinstance(value, dict):
         for key, nested in value.items():
@@ -56,6 +73,16 @@ def test_locale_json_uses_one_key_per_line():
             match = indented_key.match(line)
             if match:
                 assert len(match.group(1)) % 2 == 0, f"{path.name}:{line_number} has odd indentation"
+
+
+def test_video_reconstruction_warnings_and_failure_line_breaks():
+    for path in sorted(LOCALES.glob("*.json")):
+        runtime = _load(path.stem)["runtime"]
+        assert _fields(runtime["video_reconstruction_native_fallback"]) == ("{}", "{}"), path.name
+        assert runtime["video_reconstruction_version_unsupported"].strip(), path.name
+        message = runtime["video_export_failed"]
+        assert "\n\n" in message, path.name
+        assert "\\n" not in message, path.name
 
 
 def test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters():
@@ -186,7 +213,6 @@ def test_language_generation_is_part_of_cached_localized_ui_state():
         "src/python/lfs_plugins/selection_controls.py": 'changed in {"active_tool", "language_generation"}',
         "src/python/lfs_plugins/transform_controls.py": "language_generation",
         "src/python/lfs_plugins/gt_compare_controls.py": "language_generation",
-        "src/python/lfs_plugins/overlays/__init__.py": "language_generation",
     }
     for relative, evidence in required.items():
         source = (ROOT / relative).read_text(encoding="utf-8")
@@ -428,8 +454,10 @@ def test_cached_python_panels_request_a_frame_on_language_change():
 
 if __name__ == "__main__":
     contracts = [
+        test_locale_loader_rejects_nested_duplicates,
         test_shipped_locales_match_english_keys_and_placeholders,
         test_locale_json_uses_one_key_per_line,
+        test_video_reconstruction_warnings_and_failure_line_breaks,
         test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,

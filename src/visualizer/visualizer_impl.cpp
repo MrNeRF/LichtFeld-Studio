@@ -4,6 +4,7 @@
 
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error.hpp"
@@ -557,6 +558,7 @@ namespace lfs::vis {
                 state.outcome = tasks.getExportOutcome();
                 const auto fmt = tasks.getExportFormat();
                 state.format = fmt == core::ExportFormat::PLY           ? "PLY"
+                               : fmt == core::ExportFormat::SSOG        ? "SSOG"
                                : fmt == core::ExportFormat::SOG         ? "SOG"
                                : fmt == core::ExportFormat::SPZ         ? "SPZ"
                                : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
@@ -825,7 +827,8 @@ namespace lfs::vis {
         python::set_export_callback([](int format, const char* path, const char** node_names,
                                        int node_count, int sh_degree, bool rad_flip_y,
                                        bool rad_streamable, int spz_version,
-                                       bool include_provenance) {
+                                       bool include_provenance,
+                                       int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
                 names.reserve(node_count);
@@ -837,7 +840,7 @@ namespace lfs::vis {
                                                rad_flip_y,
                                                rad_streamable,
                                                spz_version,
-                                               include_provenance);
+                                               include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
@@ -1239,22 +1242,19 @@ namespace lfs::vis {
             code, lfs::ErrorDomain::Vulkan, lfs::Severity::Fatal, lfs::ErrorSurface::Modal,
             LOC(body_key), std::move(detail), std::move(actions), LFS_SOURCE_SITE_CURRENT()));
 
-        if (device_lost) {
-            SDL_Window* const window = window_manager_ ? window_manager_->getWindow() : nullptr;
-            if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                                          LOC(ErrModalKeys::RENDERER_DEVICE_LOST),
-                                          LOC(ErrModalKeys::RENDERER_DEVICE_LOST_BODY), window)) {
-                LOG_ERROR("Failed to present device-lost dialog: {}", SDL_GetError());
-            }
-        }
+        if (auto* window = window_manager_ ? window_manager_->getWindow() : nullptr)
+            SDL_SetWindowTitle(window, LOC(device_lost ? ErrModalKeys::RENDERER_DEVICE_LOST
+                                                       : ErrModalKeys::RENDERER_STALLED));
+        lfs::core::flush_diagnostics_noexcept();
     }
 
     void VisualizerImpl::onFrameCompleted() noexcept {
         frame_state_.on_frame_success();
-        lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
         if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr) {
             applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
         }
+        if (frame_state_.state() != FrameStateMachine::State::RendererDead)
+            lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
     }
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
@@ -1926,6 +1926,7 @@ namespace lfs::vis {
                     trainer_manager_->getLastEvaluationMetrics()) {
                 store.eval_psnr.set(last->psnr);
                 store.eval_ssim.set(last->ssim);
+                store.eval_lpips.set(last->lpips);
             }
             python::update_trainer_loaded(true, trainer_manager_->getTotalIterations(),
                                           trainer_manager_->getCurrentIteration());
@@ -1937,6 +1938,7 @@ namespace lfs::vis {
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.eval_psnr.set(event.psnr);
             store.eval_ssim.set(event.ssim);
+            store.eval_lpips.set(event.lpips);
         });
 
         state::SceneLoaded::when([](const auto& event) {
@@ -2059,7 +2061,8 @@ namespace lfs::vis {
 
         if (pipeline_cache_flush_due_ && update_started_at >= *pipeline_cache_flush_due_) {
             pipeline_cache_flush_due_.reset();
-            if (auto* const context = window_manager_->getVulkanContext())
+            if (auto* const context = window_manager_->getVulkanContext();
+                context && context->rendererTerminalState() == RendererTerminalState::Running)
                 context->flushPipelineCache();
         }
 
@@ -2198,6 +2201,10 @@ namespace lfs::vis {
         if (render_work.empty())
             return;
 
+        if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
+            cancelRemainingWork(render_work, 0, "render", viewer_thread_id_);
+            return;
+        }
         processing_render_work_ = true;
         runPostedWork(render_work, "render", viewer_thread_id_);
         processing_render_work_ = false;
@@ -2273,7 +2280,7 @@ namespace lfs::vis {
 
         if (selection_tool_ && selection_tool_->isEnabled() && gui_manager_ &&
             gui_manager_->isPositionInViewport(input.mouse_x, input.mouse_y)) {
-            return !gui_manager_->selectionRingCursorActive(input.mouse_x, input.mouse_y);
+            return gui_manager_->selectionCursorNeedsRender(input.mouse_x, input.mouse_y);
         }
 
         if (gui_manager_ && gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y)) {
@@ -2400,6 +2407,16 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::render() {
+
+        if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
+        if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
+            // Keep the CPU event and MCP queues responsive without issuing another GPU frame.
+            processRenderWorkQueue();
+            if (window_manager_)
+                window_manager_->waitEvents(0.1);
+            return;
+        }
 
         if (motion_only_wake_skipped_) {
             motion_only_wake_skipped_ = false;
@@ -3746,6 +3763,11 @@ namespace lfs::vis {
         shutdown_requested_callback_ = std::move(callback);
     }
 
+    void VisualizerImpl::set_evaluation_weights_preparer(
+        std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) {
+        trainer_manager_->set_evaluation_weights_preparer(std::move(preparer));
+    }
+
     VisualizerImpl::ProjectTrainingSessionState
     VisualizerImpl::projectTrainingSessionState() const {
         if (!project_lifecycle_) {
@@ -3758,6 +3780,7 @@ namespace lfs::vis {
         state.iteration = session.iteration;
         state.max_iterations = session.max_iterations;
         state.strategy = session.strategy;
+        state.raster_backend = session.raster_backend;
         state.completed = session.completed;
         state.hydrated = session.hydrated;
         state.restoring = session.restoring;
@@ -3782,23 +3805,31 @@ namespace lfs::vis {
     std::expected<void, std::string> VisualizerImpl::startTraining() {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
-        if (project_lifecycle_ &&
-            !trainer_manager_->hasTrainer()) {
+        const auto reject = [this](std::string message) {
+            static_cast<void>(trainer_manager_->rejectStart(
+                message, lfs::ErrorCode::FailedPrecondition));
+            return std::unexpected(std::move(message));
+        };
+        if (project_lifecycle_) {
+            if (project_lifecycle_->isHydrating()) {
+                return reject("Project is still loading. Retry Start after loading completes.");
+            }
             const auto session =
                 project_lifecycle_->trainingSessionState();
             if (session.available && !session.hydrated) {
                 if (auto restored =
                         project_lifecycle_
-                            ->restoreTrainingSession(true);
+                            ->restoreTrainingSession(false);
                     !restored) {
-                    return std::unexpected(
-                        lfs::format_for_developer(
-                            restored.error()));
+                    return reject(std::string(restored.error().user_message()));
                 }
-                return {};
+                return reject("Project training session is being restored. Retry Start after restoration completes.");
             }
         }
         if (trainer_manager_->isPaused()) {
+            if (auto preflight = trainer_manager_->preflightStartParameters(); !preflight) {
+                return std::unexpected(std::string(preflight.error().user_message()));
+            }
             if (project_lifecycle_) {
                 if (auto* const trainer = getTrainer()) {
                     const auto policy =
@@ -3810,38 +3841,48 @@ namespace lfs::vis {
                                 project_lifecycle_
                                     ->prepareTrainingStartProject();
                             !prepared) {
-                            return std::unexpected(
-                                lfs::format_for_developer(
-                                    prepared.error()));
+                            return reject(std::string(prepared.error().user_message()));
                         }
                     }
                 }
             }
-            trainer_manager_->resumeTraining();
+            if (auto resumed = trainer_manager_->resumeTraining(); !resumed) {
+                return std::unexpected(std::string(resumed.error().user_message()));
+            }
             return {};
         }
         if (!trainer_manager_->canStart()) {
             if (trainer_manager_->isFinished()) {
-                return std::unexpected(std::format(
+                return reject(std::format(
                     "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
                     trainer_manager_->getCurrentIteration()));
             }
-            return std::unexpected(std::string(
+            return reject(std::string(
                 trainer_manager_->getActionBlockedReason(
                     TrainingAction::Start)));
+        }
+        if (auto preflight =
+                trainer_manager_->preflightStartParameters();
+            !preflight) {
+            return std::unexpected(std::string(preflight.error().user_message()));
         }
         if (project_lifecycle_) {
             if (auto prepared =
                     project_lifecycle_
                         ->prepareTrainingStartProject();
                 !prepared) {
-                return std::unexpected(
-                    lfs::format_for_developer(
-                        prepared.error()));
+                return reject(std::string(prepared.error().user_message()));
             }
         }
-        if (!trainer_manager_->startTraining())
+        if (!trainer_manager_->startTraining()) {
+            if (const auto typed = trainer_manager_->lastTrainingError()) {
+                return std::unexpected(std::string(typed->user_message()));
+            }
+            if (!trainer_manager_->getLastError().empty()) {
+                return std::unexpected(trainer_manager_->getLastError());
+            }
             return std::unexpected("The training manager rejected the start request");
+        }
         return {};
     }
 

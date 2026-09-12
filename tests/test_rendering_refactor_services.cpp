@@ -29,6 +29,7 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
+#include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
@@ -48,6 +49,48 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(StaleFrameGuardTest, DeferralsBelowBoundKeepCachedThenEscalateOnce) {
+        StaleFrameGuard guard;
+        EXPECT_TRUE(guard.canUseCachedFrame());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral()) << attempt;
+            EXPECT_TRUE(guard.canUseCachedFrame()) << attempt;
+            EXPECT_FALSE(guard.takeRecoveryRequest()) << attempt;
+        }
+        EXPECT_TRUE(guard.onDeferral());
+        EXPECT_FALSE(guard.canUseCachedFrame());
+        EXPECT_TRUE(guard.takeRecoveryRequest());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        // Reimport/reset is not a successful publication. Failure after reset
+        // must not restore the stale image or trigger another reset/WARN.
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+            EXPECT_FALSE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+    }
+
+    TEST(StaleFrameGuardTest, SuccessfulPublicationResetsTheWholeEpisode) {
+        StaleFrameGuard guard;
+        for (int episode = 0; episode < 2; ++episode) {
+            for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+                EXPECT_FALSE(guard.onDeferral());
+            }
+            EXPECT_TRUE(guard.onDeferral());
+            guard.onSuccess();
+            EXPECT_TRUE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+        // Success also clears a partially consumed budget.
+        EXPECT_FALSE(guard.onDeferral());
+        guard.onSuccess();
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+        }
+        EXPECT_TRUE(guard.onDeferral());
+    }
 
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
@@ -997,6 +1040,38 @@ namespace lfs::vis {
 
         EXPECT_EQ(scene.getVisibleNodeIndex(left_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(right_id), 1);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, EditHandoffInvalidatesViewportDespitePreservingModelAddress) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        ViewportFrameLifecycleService lifecycle;
+        ViewportArtifactService artifacts;
+        const auto observe = [&] {
+            return lifecycle.handleModelChange(
+                reinterpret_cast<size_t>(manager.getModelForRendering()), artifacts,
+                manager.hasDataset() ? ViewportFrameLifecycleService::ModelSource::Training
+                                     : ViewportFrameLifecycleService::ModelSource::Scene);
+        };
+        const auto* training_model = manager.getModelForRendering();
+        ASSERT_NE(training_model, nullptr);
+        EXPECT_TRUE(observe().changed);
+        EXPECT_FALSE(observe().changed);
+        const auto generation = artifacts.artifactGeneration();
+
+        manager.switchToEditMode();
+
+        ASSERT_FALSE(manager.hasDataset());
+        ASSERT_EQ(manager.getModelForRendering(), training_model);
+        const auto handoff = observe();
+        EXPECT_TRUE(handoff.changed);
+        EXPECT_EQ(handoff.previous_model_ptr, reinterpret_cast<size_t>(training_model));
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        EXPECT_FALSE(observe().changed);
     }
 
     TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonUsesCombinedSceneMasks) {
@@ -2248,6 +2323,28 @@ namespace lfs::vis {
         const auto repeated_change = service.handleModelChange(0x1234, artifacts);
         EXPECT_FALSE(repeated_change.changed);
         EXPECT_EQ(artifacts.artifactGeneration(), generation_after_first_change);
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, ModelSourceChangesInvalidateOnceInBothDirections) {
+        using Source = ViewportFrameLifecycleService::ModelSource;
+        ViewportFrameLifecycleService service;
+        ViewportArtifactService artifacts;
+
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        auto generation = artifacts.artifactGeneration();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+
+        service.resetModelTracking();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
     }
 
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {

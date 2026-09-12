@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/training_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,26 @@
 
 namespace lfs::core {
     namespace param {
+        enum class TrainingBackendConflict {
+            None,
+            IGSPlus,
+            MipFilter,
+            DepthSupervision,
+            NormalSupervision,
+        };
+
+        // Data-only description: presentation layers render one shared message
+        // template instead of maintaining a sentence for every combination.
+        struct TrainingBackendConflictDescriptor {
+            std::string_view id;
+            std::string_view backend_name;
+            std::string_view feature_name;
+            std::string_view fallback_backend_name;
+        };
+
+        [[nodiscard]] LFS_CORE_API TrainingBackendConflictDescriptor
+        training_backend_conflict_descriptor(TrainingBackendConflict conflict);
+
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -309,6 +330,19 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            // Compatibility storage remains gut until all legacy writers migrate.
+            [[nodiscard]] RasterBackendId raster_backend() const {
+                return gut ? RasterBackendId::ThreeDGUT : RasterBackendId::ThreeDGS;
+            }
+            void set_raster_backend(RasterBackendId backend) {
+                switch (backend) {
+                case RasterBackendId::ThreeDGS: gut = false; return;
+                case RasterBackendId::ThreeDGUT: gut = true; return;
+                }
+                throw std::invalid_argument("Unsupported training raster backend");
+            }
+            [[nodiscard]] TrainingBackendConflict backend_conflict() const;
+            [[nodiscard]] std::string backend_conflict_message() const;
             [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets
@@ -410,6 +444,7 @@ namespace lfs::core {
             // belong to OptimizationParameters: saved training configurations
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
+            bool no_download = false;
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
@@ -442,6 +477,10 @@ namespace lfs::core {
             // train() is allowed to start.
             std::optional<std::filesystem::path> resume_project = std::nullopt;
 
+            // Untrained .licht passed to --data-path. Its REFS dataset folder,
+            // or the embedded dataset copy, becomes the training data source.
+            std::optional<std::filesystem::path> dataset_project = std::nullopt;
+
             // Headless/integration-test trigger for the production training
             // snapshot path. Empty unless the user passed --save-project-path;
             // the trainer then falls back to the bound project destination.
@@ -457,6 +496,12 @@ namespace lfs::core {
             // Additional final-splat exports written next to project.licht after
             // training completes. Empty = only the .licht project is written.
             std::vector<OutputFormat> export_formats;
+            int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
@@ -479,7 +524,8 @@ namespace lfs::core {
                                   USD,
                                   USDA,
                                   USDC,
-                                  RAD };
+                                  RAD,
+                                  SSOG };
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades
@@ -497,6 +543,11 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             // PLY -> RAD only: replicate the source across an AxB ground-plane
             // grid instead of pre-tiling the input file.
@@ -516,6 +567,11 @@ namespace lfs::core {
             std::vector<OutputFormat> formats{OutputFormat::PLY};
             Mesh2SplatOptions options;
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal

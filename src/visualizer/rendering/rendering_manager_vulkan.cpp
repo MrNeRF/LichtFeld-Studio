@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
@@ -670,7 +671,7 @@ namespace lfs::vis {
             return panels;
         }
 
-        // CPU split-view composite kept ONLY for capture/screenshot — runs lazily on
+        // CPU split-view composite kept ONLY for capture/screenshot â€” runs lazily on
         // demand when captureViewportImage() is called, never per-frame. Mirrors the
         // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
         // match what the user sees on screen.
@@ -1694,9 +1695,36 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
-        const auto [frame_settings, frame_depth_window_drag_preview] = [this] {
+        if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
+            // clear_external_backing waits for the arena to be idle. Do this
+            // before taking either trainer lock, after the failed frame's borrow
+            // publisher has run, so training can finish its active frame. Detach
+            // first, outside releaseScratchOnIdle's readback mutex: the arena's
+            // shrink callback takes that mutex while holding the arena gate.
+            lfs::core::GlobalArenaManager::instance().clear_external_backing();
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+        }
+        const auto [frame_settings, frame_depth_window_drag_preview, frame_panel_depth_windows] = [this] {
             std::lock_guard lock(settings_mutex_);
-            return std::pair(settings_, depth_window_drag_preview_);
+            std::array<DepthWindowState, 2> resolved_depth_windows{};
+            if (split_view_service_.isIndependentDualActive(settings_)) {
+                resolved_depth_windows = panel_depth_windows_;
+            } else {
+                const auto projection_window = [&]() {
+                    return DepthWindowState{
+                        .near_plane = -settings_.depth_filter_max.z,
+                        .far_plane = -settings_.depth_filter_min.z,
+                        .scale_x = settings_.depth_filter_scale_x,
+                        .scale_y = settings_.depth_filter_scale_y,
+                        .offset_x = settings_.depth_filter_offset_x,
+                        .offset_y = settings_.depth_filter_offset_y,
+                    };
+                }();
+                resolved_depth_windows = {projection_window, projection_window};
+            }
+            // The preview gate is a counter (nested/replacing modals); the
+            // frame only cares whether any drag is live.
+            return std::tuple(settings_, depthWindowDragActiveLocked(), resolved_depth_windows);
         }();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
@@ -1738,7 +1766,7 @@ namespace lfs::vis {
         }
         // Minimized / zero-extent: no presentable viewport work. Never hold a
         // resize training pause, never start model reads, and never publish
-        // new viewer borrows — the trainer continues headless on the existing
+        // new viewer borrows â€” the trainer continues headless on the existing
         // handshake fences only. Restore re-enters the normal frame path
         // (first frame may block once for a stable model, same as cold start).
         if (current_size.x <= 0 || current_size.y <= 0) {
@@ -1754,6 +1782,9 @@ namespace lfs::vis {
 
         std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
         const auto cached_frame_result = [this, current_size]() -> VulkanFrameResult {
+            if (!vksplat_stale_frame_guard_.canUseCachedFrame()) {
+                return {};
+            }
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
                         .external_image = vulkan_external_viewport_image_,
@@ -1783,6 +1814,18 @@ namespace lfs::vis {
                     .flip_y = vulkan_viewport_image_flip_y_,
                     .matches_viewport_extent =
                         vulkan_viewport_coordinate_size_ == current_size};
+        };
+        const auto defer_shared_scratch = [this](const std::string& reason) {
+            if (vksplat_stale_frame_guard_.onDeferral()) {
+                LOG_WARN("VkSplat shared scratch deferred {} viewport attempts; dropping stale viewport and resetting scratch before the next attempt: {}",
+                         StaleFrameGuard::kMaxCachedDeferrals, reason);
+                // Reset alone still needs arena access on the next render.
+                // Hide the old publication until fresh output is available;
+                // the renderer retains its output allocations and GPU fences.
+                clearVulkanViewportImageState();
+                clearVulkanMeshFrame();
+                viewport_artifact_service_.clearViewportOutput();
+            }
         };
         const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
             if (!split_view_service_.isActive(frame_settings)) {
@@ -1980,7 +2023,7 @@ namespace lfs::vis {
         // Window resize/minimize must never alter the training schedule. Viewer
         // work quiesces itself (cached frames while deferring; output-ring
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
-        // used on this path — other interactive wait sites keep it.
+        // used on this path â€” other interactive wait sites keep it.
 
         // Training previews never wait for a step-boundary read, including
         // discrete layout resizes. On contention, retain the previous matching
@@ -2027,13 +2070,20 @@ namespace lfs::vis {
         };
         refresh_content_flags();
         size_t model_ptr = reinterpret_cast<size_t>(model);
+        // Edit-mode handoff moves the same SplatData into a scene node. Its
+        // address does not change, but the trainer's GPU handshake is gone.
+        // Use dataset ownership, not Running/Paused, so completion alone does
+        // not reset the renderer while the trainer still owns its fences.
+        const auto model_source = scene_manager && scene_manager->hasDataset()
+                                      ? ViewportFrameLifecycleService::ModelSource::Training
+                                      : ViewportFrameLifecycleService::ModelSource::Scene;
 
         // Skip model-change tracking while the step-boundary lock is contended:
         // model_ptr is null only because densify holds exclusive, not because the
         // scene dropped the model. Treating it as a change would wipe the retained
         // last splat image (the whole point of the cadence path).
         if (!render_lock_contended) {
-            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
                 model_change.changed) {
                 invalidateGTComparisonImageCache();
                 clearVulkanViewportImageState();
@@ -2213,11 +2263,11 @@ namespace lfs::vis {
                 sample_model_under_lock();
                 refresh_content_flags();
                 model_ptr = reinterpret_cast<size_t>(model);
-                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
             }
         }
         // Scene state is authoritative here (contended frames returned above): nothing
-        // visible must clear the viewport even when a cached frame exists — a consolidated
+        // visible must clear the viewport even when a cached frame exists â€” a consolidated
         // multi-splat scene keeps the same combined-model pointer when every node is
         // hidden, so model-change tracking never clears the stale image.
         if (!has_render_content) {
@@ -2358,7 +2408,7 @@ namespace lfs::vis {
                     render_lock.reset();
                     return cached_frame_result();
                 }
-                // No cache yet — block once for the first published frame.
+                // No cache yet â€” block once for the first published frame.
                 candidate = std::shared_lock<std::shared_mutex>(live_trainer->getModelAccessMutex());
             }
             model_read_lock.emplace(std::move(candidate));
@@ -2416,7 +2466,8 @@ namespace lfs::vis {
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {},
-            .scene_jitter_pixels = applied_temporal_jitter_pixels};
+            .scene_jitter_pixels = applied_temporal_jitter_pixels,
+            .panel_depth_windows = frame_panel_depth_windows};
 
         const auto complete_temporal_convergence_frame =
             [this, temporal_camera_cut_generation]() {
@@ -2627,7 +2678,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -2666,7 +2717,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -3339,7 +3390,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};
@@ -3359,7 +3410,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};
@@ -3474,12 +3525,12 @@ namespace lfs::vis {
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
                                 if (render_camera && gtComparisonUsesRGBReference(gt_mode)) {
-                                    // Synchronous production only (RGB and, post-#1857, Loss — the
+                                    // Synchronous production only (RGB and, post-#1857, Loss â€” the
                                     // predicate is upstream's own name for the synchronous set): the
                                     // panel just rendered IS the current camera's image, so publish
                                     // that pairing. Depth/Normal go
                                     // through the hold-then-swap ticket and publish the HELD camera with
-                                    // the held image above — assigning the current camera here would pair
+                                    // the held image above â€” assigning the current camera here would pair
                                     // panel image A with camera B while a new ticket is in flight.
                                     // Degenerate GT calibration: buildGTRenderCamera returns nullopt when render_size is
                                     // degenerate or the camera's R/T tensors have no CPU pointer
@@ -3665,6 +3716,7 @@ namespace lfs::vis {
             isRetryableSharedScratchUnavailable(render_error)) {
             dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
                                  std::memory_order_relaxed);
+            defer_shared_scratch(render_error);
             render_lock.reset();
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
                       render_error);
@@ -3690,7 +3742,7 @@ namespace lfs::vis {
             // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
-            // Brush edits mutate sh0 in place — same tensor pointer but new
+            // Brush edits mutate sh0 in place â€” same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
             // re-derives + re-uploads.
             if ((frame_dirty & DirtyFlag::SPLATS) != 0) {
@@ -3835,6 +3887,7 @@ namespace lfs::vis {
                 }
 
                 render_lock.reset();
+                vksplat_stale_frame_guard_.onSuccess();
                 clearVulkanViewportImageState(render_result->size, render_result->flip_y);
                 vulkan_external_viewport_image_ = render_result->image;
                 vulkan_external_viewport_image_view_ = render_result->image_view;
@@ -3914,7 +3967,13 @@ namespace lfs::vis {
                 render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_visible_gaussian_model) {
-            auto request = buildViewportRenderRequest(frame_ctx, render_size);
+            // The main render is Left in independent-dual mode. Tag it explicitly
+            // so the builder cannot substitute Right's window when Right has focus.
+            const std::optional<SplitViewPanelId> main_render_panel =
+                splitViewUsesIndependentPanels(frame_settings.split_view_mode)
+                    ? std::optional<SplitViewPanelId>(SplitViewPanelId::Left)
+                    : std::nullopt;
+            auto request = buildViewportRenderRequest(frame_ctx, render_size, nullptr, main_render_panel);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
@@ -4134,6 +4193,7 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                        vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
                         note_vksplat_render_progress(render_result);
@@ -4436,7 +4496,7 @@ namespace lfs::vis {
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
                     // During a depth-window drag the per-move changes are CONTAINMENT-side
                     // (overlay flags from the projection pass), which this fast path cannot
-                    // refresh — it re-rasters from cached overlay_flags. Force the full
+                    // refresh â€” it re-rasters from cached overlay_flags. Force the full
                     // render while the drag is live so the reveal tracks the box.
                     const bool can_rerender_selection_overlay =
                         !frame_depth_window_drag_preview &&
@@ -4517,6 +4577,7 @@ namespace lfs::vis {
                                   "VkSplat shared scratch unavailable",
                                   render_result.error(),
                                   retry_dirty);
+                        defer_shared_scratch(render_result.error());
                         render_lock.reset();
                         return cached_frame_result();
                     }
@@ -4581,6 +4642,9 @@ namespace lfs::vis {
             pending_split_view.enabled;
 
         if (!rendered_image && has_gpu_only_pass) {
+            if (pending_split_view.enabled || render_error.empty()) {
+                vksplat_stale_frame_guard_.onSuccess();
+            }
             clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
@@ -4758,6 +4822,7 @@ namespace lfs::vis {
                               "VkSplat shared scratch unavailable",
                               render_error,
                               retry_dirty);
+                    defer_shared_scratch(render_error);
                     return cached_frame_result();
                 }
 
@@ -4804,6 +4869,7 @@ namespace lfs::vis {
         }
 
         auto viewport_image = std::move(rendered_image);
+        vksplat_stale_frame_guard_.onSuccess();
         vulkan_viewport_image_ = viewport_image;
         ++vulkan_viewport_image_generation_;
         if (vulkan_viewport_image_generation_ == 0)

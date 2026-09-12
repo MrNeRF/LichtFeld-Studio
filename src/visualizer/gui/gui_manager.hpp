@@ -18,6 +18,7 @@
 #include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
+#include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -56,6 +57,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class VisualizerImpl;
     class WindowManager;
+    class InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -158,6 +160,8 @@ namespace lfs::vis {
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
             [[nodiscard]] GuiHitTestResult hitTestPointer(double x, double y) const;
+            // Event-time press hit shared by input routing and frame ownership.
+            [[nodiscard]] GuiHitTestResult hitTestMouseButton(double x, double y) const;
             [[nodiscard]] GuiInputState inputState() const;
 
             bool isForceExit() const { return force_exit_; }
@@ -204,8 +208,8 @@ namespace lfs::vis {
 
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
-            [[nodiscard]] bool selectionRingCursorActive(float mouse_x, float mouse_y) const;
             [[nodiscard]] bool isHardwareSelectionRingActive() const;
+            [[nodiscard]] bool selectionCursorNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -239,6 +243,7 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            friend class lfs::vis::InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -373,6 +378,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
 

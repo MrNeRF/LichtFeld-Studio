@@ -248,7 +248,7 @@ def prepare_training_from_scene() -> None:
 
 def start_training() -> None:
     """
-    Start training with current parameters; waits for off-thread initialization
+    Start training with current parameters. Returns after dispatch on the viewer thread; other callers wait for initialization. Asynchronous failures are reported through training state.
     """
 
 def training_start_overwrite_conflict() -> int | None:
@@ -398,9 +398,9 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -561,12 +561,34 @@ def load_icon(name: str) -> int:
 def free_icon(texture_id: int) -> None:
     """Free an icon texture"""
 
-def reset_camera() -> None:
-    """Reset camera to default position and orientation"""
-
-def focus_selection() -> bool:
+def reset_camera(*, panel: str | None = None) -> None:
     """
-    Focus the active viewport on the selection, or the whole scene when nothing is selected
+    Reset the primary camera by default, even when another panel has focus.
+    Use panel="main" to reset the focused camera. Reset restores the camera's
+    default position and orientation.
+
+    Unlike focus_selection(), omitting panel (or passing None) does not follow focus.
+
+    panel (keyword-only):
+    - None (default): primary camera.
+    - 'main': focused camera.
+    - 'left' / 'right': named panel's camera.
+
+    Outside independent-dual split, all choices target the primary camera.
+    Addressing a panel never changes focus.
+    """
+
+def focus_selection(*, panel: str | None = None) -> bool:
+    """
+    Focus the active viewport on the selection, or the whole scene when nothing is selected.
+
+    panel (keyword-only) selects which split panel's camera is moved:
+    - None (default): the focused panel, exactly as before.
+    - 'main': the panel that currently has focus, requested explicitly.
+      Same panel as None here, reached through the panel-addressed path.
+    - 'left' / 'right': that panel's own camera. Outside independent-dual
+      split every token resolves to the primary camera, because there is
+      only one. Addressing a panel never changes which panel has focus.
     """
 
 def get_camera_navigation_mode() -> str:
@@ -1954,6 +1976,9 @@ class BackgroundMode(enum.Enum):
 
     RANDOM = 3
 
+def training_backends() -> list:
+    """Available training backends and their viewer mapping"""
+
 class OptimizationParams:
     def __init__(self) -> None: ...
 
@@ -1987,6 +2012,22 @@ class OptimizationParams:
 
     def validate(self) -> str:
         """Validate parameter consistency, returns empty string if valid"""
+
+    @property
+    def backend_conflict(self) -> str:
+        """
+        Stable identifier for the selected backend incompatibility, or an empty string
+        """
+
+    @property
+    def backend_conflict_context(self) -> dict:
+        """Structured values used to render the selected backend incompatibility"""
+
+    @property
+    def backend_conflict_message(self) -> str:
+        """
+        Native CLI message for the selected backend incompatibility, or an empty string
+        """
 
     @property
     def iterations(self) -> int:
@@ -2193,6 +2234,17 @@ class OptimizationParams:
 
     def auto_scale_steps(self, image_count: int) -> None:
         """Auto-scale steps for all strategies based on image count"""
+
+    @property
+    def raster_backend(self) -> str:
+        """Training raster backend: 3dgs or 3dgut; shares storage with legacy gut"""
+
+    @raster_backend.setter
+    def raster_backend(self, arg: str, /) -> None: ...
+
+    @property
+    def backend_capabilities(self) -> dict:
+        """Verified capabilities for the selected training backend"""
 
     @property
     def gut(self) -> bool:

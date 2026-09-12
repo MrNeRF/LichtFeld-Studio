@@ -62,6 +62,7 @@
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/kernels/mask_preprocess.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
@@ -123,6 +124,18 @@ namespace lfs::training {
                 .user_message =
                     "The training project snapshot could not be saved.",
                 .detail = std::move(detail),
+                .detection = source,
+            });
+        }
+
+        [[nodiscard]] lfs::Error training_parameter_update_error(
+            std::string message,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = message,
+                .detail = "Rejected invalid training parameter update: " + message,
                 .detection = source,
             });
         }
@@ -1861,13 +1874,18 @@ namespace lfs::training {
              mode == param::MaskMode::Ignore ||
              mode == param::MaskMode::SegmentAndIgnore);
 
+        const bool normal_terms_on =
+            (opt_params.use_normal_loss && opt_params.normal_loss_weight > 0.0f) ||
+            opt_params.normal_consistency_weight > 0.0f;
+
         // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
         // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
         const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
             mask_preprocess_workspace_,
             user_masks_photometric ? mask_2d : Tensor{},
             roi_weight,
-            mode == param::MaskMode::SegmentAndIgnore);
+            mode == param::MaskMode::SegmentAndIgnore,
+            user_masks_photometric && normal_terms_on);
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1958,7 +1976,8 @@ namespace lfs::training {
             .loss = loss,
             .grad_corrected = grad_corrected,
             .grad_raw = grad_raw,
-            .grad_alpha = grad_alpha};
+            .grad_alpha = grad_alpha,
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -3147,6 +3166,8 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (lpips_weights_path_)
+                evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
                     return applyPPISPForEval(rgb, cam);
@@ -3418,7 +3439,7 @@ namespace lfs::training {
 
             try {
                 RenderOutput output;
-                if (params.optimization.gut) {
+                if (params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     output = gsplat_rasterize(
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
@@ -3648,10 +3669,13 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
-    void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
+    lfs::Status
+    Trainer::setParams(
+        const lfs::core::param::TrainingParameters& params) {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
-            return;
+            return lfs::Status::failure(training_parameter_update_error(
+                validation_error, LFS_SOURCE_SITE_CURRENT()));
         }
 
         bool bg_image_path_changed = false;
@@ -3659,7 +3683,7 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
-                return;
+                return {};
             }
             const auto& current = pending_params_ ? *pending_params_ : params_;
             bg_image_path_changed =
@@ -3668,6 +3692,13 @@ namespace lfs::training {
             pending_params_.reset();
         }
         apply_param_side_effects(params, bg_image_path_changed);
+        return {};
+    }
+
+    void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
+        lpips_weights_path_ = std::move(path);
+        if (evaluator_)
+            evaluator_->set_lpips_weights_path(lpips_weights_path_);
     }
 
     void Trainer::apply_pending_params_at_safe_point() {
@@ -4676,11 +4707,13 @@ namespace lfs::training {
 
         photometric_loss_.arena().shrink_to_required();
 
+        std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
             false;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
+            headless_source_path = headless_project_source_path_;
             project_step_regression_
                 .arm_after_snapshot(iteration);
             first_publish_to_destination =
@@ -4695,7 +4728,7 @@ namespace lfs::training {
 
         try {
             project_writer_thread_ = std::jthread(
-                [this, path, chapters, cpu_state,
+                [this, path, chapters, cpu_state, headless_source_path,
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
@@ -4812,6 +4845,13 @@ namespace lfs::training {
                             source_path = path;
                             compact_after_publish =
                                 first_publish_to_destination;
+                        } else if (!document_context && headless_source_path) {
+                            source_path = headless_source_path;
+                        }
+                        // A redirected recovery save does not merge into or own
+                        // the original master. Its owner keeps staging alive.
+                        if (!document_context && recovery_session && !recovery_session->writer_lock().owns(path)) {
+                            recovery_session.reset();
                         }
                         bool save_as =
                             !source_path &&
@@ -4909,6 +4949,42 @@ namespace lfs::training {
                                 !created) {
                                 return std::move(created)
                                     .error();
+                            }
+                        }
+
+                        if (!document_context && save_as && headless_source_path) {
+                            // Save As carries DSRC lazily. Reject broken manifests
+                            // before publication, and bind the effective dataset
+                            // relative to the new project rather than the source.
+                            auto manifest = document->parameters().embedded_dataset();
+                            if (!manifest) {
+                                return std::move(manifest).error();
+                            }
+                            if (*manifest) {
+                                for (const auto& entry : (*manifest)->entries) {
+                                    const auto* row = document->source_reader()->find(
+                                        lfs::io::project::FOURCC_DSRC, entry.chunk_uuid);
+                                    if (!row || !row->is_live() || row->uncompressed_bytes != entry.bytes) {
+                                        return project_snapshot_error(
+                                            lfs::ErrorCode::DataLoss,
+                                            "Embedded dataset manifest has a missing or incorrectly sized DSRC payload",
+                                            LFS_SOURCE_SITE_CURRENT());
+                                    }
+                                }
+                            }
+                            auto existing = document->project().dataset_reference();
+                            if (!existing) {
+                                return std::move(existing).error();
+                            }
+                            auto reference = lfs::io::project::upsert_path_reference(
+                                document->edit_references(), path.parent_path(),
+                                chapters->parameters.dataset.data_path,
+                                "dataset", "dataset", *existing);
+                            if (!reference) {
+                                return std::move(reference).error();
+                            }
+                            if (auto bound = document->edit_project().set_dataset_reference(*reference); !bound) {
+                                return std::move(bound).error();
                             }
                         }
 
@@ -5140,7 +5216,7 @@ namespace lfs::training {
                                         document_context
                                             ? document_context
                                                   ->save_as_project_uuid
-                                            : lfs::core::Uuid{},
+                                            : (headless_source_path && save_as ? project_uuid_ : lfs::core::Uuid{}),
                                     .allow_existing_destination_replacement =
                                         document_context &&
                                         document_context
@@ -5941,7 +6017,7 @@ namespace lfs::training {
                     profiler.sampleCudaMemory();
                 }
 
-                if (params_.optimization.gut) {
+                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
@@ -6046,7 +6122,7 @@ namespace lfs::training {
                     bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
                 }
 
-                const bool fastgs_path = !params_.optimization.gut;
+                const bool three_dgs_path = params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGS;
 
                 if (!loss_accumulator_.is_valid()) {
                     loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -6105,14 +6181,14 @@ namespace lfs::training {
                     densification_type = DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
                 const bool run_fastgs_gaussian_backward =
-                    fastgs_path &&
+                    three_dgs_path &&
                     update_gaussians_this_iter;
 
                 bool fastgs_strategy_hooks_at_start = false;
                 const bool refining_this_step =
                     strategy_ && strategy_->is_refining(iter);
                 const bool morton_due = morton_reorder_due(iter);
-                if (fastgs_path && !in_sparsification) {
+                if (three_dgs_path && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
                     LOG_VRAM_DIFF("train.strategy.fastgs_pre_step");
@@ -6231,12 +6307,12 @@ namespace lfs::training {
                     ++mutation_epoch_;
                     persistent_commit = true;
                 }
-                if (fastgs_path && refining_this_step && !in_sparsification) {
+                if (three_dgs_path && refining_this_step && !in_sparsification) {
                     // Post-barrier topology publish (deferred from inside densify).
                     auto& model_after = strategy_->get_model();
                     syncTrainingSceneTopology(scene_, model_after);
                 }
-                if (fastgs_path && in_sparsification) {
+                if (three_dgs_path && in_sparsification) {
                     install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
@@ -6249,7 +6325,7 @@ namespace lfs::training {
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
                 const bool run_gut_gaussian_backward =
-                    params_.optimization.gut && update_gaussians_this_iter;
+                    params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT && update_gaussians_this_iter;
                 if (run_fastgs_gaussian_backward || run_gut_gaussian_backward) {
                     auto& model = strategy_->get_model();
                     edge_score_scratch = strategy_->edge_score_scratch(iter);
@@ -6264,7 +6340,7 @@ namespace lfs::training {
                 } else if (edge_weight_scoring_active_) {
                     clearEdgeWeightCache();
                 }
-                if (fastgs_path) {
+                if (three_dgs_path) {
                     LFS_VRAM_SCOPE("train.regularizers.fastgs_forward_only");
                     LOG_VRAM_DIFF("train.regularizers.fastgs_forward_only");
                     auto& model = strategy_->get_model();
@@ -6389,7 +6465,7 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
                         current_phase = StepPhase::Forward;
-                        if (params_.optimization.gut) {
+                        if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -6800,6 +6876,8 @@ namespace lfs::training {
                         lfs::core::Tensor tile_grad_normal;
                         lfs::core::Tensor tile_error_map;
                         lfs::core::Tensor mask_tile;
+                        // Retain the photometric workspace view through all normal terms.
+                        lfs::core::Tensor normal_terms_weight;
                         bool depth_grad_buffers_active = false;
                         const auto roi_weight_ptr_on_stream =
                             [&](const cudaStream_t stream) -> const float* {
@@ -6808,6 +6886,15 @@ namespace lfs::training {
                             }
                             roi_weight.sync_to_stream(stream);
                             return roi_weight.ptr<float>();
+                        };
+
+                        const auto normal_weight_ptr_on_stream =
+                            [&](const cudaStream_t stream) -> const float* {
+                            if (!normal_terms_weight.is_valid()) {
+                                return roi_weight_ptr_on_stream(stream);
+                            }
+                            normal_terms_weight.sync_to_stream(stream);
+                            return normal_terms_weight.ptr<float>();
                         };
 
                         const auto ensure_depth_grad_buffers =
@@ -6898,6 +6985,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                                 tile_grad_raw = result->grad_raw;
                                 tile_grad_alpha = result->grad_alpha;
+                                normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, params_.optimization, raw_loss_input);
@@ -7133,7 +7221,7 @@ namespace lfs::training {
                                     normal_loss_partials_.set_stream(normal_stream);
 
                                     const float* const normal_pixel_weight =
-                                        roi_weight_ptr_on_stream(normal_stream);
+                                        normal_weight_ptr_on_stream(normal_stream);
                                     lfs::core::pin_operands({&rendered_normal, &rendered_alpha, &target_normal});
                                     lfs::training::kernels::launch_normal_loss(
                                         rendered_normal.ptr<float>(),
@@ -7310,7 +7398,7 @@ namespace lfs::training {
                                 lfs::core::pin_operands(
                                     {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
                                 const float* const consistency_pixel_weight =
-                                    roi_weight_ptr_on_stream(consistency_stream);
+                                    normal_weight_ptr_on_stream(consistency_stream);
                                 lfs::training::kernels::launch_normal_consistency_loss(
                                     rendered_normal.ptr<float>(),
                                     rendered_depth.ptr<float>(),
@@ -7416,7 +7504,15 @@ namespace lfs::training {
 
                             if (use_mask &&
                                 params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
-                                const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                                // The pipelined loader returns normalized Float32 masks;
+                                // Camera masks retain their raw UInt8 band levels.
+                                const float keep_min =
+                                    (mask_tile.dtype() == lfs::core::DataType::UInt8 ||
+                                     mask_tile.dtype() == lfs::core::DataType::Bool)
+                                        ? 250.0f
+                                        : lfs::training::kernels::kMaskKeepMin;
+                                const auto mask_for_error =
+                                    mask_tile.gt(keep_min).to(lfs::core::DataType::Float32);
                                 tile_error_map.mul_(mask_for_error);
                             }
 
@@ -7628,7 +7724,7 @@ namespace lfs::training {
                         nvtxRangePush("compute_scale_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
-                        if (fastgs_path) {
+                        if (three_dgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
                         } else {
                             auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
@@ -7652,7 +7748,7 @@ namespace lfs::training {
                         nvtxRangePush("compute_opacity_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
                         LOG_VRAM_DIFF("train.regularizers.opacity_loss");
-                        if (fastgs_path) {
+                        if (three_dgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
                             auto opacity_loss_result = compute_opacity_reg_loss(
@@ -7716,7 +7812,7 @@ namespace lfs::training {
                 // Sparsity loss - ALL ON GPU, no CPU sync here
                 if (sparsity_optimizer_ &&
                     sparsity_optimizer_->should_apply_loss(iter) &&
-                    (!fastgs_path || update_gaussians_this_iter)) {
+                    (!three_dgs_path || update_gaussians_this_iter)) {
                     nvtxRangePush("sparsity_loss");
                     LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
                     LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
@@ -7895,7 +7991,7 @@ namespace lfs::training {
                             strategy_->post_backward(iter, r_output);
                             maybe_morton_reorder(iter);
                         }
-                        if (!fastgs_path) {
+                        if (!three_dgs_path) {
                             install_cropbox_step_damping(model, strategy_->get_optimizer());
                         }
 
@@ -8083,7 +8179,7 @@ namespace lfs::training {
                                 }
 
                                 RenderOutput rendered_timelapse_output;
-                                if (params_.optimization.gut) {
+                                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
                                                                                  1.0f, false, GsplatRenderMode::RGB, true);
                                 } else {
@@ -8307,6 +8403,9 @@ namespace lfs::training {
         }
         apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
+        if (params_.optimization.gut && params_.optimization.use_normal_loss) {
+            LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
+        }
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().on_training_start(get_total_iterations());
         }
@@ -8418,9 +8517,23 @@ namespace lfs::training {
                     fitDepthAnchors(cameras_with_depth);
                 }
             }
-            aux_pipeline_config.load_normals =
-                params_.optimization.use_normal_loss &&
-                params_.optimization.normal_loss_weight > 0.0f;
+            aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
+            if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
+                const auto mode = params_.optimization.mask_mode;
+                const bool user_masks_normal_terms =
+                    (mode == lfs::core::param::MaskMode::Segment ||
+                     mode == lfs::core::param::MaskMode::Ignore ||
+                     mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
+                    std::any_of(train_dataset_->get_cameras().begin(), train_dataset_->get_cameras().end(),
+                                [&](const auto& camera) {
+                                    return camera && (camera->has_mask() ||
+                                                      (params_.optimization.use_alpha_as_mask && camera->has_alpha()));
+                                });
+                LOG_INFO("Normal terms use user mask: {} (where available); prior-depth gate: count >= {}, weight >= {}",
+                         user_masks_normal_terms ? "yes" : "no",
+                         lfs::training::kernels::kNormalConsistencyMinValidCount,
+                         lfs::training::kernels::kNormalConsistencyMinValidWeight);
+            }
             if (aux_pipeline_config.load_normals) {
                 ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 if (val_dataset_) {
@@ -8742,6 +8855,23 @@ namespace lfs::training {
                 ++iter;
             }
 
+            // A resume at the terminal iteration starts at max+1, so there is no
+            // training step in which to service an evaluation scheduled at max.
+            if (iter > get_total_iterations() &&
+                evaluator_->is_enabled() &&
+                evaluator_->should_evaluate(current_iteration_.load())) {
+                const int eval_iteration = current_iteration_.load();
+                evaluator_->print_evaluation_header(eval_iteration);
+                eval_ppisp_applied_.store(0);
+                eval_ppisp_exif_.store(0);
+                auto metrics = evaluator_->evaluate(eval_iteration,
+                                                    strategy_->get_model(),
+                                                    val_dataset_,
+                                                    background_);
+                LOG_INFO("{}", metrics.to_string());
+                photometric_loss_.arena().shrink_to_required();
+            }
+
             clearActiveImageLoader();
             active_image_loader_guard.release();
 
@@ -9022,9 +9152,11 @@ namespace lfs::training {
         std::optional<std::filesystem::path> path,
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
-            context_provider) {
+            context_provider,
+        std::optional<std::filesystem::path> headless_source_path) {
         std::lock_guard lock(project_snapshot_mutex_);
         live_project_path_ = std::move(path);
+        headless_project_source_path_ = std::move(headless_source_path);
         live_document_context_provider_ =
             std::move(context_provider);
     }

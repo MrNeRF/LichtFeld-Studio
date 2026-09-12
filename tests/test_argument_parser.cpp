@@ -35,6 +35,210 @@ namespace {
 
 } // namespace
 
+// An untrained .licht on --data-path is its own destination, so
+// --output-path is optional and the project stays bound for the run.
+TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_dataset_project");
+    const auto project =
+        std::filesystem::path(directory) / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "-d",
+        project_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->dataset_project, project);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    EXPECT_TRUE((*parsed)->dataset.output_path.empty());
+    EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
+}
+
+TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
+    const auto data_path = make_test_path("lfs_backend_validation_data");
+    const auto output_path = make_test_path("lfs_backend_validation_output");
+    struct Case {
+        const char* flag;
+        const char* label;
+        const char* field;
+    };
+    const Case cases[] = {
+        {"--enable-mip", "Mip Filter", "mip_filter"},
+        {"--use-depth-loss", "Depth Loss", "use_depth_loss"},
+        {"--use-normal-loss", "Normal Loss", "use_normal_loss"},
+    };
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.flag);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--strategy",
+            "mcmc",
+            test.flag,
+            "--gut",
+        };
+        const auto gut = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(gut.has_value());
+        EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
+        EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
+        EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
+        EXPECT_NE(gut.error().find(test.label), std::string::npos);
+
+        const auto standard_3dgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        ASSERT_TRUE(standard_3dgs.has_value()) << standard_3dgs.error();
+        EXPECT_FALSE((*standard_3dgs)->optimization.gut);
+        EXPECT_TRUE((*standard_3dgs)->optimization.to_json().at(test.field).get<bool>());
+    }
+}
+
+TEST(ArgumentParserTest, GutAcceptsUndistort) {
+    const auto data_path = make_test_path("lfs_gut_undistort_data");
+    const auto output_path = make_test_path("lfs_gut_undistort_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--strategy",
+        "mcmc",
+        "--gut",
+        "--undistort",
+    };
+
+    const auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.gut);
+    EXPECT_TRUE((*parsed)->optimization.undistort);
+}
+
+TEST(ArgumentParserTest, ExplicitBackendSelectionAndLegacyAlias) {
+    const auto data = make_test_path("lfs_backend_identity_data");
+    const auto output = make_test_path("lfs_backend_identity_output");
+    for (const auto* name : {"3dgs", "3dgut", "unknown"}) {
+        SCOPED_TRACE(name);
+        const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                              "--strategy", "mcmc", "--raster-backend", name, "--gut"};
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        if (std::string_view(name) == "unknown") {
+            ASSERT_FALSE(parsed.has_value());
+            EXPECT_NE(parsed.error().find("--raster-backend"), std::string::npos);
+            continue;
+        }
+        ASSERT_TRUE(parsed.has_value()) << parsed.error();
+        const bool gut = std::string_view(name) == "3dgut";
+        EXPECT_EQ((*parsed)->optimization.gut, gut);
+        // The explicit CLI selection must also survive checkpoint overrides.
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.gut = !gut;
+        apply_explicit_training_overrides(restored, (*parsed)->overrides);
+        EXPECT_EQ(restored.optimization.gut, gut);
+        const auto combined = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_EQ(combined.has_value(), gut);
+        const char* reversed_argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                                       "--strategy", "mcmc", "--gut", "--raster-backend", name};
+        const auto reversed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(reversed_argv)), reversed_argv);
+        ASSERT_EQ(reversed.has_value(), gut);
+        if (gut) {
+            EXPECT_TRUE((*reversed)->optimization.gut);
+        } else {
+            EXPECT_NE(combined.error().find("Conflicting --gut"), std::string::npos);
+            EXPECT_NE(reversed.error().find("Conflicting --gut"), std::string::npos);
+        }
+    }
+}
+
+TEST(ArgumentParserTest, ExplicitGutBackendAcceptsUndistort) {
+    const auto data = make_test_path("lfs_explicit_gut_undistort_data");
+    const auto output = make_test_path("lfs_explicit_gut_undistort_output");
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--strategy", "mcmc", "--raster-backend", "3dgut", "--undistort"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.gut);
+    EXPECT_TRUE((*parsed)->optimization.undistort);
+}
+
+TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
+    const auto data = make_test_path("lfs_backend_config_data");
+    const auto output = make_test_path("lfs_backend_config_output");
+    const auto config = std::filesystem::path(output) / "backend.json";
+    auto params = lfs::core::param::OptimizationParameters::mcmc_defaults();
+    params.gut = true;
+    {
+        std::ofstream file(config);
+        file << params.to_json();
+    }
+    const auto config_text = config.string();
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--config", config_text.c_str(), "--raster-backend", "3dgs"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FALSE((*parsed)->optimization.gut);
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.gut = true;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_FALSE(restored.optimization.gut);
+}
+
+TEST(ArgumentParserTest, ConfigBackendDisagreementIsRejected) {
+    const auto data = make_test_path("lfs_backend_legacy_config_data");
+    const auto output = make_test_path("lfs_backend_legacy_config_output");
+    const auto config = std::filesystem::path(output) / "backend.json";
+    auto params = lfs::core::param::OptimizationParameters::mcmc_defaults();
+    params.gut = true;
+    auto json = params.to_json();
+    json["raster_backend"] = "3dgs";
+    {
+        std::ofstream file(config);
+        file << json;
+    }
+    const auto config_text = config.string();
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--config", config_text.c_str()};
+    const auto conflict = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(conflict.has_value());
+    EXPECT_NE(conflict.error().find("Conflicting raster_backend"), std::string::npos);
+
+    json.erase("gut");
+    {
+        std::ofstream file(config);
+        file << json;
+    }
+    const auto named = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(named.has_value()) << named.error();
+    EXPECT_FALSE((*named)->optimization.gut);
+}
+
+TEST(ArgumentParserTest, ViewerBackendSelectionSurvivesParameterDefaults) {
+    const auto directory = make_test_path("lfs_view_backend_identity");
+    const auto path = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(path).put('\n');
+    const auto path_text = path.string();
+    for (const bool legacy : {false, true}) {
+        const char* argv[] = {"LichtFeld-Studio", "-v", path_text.c_str(),
+                              legacy ? "--gut" : "--raster-backend", "3dgut"};
+        const auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)) - (legacy ? 1 : 0), argv);
+        ASSERT_TRUE(parsed.has_value()) << parsed.error();
+        EXPECT_TRUE((*parsed)->optimization.gut);
+        lfs::core::param::TrainingParameters restored;
+        apply_explicit_training_overrides(restored, (*parsed)->overrides);
+        EXPECT_TRUE(restored.optimization.gut);
+    }
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =
@@ -773,17 +977,18 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
         "--output",
         output_str.c_str(),
         "--format",
-        "ply,spz,html"};
+        ".ply,.spz,.html,.ssog"};
 
     auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     auto* mode = std::get_if<lfs::core::args::Mesh2SplatMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
-    ASSERT_EQ(mode->params.formats.size(), 3u);
+    ASSERT_EQ(mode->params.formats.size(), 4u);
     EXPECT_EQ(mode->params.formats[0], lfs::core::param::OutputFormat::PLY);
     EXPECT_EQ(mode->params.formats[1], lfs::core::param::OutputFormat::SPZ);
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
+    EXPECT_EQ(mode->params.formats[3], lfs::core::param::OutputFormat::SSOG);
 }
 
 TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {

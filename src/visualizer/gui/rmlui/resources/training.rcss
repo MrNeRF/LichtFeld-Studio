@@ -26,6 +26,8 @@ body {
 }
 
 .training-panel-layout {
+    width: 100%;
+    box-sizing: border-box;
     min-width: 0;
     min-height: 0;
     flex: 1;
@@ -35,6 +37,116 @@ body {
 
 #controls {
     flex-shrink: 0;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: hidden;
+}
+
+.training-actions-group {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.training-toolbar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6dp;
+    width: 100%;
+    min-width: 0;
+}
+
+.training-toolbar > .training-actions-group {
+    flex: 1 1 auto;
+    width: auto;
+}
+
+.training-action-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.training-start-feedback,
+.training-action-status {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    word-break: break-word;
+    overflow-x: hidden;
+}
+
+#training-controls-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 16dp;
+    margin-top: 3dp;
+    margin-bottom: 1dp;
+}
+
+.training-status-badge {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    height: auto;
+    padding: 0;
+    border-width: 0;
+    font-size: 10dp;
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+    line-height: 14dp;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.training-status-badge-label {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.training-start-feedback {
+    max-height: 120dp;
+    overflow-y: auto;
+    margin-bottom: 6dp;
+}
+
+.training-toolbar-action {
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    gap: 4dp;
+    box-sizing: border-box;
+    height: 28dp;
+    min-width: 74dp;
+    max-width: 96dp;
+    padding: 3dp 7dp;
+    margin: 0;
+    line-height: 20dp;
+    white-space: nowrap;
+}
+
+.training-toolbar-action img {
+    width: 14dp;
+    height: 14dp;
+    flex-shrink: 0;
+}
+
+.training-toolbar-action span {
+    white-space: nowrap;
 }
 
 #training-search-container {
@@ -131,6 +243,12 @@ body {
 
 .training-panel-block {
     margin-top: 4dp;
+}
+
+.training-panel-block > .section-header {
+    margin-top: 4dp;
+    padding-top: 6dp;
+    border-top-width: 1dp;
 }
 
 .training-subsection {
@@ -253,4 +371,47 @@ loss-graph {
 .mask-settings-divider {
     height: 1dp;
     margin: 4dp 0 2dp;
+}
+
+/* Measure natural localized button widths with the same styles and dp scale.
+   Hidden probes stay outside the toolbar so compact mode cannot affect them. */
+#training-toolbar-measure {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+    height: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+#measure-action-gap { display: inline-block; width: 4dp; }
+#measure-action-max { display: inline-block; width: 96dp; }
+#training-toolbar-measure .btn {
+    flex: 0 0 auto;
+    max-width: none;
+    tab-index: none;
+    nav: none;
+}
+.training-toolbar.is-compact .training-toolbar-action span {
+    display: none;
+}
+.training-toolbar.is-compact .training-toolbar-action {
+    flex: 0 0 28dp;
+    min-width: 28dp;
+    max-width: 28dp;
+    width: 28dp;
+    padding: 3dp 6dp;
+    gap: 0;
+}
+
+/* Advanced is a top-level title, not an inset subsection header. */
+#hdr-advanced-params {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 8dp 0 0;
+    padding: 5dp 6dp;
+    gap: 6dp;
+}
+#hdr-advanced-params > .section-arrow {
+    flex: 0 0 10dp;
+    margin: 0;
 }

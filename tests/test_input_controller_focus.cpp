@@ -8,6 +8,8 @@
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_manager.hpp"
+#include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
@@ -18,6 +20,7 @@
 #include "scene/scene_manager.hpp"
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer_impl.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -27,6 +30,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -204,6 +208,23 @@ namespace lfs::vis {
 
         EXPECT_EQ(toggle_gt_count, 1);
         EXPECT_EQ(toggle_split_count, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, EscapeWithScenePanelFocusStaysWithGui) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        controller.handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        EXPECT_FALSE(router.isViewportKeyboardFocused());
     }
 
     TEST_F(InputControllerFocusTest, ProgrammaticViewportFocusAllowsViewportHotkeys) {
@@ -591,6 +612,150 @@ namespace lfs::vis {
 
         EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
         EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, FreshLeftDockEdgePressUsesOneOwnershipVerdict) {
+        struct DockPanel final : gui::IPanel {
+            void draw(const gui::PanelDrawContext&) override {}
+            gui::PanelRenderCapabilities renderCapabilities() const override {
+                return {.direct = true};
+            }
+            gui::PanelDirectRenderResult renderDirect(
+                const gui::PanelDirectRenderRequest&, const gui::PanelDrawContext&) override {
+                return {.handled = true, .height = 100.0f};
+            }
+        };
+        struct RegisteredDockPanel {
+            RegisteredDockPanel() {
+                gui::PanelInfo info;
+                info.id = "test.input.focus.left-dock";
+                info.label = info.id;
+                info.space = gui::PanelSpace::LeftDock;
+                info.panel = std::make_shared<DockPanel>();
+                gui::PanelRegistry::instance().register_panel(std::move(info));
+            }
+            ~RegisteredDockPanel() {
+                gui::PanelRegistry::instance().unregister_panel("test.input.focus.left-dock");
+            }
+        };
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.safe_mode = true;
+        VisualizerImpl viewer(options);
+        RegisteredDockPanel registered_panel;
+        auto& gui = *viewer.getGuiManager();
+        // This fixture does not initialize the GUI, where the startup option is applied.
+        gui.dismissStartupOverlay();
+        ASSERT_FALSE(gui.isStartupBlockingInput());
+        gui::ScreenState screen{.work_pos = {0.0f, 0.0f}, .work_size = {1280.0f, 720.0f}};
+        gui::UIContext ui;
+        gui::PanelDrawContext draw_ctx{.ui = &ui};
+        gui::PanelInputState previous_input;
+        previous_input.mouse_x = 1000.0f;
+        previous_input.mouse_y = 400.0f;
+        gui.panelLayout().renderLeftDock(draw_ctx, true, false, previous_input, screen);
+        ASSERT_TRUE(gui.panelLayout().isLeftDockVisible());
+        ASSERT_FALSE(gui.panelLayout().isResizingPanel());
+        gui.last_ui_layout_work_pos_ = screen.work_pos;
+        gui.last_ui_layout_work_size_ = screen.work_size;
+        gui.viewport_layout_ = gui.panelLayout().computeViewportLayout(true, false, false, screen);
+
+        const auto edge = gui::PanelLayoutManager::leftDockResizeRect(
+            screen.work_pos.x, screen.work_pos.y, screen.work_size.y,
+            lfs::python::get_shared_dpi_scale(), gui.panelLayout().getLeftDockWidth());
+        const float x = (edge.x0 + 3.0f * edge.x1) / 4.0f;
+        const float y = 400.0f;
+        ASSERT_TRUE(gui.isPositionInViewport(x, y));
+        const auto hover_hit = gui.hitTestPointer(x, y);
+        ASSERT_FALSE(hover_hit.blocks_pointer);
+        ASSERT_FALSE(hover_hit.blocks_mouse_button);
+
+        Viewport viewport(1280, 720);
+        InputController controller(nullptr, viewport);
+        const auto viewport_pos = gui.getViewportPos();
+        const auto viewport_size = gui.getViewportSize();
+        controller.updateViewportBounds(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
+        ASSERT_TRUE(controller.isViewportPoint(x, y));
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        ASSERT_EQ(router.hoverTarget(x, y), input::InputTarget::Viewport);
+
+        FrameInputBuffer frame;
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_MIDDLE;
+        event.button.x = x;
+        event.button.y = y;
+        frame.processEvent(event);
+        const auto hit = gui.hitTestMouseButton(x, y);
+        frame.notePressOwner(event.button.button, hit.blocks_pointer || hit.blocks_mouse_button);
+        router.beginMouseButton(input::ACTION_PRESS, x, y, hit);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, x, y);
+
+        ASSERT_EQ(frame.mouse_button_events.size(), 1);
+        EXPECT_TRUE(frame.mouse_button_events.front().gui_owned);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Gui);
+        EXPECT_EQ(router.state().keyboard_focus, input::InputTarget::Viewport);
+        EXPECT_EQ(router.hoverTarget(x, y), input::InputTarget::Viewport);
+        EXPECT_FALSE(controller.isContinuousInputActive());
+    }
+
+    TEST_F(InputControllerFocusTest, MouseButtonVerdictPreservesCrossButtonCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.updateViewportBounds(0.0f, 0.0f, 200.0f, 200.0f);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0,
+                                {.blocks_mouse_button = true});
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Gui);
+        EXPECT_EQ(router.state().keyboard_focus, input::InputTarget::Viewport);
+        router.beginMouseButton(input::ACTION_PRESS, 250.0, 250.0, {});
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Gui);
+        router.endMouseButton(input::ACTION_RELEASE);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Gui);
+        router.endMouseButton(input::ACTION_RELEASE);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0, {});
+        router.beginMouseButton(input::ACTION_PRESS, 250.0, 250.0,
+                                {.blocks_pointer = true, .takes_keyboard_focus = true});
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Viewport);
+        EXPECT_EQ(router.state().keyboard_focus, input::InputTarget::Viewport);
+        router.endMouseButton(input::ACTION_RELEASE);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Viewport);
+        router.endMouseButton(input::ACTION_RELEASE);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, EmptyMouseButtonVerdictRetainsNoGuiViewportFallback) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.updateViewportBounds(0.0f, 0.0f, 200.0f, 200.0f);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0, {});
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 40.0, 50.0);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Viewport);
+        EXPECT_TRUE(controller.hasViewportKeyboardFocus());
+        EXPECT_TRUE(controller.isContinuousInputActive());
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE);
+
+        router.beginMouseButton(input::ACTION_PRESS, 250.0, 250.0, {});
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+        EXPECT_EQ(router.state().keyboard_focus, input::InputTarget::None);
     }
 
     TEST_F(InputControllerFocusTest, HoverTargetIgnoresPointerCapture) {

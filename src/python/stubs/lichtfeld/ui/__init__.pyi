@@ -1984,6 +1984,11 @@ def save_sog_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for SOG files. Returns empty string if cancelled.
     """
 
+def save_ssog_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for SSOG files. Returns empty string if cancelled.
+    """
+
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
@@ -2466,9 +2471,24 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
+def get_video_reconstruction_selection() -> dict:
+    """
+    Return the saved video reconstruction selection used by both export entry points.
+    """
+
+def set_video_reconstruction_selection(backend_id: str, preset_id: str, fallback: str = 'abort') -> None:
+    """
+    Set the persisted video reconstruction selection. Validates metadata only, without loading a backend.
+    """
+
+def reset_video_reconstruction_selection() -> None:
+    """
+    Reset the saved video reconstruction selection to native/native with abort policy.
+    """
+
 def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True) -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
     """
 
 def add_keyframe() -> None:
@@ -2829,6 +2849,70 @@ def get_git_commit() -> str:
 
 def get_split_view_info() -> dict:
     """Get split view info"""
+
+def get_focused_split_panel() -> str:
+    """
+    Get the focused split-view panel ('left' or 'right').
+    Outside independent-dual split this reports the panel the depth
+    toolbar would address; it is 'left' with no rendering manager.
+    """
+
+def get_depth_window_sync() -> bool:
+    """
+    Is the per-panel depth-window sync flag on? While on, a depth-window
+    edit in either split panel writes both panels.
+    """
+
+def get_depth_window_collapse_source() -> str:
+    """
+    Which panel the last LINEAGE EVENT took its surviving window from
+    ('left' or 'right') -- not only a collapse. Leaving independent-dual
+    copies the PRE-transition focused panel's depth window into the
+    single remaining one, and the split service resets the observable
+    focus to Left in the same transition, so a poller cannot recover
+    that panel from get_focused_split_panel(). A sync-ON copy and a
+    project or sync-undo restore overwrite this field too, so it names
+    the source of whichever write stamped LAST; use
+    get_depth_window_collapse_record() to learn which kind that was.
+    Only meaningful once such a write has happened; it reports 'left'
+    before the first one and with no rendering manager.
+    """
+
+def get_depth_window_collapse_record() -> tuple:
+    """
+    The last depth-window reference-lineage stamp, as
+    ('left'|'right', generation, kind).
+    kind is 'leave_collapse', 'sync_copy', 'project_restore' or
+    'retained_pair_discard'. These invalidate slot-derived references;
+    sync undo/redo also reports 'project_restore'. A retained-pair discard
+    requires fresh baselines from live windows, not from source. The
+    generation counts them, so a poller whose delta exceeds the
+    transitions it observed slept through boundaries and cannot replay
+    anything it cached; the kind says how to recover from the ones it
+    missed. 'leave_collapse' and 'sync_copy' leave ONE window, so every
+    cached reference recovers from it; 'project_restore' means
+    'fresh-baseline required' and can leave the two panel windows
+    DIFFERING, so a per-panel consumer must re-read each panel with
+    selection.get_depth_filter_window(panel=...) rather than reuse the
+    projection. source is the panel the surviving window came from and
+    is meaningful for 'leave_collapse' (the PRE-transition focus, which
+    get_focused_split_panel() can no longer report) and for 'sync_copy'
+    (the panel copied FROM); a 'project_restore' takes its windows from
+    the restored state, not from a panel. The generation is 0 before
+    the first such write and with no rendering manager.
+    """
+
+def set_depth_window_sync(sync: bool) -> bool:
+    """
+    Set the per-panel depth-window sync flag. Turning it on with
+    differing panels copies the focused panel's window to the other as
+    one undo step. Both ON and OFF changes are silently ignored while a
+    depth-window drag owns a panel, including subthreshold presses, or
+    while an independent pair is parked in GT. GT without a parked pair
+    is unaffected. In a retained Disabled interval an actual flag change
+    discards the pair before applying; a same-value request preserves it.
+    Returns the flag's actual state after the call, not the requested one.
+    """
 
 def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""

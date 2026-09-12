@@ -375,6 +375,7 @@ set(TEST_FILES
     test_adam_capacity_invariant.cpp
     test_dual_rep_optimizer.cpp
     test_gut_shN_joint_adam.cpp
+    test_gut_undistort_parity.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
@@ -386,6 +387,8 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
+    test_ssog_format.cpp
+    test_splat_decimate.cpp
     test_ply_error_taxonomy.cpp
     test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
@@ -433,6 +436,7 @@ set(TEST_FILES
     test_mcp_sequencer_tools.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
+    test_video_reconstruction.cpp
     test_video_export_utils.cpp
     test_video_frame_extractor_naming.cpp
     test_video_hdr_logic.cpp
@@ -469,6 +473,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
     fastgs_tile_culling_boundary_cuda.cu
@@ -478,6 +483,7 @@ set(TEST_FILES
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
     test_scene_consolidation.cpp
+    test_scene_graph_fuzz.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
@@ -489,12 +495,16 @@ set(TEST_FILES
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
     test_selection_screen_window.cpp
+    test_depth_window_panels.cpp
+    test_depth_window_panels_interaction.cpp
     test_rendering_refactor_services.cpp
+    test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_preferences_migration.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
+    test_input_controller_panel_camera.cpp
     test_selection_service_interactions.cpp
     test_scene_graph_identity.cpp
     test_undo_history.cpp
@@ -528,7 +538,7 @@ set(TEST_FILES
     test_nn_ops.cpp
     test_moge2.cpp
     test_sam2.cpp
-    bench_nn_ops.cpp
+    test_lpips.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
@@ -584,6 +594,7 @@ set(TEST_FILES
     test_run_guarded.cpp
     test_tcp_responder.cpp
     test_error_envelope.cpp
+    test_plugin_localization.cpp
 )
 if(LFS_TENSOR_VULKAN)
     list(APPEND TEST_FILES
@@ -646,6 +657,10 @@ list(APPEND TEST_SOURCES
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
 
+# test_assert_hardening.cpp includes the generated ABI header directly. Ensure
+# the build-time tripwire has run before this target starts compiling.
+add_dependencies(lichtfeld_tests lfs_core_abi_stamp)
+
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
 
@@ -660,6 +675,7 @@ set_target_properties(lichtfeld_tests PROPERTIES
 
 # Include directories
 target_include_directories(lichtfeld_tests PRIVATE
+    ${LFS_CORE_ABI_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests
@@ -994,11 +1010,33 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
     TIMEOUT 1800
 )
 
+# The pixel regression uses an independent decoder, not our video player.
+# Set LFS_VIDEO_TEST_FFMPEG explicitly when ffmpeg is outside PATH.
+find_program(LFS_VIDEO_TEST_FFMPEG NAMES ffmpeg)
+if(LFS_VIDEO_TEST_FFMPEG)
+    add_test(NAME video.orientation
+        COMMAND ${Python_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/verify_video_orientation.py
+            --executable $<TARGET_FILE:${PROJECT_NAME}>
+            --ffmpeg ${LFS_VIDEO_TEST_FFMPEG}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/video-orientation
+    )
+    set_tests_properties(video.orientation PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "slow;gpu;video"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+    )
+else()
+    message(STATUS "Skipping video.orientation: set LFS_VIDEO_TEST_FFMPEG to enable decoded-video regression")
+endif()
+
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
@@ -1016,6 +1054,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_localization.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
@@ -1028,6 +1067,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_shader_header_target.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_splat_lod_hierarchy.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
@@ -1040,6 +1080,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_undo.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewport_overlay_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_windows_build_preflight.py
 )
 
 set(LFS_PYTHON_SLOW_TESTS
@@ -1080,6 +1121,15 @@ set(LFS_PYTHON_NIGHTLY_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_unicode_path_bindings.py
 )
 
+add_test(NAME lichtfeld.cmake.vcpkg_profiles
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_vcpkg_profiles.cmake"
+)
+set_tests_properties(lichtfeld.cmake.vcpkg_profiles PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS "fast"
+    TIMEOUT 60
+)
+
 add_test(NAME lichtfeld.python.fast
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m "not gpu and not slow and not integration"
@@ -1089,6 +1139,7 @@ set_tests_properties(lichtfeld.python.fast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast"
     TIMEOUT 60
+    ENVIRONMENT_MODIFICATION "CMAKE_COMMAND=set:${CMAKE_COMMAND}"
 )
 
 add_test(NAME lichtfeld.python.slow
@@ -1258,6 +1309,31 @@ target_link_libraries(tensor_interface_freeze PRIVATE
 )
 add_test(NAME tensor_interface_freeze COMMAND tensor_interface_freeze)
 
+add_executable(bench_nn_ops EXCLUDE_FROM_ALL
+    bench_nn_ops.cpp
+)
+set_target_properties(bench_nn_ops PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+target_include_directories(bench_nn_ops PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_compile_definitions(bench_nn_ops PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(bench_nn_ops PRIVATE
+    lfs_core
+    GTest::gtest_main
+    CUDA::cudart
+)
+
 # Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
 # tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.
 # Positive nvcc TU: device_fault_cuda_utils.cu (compiled into lichtfeld_tests;
@@ -1275,3 +1351,8 @@ message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
 message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
 message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")
+
+add_test(NAME lichtfeld.decimate.perf
+    COMMAND lichtfeld_tests --gtest_filter=SplatDecimate.DecimatePerfSmoke)
+set_tests_properties(lichtfeld.decimate.perf PROPERTIES
+    LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)

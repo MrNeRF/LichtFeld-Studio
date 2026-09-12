@@ -6,6 +6,8 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "operation/undo_entry.hpp"
+#include "operation/undo_history.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "rendering/export_post_process.hpp"
@@ -50,6 +52,57 @@ namespace lfs::vis {
         // it is an exact sentinel match that cannot fire twice - once (0, 100)
         // becomes (-100, 0) it no longer matches, and a band the screen-window
         // path writes always satisfies min.z = -far <= max.z = -near <= 0.
+
+        constexpr float kDepthNearMin = 0.01f;
+        constexpr float kDepthNearMax = 999.99f;
+        constexpr float kDepthMax = 1000.0f;
+
+        [[nodiscard]] DepthWindowState depthWindowFromProjection(const RenderSettings& settings) {
+            // Fresh disabled settings still carry the legacy positive-Z sentinel.
+            // Decode it before seeding panel slots, just as the legacy getter does.
+            const bool legacy_default = !settings.depth_filter_enabled &&
+                                        settings.depth_filter_min.z == 0.0f &&
+                                        settings.depth_filter_max.z == 100.0f;
+            return {
+                .near_plane = legacy_default ? 0.0f : -settings.depth_filter_max.z,
+                .far_plane = legacy_default ? 100.0f : -settings.depth_filter_min.z,
+                .scale_x = settings.depth_filter_scale_x,
+                .scale_y = settings.depth_filter_scale_y,
+                .offset_x = settings.depth_filter_offset_x,
+                .offset_y = settings.depth_filter_offset_y,
+            };
+        }
+
+        void clampDepthWindowState(DepthWindowState& state) {
+            if (!std::isfinite(state.scale_x)) {
+                state.scale_x = 0.35f;
+            }
+            if (!std::isfinite(state.scale_y)) {
+                state.scale_y = 0.35f;
+            }
+            if (!std::isfinite(state.offset_x)) {
+                state.offset_x = 0.0f;
+            }
+            if (!std::isfinite(state.offset_y)) {
+                state.offset_y = 0.0f;
+            }
+            state.scale_x = std::clamp(state.scale_x, 0.05f, 1.0f);
+            state.scale_y = std::clamp(state.scale_y, 0.05f, 1.0f);
+            state.offset_x = std::clamp(state.offset_x, -1.0f, 1.0f);
+            state.offset_y = std::clamp(state.offset_y, -1.0f, 1.0f);
+            state.near_plane = std::clamp(state.near_plane, 0.0f, kDepthNearMax);
+            state.far_plane = std::clamp(state.far_plane, state.near_plane + kDepthNearMin, kDepthMax);
+        }
+
+        void applyDepthWindowToProjection(RenderSettings& settings, const DepthWindowState& state) {
+            settings.depth_filter_scale_x = state.scale_x;
+            settings.depth_filter_scale_y = state.scale_y;
+            settings.depth_filter_offset_x = state.offset_x;
+            settings.depth_filter_offset_y = state.offset_y;
+            settings.depth_filter_min.z = -state.far_plane;
+            settings.depth_filter_max.z = -state.near_plane;
+        }
+
         void sanitizeSelectionWindowSettings(RenderSettings& settings) {
             constexpr float kDefaultScale = 0.35f;
             constexpr float kDefaultOffset = 0.0f;
@@ -183,6 +236,8 @@ namespace lfs::vis {
         camera_metrics_worker_ = std::jthread([this](std::stop_token stop_token) {
             cameraMetricsWorkerLoop(stop_token);
         });
+        const auto initial_depth_window = depthWindowFromProjection(settings_);
+        panel_depth_windows_ = {initial_depth_window, initial_depth_window};
         setupEventHandlers();
     }
 
@@ -476,6 +531,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneRenderResources() {
+        vksplat_stale_frame_guard_.onSuccess();
         viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();
         clearVulkanViewportImageState();
@@ -587,14 +643,42 @@ namespace lfs::vis {
         bool clear_metrics = false;
         bool lod_request_changed = false;
         bool lod_enabled_turned_on = false;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
+        // Equal-mode writes can re-enter from latch release and take only
+        // settings_mutex_. A mode change releases it before acquiring the
+        // transition mutex, then rechecks the mode under both locks.
+        std::unique_lock<std::mutex> transition_lock;
+        for (;;) {
+            std::unique_lock<std::mutex> lock(settings_mutex_);
+            const bool split_mode_changes =
+                settings_.split_view_mode != sanitized_settings.split_view_mode;
+            if (split_mode_changes && !transition_lock.owns_lock()) {
+                lock.unlock();
+                transition_lock = std::unique_lock<std::mutex>(depth_window_transition_mutex_);
+                continue;
+            }
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_split_mode = settings_.split_view_mode;
             if (split_view_service_.isGTComparisonActive(settings_) ||
                 split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
             const int focused_panel_index =
                 static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
+
+            // Without selection intent, a same-mode unsynced write must retain
+            // the current projection, including any active drag preview.
+            if (!split_mode_changes && !depth_window_sync_ &&
+                split_view_service_.isIndependentDualActive(settings_) &&
+                (dirty_flags & DirtyFlag::SELECTION) == 0) {
+                applyDepthWindowToProjection(sanitized_settings, depthWindowFromProjection(settings_));
+            }
+
+            const float previous_depth_filter_scale_x = settings_.depth_filter_scale_x;
+            const float previous_depth_filter_scale_y = settings_.depth_filter_scale_y;
+            const float previous_depth_filter_offset_x = settings_.depth_filter_offset_x;
+            const float previous_depth_filter_offset_y = settings_.depth_filter_offset_y;
+            const float previous_depth_filter_min_z = settings_.depth_filter_min.z;
+            const float previous_depth_filter_max_z = settings_.depth_filter_max.z;
             const bool grid_plane_changed = settings_.grid_plane != sanitized_settings.grid_plane;
             lod_enabled_turned_on = !settings_.lod_enabled && sanitized_settings.lod_enabled;
             lod_request_changed =
@@ -625,6 +709,8 @@ namespace lfs::vis {
                 clear_metrics = true;
             }
 
+            const float previous_depth_min_z = settings_.depth_filter_min.z;
+            const float previous_depth_max_z = settings_.depth_filter_max.z;
             const auto previous_backend = settings_.raster_backend;
             const bool previous_gut = settings_.gut;
             settings_ = sanitized_settings;
@@ -640,14 +726,75 @@ namespace lfs::vis {
             sanitizeGTComparisonSettings(settings_);
             sanitizeSelectionWindowSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
+
+            const bool depth_window_projection_changed =
+                previous_depth_filter_scale_x != settings_.depth_filter_scale_x ||
+                previous_depth_filter_scale_y != settings_.depth_filter_scale_y ||
+                previous_depth_filter_offset_x != settings_.depth_filter_offset_x ||
+                previous_depth_filter_offset_y != settings_.depth_filter_offset_y ||
+                previous_depth_filter_min_z != settings_.depth_filter_min.z ||
+                previous_depth_filter_max_z != settings_.depth_filter_max.z;
+
+            if (settings_.split_view_mode == SplitViewMode::Disabled && depth_window_projection_changed) {
+                discardRetainedDepthWindowPairLocked(pre_transition_focus);
+            }
+
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {
                     panel_grid_planes_[focused_panel_index] = settings_.grid_plane;
                 }
+                if (depth_window_projection_changed) {
+                    const auto projection_window = depthWindowFromProjection(settings_);
+                    // These non-drag projection writes supersede backups and ownership for
+                    // every slot written.
+                    if (depth_window_sync_) {
+                        panel_depth_windows_ = {projection_window, projection_window};
+                        releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
+                                                        /*fan_out=*/true);
+                    } else if ((dirty_flags & DirtyFlag::SELECTION) != 0) {
+                        panel_depth_windows_[focused_panel_index] = projection_window;
+                        releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
+                                                        /*fan_out=*/false);
+                    }
+                }
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
+                // settings_ already has the new mode. A write that enters GT from independent-dual
+                // and changes projection must not copy that projection into both slots before
+                // they are parked below. Treat its depth change as a GT-time global write:
+                // preserve the dormant pair.
+                const bool entering_gt_from_independent_panels =
+                    split_mode_changes &&
+                    splitViewUsesIndependentPanels(previous_split_mode) &&
+                    splitViewUsesGTComparison(settings_.split_view_mode);
+                if (depth_window_projection_changed && !entering_gt_from_independent_panels) {
+                    const auto projection_window = depthWindowFromProjection(settings_);
+                    panel_depth_windows_ = {projection_window, projection_window};
+                    releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
+                                                    /*fan_out=*/true);
+                }
+            }
+
+            if (settings_.depth_filter_min.z != previous_depth_min_z ||
+                settings_.depth_filter_max.z != previous_depth_max_z) {
+                ++depth_window_projection_generation_;
+            }
+            // After applying settings, run the event paths' transition logic: epoch bump,
+            // backup restoration and seed/collapse. On independent entry, sync grid planes
+            // as handleToggleIndependentSplitView and restoreSplitViewMode do.
+            // The non-independent branch above already handles grid planes on exit.
+            if (split_mode_changes) {
+                // Only this call can combine a mode change with a global depth write.
+                // Pass the change flag so GT parking preserves the incoming projection in settings_.
+                applyDepthWindowModeTransitionLocked(
+                    previous_split_mode, settings_.split_view_mode, pre_transition_focus,
+                    depth_window_projection_changed);
+                if (splitViewUsesIndependentPanels(settings_.split_view_mode)) {
+                    syncGridPlanesLocked(settings_.grid_plane);
+                }
             }
             markDirty(dirty_flags);
+            break;
         }
 
         if (lod_request_changed && lod_controller_) {
@@ -766,20 +913,105 @@ namespace lfs::vis {
         return split_view_service_.isGTComparisonActive(settings_);
     }
 
-    void RenderingManager::setDepthWindowDragPreview(const bool active) {
+    bool RenderingManager::depthWindowDragActiveLocked() const {
+        // Preview counters track latched drags that crossed the draw threshold.
+        // Frame capture uses this signal; the sync gate uses ownership instead.
+        return depth_window_preview_counts_[0] > 0 || depth_window_preview_counts_[1] > 0;
+    }
+
+    bool RenderingManager::depthWindowDragOwnedLocked() const {
+        // Ownership lasts from invoke to destruction, including subthreshold presses.
+        // The sync gate uses this lifetime so before_ capture cannot straddle a sync change.
+        return depth_window_drag_counts_[0] > 0 || depth_window_drag_counts_[1] > 0;
+    }
+
+    bool RenderingManager::beginDepthWindowDrag(const SplitViewPanelId panel,
+                                                uint64_t& out_drag_token) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        const size_t index = splitViewPanelIndex(panel);
+        // Mint a unique, monotonic token under the same lock as its slot claims.
+        const uint64_t token = ++depth_window_last_drag_token_;
+        out_drag_token = token;
+        // CLAIM RULE: retain the original backup when taking over an owned slot.
+        // For an unowned slot, refresh from live state so an old backup cannot
+        // become the new drag's undo baseline. Until the next claim, that old
+        // backup remains available for transition folding.
+        if (!depth_window_pin_owners_[index]) {
+            depth_window_drag_backups_[index] = panel_depth_windows_[index];
+        }
+        // Take ownership while retaining the first backup. Ownership keeps it
+        // non-idle regardless of drag count and excludes other tokens' writes,
+        // restores and per-slot releases until takeover or supersession.
+        depth_window_pin_owners_[index] = token;
+        // Sync or a non-independent mode makes previews write both slots.
+        // Both need pre-drag backups before the shared value changes; otherwise a
+        // replacement drag on the other panel could save the preview as its backup
+        // and restore it at the next mode transition.
+        const bool fans_out =
+            !split_view_service_.isIndependentDualActive(settings_) || depth_window_sync_;
+        if (fans_out) {
+            const size_t other_index = index == 0 ? 1 : 0;
+            // Same claim rule, asked independently of the own slot.
+            if (!depth_window_pin_owners_[other_index]) {
+                depth_window_drag_backups_[other_index] = panel_depth_windows_[other_index];
+            }
+            // The other slot has no count for this drag; ownership preserves its
+            // backup even through a same-epoch history restore.
+            depth_window_pin_owners_[other_index] = token;
+        }
+        ++depth_window_drag_counts_[index];
+        // Report ownership of the other slot so teardown restores every slot
+        // this drag's writes may have touched.
+        return fans_out;
+    }
+
+    void RenderingManager::endDepthWindowDrag(const SplitViewPanelId panel,
+                                              const uint64_t drag_token) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        const size_t index = splitViewPanelIndex(panel);
+        if (depth_window_drag_counts_[index] == 0) {
+            return;
+        }
+        --depth_window_drag_counts_[index];
+        // IDENTITY GATE: release only slots this drag still owns.
+        // Mode transitions, project restore and non-drag writes can clear ownership;
+        // later drags can take it over. Per-slot checks protect new owners while
+        // ensuring this drag releases every slot it still owns.
+        for (size_t slot = 0; slot < depth_window_pin_owners_.size(); ++slot) {
+            if (depth_window_pin_owners_[slot] != drag_token) {
+                continue;
+            }
+            depth_window_pin_owners_[slot].reset();
+            // Keep the backup after ownership ends. Mode transitions and project restore
+            // cancel drags before folding backups; clearing it here would leave only the
+            // drag's preview. The next claim refreshes an unowned slot's backup from live
+            // state, preventing a stale undo baseline for the new drag.
+        }
+    }
+
+    void RenderingManager::beginDepthWindowPreview(const SplitViewPanelId panel) {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            if (depth_window_drag_preview_ == active) {
+            ++depth_window_preview_counts_[splitViewPanelIndex(panel)];
+        }
+        markDirty(DirtyFlag::OVERLAY);
+    }
+
+    void RenderingManager::endDepthWindowPreview(const SplitViewPanelId panel) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            const size_t index = splitViewPanelIndex(panel);
+            if (depth_window_preview_counts_[index] == 0) {
                 return;
             }
-            depth_window_drag_preview_ = active;
+            --depth_window_preview_counts_[index];
         }
         markDirty(DirtyFlag::OVERLAY);
     }
 
     bool RenderingManager::depthWindowDragPreview() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depth_window_drag_preview_;
+        return depthWindowDragActiveLocked();
     }
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
@@ -807,12 +1039,509 @@ namespace lfs::vis {
         split_view_service_.setFocusedPanel(panel);
         if (split_view_service_.isIndependentDualActive(settings_)) {
             settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(panel)];
+            applyDepthWindowProjectionLocked(panel_depth_windows_[splitViewPanelIndex(panel)]);
         }
     }
 
     int RenderingManager::getGridPlaneForPanel(const SplitViewPanelId panel) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return panel_grid_planes_[splitViewPanelIndex(panel)];
+    }
+
+    DepthWindowState RenderingManager::getDepthWindowForPanel(const SplitViewPanelId panel) const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return panel_depth_windows_[splitViewPanelIndex(panel)];
+    }
+
+    RenderingManager::DepthWindowOverlaySnapshot RenderingManager::getDepthWindowOverlaySnapshot() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return {
+            .independent_dual_active = split_view_service_.isIndependentDualActive(settings_),
+            .panel_windows = panel_depth_windows_,
+        };
+    }
+
+    void RenderingManager::releaseDepthWindowBackupsLocked(const SplitViewPanelId panel,
+                                                           const bool fan_out) {
+        // Callers have replaced these slots with a commit or deliberate non-drag write
+        // (settings, panel setter or sync copy). Clear stale backups and ownership,
+        // regardless of drag counts, so the old drag cannot overwrite the new value
+        // through preview or teardown (restorePinnedDepthWindowSlots).
+        // Drag preview writes never call this helper.
+        const auto supersede = [this](const size_t slot) {
+            depth_window_drag_backups_[slot].reset();
+            depth_window_pin_owners_[slot].reset();
+        };
+        const size_t index = splitViewPanelIndex(panel);
+        supersede(index);
+        if (!fan_out) {
+            return;
+        }
+        supersede(index == 0 ? 1 : 0);
+    }
+
+    bool RenderingManager::restorePinnedDepthWindowSlots(
+        const SplitViewPanelId panel,
+        const DepthWindowState& own_state,
+        const std::optional<DepthWindowState>& other_state,
+        const uint64_t expected_epoch,
+        const uint64_t drag_token) {
+        DepthWindowState clamped_own = own_state;
+        clampDepthWindowState(clamped_own);
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (depth_window_mode_epoch_ != expected_epoch) {
+            return false;
+        }
+        const size_t index = splitViewPanelIndex(panel);
+        const size_t other_index = index == 0 ? 1 : 0;
+        const bool owns_addressed_slot = depth_window_pin_owners_[index] == drag_token;
+        bool wrote = false;
+        // Under one lock, restore only slots still owned by this drag.
+        // Skip slots whose ownership was cleared by a newer write or taken by another
+        // drag, preserving their newer values.
+        if (owns_addressed_slot) {
+            applyDepthWindowForPanelLocked(panel, clamped_own, /*restore_mode=*/true);
+            wrote = true;
+        }
+        if (other_state && depth_window_pin_owners_[other_index] == drag_token) {
+            DepthWindowState clamped_other = *other_state;
+            clampDepthWindowState(clamped_other);
+            applyDepthWindowForPanelLocked(
+                other_index == 0 ? SplitViewPanelId::Left : SplitViewPanelId::Right,
+                clamped_other, /*restore_mode=*/true);
+            wrote = true;
+        }
+        if (wrote) {
+            markDirty(DirtyFlag::ALL);
+        }
+        return owns_addressed_slot;
+    }
+
+    void RenderingManager::releaseIdleDepthWindowBackupsLocked() {
+        for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
+            // A drag writing both slots can own a backup where the drag count is zero.
+            // Keep owned backups so the next transition can restore pre-drag state.
+            if (depth_window_drag_counts_[index] == 0 &&
+                !depth_window_pin_owners_[index]) {
+                depth_window_drag_backups_[index].reset();
+            }
+        }
+    }
+
+    bool RenderingManager::applyDepthWindowForPanelLocked(const SplitViewPanelId panel,
+                                                          const DepthWindowState& clamped,
+                                                          const bool restore_mode) {
+        const bool independent_dual = split_view_service_.isIndependentDualActive(settings_);
+        // Restore one slot regardless of sync: this undoes the drag's preview,
+        // not a user edit.
+        const bool fan_out = !restore_mode && (!independent_dual || depth_window_sync_);
+        const size_t panel_index = splitViewPanelIndex(panel);
+        if (fan_out) {
+            panel_depth_windows_.fill(clamped);
+        } else {
+            panel_depth_windows_[panel_index] = clamped;
+        }
+        // Outside independent-dual, the projection is the window.
+        // Even a single-slot restore must update it.
+        const bool updates_projection = fan_out ||
+                                        split_view_service_.focusedPanel() == panel ||
+                                        (restore_mode && !independent_dual);
+        if (updates_projection) {
+            applyDepthWindowProjectionLocked(clamped);
+        }
+        return fan_out;
+    }
+
+    // Depth-window writes need DirtyFlag::ALL, as in one-argument updateSettings.
+    // SELECTION re-rasterizes cached per-splat containment, leaving stale
+    // classifications on screen until a full render.
+    bool RenderingManager::setDepthWindowForPanel(const SplitViewPanelId panel, const DepthWindowState& state) {
+        DepthWindowState clamped = state;
+        clampDepthWindowState(clamped);
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (depth_window_dormant_panels_ && splitViewUsesGTComparison(settings_.split_view_mode)) {
+            return false;
+        }
+        if (settings_.split_view_mode == SplitViewMode::Disabled && clamped != depthWindowFromProjection(settings_)) {
+            discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
+        }
+        const bool fan_out = applyDepthWindowForPanelLocked(panel, clamped);
+        releaseDepthWindowBackupsLocked(panel, fan_out);
+        markDirty(DirtyFlag::ALL);
+        return true;
+    }
+
+    bool RenderingManager::applyDepthWindowForPanelIfEpoch(const SplitViewPanelId panel,
+                                                           const DepthWindowState& state,
+                                                           const uint64_t expected_epoch,
+                                                           const uint64_t drag_token) {
+        DepthWindowState clamped = state;
+        clampDepthWindowState(clamped);
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (depth_window_mode_epoch_ != expected_epoch) {
+            return false;
+        }
+        // A drag may write only while it owns its panel's slot. Non-drag writes clear
+        // ownership; replacement drags take it over. Refuse superseded writes without
+        // changing state, just as for a stale epoch.
+        if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
+            return false;
+        }
+        applyDepthWindowForPanelLocked(panel, clamped);
+        markDirty(DirtyFlag::ALL);
+        return true;
+    }
+
+    bool RenderingManager::commitDepthWindowForPanelIfEpoch(
+        const SplitViewPanelId panel,
+        const DepthWindowState& state,
+        const uint64_t expected_epoch,
+        const uint64_t drag_token,
+        op::DepthWindowModeSnapshot& out_snapshot) {
+        DepthWindowState clamped = state;
+        clampDepthWindowState(clamped);
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (depth_window_mode_epoch_ != expected_epoch) {
+            return false;
+        }
+        // Like preview writes, commits require this drag to own the panel's slot.
+        // Refuse a superseded drag's release without side effects, as for a stale epoch.
+        if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
+            return false;
+        }
+        // Compare a commit with committed pre-drag geometry, not its preview.
+        const auto& backup = depth_window_drag_backups_[splitViewPanelIndex(panel)];
+        if (settings_.split_view_mode == SplitViewMode::Disabled &&
+            clamped != backup.value_or(depthWindowFromProjection(settings_))) {
+            discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
+        }
+        const bool fan_out = applyDepthWindowForPanelLocked(panel, clamped);
+        // The value is now committed. Discard its pre-drag backup so a later mode
+        // transition cannot roll it back as an uncommitted preview.
+        releaseDepthWindowBackupsLocked(panel, fan_out);
+        // Keep the epoch check, write and undo snapshot under one lock so no mode
+        // transition can intervene.
+        out_snapshot = depthWindowSnapshotLocked();
+        markDirty(DirtyFlag::ALL);
+        return true;
+    }
+
+    void RenderingManager::setDepthWindowSync(const bool sync) {
+        std::optional<std::pair<op::DepthWindowModeSnapshot, op::DepthWindowModeSnapshot>> undo_snapshots;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (depth_window_sync_ == sync) {
+                return;
+            }
+            // Ignore sync changes from drag invoke to destruction, including subthreshold
+            // presses. Otherwise the toggle's undo snapshot could capture preview geometry,
+            // and the drag's before_ baseline could disagree with the new sync state.
+            if (depthWindowDragOwnedLocked()) {
+                return;
+            }
+            if (settings_.split_view_mode == SplitViewMode::Disabled) {
+                // An actual global sync edit ends retention before the GT guard.
+                discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
+            }
+            // GT has no per-panel edit target. Refuse while it parks a pair: sync undo
+            // restores live slots, not that pair, and could leave unequal windows with
+            // sync on. GT without a parked pair is unaffected.
+            if (depth_window_dormant_panels_) {
+                return;
+            }
+            bool slots_changed = false;
+            if (sync && split_view_service_.isIndependentDualActive(settings_)) {
+                const size_t focused_index =
+                    splitViewPanelIndex(split_view_service_.focusedPanel());
+                const size_t other_index = focused_index == 0 ? 1 : 0;
+                if (panel_depth_windows_[focused_index] != panel_depth_windows_[other_index]) {
+                    const op::DepthWindowModeSnapshot before_snapshot = depthWindowSnapshotLocked();
+                    panel_depth_windows_[other_index] = panel_depth_windows_[focused_index];
+                    // Discard stale backups after this sync copy, as setDepthWindowForPanel does,
+                    // so a later transition cannot restore the pre-drag window over the copied value.
+                    releaseIdleDepthWindowBackupsLocked();
+                    // Like collapse on leaving independent-dual, this copy replaces the other
+                    // panel's window with the focused one. Stamp lineage under the copy's lock
+                    // so cached per-panel state cannot reuse the discarded window after a hidden
+                    // ON -> OFF -> focus-change -> ON cycle. Equal slots need no copy or stamp.
+                    stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
+                                                  DepthWindowLineageKind::SyncCopy);
+                    slots_changed = true;
+                    op::DepthWindowModeSnapshot after_snapshot = depthWindowSnapshotLocked();
+                    after_snapshot.sync = true;
+                    undo_snapshots = {before_snapshot, after_snapshot};
+                }
+            }
+            depth_window_sync_ = sync;
+            if (slots_changed) {
+                markDirty(DirtyFlag::ALL);
+            }
+        }
+        if (undo_snapshots) {
+            op::undoHistory().push(std::make_unique<op::DepthWindowSyncUndoEntry>(
+                *this, undo_snapshots->first, undo_snapshots->second));
+        }
+    }
+
+    bool RenderingManager::getDepthWindowSync() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_sync_;
+    }
+
+    SplitViewPanelId RenderingManager::getDepthWindowCollapseSource() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_collapse_source_;
+    }
+
+    RenderingManager::DepthWindowCollapseRecord
+    RenderingManager::getDepthWindowCollapseRecord() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return {depth_window_collapse_source_,
+                depth_window_collapse_generation_,
+                depth_window_collapse_kind_};
+    }
+
+    void RenderingManager::discardRetainedDepthWindowPairLocked(const SplitViewPanelId source) {
+        if (!depth_window_dormant_panels_) {
+            return;
+        }
+        depth_window_dormant_panels_.reset();
+        stampDepthWindowLineageLocked(source, DepthWindowLineageKind::RetainedPairDiscard);
+    }
+
+    void RenderingManager::stampDepthWindowLineageLocked(
+        const SplitViewPanelId source,
+        const DepthWindowLineageKind kind) {
+        // Sole writer of source, generation and kind; settings_mutex_ keeps them consistent.
+        // Invalidating writes stamp under the same lock as slot changes, except sync
+        // undo/redo, which stamps under a second acquisition (DepthWindowSyncUndoEntry::apply).
+        // The record is self-consistent, but not atomic with the slots. Consumers reading
+        // them separately must revalidate generation around their reads.
+        depth_window_collapse_source_ = source;
+        depth_window_collapse_kind_ = kind;
+        ++depth_window_collapse_generation_;
+    }
+
+    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshotLocked() const {
+        return {
+            .panels = panel_depth_windows_,
+            .sync = depth_window_sync_,
+            .projection = depthWindowFromProjection(settings_),
+            .mode_epoch = depth_window_mode_epoch_,
+            .independent_dual = split_view_service_.isIndependentDualActive(settings_),
+        };
+    }
+
+    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depthWindowSnapshotLocked();
+    }
+
+    op::DepthWindowModeSnapshot
+    RenderingManager::depthWindowBaselineSnapshotForDrag(const uint64_t drag_token) const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        auto snapshot = depthWindowSnapshotLocked();
+        if (drag_token == 0) {
+            return snapshot;
+        }
+        for (size_t i = 0; i < snapshot.panels.size(); ++i) {
+            if (depth_window_pin_owners_[i] == drag_token && depth_window_drag_backups_[i]) {
+                snapshot.panels[i] = *depth_window_drag_backups_[i];
+            }
+        }
+        return snapshot;
+    }
+
+    void RenderingManager::restoreDepthWindowStateFromProject() {
+        // Project restore advances the epoch; serialize it with drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        const auto projection_window = depthWindowFromProjection(settings_);
+        restoreDepthWindowStateLocked({projection_window, projection_window}, false, projection_window);
+        ++depth_window_projection_generation_;
+        // Project restore advances the epoch, expiring drags and undo entries from
+        // the previous session. Clear their pre-drag backups so later mode transitions
+        // cannot restore old windows over the loaded state.
+        depth_window_drag_backups_ = {};
+        // Clear ownership with the backups. endDepthWindowDrag releases only slots
+        // it still owns, so surviving drags leave these slots untouched.
+        depth_window_pin_owners_ = {};
+        // Like the backups, the parked pair belongs to the previous session.
+        // Discard it so leaving GT cannot overwrite the restored windows.
+        depth_window_dormant_panels_.reset();
+        // Restore seeds both slots from the project's projection, invalidating cached
+        // panel references. Stamp this even if independent-dual, sync OFF and focus
+        // stay unchanged, so polling detects the reset. The source names the focused
+        // panel only to complete the record; consumers ignore it for ProjectRestore.
+        stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
+                                      DepthWindowLineageKind::ProjectRestore);
+        ++depth_window_mode_epoch_;
+    }
+
+    bool RenderingManager::restoreDepthWindowSnapshotIfEpoch(
+        const op::DepthWindowModeSnapshot& snapshot,
+        const uint64_t expected_epoch,
+        const bool restore_sync) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (depth_window_mode_epoch_ != expected_epoch) {
+            return false;
+        }
+        // Focus may have changed: restore projection from the currently focused
+        // panel's snapshot slot. restore_sync restores the saved sync flag for sync
+        // entries; drag entries restore slots only and preserve the current flag.
+        const auto& focused_slot =
+            snapshot.panels[splitViewPanelIndex(split_view_service_.focusedPanel())];
+        restoreDepthWindowStateLocked(snapshot.panels,
+                                      restore_sync ? snapshot.sync : depth_window_sync_,
+                                      focused_slot);
+        markDirty(DirtyFlag::ALL);
+        return true;
+    }
+
+    void RenderingManager::stampDepthWindowSyncRestoreLineage() {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        // ProjectRestore means "fresh baseline required" here: sync undo/redo restores
+        // both absolute window snapshots, invalidating cached panel references.
+        // This is not a project load. The focused source only completes the record;
+        // consumers ignore it for this kind.
+        stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
+                                      DepthWindowLineageKind::ProjectRestore);
+    }
+
+    uint64_t RenderingManager::depthWindowProjectionGeneration() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_projection_generation_;
+    }
+
+    uint64_t RenderingManager::depthWindowModeEpoch() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_mode_epoch_;
+    }
+
+    void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
+        const float previous_depth_min_z = settings_.depth_filter_min.z;
+        const float previous_depth_max_z = settings_.depth_filter_max.z;
+        applyDepthWindowToProjection(settings_, state);
+        if (settings_.depth_filter_min.z != previous_depth_min_z ||
+            settings_.depth_filter_max.z != previous_depth_max_z) {
+            ++depth_window_projection_generation_;
+        }
+    }
+
+    void RenderingManager::restoreDepthWindowStateLocked(
+        const std::array<DepthWindowState, 2>& panels,
+        const bool sync,
+        const DepthWindowState& projection) {
+        panel_depth_windows_ = panels;
+        depth_window_sync_ = sync;
+        // Undo/redo and project restore replace both slots with valid state.
+        // Discard stale backups only for unowned slots with a zero drag count.
+        releaseIdleDepthWindowBackupsLocked();
+        applyDepthWindowProjectionLocked(projection);
+    }
+
+    void RenderingManager::applyDepthWindowModeTransitionLocked(
+        const SplitViewMode previous_mode,
+        const SplitViewMode new_mode,
+        const SplitViewPanelId pre_transition_focus,
+        const bool boundary_carries_global_depth_write) {
+        // Other comparison modes first invalidate any retained pair. Only an
+        // independent/GT boundary expires drags and folds their previews;
+        // Disabled <-> PLY otherwise preserves the global drag lifetime.
+        const bool was_independent = splitViewUsesIndependentPanels(previous_mode);
+        const bool is_independent = splitViewUsesIndependentPanels(new_mode);
+        if (!is_independent && !splitViewUsesGTComparison(new_mode) && new_mode != SplitViewMode::Disabled) {
+            discardRetainedDepthWindowPairLocked(pre_transition_focus);
+        }
+        const bool independent_boundary = was_independent != is_independent;
+        const bool gt_boundary =
+            splitViewUsesGTComparison(previous_mode) != splitViewUsesGTComparison(new_mode);
+        if (!independent_boundary && !gt_boundary) {
+            return;
+        }
+
+        // GT suspends filtering. Park and restore the panel pair separately
+        // from ordinary collapse/seed transitions, which would homogenize it.
+        const bool is_gt = splitViewUsesGTComparison(new_mode);
+        const bool park_dormant_panels = was_independent && is_gt;
+        const bool restore_dormant_panels =
+            is_independent && depth_window_dormant_panels_.has_value();
+
+        // A modal checked out before cancellation can race this transition and write
+        // a preview. Restore all recorded backups first so both panels collapse from
+        // pre-drag state whichever operation won the mutex. Discard the backups so no
+        // surviving or replacement drag inherits them across the epoch boundary.
+        const size_t focused_index = splitViewPanelIndex(split_view_service_.focusedPanel());
+        for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
+            if (!depth_window_drag_backups_[index]) {
+                continue;
+            }
+            const DepthWindowState backup_window = *depth_window_drag_backups_[index];
+            panel_depth_windows_[index] = backup_window;
+            // Parking sets projection below from pre-transition focus or an explicit boundary
+            // write. Events may have reset current focus; direct updateSettings keeps it.
+            if (index == focused_index && !park_dormant_panels) {
+                applyDepthWindowProjectionLocked(backup_window);
+            }
+            depth_window_drag_backups_[index].reset();
+        }
+        // All backups are consumed; clear all slot ownership. Surviving drags have
+        // no slots to release, and further writes fail both ownership and epoch checks.
+        depth_window_pin_owners_ = {};
+
+        if (park_dormant_panels) {
+            // Backups are restored and ownership cleared. Park both pre-drag windows;
+            // their references survive, so no lineage stamp is needed.
+            depth_window_dormant_panels_ = panel_depth_windows_;
+            // Preserve an explicit GT-boundary projection. Otherwise remove
+            // any abandoned preview using the clean pre-transition focused slot.
+            if (!boundary_carries_global_depth_write) {
+                const auto parked_focused_window =
+                    panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
+                applyDepthWindowProjectionLocked(parked_focused_window);
+            }
+        } else if (restore_dormant_panels) {
+            // On independent entry, restore the exact retained pair over slot values from
+            // GT-time global writes. Projection follows current focus: event-driven
+            // transitions reset it to Left; direct settings writes keep it.
+            // Neither restores pre-GT focus.
+            panel_depth_windows_ = *depth_window_dormant_panels_;
+            const auto focused_window =
+                panel_depth_windows_[splitViewPanelIndex(split_view_service_.focusedPanel())];
+            applyDepthWindowProjectionLocked(focused_window);
+        } else if (splitViewUsesGTComparison(previous_mode) && new_mode == SplitViewMode::Disabled) {
+            // Disabled drags back up live slots, so align both with the global projection.
+            // Keep the retained pair separate for the next independent entry.
+            panel_depth_windows_.fill(depthWindowFromProjection(settings_));
+        } else if (!was_independent && is_independent) {
+            const auto projection_window = depthWindowFromProjection(settings_);
+            panel_depth_windows_ = {projection_window, projection_window};
+        } else if (was_independent && !is_independent) {
+            // Record the source from before the focus reset to Left so toolbar Size references
+            // follow its window. Stamp source, generation and kind under the collapse lock.
+            // Source alone hides intermediate transitions in a leave -> enter -> leave cycle.
+            // Comparing the generation delta with the observed transition reveals missed
+            // transitions; kind tells the poller how to recover.
+            stampDepthWindowLineageLocked(pre_transition_focus,
+                                          DepthWindowLineageKind::LeaveCollapse);
+            const auto collapsed =
+                panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
+            applyDepthWindowProjectionLocked(collapsed);
+            panel_depth_windows_ = {collapsed, collapsed};
+        }
+
+        // GT -> Disabled and repeated GT entry retain the original pair until
+        // an invalidating edit or comparison mode. Independent entry consumes it.
+        if (restore_dormant_panels) {
+            depth_window_dormant_panels_.reset();
+        }
+
+        // For the boundary detected above, advance the epoch to reject further writes
+        // and commits from drags that survive cancellation, and expire pre-transition
+        // undo entries.
+        ++depth_window_mode_epoch_;
     }
 
     void RenderingManager::setGridPlaneForPanel(const SplitViewPanelId panel, const int plane) {

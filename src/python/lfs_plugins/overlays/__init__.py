@@ -4,8 +4,6 @@ import math
 
 import lichtfeld as lf
 
-from ..ui import RuntimeState
-
 from .. import toolbar as viewport_toolbar
 
 try:
@@ -39,8 +37,6 @@ _ANIM_SPEED = 30.0
 _EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 60.0
 _EMPTY_STATE_ANIMATION_IDLE_TIMEOUT = 3.0
 _MIN_VIEWPORT_SIZE = 200.0
-_AUTO_DISMISS_DELAY = 3.0
-
 _empty_state_animation_until = 0.0
 _empty_state_last_mouse_pos = None
 
@@ -54,13 +50,6 @@ _OVERLAY_FLAGS = (
     | lf.ui.UILayout.WindowFlags.NoFocusOnAppearing
     | lf.ui.UILayout.WindowFlags.NoBringToFrontOnFocus
 )
-
-
-def _clamp_progress(value):
-    try:
-        return max(0.0, min(1.0, float(value)))
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _viewport_bottom_inset(layout, base_inset):
@@ -85,26 +74,12 @@ def _get_import_state():
     return dict(lf.ui.get_import_state())
 
 
-def _get_video_state():
-    native_state = _native_store_value("video_export_overlay_state", None)
-    if isinstance(native_state, dict):
-        return dict(native_state)
-
-    if not hasattr(lf.ui, "get_video_export_state"):
-        return {}
-    return dict(lf.ui.get_video_export_state())
-
-
 class _OverlayDocumentController:
     def __init__(self):
         self.reset()
 
     def reset(self):
         self._handle = None
-        self._import_state = {}
-        self._video_state = {}
-        self._last_import_signature = None
-        self._last_video_signature = None
         viewport_toolbar.reset_overlay_state()
 
     def update(self, doc=None):
@@ -116,71 +91,9 @@ class _OverlayDocumentController:
         if not self._ensure_model(doc):
             return []
 
-        import_state = self._get_import_state()
-        video_state = self._get_video_state()
-
-        import_active = import_state.get("active", False)
-        import_completion = import_state.get("show_completion", False)
-        seconds_since = import_state.get("seconds_since_completion", 0.0)
-        if (import_completion
-                and not import_active
-                and import_state.get("success", False)
-                and seconds_since >= _AUTO_DISMISS_DELAY):
-            lf.ui.dismiss_import()
-            import_state["show_completion"] = False
-            import_completion = False
-
-        import_visible = import_active or import_completion
-        if import_visible:
-            import_signature = (
-                RuntimeState.language_generation.value,
-                import_active,
-                import_completion,
-                import_state.get("success", False),
-                import_state.get("dataset_type", ""),
-                import_state.get("path", ""),
-                round(import_state.get("progress", 0.0), 3) if import_active else 1.0,
-                import_state.get("stage", ""),
-                import_state.get("num_images", 0),
-                import_state.get("num_points", 0),
-                import_state.get("error", ""),
-            )
-        else:
-            import_signature = (RuntimeState.language_generation.value, False)
-
-        video_active = video_state.get("active", False)
-        if video_active:
-            video_signature = (
-                RuntimeState.language_generation.value,
-                True,
-                round(video_state.get("progress", 0.0), 3),
-                video_state.get("current_frame", 0),
-                video_state.get("total_frames", 0),
-                video_state.get("stage", ""),
-            )
-        else:
-            video_signature = (RuntimeState.language_generation.value, False)
-
         dirty_sources = []
-        status_dirty = False
-
-        if import_signature != self._last_import_signature:
-            self._import_state = import_state
-            self._last_import_signature = import_signature
-            dirty_sources.append("import_status")
-            status_dirty = True
-
-        if video_signature != self._last_video_signature:
-            self._video_state = video_state
-            self._last_video_signature = video_signature
-            dirty_sources.append("video_status")
-            status_dirty = True
-
         toolbar_sources = viewport_toolbar.update_overlay(doc) or []
         dirty_sources.extend(f"toolbar.{source}" for source in toolbar_sources)
-
-        if status_dirty:
-            self._handle.dirty_all()
         return dirty_sources
 
     def _ensure_model(self, doc):
@@ -202,133 +115,13 @@ class _OverlayDocumentController:
         if model is None:
             return False
 
-        model.bind_func("show_import_overlay", self._show_import_overlay)
-        model.bind_func(
-            "show_import_backdrop",
-            lambda: (self._import_state.get("active", False)
-                     and self._import_state.get("dataset_type") != "project"))
-        model.bind_func("import_title", self._import_title)
-        model.bind_func("import_title_class", self._import_title_class)
-        model.bind_func("show_import_path", lambda: bool(self._import_state.get("path", "")))
-        model.bind_func("import_path", self._import_path)
-        model.bind_func("show_import_progress", self._show_import_progress)
-        model.bind_func("import_progress_value", self._import_progress_value)
-        model.bind_func("import_progress_pct", self._import_progress_pct)
-        model.bind_func("show_import_stage", self._show_import_stage)
-        model.bind_func("import_stage", lambda: self._import_state.get("stage", ""))
-        model.bind_func("show_import_counts", self._show_import_counts)
-        model.bind_func("import_counts", self._import_counts)
-        model.bind_func("show_import_error", lambda: bool(self._import_state.get("error", "")))
-        model.bind_func("import_error", lambda: self._import_state.get("error", ""))
-        model.bind_func("show_import_dismiss", self._show_import_dismiss)
-        model.bind_func("import_dismiss_label", lambda: lf.ui.tr("common.ok"))
-
-        model.bind_func("show_video_overlay", lambda: self._video_state.get("active", False))
-        model.bind_func("video_title", lambda: lf.ui.tr("progress.exporting_video"))
-        model.bind_func("video_progress_value", self._video_progress_value)
-        model.bind_func("video_progress_pct", self._video_progress_pct)
-        model.bind_func("video_frame_text", self._video_frame_text)
-        model.bind_func("show_video_stage", lambda: bool(self._video_state.get("stage", "")))
-        model.bind_func("video_stage", lambda: self._video_state.get("stage", ""))
-        model.bind_func("video_cancel_label", lambda: lf.ui.tr("common.cancel"))
-
         viewport_toolbar.bind_overlay_model(model)
-
-        model.bind_event("overlay_action", self._on_overlay_action)
         self._handle = model.get_handle()
         viewport_toolbar.attach_overlay_model_handle(self._handle)
         body.set_attribute("data-model", _MODEL_NAME)
         body.set_attribute(_MODEL_MARKER, "1")
         self._handle.dirty_all()
         return True
-
-    def _get_import_state(self):
-        return _get_import_state()
-
-    def _get_video_state(self):
-        return _get_video_state()
-
-    def _show_import_overlay(self):
-        state = self._import_state
-        return state.get("active", False) or state.get("show_completion", False)
-
-    def _show_import_progress(self):
-        state = self._import_state
-        if state.get("active", False):
-            return True
-        return (state.get("show_completion", False)
-                and state.get("success", False))
-
-    def _show_import_stage(self):
-        return self._import_state.get("active", False) and bool(self._import_state.get("stage", ""))
-
-    def _show_import_counts(self):
-        if self._import_state.get("active", False):
-            return False
-        return (self._import_state.get("num_images", 0) > 0 or
-                self._import_state.get("num_points", 0) > 0)
-
-    def _show_import_dismiss(self):
-        state = self._import_state
-        return (state.get("show_completion", False)
-                and not state.get("active", False)
-                and not state.get("success", False))
-
-    def _import_title(self):
-        state = self._import_state
-        if state.get("dataset_type") == "project":
-            return lf.ui.tr("progress.opening_project")
-        show_completion = state.get("show_completion", False)
-        if show_completion and not state.get("active", False):
-            if state.get("success", False):
-                return lf.ui.tr("progress.import_complete_title")
-            return lf.ui.tr("progress.import_failed_title")
-        dataset_type = state.get("dataset_type", "dataset") or "dataset"
-        return lf.ui.tr("progress.importing").replace("%s", dataset_type)
-
-    def _import_title_class(self):
-        show_completion = self._import_state.get("show_completion", False)
-        if not show_completion or self._import_state.get("active", False):
-            return ""
-        return "status-success" if self._import_state.get("success", False) else "status-error"
-
-    def _import_path(self):
-        path_str = self._import_state.get("path", "")
-        return f"Path: {path_str}" if path_str else ""
-
-    def _import_progress_value(self):
-        state = self._import_state
-        if state.get("show_completion", False) and state.get("success", False):
-            return "1"
-        return str(_clamp_progress(state.get("progress", 0.0)))
-
-    def _import_progress_pct(self):
-        state = self._import_state
-        if state.get("show_completion", False) and state.get("success", False):
-            return "100%"
-        return f"{_clamp_progress(state.get('progress', 0.0)) * 100:.0f}%"
-
-    def _import_counts(self):
-        return f"{self._import_state.get('num_images', 0)} images, {self._import_state.get('num_points', 0)} points"
-
-    def _video_progress_value(self):
-        return str(_clamp_progress(self._video_state.get("progress", 0.0)))
-
-    def _video_progress_pct(self):
-        return f"{_clamp_progress(self._video_state.get('progress', 0.0)) * 100:.0f}%"
-
-    def _video_frame_text(self):
-        return f"Frame {self._video_state.get('current_frame', 0)} / {self._video_state.get('total_frames', 0)}"
-
-    def _on_overlay_action(self, _handle, _ev, args):
-        if not args:
-            return
-
-        action = str(args[0])
-        if action == "dismiss_import":
-            lf.ui.dismiss_import()
-        elif action == "cancel_video_export":
-            lf.ui.cancel_video_export()
 
 
 def _draw_empty_state_overlay(layout):

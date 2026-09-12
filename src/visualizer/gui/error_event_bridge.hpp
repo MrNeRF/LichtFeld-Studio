@@ -8,6 +8,10 @@
 
 #include <optional>
 
+namespace lfs::io::video {
+    class VideoReconstructionPlan;
+}
+
 // Native events -> ErrorBus bridge (Phase 8, packet P1). Subscribes to today's
 // string failure events and translates each into an lfs::ErrorNotification
 // published on ErrorBus::instance(), so the failures surface natively even when
@@ -43,6 +47,8 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const core::events::state::TrainingCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
+    translateTrainingStartRejected(const core::events::state::TrainingStartRejected& e);
+    LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateDatasetLoadCompleted(const core::events::state::DatasetLoadCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateConfigLoadFailed(const core::events::state::ConfigLoadFailed& e);
@@ -50,6 +56,9 @@ namespace lfs::vis::gui {
     translateExportFailed(const core::events::state::ExportFailed& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateVideoExportFailed(const core::events::state::VideoExportFailed& e);
+    LFS_VIS_API std::optional<lfs::ErrorNotification>
+    videoReconstructionFallbackNotification(const io::video::VideoReconstructionPlan& plan);
+    LFS_VIS_API lfs::ErrorNotification unsupportedVideoReconstructionVersionNotification();
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateMesh2SplatFailed(const core::events::state::Mesh2SplatFailed& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>

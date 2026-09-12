@@ -19,6 +19,7 @@
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
+#include "io/splat_path.hpp"
 #include "io/video/video_extensions.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
@@ -381,11 +382,10 @@ namespace lfs::vis {
         go_to_cam_view_handler_id_ =
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
+        // Panel-less reset targets the primary viewport; explicit-panel callers
+        // use resetCameraForPanel.
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
-            viewport_.camera.resetToHome();
-            if (auto* const rendering = services().renderingOrNull())
-                rendering->markCameraCut();
-            publishCameraMove();
+            handleResetCameraHome(viewport_);
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -789,6 +789,10 @@ namespace lfs::vis {
             wants_text_input &&
             !over_gui &&
             isInViewport(x, y)) {
+            // Swallow text-dismissal presses for camera, operators and selection.
+            // GuiManager may move panel focus only after the buffered press has blurred
+            // and committed the edit; focusing in this earlier event handler would
+            // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
         }
@@ -1794,6 +1798,14 @@ namespace lfs::vis {
             bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
         }
 
+        const bool gui_keyboard_focus = input_router_
+                                            ? input_router_->keyboardFocus() == input::InputTarget::Gui
+                                            : gui::guiFocusState().want_capture_keyboard;
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            gui_keyboard_focus) {
+            return;
+        }
+
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
@@ -1856,7 +1868,6 @@ namespace lfs::vis {
         const bool modal_open = input_router_
                                     ? input_router_->isModalOpen()
                                     : (gui && gui->isModalWindowOpen());
-
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 
@@ -2088,6 +2099,17 @@ namespace lfs::vis {
                 return;
 
             case input::Action::DELETE_SELECTED:
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager();
+                        sm && !sm->getScene().hasSelection()) {
+                        const auto selected = sm->getSelectedNodeNames();
+                        if (!selected.empty()) {
+                            for (const auto& name : selected)
+                                cmd::RemovePLY{.name = name, .keep_children = false}.emit();
+                            return;
+                        }
+                    }
+                }
                 cmd::DeleteSelected{}.emit();
                 return;
 
@@ -2544,6 +2566,8 @@ namespace lfs::vis {
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
+            } else if (lfs::io::is_ssog_path(filepath)) {
+                splat_files.push_back(filepath);
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
                     dataset_path = filepath;
@@ -2558,7 +2582,7 @@ namespace lfs::vis {
                 } else {
                     LOG_DEBUG("Ignoring additional dropped environment map: {}", lfs::core::path_to_utf8(filepath));
                 }
-            } else if (ext == ".ply" || ext == ".sog" || ext == ".spz" || ext == ".rad" ||
+            } else if (ext == ".ply" || ext == ".sog" || ext == ".ssog" || ext == ".spz" || ext == ".rad" ||
                        ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
                 splat_files.push_back(filepath);
             } else if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb" ||
@@ -2639,7 +2663,7 @@ namespace lfs::vis {
 
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
             const std::string supported_formats = std::format(
-                "Supported formats: .licht, .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
+                "Supported formats: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
                 lfs::io::video::supported_video_extensions_display());
             LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
             state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();
@@ -2793,7 +2817,8 @@ namespace lfs::vis {
         }
     }
 
-    bool InputController::handleFocusSelection(Viewport& target_viewport) {
+    bool InputController::handleFocusSelection(Viewport& target_viewport,
+                                               const std::optional<SplitViewPanelId> acted_panel) {
         if (!tool_context_)
             return false;
         auto* const sm = tool_context_->getSceneManager();
@@ -2821,7 +2846,7 @@ namespace lfs::vis {
             target_viewport.camera.focusOnBounds(total_min, total_max);
             if (auto* const rendering = services().renderingOrNull())
                 rendering->markCameraCut();
-            publishCameraMove(&target_viewport);
+            publishCameraMove(&target_viewport, acted_panel);
             return true;
         }
         return false;
@@ -2897,6 +2922,29 @@ namespace lfs::vis {
 
     bool InputController::focusSelection() {
         return handleFocusSelection(activeKeyboardViewport());
+    }
+
+    void InputController::handleResetCameraHome(Viewport& target_viewport,
+                                                const std::optional<SplitViewPanelId> acted_panel) {
+        target_viewport.camera.resetToHome();
+        if (auto* const rendering = services().renderingOrNull())
+            rendering->markCameraCut();
+        publishCameraMove(&target_viewport, acted_panel);
+    }
+
+    Viewport& InputController::panelViewport(const SplitViewPanelId panel) {
+        if (auto* const rendering = services().renderingOrNull()) {
+            return rendering->resolvePanelViewport(viewport_, panel);
+        }
+        return viewport_;
+    }
+
+    void InputController::resetCameraForPanel(const SplitViewPanelId panel) {
+        handleResetCameraHome(panelViewport(panel), panel);
+    }
+
+    bool InputController::focusSelectionForPanel(const SplitViewPanelId panel) {
+        return handleFocusSelection(panelViewport(panel), panel);
     }
 
     // Helpers
@@ -3314,10 +3362,27 @@ namespace lfs::vis {
             .emit();
     }
 
-    void InputController::publishCameraMove(Viewport* target_viewport) {
+    // The depth transform and x/y extents are global, outside DepthWindowState.
+    // Moving an off-focus panel's camera must not re-anchor the focused panel's
+    // box; panelViewport() already chose the target without changing focus.
+    bool InputController::shouldSkipDepthAnchorSync(
+        const std::optional<SplitViewPanelId> acted_panel) const {
+        if (!acted_panel) {
+            return false;
+        }
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering || !rendering->isIndependentSplitViewActive()) {
+            return false;
+        }
+        return rendering->getFocusedSplitPanel() != *acted_panel;
+    }
+
+    void InputController::publishCameraMove(Viewport* target_viewport,
+                                            const std::optional<SplitViewPanelId> acted_panel) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport_;
-        if (selection_tool_ && selection_tool_->isEnabled()) {
+        if (selection_tool_ && selection_tool_->isEnabled() &&
+            !shouldSkipDepthAnchorSync(acted_panel)) {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);
         }
 

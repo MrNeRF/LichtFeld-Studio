@@ -28,6 +28,63 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "release-only-base",
+      "hidden": true,
+      "inherits": "build",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets/release-only"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release (Release-only dependencies)",
+      "description": "Native Windows x64 Release build with Release-only target and host dependencies; keeps build/ and build-debug/ intact",
+      "inherits": "release-only-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "displayName": "Windows x64 RelWithDebInfo (Release-only dependencies)",
+      "description": "Optimized Windows x64 application with debug information, reusing the windows-release dependency profile; Vulkan validation remains enabled",
+      "inherits": "windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux x64 Release (Release-only dependencies)",
+      "description": "Native Linux x64 Release build with Release-only target and host dependencies; keeps build/ and build-debug/ intact",
+      "inherits": "release-only-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_HOST_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux x64 RelWithDebInfo (Release-only dependencies)",
+      "description": "Optimized Linux x64 application with debug information, reusing the linux-release dependency profile; Vulkan validation remains enabled",
+      "inherits": "linux-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
     }
   ],
   "buildPresets": [
@@ -39,6 +96,46 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "jobs": 6
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "jobs": 6
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "configurePreset": "windows-relwithdebinfo",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "jobs": 6
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "jobs": 6
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "configurePreset": "linux-relwithdebinfo",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
       "jobs": 6
     }
   ]
