@@ -25,6 +25,7 @@
 #include "viewport_appearance_correction.hpp"
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include "vulkan_external_tensor.hpp"
 #include <algorithm>
@@ -580,24 +581,6 @@ namespace lfs::vis {
                 {std::size_t{3}, static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
                 lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
-        }
-
-        [[nodiscard]] std::optional<std::pair<size_t, size_t>>
-        plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
-            if (node_count < 2) {
-                return std::nullopt;
-            }
-
-            size_t remaining = offset % ((node_count * (node_count - 1)) / 2);
-            for (size_t left = 0; left + 1 < node_count; ++left) {
-                const size_t row_count = node_count - left - 1;
-                if (remaining < row_count) {
-                    return std::pair<size_t, size_t>{left, left + 1 + remaining};
-                }
-                remaining -= row_count;
-            }
-
-            return std::nullopt;
         }
 
         [[nodiscard]] std::vector<ViewportInteractionPanel> buildVulkanInteractionPanels(
@@ -1931,13 +1914,42 @@ namespace lfs::vis {
 
         const lfs::core::SplatData* model = nullptr;
         SceneRenderState scene_state;
+        size_t comparison_identity = 0;
         auto sample_model_under_lock = [&]() {
-            model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
             scene_state = {};
-            if (scene_manager) {
-                LOG_TIMER("renderVulkanFrame.buildRenderState");
-                scene_state = scene_manager->buildRenderState();
+            comparison_identity = 0;
+            if (!scene_manager) {
+                model = nullptr;
+                return;
             }
+            LOG_TIMER("renderVulkanFrame.buildRenderState");
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                // Comparison draws owned node models. Do not concatenate them
+                // into a hidden combined copy just to fill FrameContext.model.
+                scene_state = scene_manager->buildRenderState({.metadata_only = true});
+                model = nullptr;
+                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
+                const auto pair =
+                    plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
+                if (pair) {
+                    const auto* const left_node = visible_nodes[pair->first].node;
+                    const auto* const right_node = visible_nodes[pair->second].node;
+                    comparison_identity =
+                        reinterpret_cast<size_t>(left_node) ^
+                        (reinterpret_cast<size_t>(right_node) << 1);
+                    if (left_node && left_node->model) {
+                        comparison_identity ^=
+                            reinterpret_cast<size_t>(left_node->model.get());
+                    }
+                    if (right_node && right_node->model) {
+                        comparison_identity ^=
+                            reinterpret_cast<size_t>(right_node->model.get());
+                    }
+                }
+                return;
+            }
+            model = scene_manager->getModelForRendering();
+            scene_state = scene_manager->buildRenderState();
         };
         if (!render_lock_contended) {
             sample_model_under_lock();
@@ -1952,6 +1964,21 @@ namespace lfs::vis {
             has_renderable_model = hasRenderableGaussians(model);
             has_visible_gaussian_model =
                 has_renderable_model && scene_state.visible_splat_count > 0;
+            if (!has_visible_gaussian_model &&
+                splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager) {
+                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
+                has_visible_gaussian_model = std::any_of(
+                    visible_nodes.begin(),
+                    visible_nodes.end(),
+                    [](const auto& slot) {
+                        return slot.node && hasRenderableGaussians(slot.node->model.get());
+                    });
+                if (!has_visible_gaussian_model) {
+                    has_visible_gaussian_model = hasRenderableGaussians(
+                        scene_manager->getScene().peekCombinedModel());
+                }
+                has_renderable_model = has_visible_gaussian_model;
+            }
             has_point_cloud =
                 scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
             has_meshes = std::any_of(scene_state.meshes.begin(),
@@ -1962,7 +1989,8 @@ namespace lfs::vis {
                 has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
         };
         refresh_content_flags();
-        size_t model_ptr = reinterpret_cast<size_t>(model);
+        size_t model_ptr = comparison_identity != 0 ? comparison_identity
+                                                    : reinterpret_cast<size_t>(model);
         // Edit-mode handoff moves the same SplatData into a scene node. Its
         // address does not change, but the trainer's GPU handshake is gone.
         // Use dataset ownership, not Running/Paused, so completion alone does
@@ -2519,7 +2547,7 @@ namespace lfs::vis {
                                ? *request_override
                                : [&] {
                                      if (frame_settings.split_view_mode == SplitViewMode::PLYComparison &&
-                                         node_visibility_override && panel_id) {
+                                         panel_id) {
                                          const auto layouts = makePlyComparisonPanelLayouts(
                                              render_size.x, frame_settings.split_position);
                                          const auto& layout = layouts[splitViewPanelIndex(*panel_id)];
@@ -2537,8 +2565,29 @@ namespace lfs::vis {
                                      return buildViewportRenderRequest(
                                          frame_ctx, panel_size, &source_viewport, panel_id);
                                  }();
+            if (model_override && scene_manager &&
+                splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
+                for (const auto& slot : visible_nodes) {
+                    if (slot.node && slot.node->model.get() == model_override) {
+                        applyPlyComparisonNodeScope(
+                            request.filters,
+                            request.overlay,
+                            frame_ctx,
+                            *slot.node,
+                            static_cast<int>(slot.slot_index));
+                        break;
+                    }
+                }
+            }
+            if (node_visibility_override && scene_manager && !request.scene.transform_indices) {
+                request.scene.transform_indices =
+                    scene_manager->getScene().peekTransformIndices();
+            }
             std::vector<std::uint32_t> lod_touched_chunks;
-            if (lod_controller_ && lod_controller_->hasTree()) {
+            const bool skip_combined_lod =
+                model_override != nullptr && model_override != model;
+            if (!skip_combined_lod && lod_controller_ && lod_controller_->hasTree()) {
                 lod_controller_->advanceTransition();
                 const bool lod_transition_active = lod_controller_->transitionActive();
                 if (lod_transition_active) {
@@ -3338,22 +3387,61 @@ namespace lfs::vis {
                 }
             }
         } else if (splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager && has_visible_gaussian_model) {
-            const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
+            const auto& scene = scene_manager->getScene();
+            const auto visible_nodes = scene.getVisibleSplatNodeSlots();
             const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
             if (pair) {
                 const auto& left_node = visible_nodes[pair->first];
                 const auto& right_node = visible_nodes[pair->second];
+                const auto* const left_owned =
+                    left_node.node && hasRenderableGaussians(left_node.node->model.get())
+                        ? left_node.node->model.get()
+                        : nullptr;
+                const auto* const right_owned =
+                    right_node.node && hasRenderableGaussians(right_node.node->model.get())
+                        ? right_node.node->model.get()
+                        : nullptr;
+                const auto* const prepared_combined = scene.peekCombinedModel();
+                const bool render_owned_nodes = left_owned && right_owned;
                 const size_t slot_count = std::max(frame_ctx.scene_state.model_transforms.size(),
                                                    frame_ctx.scene_state.node_visibility_mask.size());
-                if (!left_node.node || !right_node.node ||
-                    left_node.slot_index >= slot_count ||
-                    right_node.slot_index >= slot_count) {
+                if (!left_node.node || !right_node.node) {
+                    render_error = "PLY comparison render slots are unavailable";
+                } else if (!render_owned_nodes &&
+                           (!hasRenderableGaussians(prepared_combined) ||
+                            left_node.slot_index >= slot_count ||
+                            right_node.slot_index >= slot_count)) {
                     render_error = "PLY comparison render slots are unavailable";
                 } else {
-                    std::vector<bool> left_mask(slot_count, false);
-                    std::vector<bool> right_mask(slot_count, false);
-                    left_mask[left_node.slot_index] = true;
-                    right_mask[right_node.slot_index] = true;
+                    std::vector<bool> left_mask;
+                    std::vector<bool> right_mask;
+                    std::vector<glm::mat4> left_transforms;
+                    std::vector<glm::mat4> right_transforms;
+                    const lfs::core::SplatData* left_model = nullptr;
+                    const lfs::core::SplatData* right_model = nullptr;
+                    const std::vector<glm::mat4>* left_transform_override = nullptr;
+                    const std::vector<glm::mat4>* right_transform_override = nullptr;
+                    std::optional<std::vector<bool>> left_visibility;
+                    std::optional<std::vector<bool>> right_visibility;
+                    if (render_owned_nodes) {
+                        left_model = left_owned;
+                        right_model = right_owned;
+                        left_transforms = {scene_coords::nodeVisualizerWorldTransform(
+                            scene, left_node.node->id)};
+                        right_transforms = {scene_coords::nodeVisualizerWorldTransform(
+                            scene, right_node.node->id)};
+                        left_transform_override = &left_transforms;
+                        right_transform_override = &right_transforms;
+                    } else {
+                        left_model = prepared_combined;
+                        right_model = prepared_combined;
+                        left_mask.assign(slot_count, false);
+                        right_mask.assign(slot_count, false);
+                        left_mask[left_node.slot_index] = true;
+                        right_mask[right_node.slot_index] = true;
+                        left_visibility = left_mask;
+                        right_visibility = right_mask;
+                    }
 
                     const auto ply_layouts = makePlyComparisonPanelLayouts(
                         render_size.x, frame_settings.split_position);
@@ -3364,17 +3452,17 @@ namespace lfs::vis {
                         context.viewport,
                         {std::max(left_layout.panel.width, 1), render_size.y},
                         SplitViewPanelId::Left,
-                        std::optional<std::vector<bool>>(left_mask),
-                        nullptr,
-                        nullptr,
+                        left_visibility,
+                        left_model,
+                        left_transform_override,
                         VksplatViewportRenderer::OutputSlot::SplitLeft);
                     auto right = render_panel_image(
                         context.viewport,
                         {std::max(right_layout.panel.width, 1), render_size.y},
                         SplitViewPanelId::Right,
-                        std::optional<std::vector<bool>>(right_mask),
-                        nullptr,
-                        nullptr,
+                        right_visibility,
+                        right_model,
+                        right_transform_override,
                         VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
                         pending_split_view.enabled = true;

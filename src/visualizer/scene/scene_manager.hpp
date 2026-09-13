@@ -217,8 +217,10 @@ namespace lfs::vis {
         const lfs::core::SplatData* getModelForRendering() const;
 
         // Build complete render state from scene graph
-        // This is the single source of truth for all rendering data
-        SceneRenderState buildRenderState() const;
+        // This is the single source of truth for all rendering data.
+        // metadata_only skips combined-model concatenation and per-gaussian
+        // transform/selection aggregates; the two caches are distinct.
+        SceneRenderState buildRenderState(SceneRenderStateOptions options = {}) const;
 
         // Direct info queries
         struct SceneInfo {
@@ -448,6 +450,7 @@ namespace lfs::vis {
         mutable std::uint64_t cached_render_scene_generation_local_ = 0;
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
+        mutable bool cached_render_metadata_only_ = false;
     };
 
 } // namespace lfs::vis

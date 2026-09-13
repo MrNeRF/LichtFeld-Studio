@@ -882,6 +882,47 @@ namespace lfs::core {
         return single_node_model_ ? single_node_model_ : cached_combined_.get();
     }
 
+    bool Scene::hasPreparedCombinedModel() const {
+        return peekCombinedModel() != nullptr;
+    }
+
+    const lfs::core::SplatData* Scene::peekCombinedModel() const {
+        return single_node_model_ ? single_node_model_ : cached_combined_.get();
+    }
+
+    std::shared_ptr<lfs::core::Tensor> Scene::peekTransformIndices() const {
+        return cached_transform_indices_;
+    }
+
+    std::shared_ptr<lfs::core::Tensor>
+    Scene::selectionMaskSliceForNode(const NodeId node_id) const {
+        if (node_id == NULL_NODE) {
+            return nullptr;
+        }
+
+        const auto mask = getSelectionMask(SelectionDomain::Splat);
+        const size_t expected_size = currentSelectionCapacity(SelectionDomain::Splat);
+        if (!mask || !mask->is_valid() || mask->ndim() != 1 ||
+            mask->numel() != expected_size) {
+            return nullptr;
+        }
+
+        size_t offset = 0;
+        for (const auto& node : nodes_) {
+            const size_t node_capacity =
+                nodeSelectionCapacity(*node, SelectionDomain::Splat);
+            if (node->id == node_id) {
+                if (node_capacity == 0 || offset + node_capacity > expected_size) {
+                    return nullptr;
+                }
+                return std::make_shared<lfs::core::Tensor>(
+                    mask->slice(0, offset, offset + node_capacity));
+            }
+            offset += node_capacity;
+        }
+        return nullptr;
+    }
+
     Scene::CombinedModelBuild Scene::captureCombinedModelBuild(
         const bool include_hidden_splats) const {
         CombinedModelBuild build;

@@ -3251,6 +3251,7 @@ namespace lfs::vis {
                     .focal_length_mm = focal_length_mm,
                     .orthographic = render_settings.orthographic,
                     .ortho_scale = ortho_scale,
+                    .panel = interaction->panel,
                 });
         }
         if (depth <= 0.0f) {

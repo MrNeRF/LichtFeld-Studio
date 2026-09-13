@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
+#include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
+#include <type_traits>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -443,6 +446,133 @@ namespace lfs::vis {
 
         applyPointCloudCropVolume(request.filters, ctx);
         return request;
+    }
+
+    const core::SceneNode* plyComparisonNodeForPanel(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel) {
+        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        if (!pair) {
+            return nullptr;
+        }
+        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
+        return visible_nodes[index].node;
+    }
+
+    void applyPlyComparisonNodeScope(
+        lfs::rendering::GaussianFilterState& filters,
+        lfs::rendering::GaussianOverlayState& overlay,
+        const FrameContext& ctx,
+        const core::SceneNode& node,
+        const int visible_index) {
+        const auto keep_matching = [visible_index](auto& regions, auto& primary) {
+            using Filter = std::decay_t<decltype(regions[0])>;
+            std::vector<Filter> kept;
+            kept.reserve(regions.size());
+            for (auto& region : regions) {
+                if (region.parent_node_index == visible_index) {
+                    region.parent_node_index = 0;
+                    kept.push_back(std::move(region));
+                }
+            }
+            regions = std::move(kept);
+            if (!regions.empty()) {
+                primary = regions.front();
+            } else {
+                primary.reset();
+            }
+        };
+        keep_matching(filters.crop_regions, filters.crop_region);
+        keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+
+        overlay.emphasis.mask.reset();
+        overlay.has_selection = false;
+        if (ctx.scene_manager) {
+            overlay.emphasis.mask =
+                ctx.scene_manager->getScene().selectionMaskSliceForNode(node.id);
+            overlay.has_selection =
+                overlay.emphasis.mask && overlay.emphasis.mask->is_valid() &&
+                overlay.emphasis.mask->numel() > 0 && ctx.scene_state.has_selection;
+        }
+
+        const bool selected =
+            visible_index >= 0 &&
+            static_cast<size_t>(visible_index) < ctx.scene_state.selected_node_mask.size() &&
+            ctx.scene_state.selected_node_mask[static_cast<size_t>(visible_index)];
+        overlay.emphasis.emphasized_node_mask =
+            overlay.emphasis.dim_non_emphasized ? std::vector<bool>{selected} : std::vector<bool>{};
+        overlay.emphasis.transient_mask = {};
+        overlay.emphasis.focused_gaussian_id = -1;
+        overlay.cursor = {};
+    }
+
+    PlyComparisonDepthSample resolvePlyComparisonDepthSample(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel) {
+        PlyComparisonDepthSample sample;
+        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        if (!pair) {
+            return sample;
+        }
+        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
+        const auto& slot = visible_nodes[index];
+        sample.node = slot.node;
+        sample.visible_index = static_cast<int>(slot.slot_index);
+        if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
+            sample.model = slot.node->model.get();
+            sample.uses_owned_node_model = true;
+        } else {
+            sample.model = scene.peekCombinedModel();
+        }
+        return sample;
+    }
+
+    void scopeSceneRenderStateToVisibleSplatNode(
+        SceneRenderState& state,
+        const core::Scene& scene,
+        const core::SceneNode& node,
+        const int visible_index,
+        const glm::mat4& visualizer_world_transform) {
+        state.combined_model = node.model.get();
+        state.model_transforms = {visualizer_world_transform};
+        state.transform_indices.reset();
+        state.node_visibility_mask.clear();
+        state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
+
+        const auto keep_matching = [visible_index](auto& items) {
+            using Item = std::decay_t<decltype(items[0])>;
+            std::vector<Item> kept;
+            kept.reserve(items.size());
+            for (auto& item : items) {
+                if (item.parent_node_index == visible_index) {
+                    item.parent_node_index = 0;
+                    kept.push_back(std::move(item));
+                }
+            }
+            items = std::move(kept);
+        };
+        keep_matching(state.cropboxes);
+        keep_matching(state.ellipsoids);
+        state.selected_cropbox_index = -1;
+        for (size_t i = 0; i < state.cropboxes.size(); ++i) {
+            if (state.cropboxes[i].data && state.cropboxes[i].data->enabled) {
+                state.selected_cropbox_index = static_cast<int>(i);
+                break;
+            }
+        }
+
+        state.selection_mask = scene.selectionMaskSliceForNode(node.id);
+        const bool selected =
+            visible_index >= 0 &&
+            static_cast<size_t>(visible_index) < state.selected_node_mask.size() &&
+            state.selected_node_mask[static_cast<size_t>(visible_index)];
+        state.selected_node_mask = {selected};
+        state.has_selection = scene.hasSelection() && state.selection_mask &&
+                              state.selection_mask->is_valid();
     }
 
 } // namespace lfs::vis

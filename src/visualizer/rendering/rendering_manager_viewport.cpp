@@ -11,6 +11,7 @@
 #include "scene/scene_render_state.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <cmath>
@@ -1213,8 +1214,33 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(request.scene_manager);
-        auto scene_state = request.scene_manager->buildRenderState();
-        const auto* const model = scene_state.combined_model;
+        const auto settings = getSettings();
+        SceneRenderState scene_state;
+        const lfs::core::SplatData* model = nullptr;
+        if (splitViewUsesPLYComparison(settings.split_view_mode)) {
+            scene_state = request.scene_manager->buildRenderState({.metadata_only = true});
+            const auto& scene = request.scene_manager->getScene();
+            const auto sample = resolvePlyComparisonDepthSample(
+                scene,
+                settings.split_view_offset,
+                request.panel.value_or(SplitViewPanelId::Left));
+            if (sample.uses_owned_node_model && sample.node && hasRenderableGaussians(sample.model)) {
+                scopeSceneRenderStateToVisibleSplatNode(
+                    scene_state,
+                    scene,
+                    *sample.node,
+                    sample.visible_index,
+                    scene_coords::nodeVisualizerWorldTransform(scene, sample.node->id));
+                model = sample.model;
+            } else if (hasRenderableGaussians(sample.model)) {
+                scene_state.combined_model = sample.model;
+                scene_state.transform_indices = scene.peekTransformIndices();
+                model = sample.model;
+            }
+        } else {
+            scene_state = request.scene_manager->buildRenderState();
+            model = scene_state.combined_model;
+        }
         if (!hasRenderableGaussians(model)) {
             return -1.0f;
         }
