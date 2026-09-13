@@ -103,9 +103,9 @@ def _validate_journal(data):
             require(all(isinstance(job.get(key), str) for key in ("id", "project", "path", "message")))
             require(job["id"] and job["id"] not in identifiers)
             identifiers.add(job["id"])
-            require(job.get("status") in ("queued", "running", "paused", "error", "conflict", "completed", "canceled"))
+            require(job.get("status") in ("queued", "running", "paused", "waiting", "error", "conflict", "completed", "canceled"))
             require(job.get("kind", "upload") in ("upload", "download"))
-            for key in ('createdAt', 'finishedAt', 'processingDeadline', 'retryAt'):
+            for key in ('createdAt', 'finishedAt', 'processingDeadline', 'retryAt', 'retryDelay'):
                 require(key not in job or (type(job[key]) in (int, float) and math.isfinite(job[key]) and job[key] >= 0))
             require('attempts' not in job or (type(job['attempts']) is int and job['attempts'] >= 0))
             for key in ("serverProcessing", "packaged", "needsAttention"):
@@ -186,6 +186,7 @@ class GallerySync:
         self._persist_lock = threading.Lock()
         self._cancel = threading.Event()
         self._thread = None
+        self._connection_timer = None
         self._session = None
         self._origin = None
         self._owner = None
@@ -255,6 +256,8 @@ class GallerySync:
                         link.setdefault("exchangedAt", 0)
                         link.setdefault("checkedAt", 0)
                     for job in bucket["jobs"]:
+                        if job["status"] == "paused" and "retryAt" in job and not job.get("interrupted"):
+                            job.update(status="waiting", message="Waiting for connection…")
                         if (recover_interrupted or self._journal_problem) and job["status"] in ("queued", "running"):
                             job.update(status="paused", interrupted=True, message="Interrupted. Resume when ready.")
                 self._data = data
@@ -410,6 +413,7 @@ class GallerySync:
                 finally:
                     with self._lock:
                         self.version += 1
+                    self._schedule_connection_retry()
 
             self._thread = threading.Thread(target=worker, daemon=True, name="GallerySync")
             self._thread.start()
@@ -663,7 +667,33 @@ class GallerySync:
     def _job(self, job_id):
         return next(j for j in self._bucket()["jobs"] if j["id"] == job_id)
 
-    def resume(self, job_id, *, keep_waiting=False):
+    def _schedule_connection_retry(self):
+        """Connection recovery belongs to the service, including without a panel."""
+        with self._lock:
+            if self._connection_timer is not None:
+                return
+            waiting = [j for j in self.snapshot()["jobs"] if j["status"] == "waiting"]
+            if not waiting:
+                return
+            delay = max(0.1, min(j.get("retryAt", 0) for j in waiting) - time.time())
+            self._connection_timer = threading.Timer(delay, self._retry_connection)
+            self._connection_timer.daemon = True
+            self._connection_timer.start()
+
+    def _retry_connection(self):
+        with self._lock:
+            self._connection_timer = None
+            if self.busy:
+                # The current worker schedules recovery when it exits.
+                return
+            due = [j for j in self.snapshot()["jobs"] if j["status"] == "waiting"
+                   and j.get("retryAt", 0) <= time.time()]
+            if due:
+                self.resume(due[0]["id"], _automatic=True)
+            else:
+                self._schedule_connection_retry()
+
+    def resume(self, job_id, *, keep_waiting=False, _automatic=False):
         with self._lock:
             client = self._client()
             job = self._job(job_id)
@@ -715,10 +745,18 @@ class GallerySync:
                 self._retire_export(job)
 
             try:
+                if _automatic:
+                    capabilities = client._request("GET", "/me")
+                    self._client()  # Reject an account change during the probe.
+                    if capabilities.get("id") != self._owner:
+                        raise ValueError("The account changed. Refresh the gallery before continuing.")
+                    if self._cancel.is_set():
+                        raise GalleryTransferCanceled()
                 with self._lock:
                     if extend_processing:
                         job["processingDeadline"] = time.time() + PROCESSING_TIMEOUT
                     job.pop("retryAt", None)
+                    job.pop("retryDelay", None)
                     job.update(status="running", interrupted=False, needsAttention=False, serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
                     self.message = job["message"]
                 self._save()
@@ -819,9 +857,15 @@ class GallerySync:
                 with self._lock:
                     job.update(status="paused" if isinstance(exc, GalleryTransferCanceled) else "conflict"
                         if isinstance(exc, PortalHTTPError) and exc.status == 409 else "error", message=friendly_error(exc))
-                    if is_transient(exc):
-                        job.update(status="paused", retryAt=time.time() + 30,
-                            message="Waiting for the portal connection. The transfer will resume automatically.")
+                    if is_transient(exc) and not self._cancel.is_set():
+                        delay = min(300, job.get("retryDelay", 2.5) * 2) if _automatic else 5
+                        job.update(status="waiting", retryAt=time.time() + delay, retryDelay=delay,
+                            message="Waiting for connection…")
+                    else:
+                        job.pop("retryAt", None)
+                        job.pop("retryDelay", None)
+                        if self._cancel.is_set():
+                            job.update(status="paused", message="Paused. Resume when ready.")
                     if isinstance(exc, GalleryTransferCanceled):
                         job["message"] = (("Paused. The pinned download will resume from its saved bytes." if (job.get('checkpoint') or {}).get('representationId')
                             else "Paused. The download will restart from zero because the portal has no pinned representation.") if job.get("kind") == "download"
@@ -1100,8 +1144,25 @@ class GallerySync:
                 job["checkpoint"] = None
         self.resume(job_id)
 
-    def pause(self):
-        self._cancel.set()
+    def pause(self, job_id=None):
+        with self._lock:
+            if job_id is not None and self.busy and self._job(job_id)["status"] == "waiting":
+                raise ValueError("Wait for the current operation or pause it first.")
+            self._cancel.set()
+            if self._connection_timer is not None:
+                self._connection_timer.cancel()
+                self._connection_timer = None
+            waiting = [j for j in self.snapshot()["jobs"] if j["status"] == "waiting"
+                       and (job_id is None or j["id"] == job_id)]
+            if waiting and not self.busy:
+                def action():
+                    for entry in waiting:
+                        job = self._job(entry["id"])
+                        job.update(status="paused", message="Paused. Resume when ready.")
+                        job.pop("retryAt", None)
+                        job.pop("retryDelay", None)
+                    self._save()
+                self._launch(action)
 
     def restore_local_backup(self, path, backup, expected_stamp):
         """Undo one completed pull without overwriting a later saved project."""

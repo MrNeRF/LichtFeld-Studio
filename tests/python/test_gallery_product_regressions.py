@@ -97,6 +97,9 @@ def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
             creates.append(body)
             return dict(id=upload_id, status='uploading', partSize=3,
                 uploadedParts=[dict(partNumber=1, etag='retained', size=3)])
+        if method == 'GET' and path == f'/splats/uploads/{upload_id}':
+            return dict(id=upload_id, status='uploading', partSize=3,
+                uploadedParts=[dict(partNumber=1, etag='retained', size=3)])
         if path.endswith('/part-upload-urls'):
             number = body['parts'][0]
             return dict(urls=[dict(partNumber=number, url=f'https://portal.example/part/{number}')])
@@ -137,20 +140,12 @@ def test_outage_exhaustion_pauses_with_automatic_resume(tmp_path, monkeypatch, e
     service.queue_upload(source, {'title': 'Scene'}, 'project')
     finish(service)
     job = service.snapshot()['jobs'][0]
-    assert job['status'] == 'paused' and job['retryAt'] > 0
+    assert job['status'] == 'waiting' and job['retryDelay'] == 5 and job['retryAt'] > 0
     assert job['completed'] == 4 and job['checkpoint']['uploadId'] == 'retained'
-    assert 'automatically' in job['message']
+    assert job['message'] == 'Waiting for connection…'
+    service.pause()
+    finish(service)
 
-
-def test_controller_automatically_resumes_due_waiting_job(gallery, monkeypatch):
-    panel, state, actions = gallery
-    state['jobs'] = [dict(id='waiting', status='paused', retryAt=0)]
-    panel.service.resume = lambda identifier: actions.append(identifier)
-    for method in ('_advance_phases', '_advance_update_all', '_publish_runtime_state', '_finish_pulls'):
-        monkeypatch.setattr(panel, method, lambda *a: None)
-    panel._next_refresh = float('inf')
-    panel._tick_body()
-    assert actions == ['waiting']
 
 
 def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monkeypatch, tmp_path):
@@ -225,8 +220,7 @@ def test_resolve_portal_retires_conflict_before_backup_and_relinks(gallery, tmp_
 
 
 def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monkeypatch, tmp_path):
-    from test_gallery_sync import connected, finish, Client
-    from lfs_plugins import gallery_sync
+    from test_gallery_sync import connected, finish, Client, gallery_sync
     from lfs_plugins.gallery_controller import asset_sync_state
     panel, _, _ = gallery
     module = import_module('lfs_plugins.gallery_controller')
@@ -363,7 +357,8 @@ def test_account_switch_releases_pending_resolution(gallery):
     assert not actions
 
 
-def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, tmp_path, monkeypatch):
+@pytest.mark.parametrize('both', [False, True])
+def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, tmp_path, monkeypatch, both):
     import shutil
     from pathlib import Path
     from test_gallery_sync import connected, finish, Client
@@ -376,7 +371,11 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     panel.service = service
     panel._identity = service.identity()
     service._source_formats = ['licht']
-    remote = scene(viewerSettings=dict(exposure=2, cameraPath=None))
+    def track(x):
+        return dict(version=1, duration=6, loopMode='loop', playbackSpeed=1.5, keyframes=[
+            dict(time=.5, position=[x, 2, 3], rotation=[1, 0, 0, 0], focal_length_mm=35, easing=1),
+            dict(time=4, position=[-2, 1, 3], rotation=[.5, .5, .5, .5], focal_length_mm=200, easing=3)])
+    remote = scene(viewerSettings=dict(exposure=2, cameraPath=track(12) if both else None))
     service.scenes = [remote]
     service._bucket()['links']['project'] = gallery_sync.exchange_link(remote, 'before')
     service._save()
@@ -390,8 +389,18 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     monkeypatch.setattr(panel, '_project_identity', lambda: ('project', str(source)))
     monkeypatch.setattr(module.lf, 'project_poll_write', lambda: {'path': str(source)}, raising=False)
     monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(commit_uuid='after'))
-    monkeypatch.setattr(module, 'capture_view', lambda _: dict(exposure=1, cameraPath=None, environment=environment))
-    monkeypatch.setattr(module, 'restore_view', lambda *a, **k: None)
+    monkeypatch.setattr(module, 'capture_view', lambda _: dict(exposure=1, cameraPath=track(22) if both else None, environment=environment))
+    restored = []
+    from lfs_plugins.gallery_view import restore_camera_path
+    def native_restore(path):
+        # The actual native timeline loader requires time, not t.
+        if any('time' not in frame or 't' in frame for frame in path['keyframes']):
+            return False
+        restored.append(copy.deepcopy(path))
+        return True
+    monkeypatch.setattr(module.lf.ui, 'set_camera_path', native_restore, raising=False)
+    monkeypatch.setattr(module.lf.ui, 'clear_keyframes', lambda: None, raising=False)
+    monkeypatch.setattr(module, 'restore_view', lambda lf, view, **kw: restore_camera_path(lf, view['cameraPath']))
     monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
     monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
@@ -410,12 +419,301 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
         return {'scene': dict(remote, title=metadata['title'], viewerSettings=metadata['viewerSettings'], revision='uploaded')}
     monkeypatch.setattr(Client, 'upload', upload, raising=False)
     panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
-    for _, _, _, callback in module.lf._test_state.confirm_dialogs:
-        callback(module.tr('conflict.mine'))
+    pressed = []
+    for _, _, buttons, callback in module.lf._test_state.confirm_dialogs:
+        choice = 'both' if both and module.tr('conflict.both') in buttons else 'mine'
+        pressed.append(choice)
+        callback(module.tr('conflict.' + choice))
+    if both:
+        assert pressed == ['mine', 'mine', 'both', 'mine']
+        assert restored[0]['duration'] == 12
+        assert [f['time'] for f in restored[0]['keyframes']] == [.5, 4, 6.5, 10]
     assert panel._export_pending, panel._message
     panel._finish_export()
     finish(service)
+    if both:
+        assert uploads[0]['viewerSettings']['cameraPath'] == restored[0]
     assert len(uploads) == 1 and uploads[0]['title'] == 'Mine', service.snapshot()['jobs'][-1]['message']
     state = service.snapshot()
     assert state['jobs'][-1]['status'] == 'completed', state['jobs'][-1]['message']
     assert asset_sync_state(asset, state['links']['project'], state['scenes'][0], state['jobs'])['freshness'] == 'equal'
+
+
+@pytest.fixture
+def connection_clock(monkeypatch):
+    from lfs_plugins import gallery_sync
+    now, timers = [1000.0], []
+    class Timer:
+        def __init__(self, delay, callback):
+            self.delay, self.callback, self.canceled = delay, callback, False
+            timers.append(self)
+        def start(self):
+            pass
+        def cancel(self):
+            self.canceled = True
+        def fire(self):
+            assert not self.canceled
+            now[0] += self.delay
+            self.callback()
+    monkeypatch.setattr(gallery_sync.threading, 'Timer', Timer)
+    monkeypatch.setattr(gallery_sync.time, 'time', lambda: now[0])
+    return now, timers
+
+
+def test_waiting_probes_backoff_then_resumes_without_controller(tmp_path, monkeypatch, connection_clock):
+    from test_gallery_sync import connected, finish, Client
+    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_controller import asset_sync_state
+    service = connected(tmp_path, monkeypatch)
+    now, timers = connection_clock
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    attempts, probes = [], []
+    reachable = [False]
+    def upload(client, path, metadata, **kwargs):
+        attempts.append(kwargs['checkpoint'])
+        if len(attempts) == 1:
+            kwargs['on_checkpoint']({'uploadId': 'retained'})
+            kwargs['on_progress'](4, 8)
+            raise ConnectionRefusedError()
+        assert kwargs['checkpoint']['uploadId'] == 'retained'
+        return {'scene': scene()}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    def probe(client, method, path):
+        assert (method, path) == ('GET', '/me')
+        probes.append(now[0])
+        if not reachable[0]:
+            raise ConnectionRefusedError()
+        return {'id': 'one', 'gallerySyncVersion': 1}
+    monkeypatch.setattr(Client, '_request', probe)
+    for delay in [5, 10, 20, 40, 80, 160, 300, 300]:
+        assert timers[-1].delay == delay
+        state = service.snapshot()
+        assert state['jobs'][0]['status'] == 'waiting'
+        assert state['jobs'][0]['completed'] == 4
+        row = transfer_rows(state)[0]
+        assert row['can_pause'] and row['can_resume']
+        assert row['phase'].endswith('waiting') or row['phase'] == 'Waiting for connection…'
+        assert asset_sync_state({'id': 'project'}, None, None, state['jobs'])['state'] == 'waiting'
+        timers[-1].fire()
+        finish(service)
+        assert len(attempts) == 1
+    reachable[0] = True
+    timers[-1].fire()
+    finish(service)
+    assert len(probes) == 9 and len(attempts) == 2
+    assert service._job(identifier)['status'] == 'completed'
+    assert service._connection_timer is None
+
+
+@pytest.mark.parametrize('restart', [False, True])
+def test_explicit_pause_never_auto_resumes_after_outage(tmp_path, monkeypatch, connection_clock, restart):
+    from test_gallery_sync import connected, finish, Client, gallery_sync
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    timer = connection_clock[1][-1]
+    service.pause(identifier)
+    finish(service)
+    assert timer.canceled
+    if restart:
+        service = gallery_sync.GallerySync(service.account, tmp_path)
+        service.refresh()
+        finish(service)
+        assert service._owner, service.message
+    job = service._job(identifier)
+    assert job['status'] == 'paused' and 'retryAt' not in job
+    assert service._connection_timer is None
+    service._retry_connection()
+    assert service._connection_timer is None and not service.busy
+
+
+def test_waiting_recovers_after_restart_but_old_account_cannot_resume(tmp_path, monkeypatch, connection_clock):
+    from test_gallery_sync import connected, finish, Client, gallery_sync
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    service._connection_timer.cancel()
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    assert restarted._owner, restarted.message
+    assert restarted._job(identifier)['status'] == 'waiting'
+    assert restarted._connection_timer.delay == 5
+    service.account.email = 'different@example.com'
+    restarted._connection_timer.fire()
+    assert not restarted.busy and restarted._connection_timer is None
+    assert restarted.snapshot()['jobs'] == []
+
+
+def test_pause_while_connection_probe_is_in_flight_stays_paused(tmp_path, monkeypatch, connection_clock):
+    import threading
+    from test_gallery_sync import connected, finish, Client
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    probing, release = threading.Event(), threading.Event()
+    def probe(*args):
+        probing.set()
+        assert release.wait(2)
+        raise TimeoutError()
+    monkeypatch.setattr(Client, '_request', probe)
+    connection_clock[1][-1].fire()
+    assert probing.wait(2)
+    service.pause()
+    release.set()
+    finish(service)
+    assert service._job(identifier)['status'] == 'paused'
+    assert service._connection_timer is None
+
+
+@pytest.mark.skipif(__import__('sys').platform == 'win32', reason='Exercises SIGKILL and the POSIX process lock')
+def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp_path, monkeypatch):
+    import hashlib
+    import io
+    import subprocess
+    import sys
+    import uuid
+    from test_gallery_sync import connected, finish, gallery_sync
+    from test_portable_project import FIXTURES
+    from lfs_plugins import portal_gallery
+    from lfs_plugins.portable_project import ProjectFile
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.licht'
+    data = (FIXTURES / 'portable-ply.licht').read_bytes()
+    source.write_bytes(data)
+    part_size = len(data) // 3
+    upload_id = str(uuid.uuid4())
+    monkeypatch.setattr(service, 'resume', lambda _: None)
+    identifier = service.queue_upload(source, {'title': 'Scene', '_commitUuid': 'saved'}, 'project')
+    service._job(identifier).update(status='running', completed=part_size * 2,
+        checkpoint=dict(origin=service.account.base_url, owner='one', sha256=hashlib.sha256(data).hexdigest(),
+            idempotencyKey='stable-key', uploadId=upload_id,
+            request=dict(title='Scene', sourceFormat='licht', contentLength=len(data))))
+    service._save()
+    # A process holds the actual sidecar lock until it is killed. The lock file
+    # survives; flock ownership does not. Recovery must distinguish the two.
+    child = subprocess.Popen([sys.executable, '-c',
+        'import fcntl,sys,time; f=open(sys.argv[1],"a"); fcntl.flock(f,fcntl.LOCK_EX); print("locked",flush=True); time.sleep(30)',
+        str(tmp_path / 'sync.lock')], stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'locked'
+        child.kill()
+        assert child.wait(timeout=3) == -9
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        child.stdout.close()
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    recovered = restarted._job(identifier)
+    assert recovered['status'] == 'paused' and recovered['interrupted']
+    assert recovered['completed'] == part_size * 2
+    storage, puts, requests = {1: data[:part_size], 2: b'truncated'}, [], []
+    remote_scene = dict(id=str(uuid.uuid4()), revision='published', title='Scene', viewerSettings={})
+    def request(client, method, path, body=None):
+        requests.append((method, path))
+        if path == '/me':
+            return dict(id='one', gallerySyncVersion=1, sourceFormats=['licht'])
+        if path == '/splats/uploads':
+            assert body['idempotencyKey'] == 'stable-key'
+            # A replay response has no authoritative part inventory.
+            return dict(id=upload_id, status='uploading', partSize=part_size, uploadedParts=[])
+        if method == 'GET' and path == f'/splats/uploads/{upload_id}':
+            return dict(id=upload_id, status='uploading', partSize=part_size,
+                uploadedParts=[dict(partNumber=n, size=len(value), etag=f'tag-{n}') for n, value in storage.items()])
+        if path.endswith('/part-upload-urls'):
+            number = body['parts'][0]
+            return dict(urls=[dict(partNumber=number, url=f'https://portal.example/part/{number}')])
+        if path.endswith('/complete'):
+            assert body['parts'][0] == dict(partNumber=1, etag='tag-1')
+            assembled = b''.join(storage[n] for n in sorted(storage))
+            assert assembled == data
+            ProjectFile(io.BytesIO(assembled))  # The real publishing-subset reader.
+            return dict(id=upload_id, status='completed', scene=remote_scene)
+        raise AssertionError((method, path, body))
+    class Response(io.BytesIO):
+        status = 200
+    def opened(request, **kwargs):
+        number = int(request.full_url.rsplit('/', 1)[-1])
+        puts.append(request.data)
+        storage[number] = request.data
+        response = Response()
+        response.headers = {'ETag': f'tag-{number}'}
+        return response
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_request', request)
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
+    restarted.resume(identifier)
+    finish(restarted)
+    assert restarted._job(identifier)['status'] == 'completed', restarted._job(identifier)['message']
+    assert sum(map(len, puts)) == len(data) - part_size < len(data)
+    assert ('GET', f'/splats/uploads/{upload_id}') in requests
+    from lfs_plugins.gallery_controller import asset_sync_state
+    assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved'},
+        restarted.snapshot()['links']['project'], remote_scene)['freshness'] == 'equal'
+
+
+def test_waiting_wording_is_not_replaced_by_generic_connection_error(panel_module, monkeypatch):
+    from lfs_plugins.gallery_messages import localize_message
+    monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: {
+        'asset_manager.gallery.state.waiting': 'Waiting for connection…',
+        'asset_manager.gallery.error.connection': 'Connection failed',
+    }.get(key, key))
+    assert localize_message('Waiting for connection…') == 'Waiting for connection…'
+    assert localize_message('Waiting for the portal connection. The transfer will resume automatically.') == 'Waiting for connection…'
+
+
+@pytest.mark.parametrize('probe_result', ['wrong_owner', 'unauthorized'])
+def test_connection_probe_does_not_resume_under_another_account(tmp_path, monkeypatch, connection_clock, probe_result):
+    from test_gallery_sync import connected, finish, Client
+    from lfs_plugins.portal_account import PortalHTTPError
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    attempts = []
+    def upload(*args, **kwargs):
+        attempts.append(1)
+        raise TimeoutError()
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    def probe(*args):
+        if probe_result == 'unauthorized':
+            raise PortalHTTPError(401, 'Expired')
+        return {'id': 'two', 'gallerySyncVersion': 1}
+    monkeypatch.setattr(Client, '_request', probe)
+    connection_clock[1][-1].fire()
+    finish(service)
+    assert service._job(identifier)['status'] == 'error'
+    assert len(attempts) == 1 and service._connection_timer is None
+
+
+def test_legacy_outage_pause_migrates_to_waiting_on_restart(tmp_path, monkeypatch, connection_clock):
+    from test_gallery_sync import connected, finish, gallery_sync
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'12345678')
+    monkeypatch.setattr(service, 'resume', lambda _: None)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    service._job(identifier).update(status='paused', retryAt=1005,
+        message='Waiting for the portal connection. The transfer will resume automatically.')
+    service._save()
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    assert restarted._job(identifier)['status'] == 'waiting'
+    assert restarted._connection_timer.delay == 5

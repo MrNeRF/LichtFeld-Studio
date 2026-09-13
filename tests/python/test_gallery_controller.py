@@ -1507,15 +1507,15 @@ def test_T1_continuation_failure_does_not_stop_gallery_ticks(gallery, monkeypatc
     assert len(scheduled) == 2 and panel._open_continuation is None
 
 
-def test_C1_both_camera_tracks_shift_canonical_t_without_mutating_inputs(gallery):
+def test_C1_both_camera_tracks_use_native_time_without_mutating_inputs(gallery):
     from lfs_plugins.gallery_controller import combine_camera_tracks
-    mine = {'version': 1, 'duration': 4, 'loopMode': 'once', 'playbackSpeed': 1, 'keyframes': [{'t': 0}, {'t': 4}]}
-    portal = {'version': 1, 'duration': 3, 'keyframes': [{'t': 0}, {'t': 3}, {'time': 2}]}
-    original = copy.deepcopy(portal)
+    mine = {'version': 1, 'duration': 4, 'loopMode': 'once', 'playbackSpeed': 1, 'keyframes': [{'time': .5}, {'time': 3}]}
+    portal = {'version': 1, 'duration': 3, 'keyframes': [{'time': .5}, {'time': 2}]}
+    originals = copy.deepcopy((mine, portal))
     result = combine_camera_tracks(mine, portal)
-    assert [frame['t'] for frame in result['keyframes']] == [0, 4, 4, 7, 6]
-    assert result['duration'] == 7 and portal == original
-    assert all('time' not in frame for frame in result['keyframes'])
+    assert [frame['time'] for frame in result['keyframes']] == [.5, 3, 4.5, 6]
+    assert result['duration'] == 7 and (mine, portal) == originals
+    assert all('t' not in frame for frame in result['keyframes'])
 
 
 @pytest.mark.parametrize('missing_backup', [False, True])

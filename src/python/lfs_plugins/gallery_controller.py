@@ -210,7 +210,10 @@ class GalleryController:
         if name == "pause":
             self._update_queue = []
             self._batch_approval = None
-            self._action_pause()
+            if any(j["id"] == job_id and j["status"] == "waiting" for j in self.service.snapshot()["jobs"]):
+                self.service.pause(job_id)
+            else:
+                self._action_pause()
         elif name == "cancel":
             if self.service.busy:
                 self._cancel_requests.add(job_id)
@@ -220,7 +223,7 @@ class GalleryController:
                 self.service.discard(job_id)
         elif name == "resume_all":
             self._resume_queue = [j["id"] for j in self.service.snapshot()["jobs"]
-                                  if j["status"] in ("paused", "error", "queued")]
+                                  if j["status"] in ("paused", "waiting", "error", "queued")]
         elif name == "clear_finished":
             self.service.clear_finished(tuple(self._clearable_jobs()))
         else:
@@ -772,10 +775,6 @@ class GalleryController:
                     self.service.discard(job_id)
             elif self._resume_queue:
                 self.service.resume(self._resume_queue.pop(0))
-            elif not self._panel_busy() and any(j.get("status") == "paused" and j.get("retryAt", float("inf")) <= time.time()
-                                              for j in self._state["jobs"]):
-                job = next(j for j in self._state["jobs"] if j.get("status") == "paused" and j.get("retryAt", float("inf")) <= time.time())
-                self.service.resume(job["id"])
             else:
                 try:
                     self._finish_pulls()
@@ -2024,7 +2023,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         activity = ("processing" if job.get("serverProcessing") else
                     "downloading" if job.get("kind") == "download" else "uploading") if status == "running" else (
                     "interrupted" if job.get("interrupted") else "paused") if status == "paused" else (
-                    "error" if status in ("conflict", "error") else "queued")
+                    "waiting" if status == "waiting" else "error" if status in ("conflict", "error") else "queued")
         if status == "conflict":
             freshness = "diverged"
     active = activity in ("checking", "preparing", "queued", "uploading", "processing", "downloading", "applying")
@@ -2034,7 +2033,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         visible = activity
     elif storage_issue or relationship == "identity_ambiguous":
         visible = "error"
-    elif activity in ("error", "paused", "interrupted"):
+    elif activity in ("error", "paused", "waiting", "interrupted"):
         visible = activity
     elif relationship in ("local_missing", "remote_deleted"):
         visible = relationship
@@ -2049,7 +2048,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
             visible = cached
     icons = {"unlinked": "cloud", "equal": "cloud-check", "local": "cloud-up",
              "remote": "cloud-down", "diverged": "cloud-updown", "remote_only": "cloud-down",
-             "queued": "cloud-dotted", "paused": "cloud-dotted", "interrupted": "cloud-dotted",
+             "queued": "cloud-dotted", "paused": "cloud-dotted", "waiting": "cloud-dotted", "interrupted": "cloud-dotted",
              "error": "cloud-bang", "local_missing": "cloud-bang", "remote_deleted": "cloud-strike",
              "unknown": "cloud-dotted"}
     tones = {"equal": "success", "local": "primary", "remote": "info", "remote_only": "info",
@@ -2058,7 +2057,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     action = {"unlinked": "publish", "equal": "open", "local": "update", "remote": "pull",
               "diverged": "resolve", "remote_only": "pull", "local_missing": "pull",
               "remote_deleted": "publish_new", "unknown": "check", "error": "retry",
-              "paused": "resume", "interrupted": "resume"}.get(visible, "")
+              "paused": "resume", "waiting": "resume", "interrupted": "resume"}.get(visible, "")
     if visible == "remote_deleted" and not project.get("exists", True):
         action = "unlink"
     if relationship == "identity_ambiguous" or storage_issue or (cached_projection and not link):
@@ -2076,8 +2075,7 @@ def combine_camera_tracks(mine, portal):
     offset = float(mine.get("duration", 0))
     appended = copy.deepcopy(portal.get("keyframes", []))
     for frame in appended:
-        frame["t"] = float(frame.get("t", frame.get("time", 0))) + offset
-        frame.pop("time", None)
+        frame["time"] = float(frame["time"]) + offset
     result["keyframes"] = result.get("keyframes", []) + appended
     result["duration"] = offset + float(portal.get("duration", 0))
     return result

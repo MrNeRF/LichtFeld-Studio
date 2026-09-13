@@ -32,9 +32,10 @@ def transfer_rows(snapshot, history_limit=30):
                "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else tr("bytes", done=format_size(done), total=format_size(total))),
                "phase": "Needs attention" if job.get("needsAttention") else tr("phase." + phase),
-               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
+               "reason": job.get("message", "") if status in ("error", "conflict", "paused", "waiting") else "",
                "progress": 100 if status == "completed" else min(100, 100 * done / max(1, total)),
-               "can_pause": status == "running", "can_resume": status in ("paused", "error", "queued") and not snapshot.get("busy"),
+               "can_pause": status == "running" or status == "waiting" and not snapshot.get("busy"),
+               "can_resume": status in ("paused", "waiting", "error", "queued") and not snapshot.get("busy"),
                "can_cancel": status not in ("completed", "canceled")}
         (history if status in ("completed", "canceled") else pending).append(row)
     if snapshot.get("phase", "idle") != "idle":

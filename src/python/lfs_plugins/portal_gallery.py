@@ -419,6 +419,7 @@ class PortalGalleryClient:
         """Upload an immutable export; a canceled worker can resume its checkpoint."""
         path = Path(path)
         cancel = cancel or threading.Event()
+        resuming = bool(checkpoint and checkpoint.get("uploadId"))
 
         def check_canceled():
             if cancel.is_set():
@@ -462,6 +463,10 @@ class PortalGalleryClient:
         upload_id = _identifier(upload["id"])
         checkpoint["uploadId"] = upload_id
         on_checkpoint(dict(checkpoint))
+        # The create response can be an idempotent replay. Storage is the
+        # authority for parts acknowledged before the last local checkpoint.
+        if resuming:
+            upload = self._request("GET", f"/splats/uploads/{upload_id}")
         if upload.get("status") == "completed":
             on_progress(size, size)
             return upload

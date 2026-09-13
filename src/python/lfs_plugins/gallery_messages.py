@@ -24,7 +24,7 @@ def localize_message(message):
     rules = (
         (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
         (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
-        (r'waiting for the portal connection', 'info.waiting_connection'),
+        (r'waiting for (?:the portal )?connection', 'state.waiting'),
         (r'unsafe portal url|unsafe_portal_url', 'error.unsafe_url'),
         (r'account changed|account or .*changed|previous account', 'error.account_changed'),
         (r'sign out and reconnect|approve gallery', 'error.access'),
