@@ -398,3 +398,13 @@
 .asset-info-empty-text {
     color: @{text_dim};
 }
+
+.gallery-badge { background-color: @{surface}; }
+.gallery-remote { border-color: @{text_dim}; }
+.gallery-toolbar-button img { image-color: @{text}; }
+.gallery-tone-success, .gallery-tone-success img { color: @{success}; image-color: @{success}; }
+.gallery-tone-primary, .gallery-tone-primary img { color: @{primary}; image-color: @{primary}; }
+.gallery-tone-info, .gallery-tone-info img { color: @{info}; image-color: @{info}; }
+.gallery-tone-warning, .gallery-tone-warning img { color: @{warning}; image-color: @{warning}; }
+.gallery-tone-error, .gallery-tone-error img { color: @{error}; image-color: @{error}; }
+.gallery-tone-text_dim, .gallery-tone-text_dim img { color: @{text_dim}; image-color: @{text_dim}; }

@@ -12,7 +12,7 @@ import tempfile
 import threading
 import uuid
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
@@ -23,7 +23,7 @@ _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
 
@@ -45,9 +45,11 @@ _PROJECT_STORAGE_FIELDS = frozenset(
         "open_state",
         "has_preview",
         "status",
+        "gallery",
     }
 )
 _INSPECTION_STORAGE_FIELDS = _PROJECT_STORAGE_FIELDS - {
+    "gallery",
     "name",
     "path",
     "folder_id",
@@ -271,6 +273,7 @@ class Project:
     path_mtime_ns: int = 0
     inspection_verified: bool = False
     inspection_restored: bool = False
+    gallery: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -284,6 +287,7 @@ class Project:
             "size": self.path_size_bytes,
             "mtime_ns": self.path_mtime_ns,
             "fallback_preview_path": self.fallback_preview_path,
+            "gallery": dict(self.gallery),
         }
         if self.inspection_verified or self.inspection_restored:
             record.update(
@@ -756,6 +760,7 @@ class AssetIndex:
                 path_size_bytes=int(value.get("size") or 0),
                 path_mtime_ns=int(value.get("mtime_ns") or 0),
                 fallback_preview_path=str(value.get("fallback_preview_path") or ""),
+                gallery=dict(value.get("gallery") or {}),
             )
             if self._has_persisted_inspection(value):
                 self._restore_inspection(project, value)
@@ -958,9 +963,15 @@ class AssetIndex:
             if not isinstance(data, dict):
                 raise ValueError("Asset Manager catalog root must be an object")
 
-            is_current = data.get("schema_version") in (SCHEMA_VERSION, 3)
+            if isinstance(data.get("schema_version"), int) and data["schema_version"] > SCHEMA_VERSION:
+                raise ValueError("Unsupported future Asset Manager catalog schema")
+            is_current = data.get("schema_version") in (SCHEMA_VERSION, 3, 4)
             if is_current and not migrating_legacy_location:
-                if self._load_v3(data) and not self.save():
+                migrating = data.get("schema_version") != SCHEMA_VERSION
+                normalized = self._load_v3(data)
+                if migrating:
+                    self._preserve_legacy_backup(source_path)
+                if (normalized or migrating) and not self.save():
                     self._restore_state(previous_state)
                     return False
                 self._cleanup_obsolete_storage()
@@ -983,6 +994,25 @@ class AssetIndex:
             self._restore_state(previous_state)
             _log.error("Failed to load Asset Manager library %s: %s", source_path, exc)
             return False
+
+    @_synchronized
+    def rebuild_gallery_projection(self, projection):
+        """Rebuild only existing local records; the journal owns the relationship."""
+        if all(project.gallery == dict(projection.get(identifier, {})) for identifier, project in self._projects.items()):
+            return True
+        # Import/scan code can save through another AssetIndex instance. Merge
+        # against disk first so a delayed UI snapshot never drops its new rows.
+        if self._library_path.exists() and not self.load():
+            return False
+        changed = False
+        for identifier, project in self._projects.items():
+            value = dict(projection.get(identifier, {}))
+            if project.gallery != value:
+                project.gallery = value
+                changed = True
+        if changed:
+            return self.save()
+        return True
 
     @_synchronized
     def save(self) -> bool:

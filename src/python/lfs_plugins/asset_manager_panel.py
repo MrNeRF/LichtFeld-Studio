@@ -14,7 +14,10 @@ from urllib.parse import quote
 
 import lichtfeld as lf
 
+from .asset_gallery_ui import GalleryAssetMixin, GALLERY_SCOPES, SCOPE_PUBLISHED, SCOPE_ATTENTION, SCOPE_TRANSFERS
 from . import rml_widgets
+from .asset_layout import panel_layout, list_columns
+from .asset_format import format_size
 from .asset_watch import (
     AssetFolderScanProgress,
     scan_all_asset_folders,
@@ -76,7 +79,7 @@ __lfs_panel_ids__ = ["lfs.asset_manager"]
 
 
 @panel_class("asset_manager")
-class AssetManagerPanel(Panel):
+class AssetManagerPanel(GalleryAssetMixin, Panel):
     """Dockable `.licht` project catalog."""
 
     SORT_MODES = ("name", "size")
@@ -97,11 +100,12 @@ class AssetManagerPanel(Panel):
         self._search_query = ""
 
         self._folders_collapsed = False
-        self._sidebar_height = 176.0
+        self._sidebar_height = 280.0
         self._bottom_panel_height = 220.0
-        self._sidebar_dragging = False
-        self._sidebar_drag_start_y = 0.0
-        self._sidebar_start_height = self._sidebar_height
+        self._info_preferred_height = 220.0
+        self._layout_signature = None
+        self._main_min_height = 0.0
+        self._folder_layout_initialized = False
         self._bottom_panel_dragging = False
         self._bottom_panel_drag_start_y = 0.0
         self._bottom_panel_start_height = self._bottom_panel_height
@@ -153,12 +157,13 @@ class AssetManagerPanel(Panel):
         self._last_project_write_path = ""
         self._thumbnail_sources_by_asset: Dict[str, str] = {}
         self._last_default_folder_path = ""
+        self._init_gallery()
 
     def capture_chrome(self) -> Dict[str, Any]:
         return {
             "folders_collapsed": self._folders_collapsed,
             "sidebar_height": self._sidebar_height,
-            "bottom_panel_height": self._bottom_panel_height,
+            "bottom_panel_height": self._info_preferred_height,
         }
 
     def apply_chrome(self, payload: Any) -> None:
@@ -166,13 +171,13 @@ class AssetManagerPanel(Panel):
             self._folders_collapsed = bool(
                 payload.get("folders_collapsed", self._folders_collapsed)
             )
-            for key, attr in (
-                ("sidebar_height", "_sidebar_height"),
-                ("bottom_panel_height", "_bottom_panel_height"),
-            ):
-                value = payload.get(key)
-                if isinstance(value, (int, float)) and value > 0:
-                    setattr(self, attr, float(value))
+            self._folder_layout_initialized = "folders_collapsed" in payload
+            value = payload.get("bottom_panel_height")
+            if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+                self._info_preferred_height = min(500.0, float(value))
+            # Old sidebar heights are superseded by content/viewport sizing.
+            self._layout_signature = None
+            self._sync_panel_layout()
         if self._handle:
             self._handle.dirty_all()
 
@@ -232,6 +237,8 @@ class AssetManagerPanel(Panel):
                     self._last_default_folder_path = default_path
                     self._catalog_epoch_seen = self._catalog_epoch()
                     self._repair_selection()
+                    if self._gallery_focus_path:
+                        self.focus_gallery(self._gallery_focus_path)
                     self._refresh_records(assets=True, folders=True)
                     if self._handle:
                         self._handle.dirty_all()
@@ -254,6 +261,7 @@ class AssetManagerPanel(Panel):
         if model is None:
             return
 
+        self._bind_gallery_model(model)
         model.bind("search_query", self.get_search_query, self.set_search_query)
         model.bind_func("is_gallery_view", lambda: self._view_mode == "gallery")
         model.bind_func("is_list_view", lambda: self._view_mode == "list")
@@ -273,11 +281,14 @@ class AssetManagerPanel(Panel):
             "show_selection_multiple", lambda: self._selection_type == "multiple"
         )
 
+        model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["modified"])
+        model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["folder"])
+        model.bind_func("col_gallery_label", lambda: tr("asset_manager.gallery.sidebar.title"))
         model.bind_func("sidebar_height", lambda: f"{self._sidebar_height:.1f}dp")
+        model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")
         model.bind_func(
             "bottom_panel_height", lambda: f"{self._bottom_panel_height:.1f}dp"
         )
-        model.bind_func("sidebar_resize_dragging", lambda: self._sidebar_dragging)
         model.bind_func(
             "bottom_panel_resize_dragging", lambda: self._bottom_panel_dragging
         )
@@ -387,7 +398,6 @@ class AssetManagerPanel(Panel):
             ("refresh_catalog", self.refresh_catalog),
             ("on_locate_file", self.on_locate_file),
             ("on_use_found_location", self.on_use_found_location),
-            ("on_sidebar_resize_start", self.on_sidebar_resize_start),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
         ):
@@ -442,18 +452,7 @@ class AssetManagerPanel(Panel):
 
     @staticmethod
     def _format_size(value: Any) -> str:
-        try:
-            size = max(0, int(value))
-        except (TypeError, ValueError):
-            size = 0
-        for divisor, key in (
-            (1024**3, "asset_manager.unit.gb"),
-            (1024**2, "asset_manager.unit.mb"),
-            (1024, "asset_manager.unit.kb"),
-        ):
-            if size >= divisor:
-                return f"{size / divisor:.1f} {tr(key)}"
-        return f"{size} {tr('asset_manager.unit.b')}"
+        return format_size(value)
 
     @staticmethod
     def _format_unix_ns(value: Any) -> str:
@@ -472,6 +471,8 @@ class AssetManagerPanel(Panel):
         return assets if isinstance(assets, dict) else {}
 
     def _asset_dict(self, asset_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if asset_id and asset_id.startswith("remote:"):
+            return self._gallery_remote_assets().get(asset_id)
         if not asset_id or not self._asset_index:
             return None
         getter = getattr(self._asset_index, "get_asset_dict", None)
@@ -506,12 +507,12 @@ class AssetManagerPanel(Panel):
         return query in haystack
 
     def _repair_selection(self) -> None:
-        assets = self._asset_index_assets()
+        assets = self._all_display_assets()
         folders = self._asset_index_folders()
         self._selected_asset_ids.intersection_update(assets)
         if self._selection_cursor_id not in assets:
             self._selection_cursor_id = next(iter(self._selected_asset_ids), None)
-        if self._selected_folder_id not in {*folders, SCOPE_ALL}:
+        if self._selected_folder_id not in {*folders, SCOPE_ALL, *GALLERY_SCOPES}:
             self._selected_folder_id = SCOPE_ALL
         self._update_selection_type()
 
@@ -618,6 +619,7 @@ class AssetManagerPanel(Panel):
         display_name = self._get_asset_display_name(asset)
         return {
             **asset,
+            **self._gallery_badge(asset),
             "display_name": display_name,
             "placeholder_label": self._placeholder_label(display_name),
             "id": asset_id,
@@ -658,8 +660,9 @@ class AssetManagerPanel(Panel):
         folder_id = self._selected_folder_id if folder_id is None else folder_id
         query = self._search_query.strip().casefold()
         rows: List[Dict[str, Any]] = []
-        for asset in self._asset_index_assets().values():
-            if folder_id not in (None, SCOPE_ALL) and asset.get("folder_id") != folder_id:
+        source = self._gallery_rows(folder_id == SCOPE_ATTENTION) if folder_id in GALLERY_SCOPES else self._asset_index_assets().values()
+        for asset in source:
+            if folder_id not in (None, SCOPE_ALL, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
                 continue
             if not self._asset_matches_query(asset, query):
                 continue
@@ -878,6 +881,8 @@ class AssetManagerPanel(Panel):
 
     def toggle_folders_collapsed(self, _handle=None, _ev=None, _args=None):
         self._folders_collapsed = not self._folders_collapsed
+        self._folder_layout_initialized = True
+        self._layout_signature = None
         self._dirty_fields("folders_collapsed", "folders_expanded")
 
     def set_view_mode(self, _handle, _ev, args):
@@ -944,8 +949,13 @@ class AssetManagerPanel(Panel):
             self._log_error("Failed to import .licht project %s: %s", path, exc)
 
     def _select_folder_id(self, folder_id: str) -> bool:
-        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL}:
+        if folder_id == SCOPE_TRANSFERS:
+            self.on_open_gallery()
+            return True
+        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, *GALLERY_SCOPES}:
             return False
+        if folder_id in self._asset_index_folders():
+            self._gallery_last_folder = folder_id
         self._selected_folder_id = folder_id
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
@@ -976,7 +986,7 @@ class AssetManagerPanel(Panel):
         row_element=None,
         container=None,
     ) -> bool:
-        if asset_id not in self._asset_index_assets():
+        if asset_id not in self._all_display_assets():
             return False
         if multi_select:
             if asset_id in self._selected_asset_ids:
@@ -998,6 +1008,9 @@ class AssetManagerPanel(Panel):
         self._select_asset_id(asset_id, multi_select=self._event_multi_select(_ev))
 
     def _dirty_selection(self) -> None:
+        self._gallery_selection_changed()
+        if self._handle:
+            self._handle.dirty_all()
         self._dirty_fields(
             "selected_asset_id",
             "selected_count",
@@ -1058,22 +1071,15 @@ class AssetManagerPanel(Panel):
         self._load_asset(self._resolve_event_value(args, _ev, "data-asset-id"))
 
     def on_open_gallery(self, _handle=None, _event=None, _args=None):
-        path = None
-        asset_id = self.get_selected_asset_id()
-        if asset_id and self._asset_index:
-            project = self._asset_index.verify_asset(asset_id)
-            asset = project.to_dict() if project is not None else None
-            if not asset or not self._project_available(asset):
-                self.refresh_catalog(scan_folders=False)
-                return
-            path = str(asset["path"])
-        lf.ui.set_panel_enabled("lfs.gallery", True)
-        panel = lf.ui.get_panel_object("lfs.gallery")
-        if panel is not None:
-            panel.focus_project(path)
+        enabled = getattr(lf.ui, "is_panel_enabled", lambda _: False)("lfs.gallery_transfer")
+        lf.ui.set_panel_enabled("lfs.gallery_transfer", not enabled)
 
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:
+            return
+        if asset_id.startswith("remote:"):
+            self._select_asset_id(asset_id)
+            self._gallery_command("pull_open")
             return
         project = self._asset_index.verify_asset(asset_id)
         if project is None:
@@ -1122,6 +1128,9 @@ class AssetManagerPanel(Panel):
         items: List[Dict[str, Any]] = []
         if self._project_available(asset):
             items.append({"label": tr("menu.file.open_project"), "action": "load"})
+        items.extend(self._gallery_context_items(asset))
+        if asset.get("remote_only"):
+            return items
         if str(asset.get("relocation_candidate") or ""):
             items.append(
                 {
@@ -1143,7 +1152,10 @@ class AssetManagerPanel(Panel):
         return items
 
     def _handle_asset_context_action(self, action: str, asset_id: str) -> None:
-        if action == "load":
+        if action.startswith("gallery:"):
+            self._select_asset_id(asset_id)
+            self._gallery_command(action.split(":", 1)[1])
+        elif action == "load":
             self._load_asset(asset_id)
         elif action == "use_found_location":
             self.on_use_found_location(None, None, [asset_id])
@@ -1570,6 +1582,8 @@ class AssetManagerPanel(Panel):
                 "asset_gallery_top_spacer_height",
                 "asset_gallery_bottom_spacer_height",
                 "asset_card_slot_width",
+                "asset_list_wide",
+                "asset_list_show_folder",
             ):
                 self._handle.dirty(field)
         self._request_model_update()
@@ -1606,6 +1620,44 @@ class AssetManagerPanel(Panel):
     def _asset_scroll_container(self, doc=None):
         document = doc or self._doc
         return document.get_element_by_id("asset-gallery-scroll") if document else None
+
+    @staticmethod
+    def _ui_scale():
+        return max(0.1, float(getattr(lf.ui, "get_ui_scale", lambda: 1.0)() or 1.0))
+
+    def _sync_panel_layout(self, doc=None):
+        document = doc or self._doc
+        popup = document.get_element_by_id("asset-popup") if document else None
+        if not popup:
+            return False
+        scale = self._ui_scale()
+        height = float(popup.client_height or 0) / scale
+        if height <= 0:
+            return False
+        if not self._folder_layout_initialized:
+            self._folder_layout_initialized = True
+            self._folders_collapsed = height < 640
+            self._dirty_fields("folders_collapsed", "folders_expanded")
+        def measured(identifier, fallback, *, content=False):
+            element = document.get_element_by_id(identifier)
+            value = getattr(element, "scroll_height" if content else "client_height", 0) if element else 0
+            return float(value) / scale if value else fallback
+        folder_count = len(self._asset_index_folders())
+        local = 77.0 + (0 if self._folders_collapsed else 34.0 * folder_count)
+        content = 16.0 + measured("asset-sidebar-local-content", local, content=True) + measured("asset-sidebar-gallery", 132.0) + 8.0
+        toolbar = measured("asset-popup-toolbar", 114.0) + 1.0
+        header = measured("asset-results-header", 48.0) + 1.0
+        signature = (height, content, toolbar, header, self._info_preferred_height, self._folders_collapsed)
+        if signature == self._layout_signature:
+            return False
+        self._layout_signature = signature
+        layout = panel_layout(height, info_height=self._info_preferred_height, toolbar_height=toolbar,
+                              results_header_height=header, sidebar_content_height=content)
+        self._sidebar_height = layout["sidebar"]
+        self._bottom_panel_height = layout["info"]
+        self._main_min_height = layout["main_min_height"]
+        self._dirty_fields("sidebar_height", "bottom_panel_height", "main_min_height")
+        return True
 
     def _sync_asset_window_viewport(self, doc=None) -> bool:
         scroll = self._asset_scroll_container(doc)
@@ -1691,7 +1743,10 @@ class AssetManagerPanel(Panel):
         if action_element is not None:
             action = action_element.get_attribute("data-asset-action", "")
             asset_id = action_element.get_attribute("data-asset-id", "")
-            if action == "load":
+            if action == "gallery":
+                self._select_asset_id(asset_id)
+                self._gallery_command("primary")
+            elif action == "load":
                 self._load_asset(asset_id)
             elif action == "menu":
                 self._show_asset_context_menu(asset_id)
@@ -1956,12 +2011,6 @@ class AssetManagerPanel(Panel):
         except Exception:
             return False
 
-    def on_sidebar_resize_start(self, _handle, event, _args):
-        self._sidebar_dragging = True
-        self._sidebar_drag_start_y = float(event.get_parameter("mouse_y", "0"))
-        self._sidebar_start_height = self._sidebar_height
-        self._dirty_fields("sidebar_resize_dragging")
-
     def on_bottom_panel_resize_start(self, _handle, event, _args):
         self._bottom_panel_dragging = True
         self._bottom_panel_drag_start_y = float(event.get_parameter("mouse_y", "0"))
@@ -1973,19 +2022,13 @@ class AssetManagerPanel(Panel):
             mouse_y = float(event.get_parameter("mouse_y", "0"))
         except (TypeError, ValueError):
             return
-        if self._sidebar_dragging:
-            self._sidebar_height = max(80.0, min(420.0, self._sidebar_start_height + mouse_y - self._sidebar_drag_start_y))
-            self._dirty_fields("sidebar_height")
-            self._stop_event(event)
-        elif self._bottom_panel_dragging:
-            self._bottom_panel_height = max(120.0, min(500.0, self._bottom_panel_start_height - mouse_y + self._bottom_panel_drag_start_y))
+        if self._bottom_panel_dragging:
+            self._info_preferred_height = max(0.0, min(500.0, self._bottom_panel_start_height - (mouse_y - self._bottom_panel_drag_start_y) / self._ui_scale()))
+            self._sync_panel_layout()
             self._dirty_fields("bottom_panel_height")
             self._stop_event(event)
 
     def _on_resize_mouseup(self, _event) -> None:
-        if self._sidebar_dragging:
-            self._sidebar_dragging = False
-            self._dirty_fields("sidebar_resize_dragging")
         if self._bottom_panel_dragging:
             self._bottom_panel_dragging = False
             self._dirty_fields("bottom_panel_resize_dragging")
@@ -2102,12 +2145,14 @@ class AssetManagerPanel(Panel):
         self._mount_generation += 1
         self._schedule_slow_poll(self._mount_generation)
         self._doc = doc
+        self._subscribe_gallery()
         if self._asset_index is None:
             self._start_backend_initialization()
         self._repair_selection()
         self._bind_dom_event_listeners(doc)
         self._subscribe_reactive_state()
         self._sync_panel_space_state()
+        self._sync_panel_layout(doc)
         self._sync_asset_window_viewport(doc)
         self._refresh_records(assets=True, folders=True)
         if self._handle:
@@ -2120,7 +2165,7 @@ class AssetManagerPanel(Panel):
             self._scan_asset_folders()
 
     def on_update(self, doc):
-        changed = False
+        changed = self._sync_panel_layout(doc)
         if self._sync_panel_space_state():
             self._dirty_fields("is_floating")
             changed = True
@@ -2141,11 +2186,20 @@ class AssetManagerPanel(Panel):
             def tick() -> None:
                 if generation != self._mount_generation or not self._panel_mounted:
                     return
-                changed = self._sync_default_folder_path()
-                changed = self._refresh_after_project_write() or changed
-                if changed:
+                try:
+                    self._continue_gallery_publish()
+                    changed = self._sync_default_folder_path()
+                    changed = self._refresh_after_project_write() or changed
+                    if changed:
+                        self._request_model_update()
+                    self._last_poll_error = None
+                except Exception as exc:
+                    from .gallery_messages import report_poll_error
+                    self._gallery_notice = report_poll_error(self, exc, "Asset Manager polling failed")
+                    self._dirty_fields("gallery_notice")
                     self._request_model_update()
-                self._schedule_slow_poll(generation)
+                finally:
+                    self._schedule_slow_poll(generation)
 
             if callable(scheduler):
                 scheduler(tick)
@@ -2156,6 +2210,12 @@ class AssetManagerPanel(Panel):
         timer.start()
 
     def on_unmount(self, doc):
+        if self._gallery_undo_timer:
+            self._gallery_undo_timer.cancel()
+            self._gallery_undo_timer = None
+        if self._gallery_unsubscribe:
+            self._gallery_unsubscribe()
+            self._gallery_unsubscribe = None
         with self._folder_scan_lock:
             self._panel_mounted = False
             self._mount_generation += 1

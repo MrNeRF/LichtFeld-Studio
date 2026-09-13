@@ -4,47 +4,44 @@
 import lichtfeld as lf
 from .panels import panel_class
 from .types import Panel
+from .asset_format import format_size
 
 __lfs_panel_classes__ = ["GalleryTransferPanel"]
 __lfs_panel_ids__ = ["lfs.gallery_transfer"]
 
 
-def transfer_state(owner):
-    state = owner.service.snapshot()
-    result = dict(title="Gallery transfer", message="No active transfer", progress=0,
-                  detail="", can_pause=False, can_resume=False, resume_id="", pause_label="Pause")
-    if state["identity"] != owner._identity:
-        result["message"] = "Account changed. Open your gallery to continue."
-        return result
-    if owner._save_pending or owner._export_pending or owner._import_pending:
-        result.update(title=owner._title or "Gallery transfer", message=owner._message or "Preparing scene",
-                      progress=owner._export_progress, can_pause=owner._can_pause(), pause_label="Cancel preparation")
-        return result
-    jobs = state["jobs"]
-    if owner._message and not any(j["status"] == "running" for j in jobs):
-        result.update(title=owner._title or "Gallery transfer", message=owner._message)
-        return result
-    job = next((j for j in reversed(jobs) if j["status"] == "running"), jobs[-1] if jobs else None)
-    if job is None:
-        return result
-    if job.get("retired"):
-        result.update(title=job["metadata"]["title"], message=job["message"])
-        return result
-    total, done = max(1, job["total"]), job["completed"]
-    processing = bool(job.get("serverProcessing"))
-    status = job["status"]
-    message = job["message"]
-    if status == "completed":
-        done = job["total"]
-        message = "Ready in your gallery" if job.get("kind") != "download" else "Downloaded. Open your gallery to import."
-    elif processing and status == "running":
-        message = "Upload received · " + message
-    result.update(title=job["metadata"]["title"], message=message,
-                  progress=100 if status == "completed" else min(100, 100 * done / total),
-                  detail=f"{min(100, 100 * done / total):.0f}% · {done / 1048576:.1f} / {job['total'] / 1048576:.1f} MB" + (" checked" if processing else ""),
-                  can_pause=status == "running", pause_label="Stop waiting" if processing else "Pause transfer",
-                  can_resume=not state["busy"] and status in ("paused", "error", "queued"), resume_id=job["id"])
-    return result
+def tr(key, **values):
+    from .localization import safe_format
+    full_key = "gallery.transfer." + key
+    return safe_format(lf.ui.tr(full_key), **values)
+
+
+def transfer_rows(snapshot, history_limit=30):
+    pending, history = [], []
+    for job in snapshot.get("jobs", []):
+        if job.get("retired"):
+            continue
+        status = job["status"]
+        done, total = job.get("completed", 0), job.get("total", 0)
+        processing = bool(job.get("serverProcessing"))
+        phase = "processing" if processing and status == "running" else (
+            "downloading" if job.get("kind") == "download" else "uploading") if status == "running" else (
+            "interrupted" if job.get("interrupted") and status == "paused" else status)
+        row = {"id": job["id"], "title": job.get("metadata", {}).get("title", ""),
+               "direction": "↓" if job.get("kind") == "download" else "↑",
+               "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
+                         else tr("bytes", done=format_size(done), total=format_size(total))),
+               "phase": tr("phase." + phase), "reason": job.get("message", "") if status in ("error", "conflict") else "",
+               "progress": 100 if status == "completed" else min(100, 100 * done / max(1, total)),
+               "can_pause": status == "running", "can_resume": status in ("paused", "error", "queued") and not snapshot.get("busy"),
+               "can_cancel": status not in ("completed", "canceled")}
+        (history if status in ("completed", "canceled") else pending).append(row)
+    if snapshot.get("phase", "idle") != "idle":
+        pending.insert(0, {"id": "native", "title": tr("title"), "direction": "↓" if snapshot["phase"] == "applying" else "↑",
+            "bytes": "", "phase": tr("phase." + snapshot["phase"]), "reason": "",
+            "progress": snapshot.get("preparationProgress", 0), "can_pause": False,
+            "can_resume": False, "can_cancel": True})
+    return pending + list(reversed(history))[:history_limit]
 
 
 @panel_class("gallery_transfer")
@@ -53,47 +50,65 @@ class GalleryTransferPanel(Panel):
         super().__init__()
         self._handle = None
         self._state = {}
+        self._unsubscribe = None
+        self._history_limit = 30
         self._owner = None
-        self._key = None
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("gallery_transfer")
         if model is None:
             return
-        model.bind_func("panel_label", lambda: "Gallery transfer")
-        for field in ("title", "message", "progress", "detail", "can_pause", "can_resume", "pause_label"):
-            model.bind_func(field, lambda f=field: self._state.get(f, False if f.startswith("can_") else 0 if f == "progress" else ""))
-        model.bind_event("pause", lambda *_: self._action("pause"))
-        model.bind_event("resume", lambda *_: self._action("resume", [self._state["resume_id"]]))
-        model.bind_event("gallery", lambda *_: self._open_gallery())
+        model.bind_func("panel_label", lambda: tr("title"))
+        model.bind_func("header", lambda: tr("header", active=int(self._state.get("phase", "idle") != "idle") + sum(j.get("status") in ("running", "queued") for j in self._state.get("jobs", [])),
+            paused=sum(j.get("status") == "paused" for j in self._state.get("jobs", []))))
+        model.bind_func("interrupted", lambda: sum(j.get("status") == "paused" and j.get("interrupted", False) for j in self._state.get("jobs", [])))
+        model.bind_func("recovery", lambda: tr("recovery", count=sum(j.get("status") == "paused" and j.get("interrupted", False) for j in self._state.get("jobs", []))))
+        model.bind_func("message", lambda: self._state.get("message", ""))
+        for key in ("pause", "resume", "cancel", "resume_all", "clear_finished", "show_older", "gallery", "empty"):
+            translation_key = "action." + key
+            model.bind_func(key + "_label", lambda k=translation_key: tr(k))
+        model.bind_func("has_jobs", lambda: bool(self._state.get("jobs")) or self._state.get("phase", "idle") != "idle")
+        model.bind_record_list("jobs")
+        for action in ("pause", "resume", "cancel", "resume_all", "clear_finished", "show_older", "gallery"):
+            model.bind_event(action, lambda _h, _e, args, a=action: self._action(a, args))
         self._handle = model.get_handle()
 
-    def _open_gallery(self):
-        lf.ui.set_panel_enabled("lfs.gallery", True)
-        lf.ui.set_panel_enabled("lfs.gallery_transfer", False)
+    def _changed(self, state):
+        self._state = state
+        if self._handle:
+            self._handle.update_record_list("jobs", transfer_rows(state, self._history_limit))
+            self._handle.dirty_all()
+        lf.ui.request_redraw()
 
-    def _action(self, action, args=None):
-        if self._owner:
-            self._owner._dispatch(action, args or [])
+    def _action(self, action, args=()):
+        if action == "gallery":
+            lf.ui.set_panel_enabled("lfs.asset_manager", True)
+            panel = lf.ui.get_panel_object("lfs.asset_manager")
+            if panel:
+                panel.focus_gallery()
+        elif action == "show_older":
+            self._history_limit += 30
+            self._changed(self._state)
+        elif self._owner:
+            identifier = args[0] if args else None
+            if identifier == "native":
+                self._owner.command("pause")
+            else:
+                try:
+                    self._owner.command(action, identifier)
+                except Exception as exc:
+                    from .gallery_messages import localize_message
+                    self._changed(dict(self._state, message=localize_message(str(exc))))
 
-    def on_update(self, doc):
-        owner = lf.ui.get_panel_object("lfs.gallery")
-        if hasattr(owner, "_load"):
-            owner = owner._load()
-        self._owner = owner
-        key = (owner.service.state_key(), owner._message, owner._export_progress,
-               bool(owner._save_pending), bool(owner._export_pending), bool(owner._import_pending))
-        if key == self._key:
-            return False
-        self._key = key
-        current = transfer_state(owner)
-        if current != self._state:
-            self._state = current
-            if self._handle:
-                self._handle.dirty_all()
-            return True
-        return False
+    def on_mount(self, doc):
+        super().on_mount(doc)
+        from .gallery_controller import get_gallery_controller
+        self._owner = get_gallery_controller()
+        self._unsubscribe = self._owner.subscribe(self._changed)
 
     def on_unmount(self, doc):
+        if self._unsubscribe:
+            self._unsubscribe()
+            self._unsubscribe = None
         self._handle = None
         super().on_unmount(doc)

@@ -123,7 +123,7 @@
     flex-direction: column;
     flex: 1;
     width: 100%;
-    min-height: 240dp;
+    min-height: 0;
 }
 
 #asset-viewport-edge {
@@ -274,9 +274,9 @@
 }
 
 #asset-sidebar {
-    height: 176dp;
-    min-height: 120dp;
-    max-height: 400dp;
+    height: 280dp;
+    min-height: 0;
+    box-sizing: border-box;
     border-bottom-width: 1dp;
     display: flex;
     flex-direction: column;
@@ -286,7 +286,8 @@
 
 .asset-sidebar-inner {
     flex: 1;
-    padding: 10dp;
+    min-height: 0;
+    padding: 8dp;
     overflow-y: auto;
     min-width: 0;
     display: flex;
@@ -304,12 +305,14 @@
 }
 
 .asset-sidebar-section {
-    margin-bottom: 14dp;
+    flex-shrink: 0;
+    margin-bottom: 8dp;
 }
 
 .asset-sidebar-global {
-    margin-bottom: 10dp;
-    padding-bottom: 8dp;
+    flex-shrink: 0;
+    margin-bottom: 6dp;
+    padding-bottom: 6dp;
     border-bottom-width: 1dp;
 }
 
@@ -380,7 +383,7 @@
 #asset-gallery {
     flex: 1;
     min-width: 0;
-    min-height: 240dp;
+    min-height: 0;
     display: flex;
     flex-direction: column;
 }
@@ -452,7 +455,7 @@
     display: flex;
     flex-direction: column;
     overflow: auto;
-    min-height: 140dp;
+    min-height: 160dp;
 }
 
 .asset-scroll-shell {
@@ -469,7 +472,7 @@
 
 .asset-scroll-shell-list {
     gap: 4dp;
-    padding: 0 32dp 32dp 12dp;
+    padding: 0 12dp 32dp 12dp;
     box-sizing: border-box;
 }
 
@@ -504,6 +507,9 @@
 }
 
 .asset-card {
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
     width: 100%;
     min-width: 0;
     border-width: 1dp;
@@ -524,6 +530,7 @@
 
 .asset-card-thumb {
     height: 92dp;
+    flex-shrink: 0;
     position: relative;
     border-bottom-width: 1dp;
     display: flex;
@@ -585,10 +592,13 @@
 }
 
 .asset-card-actions {
+    min-height: 24dp;
+    flex-shrink: 0;
+    padding-right: 30dp;
     display: flex;
     flex-direction: row;
     gap: 6dp;
-    margin-top: 8dp;
+    margin-top: auto;
     align-items: center;
 }
 
@@ -598,8 +608,8 @@
 
 .asset-card-menu {
     position: absolute;
-    top: 4dp;
-    right: 4dp;
+    bottom: 8dp;
+    right: 8dp;
     border-color: transparent;
 }
 
@@ -654,7 +664,7 @@
     flex-direction: row;
     align-items: center;
     gap: 6dp;
-    min-width: 440dp;
+    min-width: 0;
     width: 100%;
     box-sizing: border-box;
 }
@@ -706,32 +716,28 @@
 }
 
 .asset-col-name {
-    width: 118dp;
-    min-width: 88dp;
-    flex-shrink: 1;
+    flex: 1 1 64dp;
+    min-width: 64dp;
 }
 
-.asset-col-folder {
-    width: 58dp;
-    flex-shrink: 0;
-}
+.asset-col-folder { display: none; width: 58dp; flex-shrink: 0; }
+.asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
 
 .asset-col-size {
-    width: 78dp;
+    width: 48dp;
     flex-shrink: 0;
 }
 
-.asset-col-modified {
-    width: 150dp;
-    min-width: 150dp;
-    flex: 1 0 150dp;
-}
+.asset-col-modified { display: none; width: 72dp; flex-shrink: 0; font-size: 10dp; }
+.asset-scroll-shell-list.is-wide .asset-col-modified { display: block; }
+.asset-col-gallery { width: 96dp; min-width: 96dp; flex-shrink: 0; }
 
 
 #asset-info-panel {
     height: 220dp;
-    min-height: 160dp;
-    max-height: 400dp;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden;
     border-top-width: 1dp;
     display: flex;
     flex-direction: column;
@@ -769,7 +775,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 12dp;
-    min-height: 140dp;
+    min-height: 0;
 }
 
 .asset-info-header {
@@ -838,3 +844,41 @@
 .asset-info-empty-text {
     font-size: 12dp;
 }
+
+/* Gallery shares the catalog geometry; status and action slots never grow. */
+.gallery-sidebar-heading, .gallery-actions { display: flex; align-items: center; gap: 4dp; flex-wrap: wrap; }
+.gallery-account-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gallery-checked { padding: 2dp 8dp; }
+.gallery-toolbar-button { position: relative; }
+.gallery-toolbar-button img { width: 16dp; height: 16dp; }
+.gallery-count-overlay { position: absolute; right: 1dp; bottom: 0dp; font-size: 9dp; }
+.gallery-badge { position: absolute; top: 6dp; right: 6dp; width: 20dp; height: 20dp; border-radius: 10dp; display: flex; align-items: center; justify-content: center; }
+.gallery-badge img { width: 16dp; height: 16dp; }
+.gallery-list-icon { width: 12dp; height: 12dp; margin-right: 4dp; }
+.gallery-remote { border-width: 1dp; }
+.gallery-card-action { visibility: hidden; box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-card-meta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 16dp; }
+.asset-card:hover .gallery-card-action, .asset-card:focus .gallery-card-action, .asset-card.is-selected .gallery-card-action { visibility: visible; }
+.gallery-progress-slot { position: absolute; bottom: 0dp; left: 0dp; right: 0dp; height: 2dp; }
+.gallery-progress { height: 2dp; width: 100%; }
+.asset-col-name { flex-direction: column; justify-content: center; }
+.asset-list-secondary { font-size: 10dp; overflow: hidden; text-overflow: ellipsis; }
+#asset-info-gallery .section-content { padding: 4dp; }
+#asset-info-gallery .setting-row { display: flex; align-items: center; gap: 8dp; margin-bottom: 4dp; flex-wrap: wrap; }
+#asset-info-gallery input, #asset-info-gallery select { flex: 1; min-width: 100dp; }
+#asset-info-gallery .section-header { display: flex; align-items: center; gap: 6dp; flex-wrap: wrap; }
+
+.asset-sidebar-title { margin-bottom: 6dp; }
+
+/* Local folders yield to the always-visible Gallery scopes. */
+#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto; flex: 0 1 auto; }
+#asset-sidebar-local-content { flex-shrink: 0; }
+#asset-sidebar-gallery { flex-shrink: 0; }
+.asset-sidebar-inner { overflow: hidden; }
+#asset-sidebar .asset-filter-row { box-sizing: border-box; min-height: 24dp; line-height: 16dp; flex-shrink: 0; }
+#asset-sidebar-gallery .asset-filter-row { height: 24dp; }
+.gallery-sidebar-heading { height: 28dp; flex-wrap: nowrap; }
+.gallery-sidebar-heading .btn { box-sizing: border-box; height: 28dp; min-height: 28dp; padding: 0 6dp; }
+.gallery-checked { box-sizing: border-box; height: 20dp; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sidebar-resize-handle, #bottom-panel-resize-handle { box-sizing: border-box; }
+#sidebar-resize-handle { cursor: default; }

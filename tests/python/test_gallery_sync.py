@@ -43,6 +43,9 @@ def connected(tmp_path, monkeypatch):
     service = gallery_sync.GallerySync(Account(), tmp_path)
     service.refresh()
     finish(service)
+    # Persistence tests start with an explicitly seeded journal; browsing no
+    # longer creates or rewrites this file.
+    service._save()
     return service
 
 
@@ -311,7 +314,10 @@ def test_other_process_journal_change_cannot_be_overwritten(tmp_path, monkeypatc
     finish(service)
     assert service.snapshot()["connected"]
     assert "other" in service._data["accounts"]
-    assert json.loads(journal.read_text()) == different
+    migrated = json.loads(journal.read_text())
+    assert migrated == different  # A refresh migrates in memory, without rewriting a peer journal.
+    assert service._data["version"] == 2
+    assert service._data["accounts"]["other"] == different["accounts"]["other"]
 
 
 def test_refresh_waits_for_other_window_then_loads_completed_transfer(tmp_path, monkeypatch):
@@ -876,3 +882,176 @@ def test_fetch_camera_track_conflict_does_not_mutate_link(tmp_path, monkeypatch)
     assert service.snapshot()["trackFetch"]["state"] == "failed"
     assert service.snapshot()["links"]["project"]["revision"] == "old"
     assert "changed" in service.message.lower()
+
+
+def test_v1_migration_preserves_links_and_does_not_invent_commit(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    bucket = service._bucket()
+    bucket['links']['project'] = {'sceneId':'scene','revision':'r1','metadata':{'title':'Kept'}}
+    service._data['version'] = 1
+    service._save()
+    recovered = gallery_sync.GallerySync(service.account, tmp_path)
+    recovered.refresh()
+    finish(recovered)
+    link = recovered.snapshot()['links']['project']
+    assert link['commitUuid'] == '' and link['sharedFields'] == {}
+    assert link['metadata']['title'] == 'Kept'
+    assert recovered._data['version'] == 2
+
+
+def test_presentation_revision_is_adopted_but_shared_change_keeps_guard(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    base = dict(id='scene',revision='old',title='Title',description='',visibility='private',viewerSettings={'cameraPath':None})
+    service._bucket()['links']['project'] = gallery_sync.exchange_link(base,'commit')
+    remote = dict(base,revision='cover',presentation={'cover':'different'})
+    monkeypatch.setattr(Client,'scene',lambda *_: dict(remote))
+    assert service._write_revision(Client(service.account),'scene','old') == 'cover'
+    remote['title'] = 'Changed on portal'
+    assert service._write_revision(Client(service.account),'scene','old') == 'old'
+
+
+def test_completed_upload_records_exact_prepared_commit(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    path = tmp_path/'scene.ply'
+    path.write_bytes(b'ply-data')
+    remote = dict(id='scene',revision='new',title='Example',description='',visibility='private',viewerSettings={})
+    received=[]
+    def upload(_client, _path, metadata, **kwargs):
+        received.append(dict(metadata))
+        return {'scene':remote}
+    monkeypatch.setattr(Client,'upload',upload,raising=False)
+    service.queue_upload(path,{'title':'Example','_commitUuid':'prepared-commit','_uploadFormat':'sog'},'project')
+    finish(service)
+    link=service.snapshot()['links']['project']
+    assert link['commitUuid']=='prepared-commit' and link['uploadFormat']=='sog'
+    assert link['sharedFields']==gallery_sync.shared_fields(remote)
+    assert link['exchangedAt'] > 0
+    assert received==[{'title':'Example'}]
+
+
+def test_publish_as_new_keeps_old_pair_until_success(tmp_path, monkeypatch):
+    service=connected(tmp_path,monkeypatch)
+    old=dict(id='old',revision='r1',title='Old')
+    service._bucket()['links']['project']=gallery_sync.exchange_link(old,'saved')
+    path=tmp_path/'scene.ply';path.write_bytes(b'ply-data')
+    def paused(*args,**kwargs): raise GalleryTransferCanceled()
+    monkeypatch.setattr(Client,'upload',paused,raising=False)
+    job=service.queue_upload(path,{'title':'New','_publishAsNew':True},'project')
+    finish(service)
+    assert service.snapshot()['links']['project']['sceneId']=='old'
+    monkeypatch.setattr(Client,'upload',lambda *_a,**_k:{'scene':dict(id='new',revision='r2',title='New')})
+    service.resume(job);finish(service)
+    assert service.snapshot()['links']['project']['sceneId']=='new'
+
+
+def test_pull_undo_checks_backup_digest_and_later_local_save(tmp_path, monkeypatch):
+    import hashlib
+    service=connected(tmp_path,monkeypatch)
+    target=tmp_path/'local.licht';target.write_bytes(b'updated')
+    backup=tmp_path/'backups'/'old.licht';backup.parent.mkdir();backup.write_bytes(b'original')
+    job=downloaded_job(service)
+    job['localUpdate']={'backupPath':str(backup),'sha256':hashlib.sha256(b'original').hexdigest()}
+    service._save()
+    stamp=gallery_sync.file_stamp(target)
+    target.write_bytes(b'later-save')
+    service.restore_local_backup(target,backup,stamp);finish(service)
+    assert target.read_bytes()==b'later-save'
+    service.restore_local_backup(target,backup,gallery_sync.file_stamp(target));finish(service)
+    assert target.read_bytes()==b'original' and backup.read_bytes()==b'original'
+
+
+def test_C2_camera_send_records_shared_baseline_and_exchange_times(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    before = {'id':'scene','revision':'old','title':'Title','description':'','visibility':'private','viewerSettings':{}}
+    link = gallery_sync.exchange_link(before, 'commit')
+    link.update(exchangedAt=1, checkedAt=1)
+    service._bucket()['links']['project'] = link
+    service._save()
+    track = {'version':1,'duration':2,'keyframes':[{'t':0}]}
+    after = dict(before, revision='new', viewerSettings={'cameraPath':track})
+    monkeypatch.setattr(Client, 'update', lambda *args, **kwargs: after, raising=False)
+    service.send_camera_track('scene','old',track)
+    finish(service)
+    current = service.snapshot()['links']['project']
+    assert current['sharedFields'] == gallery_sync.shared_fields(after)
+    assert current['commitUuid'] == 'commit'
+    assert current['exchangedAt'] > 1 and current['checkedAt'] > 1
+
+
+def test_D3_refresh_preserves_journal_bytes_and_does_not_interrupt_peer_jobs(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    # Construct the peer before an owner writes a running checkpoint.
+    peer = gallery_sync.GallerySync(Account(), tmp_path)
+    service._bucket()['jobs'] = [{'id':'job','kind':'upload','project':'p','path':'/source.ply',
+        'metadata':{'title':'Title'},'status':'running','completed':0,'total':1,'checkpoint':None,'message':''}]
+    service._save()
+    journal = tmp_path/'sync.json'
+    before, stamp = journal.read_bytes(), journal.stat().st_mtime_ns
+    peer.refresh(); finish(peer)
+    assert peer.snapshot()['jobs'][0]['status'] == 'running'
+    assert not peer.snapshot()['jobs'][0].get('interrupted')
+    assert journal.read_bytes() == before and journal.stat().st_mtime_ns == stamp
+    # The owner's next write still has a valid guard after another window browses.
+    service._save()
+    assert not service.snapshot()['storage_issue']
+
+
+@pytest.mark.parametrize('failure', ['missing', 'digest', 'journal_after_restore'])
+def test_D1_restore_worker_reports_failure_and_actual_file_replacement(tmp_path, monkeypatch, failure):
+    import hashlib
+    service = connected(tmp_path, monkeypatch)
+    target = tmp_path / 'local.licht'
+    target.write_bytes(b'updated')
+    backup = tmp_path / 'backups' / 'original.licht'
+    backup.parent.mkdir()
+    backup.write_bytes(b'original')
+    job = downloaded_job(service)
+    job['localUpdate'] = {'backupPath': str(backup), 'sha256': hashlib.sha256(b'original').hexdigest()}
+    service._save()
+    if failure == 'missing':
+        backup.unlink()
+    elif failure == 'digest':
+        backup.write_bytes(b'corrupt')
+    else:
+        monkeypatch.setattr(service, '_save', lambda: (_ for _ in ()).throw(OSError('disk full')))
+    operation = service.restore_local_backup(target, backup, gallery_sync.file_stamp(target))
+    finish(service)
+    result = service.snapshot()['undoRestore']
+    assert result['id'] == operation
+    assert result['state'] == ('restored' if failure == 'journal_after_restore' else 'failed')
+    assert result['backupMissing'] == (failure == 'missing')
+    assert target.read_bytes() == (b'original' if failure == 'journal_after_restore' else b'updated')
+
+
+@pytest.mark.parametrize('resumed', [False, True])
+def test_A5_finished_upload_records_all_bytes_even_without_final_progress(tmp_path, monkeypatch, resumed):
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'scene.ply'
+    source.write_bytes(b'x' * 137114)
+    attempts = []
+    def upload(client, path, metadata, **callbacks):
+        attempts.append(callbacks['checkpoint'])
+        if resumed and len(attempts) == 1:
+            # All parts reached the portal before processing was paused; the
+            # last stored counter is the processing count, not uploaded bytes.
+            callbacks['on_checkpoint']({'uploadId': 'all-parts', 'idempotencyKey': 'stable'})
+            callbacks['on_progress'](137114, 137114)
+            callbacks['on_processing']({'stage': 'validating', 'completed': 0, 'total': 137114})
+            raise GalleryProcessingPaused()
+        # Idempotent resume can return the finished scene without sending parts
+        # or emitting any further byte progress callback.
+        return {'scene': {'id': 'scene', 'revision': 'ready'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
+    finish(service)
+    if resumed:
+        assert service.snapshot()['jobs'][0]['status'] == 'paused'
+        service.resume(identifier)
+        finish(service)
+        assert attempts[-1]['uploadId'] == 'all-parts'
+    job = service.snapshot()['jobs'][0]
+    assert job['status'] == 'completed'
+    assert job['completed'] == job['total'] == 137114
+    saved = json.loads((tmp_path / 'sync.json').read_text())
+    stored = next(bucket['jobs'][0] for bucket in saved['accounts'].values() if bucket['jobs'])
+    assert stored['completed'] == stored['total'] == 137114

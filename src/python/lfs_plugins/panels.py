@@ -56,11 +56,11 @@ PANEL_SPECS = {
     ),
     "gallery": _PanelSpec(
         "lfs_plugins.gallery_panel", "GalleryPanel", "lfs.gallery", "Gallery",
-        "FLOATING", 94, "rmlui/gallery_panel.rml", "FILL", (650, 700),
+        "FLOATING", 94, "rmlui/gallery_panel.rml", "CONTENT", (320, 0),
     ),
     "gallery_transfer": _PanelSpec(
-        "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Gallery transfer",
-        "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (420, 0),
+        "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
+        "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",
     ),
     "bug_report": _PanelSpec(
         "lfs_plugins.bug_report_panel", "BugReportPanel", "lfs.bug_report",

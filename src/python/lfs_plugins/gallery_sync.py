@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import threading
 import uuid
+import time
 from pathlib import Path
 
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
@@ -21,6 +22,19 @@ from . import gallery_bundle, gallery_preparation
 
 
 MAX_JOURNAL_BYTES = 32 * 1024 * 1024
+
+
+def shared_fields(scene):
+    """Fields shared with Studio; cover, highlights and broad revision excluded."""
+    return copy.deepcopy({key: scene.get(key, {} if key == "viewerSettings" else "")
+                          for key in ("title", "description", "visibility", "viewerSettings")})
+
+
+def exchange_link(scene, commit_uuid=""):
+    now = time.time()
+    return {"sceneId": scene["id"], "revision": scene["revision"],
+            "metadata": copy.deepcopy(scene), "sharedFields": shared_fields(scene),
+            "commitUuid": commit_uuid, "exchangedAt": now, "checkedAt": now}
 JOURNAL_RECOVERY_MESSAGE = (
     "LichtFeld Studio couldn't read your saved gallery links and transfers. "
     "Your files have been kept. Open the recovery folder for help, then retry."
@@ -53,7 +67,7 @@ def _validate_journal(data):
     def optional_text(record, keys):
         require(all(key not in record or isinstance(record[key], str) for key in keys))
 
-    require(isinstance(data, dict) and type(data.get("version")) is int and data["version"] == 1
+    require(isinstance(data, dict) and type(data.get("version")) is int and data["version"] in (1, 2)
         and isinstance(data.get("accounts"), dict))
     for bucket in data["accounts"].values():
         require(isinstance(bucket, dict) and isinstance(bucket.get("links"), dict)
@@ -61,6 +75,10 @@ def _validate_journal(data):
         for link in bucket["links"].values():
             require(isinstance(link, dict) and all(isinstance(link.get(key), str) for key in ("sceneId", "revision")))
             require(isinstance(link.get("metadata", {}), dict))
+            optional_text(link, ("commitUuid",))
+            require(isinstance(link.get("sharedFields", {}), dict))
+            for key in ("exchangedAt", "checkedAt"):
+                require(key not in link or (type(link[key]) in (float, int) and math.isfinite(link[key]) and link[key] >= 0))
             optional_text(link.get("metadata", {}), ("id", "revision", "title", "description", "visibility"))
         identifiers = set()
         for job in bucket["jobs"]:
@@ -145,18 +163,25 @@ class GallerySync:
         self._origin = None
         self._owner = None
         self._source_formats = []
+        self._refresh_ok = False
+        self._relink_required = False
         self.scenes = []
         self._track_fetch = {}
+        self._undo_restore = {}
         self.message = "Refresh to connect your gallery."
         self.version = 0
-        self._data = {"version": 1, "accounts": {}}
+        self._data = {"version": 2, "accounts": {}}
         self._journal = self.root / "sync.json"
         self._disk_digest = None
         self._journal_seen = False
         self._journal_problem = False
         self._stale = False
         try:
-            self._reload_journal()
+            try:
+                with _locked_sidecar(self.root / "sync.lock", blocking=False):
+                    self._reload_journal(recover_interrupted=True)
+            except OSError:
+                self._reload_journal()
         except (OSError, ValueError, RecursionError):
             self._journal_problem = True
             self.message = JOURNAL_RECOVERY_MESSAGE
@@ -174,20 +199,27 @@ class GallerySync:
             raise ValueError("The saved sync record is too large")
         return encoded
 
-    def _reload_journal(self):
+    def _reload_journal(self, *, recover_interrupted=False):
         encoded = self._journal_bytes()
         digest = hashlib.sha256(encoded).hexdigest() if encoded is not None else None
         if encoded is None:
-            data = {"version": 1, "accounts": {}}
+            data = {"version": 2, "accounts": {}}
         else:
             data = _validate_journal(json.loads(encoded, object_pairs_hook=_journal_object,
                 parse_float=_journal_number, parse_constant=_journal_number))
         with self._lock:
+            migrating = data["version"] == 1
+            data["version"] = 2
             if digest != self._disk_digest or self._journal_problem:
                 for bucket in data["accounts"].values():
+                    for link in bucket["links"].values() if migrating else ():
+                        link.setdefault("commitUuid", "")
+                        link.setdefault("sharedFields", {})
+                        link.setdefault("exchangedAt", 0)
+                        link.setdefault("checkedAt", 0)
                     for job in bucket["jobs"]:
-                        if job["status"] in ("queued", "running"):
-                            job.update(status="paused", message="Interrupted. Resume when ready.")
+                        if (recover_interrupted or self._journal_problem) and job["status"] in ("queued", "running"):
+                            job.update(status="paused", interrupted=True, message="Interrupted. Resume when ready.")
                 self._data = data
             self._disk_digest = digest
             self._journal_problem = self._stale = False
@@ -256,8 +288,12 @@ class GallerySync:
                 "display_name": getattr(snap, "display_name", "") if snap.signed_in else "",
                 "message": self.message if self._journal_problem or self._stale or same or (snap.signed_in and self._owner is None) else "Sign in and refresh to connect your gallery.",
                 "storage_issue": self._journal_problem,
+                "refresh_ok": self._refresh_ok,
+                "relink_required": self._relink_required if snap.signed_in else False,
                 "source_formats": self._source_formats if same else [],
                 "trackFetch": self._track_fetch if same else {},
+                "undoRestore": self._undo_restore if (snap.signed_in and self._session == (snap.email, snap.connected_since)
+                    and self._origin == self.account.base_url) else {},
                 "busy": self.busy, "connected": bool(same and self._owner), "version": self.version})
 
     def _client(self):
@@ -291,6 +327,7 @@ class GallerySync:
                         action()
                 except Exception as exc:
                     with self._lock:
+                        self._relink_required = isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required"
                         self.message = friendly_error(exc)
                 finally:
                     with self._lock:
@@ -300,6 +337,7 @@ class GallerySync:
             self._thread.start()
 
     def refresh(self):
+        self._refresh_ok = False
         def action():
             snap = self.account.snapshot()
             if not snap.signed_in:
@@ -321,8 +359,11 @@ class GallerySync:
                 self._origin = origin
                 self._source_formats = capabilities.get("sourceFormats", [])
                 self.scenes = scenes
+                self._refresh_ok = True
+                self._relink_required = False
                 self.message = "Gallery is up to date."
-            self._save()
+            # Refresh updates only the account-scoped listing cache. Migration
+            # and recovered jobs are persisted by the next actual mutation.
         self._launch(action, reload_journal=True)
 
     def queue_prepared_upload(self, staging, metadata, project_id):
@@ -340,7 +381,7 @@ class GallerySync:
             if preparation is not None and Path(export_path).suffix[1:] not in self._source_formats:
                 raise ValueError("This portal cannot receive .licht files yet. Refresh after it is updated.")
             linked = self._bucket()["links"].get(project_id)
-            if linked and metadata.get("replaceSceneId") != linked["sceneId"]:
+            if linked and metadata.get("replaceSceneId") != linked["sceneId"] and not metadata.get("_publishAsNew"):
                 raise ValueError("This project is linked to another gallery item. Select its linked item or unlink the project first.")
             jobs = self._bucket()["jobs"]
             if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in jobs):
@@ -351,6 +392,10 @@ class GallerySync:
                 "metadata": copy.deepcopy(metadata), "checkpoint": None, "status": "queued",
                 "completed": 0, "total": 0 if preparation is not None else Path(export_path).stat().st_size,
                 "message": "Ready to prepare" if preparation is not None else "Ready to upload"}
+            job["commitUuid"] = job["metadata"].pop("_commitUuid", "")
+            job["uploadFormat"] = job["metadata"].pop("_uploadFormat", "studio")
+            job["contentStamp"] = job["metadata"].pop("_contentStamp", "")
+            job["publishAsNew"] = job["metadata"].pop("_publishAsNew", False)
             if preparation is not None:
                 job.update(preparation=preparation, packaged=False)
             guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
@@ -381,7 +426,7 @@ class GallerySync:
                 self.version += 1
         return job["id"]
 
-    def download(self, scene):
+    def download(self, scene, *, destination=None):
         with self._lock:
             self._client()
             if self.busy:
@@ -395,6 +440,11 @@ class GallerySync:
                 "path": str(path), "metadata": {"title": scene["title"]}, "sceneId": scene["id"],
                 "revision": scene["revision"], "checkpoint": None, "status": "queued", "completed": 0,
                 "total": scene["contentLength"], "message": "Ready to download"}
+            if destination:
+                target = Path(destination)
+                if not target.is_absolute() or target.suffix.lower() != ".licht" or target.exists() or not target.parent.is_dir():
+                    raise ValueError("Choose an unused .licht filename in an existing folder.")
+                job["destination"] = str(target)
             guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
             try:
                 guard.__enter__()
@@ -452,7 +502,7 @@ class GallerySync:
 
             try:
                 with self._lock:
-                    job.update(status="running", serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
+                    job.update(status="running", interrupted=False, serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
                     self.message = job["message"]
                 self._save()
                 if job.get("ownedExport"):
@@ -514,13 +564,17 @@ class GallerySync:
                         self.message = job["message"]
                     self._save()
                     return
+                if job["metadata"].get("replaceSceneId") and job["metadata"].get("baseRevision") and not job["checkpoint"]:
+                    job["metadata"]["baseRevision"] = self._write_revision(client,
+                        job["metadata"]["replaceSceneId"], job["metadata"]["baseRevision"])
                 result = client.upload(job["path"], job["metadata"], checkpoint=job["checkpoint"],
                     on_checkpoint=checkpoint, on_progress=progress, on_processing=processing, cancel=self._cancel)
                 scene = result["scene"]
                 with self._lock:
-                    bucket["links"][job["project"]] = {"sceneId": scene["id"], "revision": scene["revision"],
-                        "metadata": copy.deepcopy(scene)}
-                    job.update(status="completed", serverProcessing=False, message="Uploaded", result=scene)
+                    bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
+                    bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
+                    bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
+                    job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
                     self.scenes = [s for s in self.scenes if s["id"] != scene["id"]] + [scene]
                     self.message = "Upload complete."
                 self._save()
@@ -547,7 +601,7 @@ class GallerySync:
                 self._save()
         self._launch(action)
 
-    def link_download(self, job_id, project_id):
+    def link_download(self, job_id, project_id, commit_uuid=""):
         self._client()
         job, bucket = self._job(job_id), self._bucket()
         if job.get("kind") != "download" or job["status"] != "completed" or job.get("retired") or job.get("cleanupPending"):
@@ -562,7 +616,7 @@ class GallerySync:
                 self._client()
                 with self._lock:
                     scene = job["result"]
-                    bucket["links"][project_id] = {"sceneId": scene["id"], "revision": scene["revision"], "metadata": copy.deepcopy(scene)}
+                    bucket["links"][project_id] = exchange_link(scene, commit_uuid)
                     job["project"] = project_id
                     job["linkOperation"] = {"id": operation, "state": "ready"}
                 self._save()
@@ -688,7 +742,9 @@ class GallerySync:
                         from .asset_index import resolve_default_asset_directory
                         assets = resolve_default_asset_directory()
                         assets.mkdir(parents=True, exist_ok=True)
-                        project_path = assets / ("Gallery-" + identifier + ".licht")
+                        project_path = Path(job["destination"]) if job.get("destination") else assets / ("Gallery-" + identifier + ".licht")
+                        if project_path.exists():
+                            raise ValueError("The destination already exists. Choose another file name.")
                         try:
                             os.link(job["path"], project_path)
                             retained_project = project_path
@@ -794,6 +850,53 @@ class GallerySync:
 
     def pause(self):
         self._cancel.set()
+
+    def restore_local_backup(self, path, backup, expected_stamp):
+        """Undo one completed pull without overwriting a later saved project."""
+        self._client()
+        target, source = Path(path), Path(backup)
+        record = next((j.get("localUpdate", {}) for j in self._bucket()["jobs"]
+                       if j.get("localUpdate", {}).get("backupPath") == str(source)), None)
+        if not record or source.parent != self.root / "backups":
+            raise ValueError("The saved backup is no longer available.")
+        operation = {"id": str(uuid.uuid4()), "state": "running"}
+        self._undo_restore = operation
+        def action():
+            temporary = None
+            restored = False
+            try:
+                if file_stamp(target) != expected_stamp:
+                    raise ValueError("The local project changed. Keep the backup and review both files.")
+                digest = hashlib.sha256()
+                with source.open("rb") as incoming, tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    temporary = Path(output.name)
+                    while chunk := incoming.read(gallery_bundle.CHUNK_BYTES):
+                        self._client()
+                        digest.update(chunk)
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                self._client()
+                if digest.hexdigest() != record.get("sha256") or file_stamp(target) != expected_stamp:
+                    raise ValueError("The backup or local project changed. No file was restored.")
+                os.replace(temporary, target)
+                restored = True
+                record["undoRestored"] = True
+                self._save()
+                with self._lock:
+                    operation.update(state="restored")
+            except Exception as exc:
+                with self._lock:
+                    # Once replace succeeded, retrying would overwrite a restored
+                    # file; a later journal failure does not undo that success.
+                    operation.update(state="restored" if restored else "failed", message=friendly_error(exc),
+                                     backupMissing=not source.is_file())
+                raise
+            finally:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+        self._launch(action)
+        return operation["id"]
 
     @contextmanager
     def local_use(self, job_id):
@@ -1003,17 +1106,33 @@ class GallerySync:
             self._save()
         self._launch(action)
 
-    def edit(self, scene_id, revision, metadata):
+    def _write_revision(self, client, scene_id, revision):
+        """Adopt cover/highlight-only revisions, keeping shared-field conflicts guarded."""
+        link = next((link for link in self._bucket()["links"].values()
+                     if link["sceneId"] == scene_id), None)
+        if not link or not link.get("sharedFields"):
+            return revision
+        current = client.scene(scene_id)
+        if current.get("status", "ready") == "ready" and shared_fields(current) == link["sharedFields"]:
+            return current["revision"]
+        return revision
+
+    def edit(self, scene_id, revision, metadata, *, commit_uuid=None, content_stamp=None):
         client = self._client()
         bucket = self._bucket()
         def action():
-            scene = client.update(scene_id, revision, **metadata)
+            scene = client.update(scene_id, self._write_revision(client, scene_id, revision), **metadata)
             with self._lock:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
                 self.message = "Gallery details saved."
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
-                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene))
+                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene),
+                                    sharedFields=shared_fields(scene), exchangedAt=time.time(), checkedAt=time.time())
+                        if commit_uuid:
+                            link["commitUuid"] = commit_uuid
+                        if content_stamp:
+                            link["contentStamp"] = content_stamp
             self._save()
         self._launch(action)
 
@@ -1031,7 +1150,8 @@ class GallerySync:
                 self.message = "Gallery camera track sent."
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
-                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene))
+                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene),
+                                    sharedFields=shared_fields(scene), exchangedAt=time.time(), checkedAt=time.time())
             self._save()
         self._launch(action)
 
@@ -1084,7 +1204,9 @@ class GallerySync:
             with self._lock:
                 self.scenes = [s for s in self.scenes if s["id"] != scene_id]
                 self.message = "Removed from gallery. Local projects are unchanged."
-                bucket["links"] = {key: link for key, link in bucket["links"].items() if link["sceneId"] != scene_id}
+                for link in bucket["links"].values():
+                    if link["sceneId"] == scene_id:
+                        link["remoteDeleted"] = True
             self._save()
         self._launch(action)
 
