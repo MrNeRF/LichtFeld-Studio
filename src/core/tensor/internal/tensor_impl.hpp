@@ -572,8 +572,8 @@ namespace lfs::core {
         friend std::shared_ptr<Tensor> internal::lazy_executor_snapshot_operand(
             const Tensor& source);
         friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
-        friend std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
-        friend std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
+        friend LFS_CORE_API std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+        friend LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
         friend internal::StorageRef internal::storage_ref(const Tensor& tensor);
         friend void internal::require_same_gpu_backend(const Tensor& reference,
                                                        const Tensor& other,
