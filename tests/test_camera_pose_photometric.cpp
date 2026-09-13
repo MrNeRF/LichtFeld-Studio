@@ -696,6 +696,17 @@ namespace {
     }
 
     TEST_F(CameraPoseViewTest, DisplacementLabelClearsAndUsesNetMovement) {
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        struct LocalizationScope {
+            ~LocalizationScope() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } localization_scope;
+        localization.reset();
+        const auto locales = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                             "src/visualizer/gui/resources/locales";
+        ASSERT_TRUE(localization.initialize(locales.string()));
+        for (const auto* key : {"training.pose.paused", "training.pose.unchanged",
+                                "training.pose.tooltip", "training.pose.finished", "training.pose.corrected"})
+            ASSERT_TRUE(localization.hasKey(key)) << key;
         PoseCameraDisplay display;
         display.pose.center_displacement = 0.125;
         display.pose.rotation_displacement = 1.5707963267948966;

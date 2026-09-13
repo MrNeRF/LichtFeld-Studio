@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "pose_refinement_session.hpp"
+#include "core/logger.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -106,12 +107,18 @@ namespace lfs::training::camera_pose {
         if (iteration < iteration_ || iteration > config_.total_iterations)
             throw std::invalid_argument("Camera pose iteration must be monotonic and within the training schedule");
         auto& entry = entries_.at(index_.at(uid));
+        const int freeze_iteration = static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction));
+        const bool reached_freeze = iteration_ < freeze_iteration && iteration >= freeze_iteration;
         iteration_ = iteration;
         dirty_ = true;
+        if (reached_freeze) {
+            LOG_INFO("Camera pose refinement frozen at iteration {} (scheduled stop {}); retaining accepted poses for subsequent Gaussian training",
+                     iteration, freeze_iteration);
+        }
         PoseVisitResult result;
         if (paused_ || stop.stop_requested() || !in_window() || entry.role != PoseRole::Train) {
             result.cancelled = stop.stop_requested();
-            publish();
+            publish(reached_freeze);
             return result;
         }
         if (!evaluate || !candidate_loss)

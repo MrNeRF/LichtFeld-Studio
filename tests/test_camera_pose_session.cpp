@@ -101,7 +101,9 @@ namespace {
         EXPECT_TRUE(session.visit(30, 10, 1, evaluate, loss).scheduled);
         const auto before = session.current_pose(30);
         EXPECT_FALSE(session.visit(30, 80, 2, {}, {}).scheduled);
-        session.publish(true);
+        // The freeze transition must be visible immediately, even within the
+        // normal snapshot throttle interval.
+        EXPECT_EQ(session.published_snapshot()->stop_iteration, 80);
         EXPECT_EQ(session.published_snapshot()->cameras[2].state, PoseDisplayState::Frozen);
         EXPECT_TRUE(session.published_snapshot()->refinement_finished);
         EXPECT_EQ(session.current_pose(30), before);
