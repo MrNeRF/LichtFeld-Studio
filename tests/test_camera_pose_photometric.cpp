@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/argument_parser.hpp"
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -688,6 +689,60 @@ namespace {
         display.pose.center_displacement = 0;
         display.pose.rotation_displacement = 0;
         EXPECT_EQ(lfs::vis::cameraPoseDisplacementLabel(&display), "\u0394 0 / 0.00\u00b0");
+    }
+
+    TEST(CameraPoseActivationTest, ConfigurationPreservesOptInAndRejectsUnsupportedTraining) {
+        using namespace lfs::core::param;
+        auto params = OptimizationParameters::mcmc_defaults();
+        EXPECT_FALSE(params.refine_camera_poses);
+        auto legacy = params.to_json();
+        legacy.erase("refine_camera_poses");
+        EXPECT_FALSE(OptimizationParameters::from_json(legacy).refine_camera_poses);
+        params.refine_camera_poses = true;
+        const auto restored = OptimizationParameters::from_json(params.to_json());
+        EXPECT_TRUE(restored.refine_camera_poses);
+        EXPECT_TRUE(restored.validate().empty());
+        TrainingParameters target;
+        ExplicitTrainingOverrides overrides;
+        overrides.optimization_json = R"({"refine_camera_poses":true})";
+        apply_explicit_training_overrides(target, overrides);
+        EXPECT_TRUE(target.optimization.refine_camera_poses);
+        auto invalid = params.to_json();
+        invalid["refine_camera_poses"] = "true";
+        EXPECT_THROW((void)OptimizationParameters::from_json(invalid), nlohmann::json::exception);
+        for (int option = 0; option < 10; ++option) {
+            auto incompatible = restored;
+            switch (option) {
+            case 0: incompatible.gut = true; break;
+            case 1: incompatible.mip_filter = true; break;
+            case 2: incompatible.use_depth_loss = true; break;
+            case 3: incompatible.use_normal_loss = true; break;
+            case 4: incompatible.use_ppisp = true; break;
+            case 5: incompatible.use_bilateral_grid = true; break;
+            case 6: incompatible.use_exposure_correction = true; break;
+            case 7: incompatible.enable_sparsity = true; break;
+            case 8: incompatible.mask_mode = MaskMode::Ignore; break;
+            case 9: incompatible.ppisp_use_controller = true; break;
+            }
+            EXPECT_FALSE(incompatible.validate().empty()) << option;
+        }
+        params.mip_filter = true;
+        params.refine_camera_poses = false;
+        EXPECT_TRUE(params.validate().empty());
+    }
+
+    TEST(CameraPoseActivationTest, CommandLineCapturesOptInAndRejectsConflict) {
+        const char* argv[] = {"LichtFeld-Studio", "--refine-camera-poses", "--enable-mip"};
+        auto ordinary = lfs::core::args::parse_args_and_params(1, argv);
+        ASSERT_TRUE(ordinary.has_value()) << ordinary.error();
+        EXPECT_FALSE((*ordinary)->optimization.refine_camera_poses);
+        auto enabled = lfs::core::args::parse_args_and_params(2, argv);
+        ASSERT_TRUE(enabled.has_value()) << enabled.error();
+        EXPECT_TRUE((*enabled)->optimization.refine_camera_poses);
+        EXPECT_TRUE((*enabled)->overrides.has_optimization_key("refine_camera_poses"));
+        const auto conflict = lfs::core::args::parse_args_and_params(3, argv);
+        ASSERT_FALSE(conflict.has_value());
+        EXPECT_NE(conflict.error().find("Mip Filter"), std::string::npos);
     }
 
     class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};

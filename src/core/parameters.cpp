@@ -424,7 +424,29 @@ namespace lfs::core {
                 descriptor.fallback_backend_name);
         }
 
+        std::string OptimizationParameters::camera_pose_incompatibility() const {
+            if (raster_backend() != RasterBackendId::ThreeDGS)
+                return "Camera pose refinement requires FastGS";
+            if (mip_filter)
+                return "Camera pose refinement does not yet support Mip Filter";
+            if (use_depth_loss || use_normal_loss)
+                return "Camera pose refinement currently requires RGB-only supervision";
+            if (mask_mode != MaskMode::None)
+                return "Camera pose refinement does not yet compose mask losses";
+            if (ppisp_active() || ppisp_use_controller || bilateral_grid_active())
+                return "Camera pose refinement does not yet compose appearance correction";
+            if (enable_sparsity)
+                return "Camera pose refinement is not yet integrated with sparsification";
+            if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1)
+                return "Camera pose refinement requires an SSIM weight in [0,1]";
+            return {};
+        }
+
         std::string OptimizationParameters::validate() const {
+            if (refine_camera_poses) {
+                if (auto error = camera_pose_incompatibility(); !error.empty())
+                    return error;
+            }
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
                     return std::format("{} must be finite and nonnegative (got {})", name, value);

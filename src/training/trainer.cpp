@@ -3698,6 +3698,9 @@ namespace lfs::training {
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
             const auto& effective = pending_params_ ? *pending_params_ : params_;
+            if (initialized_.load() && params.optimization.refine_camera_poses != effective.optimization.refine_camera_poses)
+                return lfs::Status::failure(training_parameter_update_error(
+                    "Camera pose activation requires Trainer reinitialization", LFS_SOURCE_SITE_CURRENT()));
             if (camera_pose_session_.load(std::memory_order_acquire)) {
                 auto error = camera_pose::trainer_pose_incompatibility(params.optimization);
                 if (error.empty() && (params.optimization.resolved_total_iterations() != effective.optimization.resolved_total_iterations() ||

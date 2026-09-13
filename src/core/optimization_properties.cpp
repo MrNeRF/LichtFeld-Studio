@@ -632,6 +632,10 @@ namespace lfs::core::param {
             .locale("training_params.mip_filter")
             .tooltip("training.tooltip.mip_filter")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::refine_camera_poses,
+                       "refine_camera_poses", "Camera Pose Refinement", d.refine_camera_poses,
+                       "Refine camera extrinsics during raw RGB FastGS training; configure before initialization")
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,
                        "Enable per-camera physically plausible image signal processing")

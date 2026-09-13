@@ -11,6 +11,7 @@ from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session
 from check_camera_pose_gate import require_production_evaluator
 from check_camera_pose_gate import TRAINER_SUITE, TRAINER_TESTS, inspect_trainer_gate
 from check_camera_pose_gate import VIEW_SUITE, VIEW_TESTS, inspect_view_gate
+from check_camera_pose_gate import ACTIVATION_SUITE, ACTIVATION_TESTS, inspect_activation_gate
 
 
 def valid_report():
@@ -167,6 +168,38 @@ class CameraPoseViewGateReportTests(unittest.TestCase):
                 ET.SubElement(case, mutation)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 inspect_view_gate(root)
+
+
+class CameraPoseActivationGateReportTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseViewGateReportTests().report()
+        suite = ET.SubElement(root, "testsuite", name=ACTIVATION_SUITE)
+        for name in sorted(ACTIVATION_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        return root
+
+    def test_accepts_all_36_tests(self):
+        result = inspect_activation_gate(self.report())
+        self.assertEqual(result["tests"], 36)
+        self.assertTrue(result["activation_contracts"])
+
+    def test_rejects_missing_or_failed_activation(self):
+        for mutation in ("suite", "missing", "duplicate", "failure", "error", "skipped", "notrun"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{ACTIVATION_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "suite":
+                root.remove(suite)
+            elif mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_activation_gate(root)
 
 
 class CameraPoseControllerGateReportTests(unittest.TestCase):

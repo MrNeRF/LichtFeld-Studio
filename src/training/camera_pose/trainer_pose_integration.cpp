@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "trainer_pose_integration.hpp"
+#include "core/logger.hpp"
 #include "trainer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -10,22 +11,7 @@
 
 namespace lfs::training::camera_pose {
     std::string trainer_pose_incompatibility(const lfs::core::param::OptimizationParameters& params) {
-        using namespace lfs::core::param;
-        if (params.raster_backend() != RasterBackendId::ThreeDGS)
-            return "Camera pose refinement requires FastGS";
-        if (params.mip_filter)
-            return "Camera pose refinement does not yet support Mip Filter";
-        if (params.use_depth_loss || params.use_normal_loss)
-            return "Camera pose refinement currently requires RGB-only supervision";
-        if (params.mask_mode != MaskMode::None)
-            return "Camera pose refinement does not yet compose mask losses";
-        if (params.ppisp_active() || params.ppisp_use_controller || params.bilateral_grid_active())
-            return "Camera pose refinement does not yet compose appearance correction";
-        if (params.enable_sparsity)
-            return "Camera pose refinement is not yet integrated with sparsification";
-        if (!std::isfinite(params.lambda_dssim) || params.lambda_dssim < 0 || params.lambda_dssim > 1)
-            return "Camera pose refinement requires an SSIM weight in [0,1]";
-        return {};
+        return params.camera_pose_incompatibility();
     }
 } // namespace lfs::training::camera_pose
 
@@ -73,16 +59,18 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params, const lfs::core::SplatData& model) const try {
         using namespace camera_pose;
         using namespace lfs::core;
-        if (!camera_pose_config_ && params.camera_pose_state_json.empty())
+        if (!camera_pose_config_ && !params.optimization.refine_camera_poses && params.camera_pose_state_json.empty())
             return std::shared_ptr<PoseRefinementSession>{};
         if (auto error = trainer_pose_incompatibility(params.optimization); !error.empty())
             return pose_initialization_error(std::move(error), LFS_SOURCE_SITE_CURRENT());
         if (!train_dataset_ || camera_pose_sources_.empty())
             return pose_initialization_error("Camera pose refinement requires an initialized dataset", LFS_SOURCE_SITE_CURRENT());
         const auto saved = params.camera_pose_state_json.empty() ? nlohmann::json{} : nlohmann::json::parse(params.camera_pose_state_json);
-        auto config = saved.is_null() ? *camera_pose_config_ : pose_session_config_from_state(saved);
+        auto config = saved.is_null() ? camera_pose_config_.value_or(PoseSessionConfig{}) : pose_session_config_from_state(saved);
         config.total_iterations = params.optimization.resolved_total_iterations();
         config.optimizer.scene_scale = model.get_scene_scale();
+        if (config.warmup_iterations >= std::floor(config.total_iterations * config.freeze_fraction))
+            return pose_initialization_error("Camera pose warmup must end before the pose-freeze phase; increase training iterations", LFS_SOURCE_SITE_CURRENT());
         std::unordered_set<int> training;
         for (size_t i = 0; i < train_dataset_->size(); ++i) {
             const auto& camera = train_dataset_->get_cameras().at(train_dataset_->local_to_source(i));
@@ -108,6 +96,9 @@ namespace lfs::training {
         if (!saved.is_null()) {
             session->restore_state(saved);
         }
+        LOG_INFO("Camera pose refinement: {} cameras, warmup={}, freeze at={}, steps/visit={}, visits between updates={}, restored={}",
+                 session->published_snapshot()->cameras.size(), config.warmup_iterations, static_cast<int>(std::floor(config.total_iterations * config.freeze_fraction)),
+                 config.steps_per_visit, config.visits_between_updates, !saved.is_null());
         return session;
     } catch (const std::exception& error) {
         return lfs::make_error(lfs::ErrorInit{

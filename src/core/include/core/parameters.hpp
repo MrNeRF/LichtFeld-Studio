@@ -232,6 +232,9 @@ namespace lfs::core {
             // Mip filter (anti-aliasing)
             bool mip_filter = false;
 
+            // Initialization-time opt-in; corrected poses are retained in checkpoints.
+            bool refine_camera_poses = false;
+
             // Background settings for training
             BackgroundMode bg_mode = BackgroundMode::SolidColor; // Which background mode to use
             std::array<float, 3> bg_color = {0.0f, 0.0f, 0.0f};  // RGB background color [0-1]
@@ -344,6 +347,8 @@ namespace lfs::core {
             [[nodiscard]] TrainingBackendConflict backend_conflict() const;
             [[nodiscard]] std::string backend_conflict_message() const;
             [[nodiscard]] std::string validate() const;
+
+            [[nodiscard]] std::string camera_pose_incompatibility() const;
 
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();

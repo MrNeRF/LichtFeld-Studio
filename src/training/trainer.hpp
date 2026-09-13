@@ -217,7 +217,7 @@ namespace lfs::training {
         bool isInitialized() const { return initialized_.load(); }
 
         // Internal opt-in, only before initialize(), serialized by init_mutex_.
-        // No UI/Python setting until visual consumers share current poses.
+        // Overrides the default schedule of the refine_camera_poses option.
         // Dataset scale and runtime length override config. Embedded state
         // automatically restores the saved configuration on checkpoint load.
         lfs::Status configureCameraPoseRefinement(

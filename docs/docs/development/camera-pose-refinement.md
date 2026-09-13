@@ -6,10 +6,40 @@ unchanged. Camera movement and decreasing training loss do not, by themselves,
 establish improved reconstruction quality.
 
 The implementation consists of SE(3) operations, a bounded per-camera optimizer,
-a multi-camera session and a FastGS evaluator, with an internal opt-in Trainer
-integration and embedded checkpoint persistence. Live viewport geometry and Scene
-Graph displacement indicators consume published poses. User-facing activation
-is not yet connected.
+a multi-camera session and a FastGS evaluator, with opt-in Trainer integration
+and embedded checkpoint persistence. Live viewport geometry and Scene Graph
+displacement indicators consume published poses.
+
+## Activation
+
+Add `--refine-camera-poses` when starting a new training session. The equivalent
+optimization JSON property is `"refine_camera_poses": true`. The option is disabled
+by default and is retained in saved training parameters. Existing configuration
+files without this property retain their previous behavior.
+
+For example, replace the dataset and output paths with local paths:
+
+```text
+LichtFeld-Studio -d DATASET -o OUTPUT --iter 3000 --refine-camera-poses
+```
+
+The default schedule starts at iteration 500 and freezes poses at 80% of the
+training duration (iteration 2400 in this example). There must be an update window
+between warmup and freeze. Each eligible camera visit permits at most two update
+steps, with subsequent bursts spaced by eight visits to that camera. The
+initialization log reports the camera count, warmup, freeze iteration and cadence.
+
+Enable camera frustums in the viewport and expand the camera nodes in Scene Graph
+to observe accepted pose changes and net displacement. Two reference cameras and
+all evaluation cameras remain fixed. Well-calibrated cameras may also stay still.
+Publication during visits is throttled to 250 ms; movement is shown at its actual
+scene scale.
+
+Activation requires Trainer reinitialization; changing the option on an initialized
+Trainer is rejected. Saved pose state restores automatically, including its own
+schedule, even when the launch flag is absent. The command-line option does not
+discard saved poses or override the checkpoint's pose schedule. A dedicated
+Training-panel control is not yet connected.
 
 ## Pose representation
 
@@ -160,8 +190,10 @@ rejects adoption. Loading a checkpoint without poses clears stale pose metadata.
 
 ## Trainer integration
 
-`configureCameraPoseRefinement` accepts an optional session configuration before
-Trainer initialization. Refinement is disabled by default; a checkpoint containing
+`configureCameraPoseRefinement` accepts an optional custom session configuration
+before Trainer initialization. The `refine_camera_poses` optimization option uses
+the default session configuration when no custom configuration is supplied.
+Refinement is disabled by default; a checkpoint containing
 pose state restores its saved configuration automatically. Runtime length and
 scene scale come from the Trainer and model. Evaluation and disabled cameras are
 excluded from the effective training membership.
