@@ -56,7 +56,7 @@ namespace {
 } // namespace
 
 TEST_F(CudaTest, F1_DeferredExpressionSnapshotsSourceBeforeMutation_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         LazyStateGuard guard;
         auto source = Tensor::ones({1024}, device);
         const auto deferred = source.add(1.0f);
@@ -64,7 +64,7 @@ TEST_F(CudaTest, F1_DeferredExpressionSnapshotsSourceBeforeMutation_CPUAndCUDA) 
         source.fill_(5.0f);
 
         auto torch_source = torch::ones({1024});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             torch_source = torch_source.cuda();
         }
         const auto torch_result = torch_source.add(1.0f);
@@ -76,7 +76,7 @@ TEST_F(CudaTest, F1_DeferredExpressionSnapshotsSourceBeforeMutation_CPUAndCUDA) 
 }
 
 TEST_F(CudaTest, F2_CUDARowReferencesDoNotAliasReusableStaging) {
-    auto ours = lfs_float_tensor({1.0f, 2.0f}, {1, 2}, Device::CUDA);
+    auto ours = lfs_float_tensor({1.0f, 2.0f}, {1, 2}, Device::GPU);
     {
         auto row = ours[0];
         float& first = row[0];
@@ -140,7 +140,7 @@ TEST_F(CudaTest, F5_NegativeScatterIndicesMatchAcrossCPUCUDAAndTorch) {
         torch_threw = true;
     }
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         auto ours = Tensor::zeros({3}, device);
         const auto index = lfs_int_tensor({-1}, {1}, device);
         const auto source = lfs_float_tensor({7.0f}, {1}, device);
@@ -154,7 +154,7 @@ TEST_F(CudaTest, F5_NegativeScatterIndicesMatchAcrossCPUCUDAAndTorch) {
             << (device == Device::CPU ? "F5 CPU exception contract" : "F5 CUDA exception contract");
         if (!torch_threw) {
             auto expected = torch_expected;
-            if (device == Device::CUDA) {
+            if (device == Device::GPU) {
                 expected = expected.cuda();
             }
             expect_float_values_match(
@@ -185,8 +185,8 @@ TEST(HardeningThemeF_Misc, F7_Rank9BroadcastDoesNotOverwriteFixedMetadataArrays)
 }
 
 TEST_F(CudaTest, F8_GenericBroadcastUsesInlineMetadataAndWritesResult) {
-    const auto ours = Tensor::ones({2, 1, 3, 1}, Device::CUDA)
-                          .add(Tensor::ones({1, 4, 1, 5}, Device::CUDA));
+    const auto ours = Tensor::ones({2, 1, 3, 1}, Device::GPU)
+                          .add(Tensor::ones({1, 4, 1, 5}, Device::GPU));
     const auto theirs = torch::ones(
                             {2, 1, 3, 1}, torch::TensorOptions().device(torch::kCUDA))
                             .add(torch::ones(

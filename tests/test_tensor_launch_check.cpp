@@ -7,8 +7,8 @@
 // from a real instantiation under a poisoned CUDA sticky-error state.
 
 #include "core/cuda_error_typed.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/tensor_functors.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>

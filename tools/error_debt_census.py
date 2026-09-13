@@ -523,7 +523,7 @@ BARE_POINTER_RE = re.compile(
 FACTORY_ASSIGNMENT_RE = re.compile(
     r"\b([A-Za-z_]\w*)\s*=\s*"
     r"(?:(?:[A-Za-z_]\w*)::)*"
-    r"(?:empty|zeros|ones|full|full_like|empty_like|zeros_like)\s*\("
+    r"(?:empty|zeros|ones|full|full_like|empty_like|zeros_like|allocate_like)\s*\("
 )
 PIN_OPERANDS_RE = re.compile(r"\bpin_operands\s*\(")
 UNPINNED_MULTI_CAPTURE_ESCAPE = "LFS-CENSUS-OK(unpinned-multi-capture)"

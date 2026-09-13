@@ -24,7 +24,7 @@ namespace {
             flat[i] = row0[i];
             flat[n + i] = row1[i];
         }
-        return Tensor::from_vector(flat, {size_t{2}, n}, Device::CUDA);
+        return Tensor::from_vector(flat, {size_t{2}, n}, Device::GPU);
     }
 
     std::vector<float> to_host(const Tensor& t) {
@@ -35,12 +35,12 @@ namespace {
 
 TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
     constexpr size_t N = 8;
-    auto vis = Tensor::zeros({N}, Device::CUDA);
-    auto refine_max = Tensor::zeros({N}, Device::CUDA);
+    auto vis = Tensor::zeros({N}, Device::GPU);
+    auto refine_max = Tensor::zeros({N}, Device::GPU);
 
     // Reference path: separate max/add + zero each step.
-    auto vis_ref = Tensor::zeros({N}, Device::CUDA);
-    auto refine_ref = Tensor::zeros({N}, Device::CUDA);
+    auto vis_ref = Tensor::zeros({N}, Device::GPU);
+    auto refine_ref = Tensor::zeros({N}, Device::GPU);
 
     const std::vector<std::pair<std::vector<float>, std::vector<float>>> steps = {
         {{1, 0, 2, 0, 0, 3, 0, 0}, {0.5f, 0, 1.0f, 0, 0, 0.2f, 0, 0}},
@@ -89,8 +89,8 @@ TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
 
 TEST(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
     constexpr size_t N = 6;
-    auto err_max = Tensor::zeros({N}, Device::CUDA);
-    auto err_ref = Tensor::zeros({N}, Device::CUDA);
+    auto err_max = Tensor::zeros({N}, Device::GPU);
+    auto err_ref = Tensor::zeros({N}, Device::GPU);
 
     const std::vector<std::vector<float>> error_rows = {
         {0.1f, 0, 0.5f, 0, 2.0f, 0},

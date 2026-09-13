@@ -49,7 +49,7 @@ namespace {
             chw,
             lfs::core::TensorShape(std::vector<std::size_t>{
                 1, 3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)}),
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
         if (dtype != lfs::core::DataType::Float32) {
             return t.to(dtype);
         }
@@ -152,7 +152,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
     ASSERT_GT(devices, 0);
 
-    auto model = lfs::core::nn::models::Moge2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Moge2::load(weights, lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float32);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
 
@@ -227,7 +227,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     if (!weights16.empty()) {
         std::ifstream probe(weights16, std::ios::binary);
         if (probe.good()) {
-            auto model16 = lfs::core::nn::models::Moge2::load(weights16, lfs::core::Device::CUDA,
+            auto model16 = lfs::core::nn::models::Moge2::load(weights16, lfs::core::Device::GPU,
                                                               lfs::core::DataType::Float16);
             ASSERT_TRUE(model16.has_value()) << std::string(model16.error().detail());
             auto ran16 = model16->forward(image, num_tokens);
@@ -278,7 +278,7 @@ TEST(Moge2Test, DeviceFootprintStaysUnderBudget) {
     std::size_t total = 0;
     ASSERT_EQ(cudaMemGetInfo(&free0, &total), cudaSuccess);
 
-    auto model = lfs::core::nn::models::Moge2::load(path, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Moge2::load(path, lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float16);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
     auto image = make_test_image(518, 518, lfs::core::DataType::Float32);

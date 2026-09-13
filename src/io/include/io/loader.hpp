@@ -88,8 +88,8 @@ namespace lfs::io {
         using std::runtime_error::runtime_error;
     };
 
-    // Re-home a splat's tensors into the Vulkan-external allocator the renderer requires (it
-    // rejects an input-copy fallback). No-op if already allocator-backed or allocator is empty.
+    // Re-home a splat's tensors into renderer storage: Vulkan-backend tensors, or CUDA-exportable
+    // VMM tagged vulkan_external_buffer. No-op if already renderer-ready or the allocator is empty.
     // The loader runs this for file imports; in-memory callers (e.g. the Python API) must too.
     [[nodiscard]] LFS_IO_API bool splatTensorsRendererReady(const SplatData& model);
 

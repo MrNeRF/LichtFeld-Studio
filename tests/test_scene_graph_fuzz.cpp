@@ -68,7 +68,7 @@ namespace {
     }
 
     std::unique_ptr<lfs::core::SplatData> make_cuda_splat(const size_t count, const float offset) {
-        return make_splat(count, offset, Device::CUDA);
+        return make_splat(count, offset, Device::GPU);
     }
 
     uint64_t hash_tensor(const Tensor& tensor) {
@@ -317,7 +317,7 @@ namespace {
         // The second model deliberately has a pre-existing deleted mask on a
         // different device. Preparation must reject the whole operation before
         // applying the first partial slice.
-        second->model->deleted() = Tensor::zeros({2}, Device::CUDA, DataType::Bool);
+        second->model->deleted() = Tensor::zeros({2}, Device::GPU, DataType::Bool);
         second->model->notify_deleted_mask_changed();
         const auto before_second_deleted = second->model->deleted().clone();
         scene.setSelectionMask(std::make_shared<Tensor>(
@@ -988,7 +988,7 @@ namespace {
                         std::vector<bool> mask(capacity, false);
                         mask[rng() % capacity] = true;
                         scene.setSelectionMask(
-                            std::make_shared<Tensor>(Tensor::from_vector(mask, {capacity}, Device::CUDA)));
+                            std::make_shared<Tensor>(Tensor::from_vector(mask, {capacity}, Device::GPU)));
                         // Installing this mask is part of the operation. A
                         // failed delete must preserve the state after this
                         // intentional selection change.

@@ -57,7 +57,7 @@ protected:
         auto ssim_map = ssim_result.ssim_map; // [N, C, H, W]
 
         // Compute per-pixel combined loss map (full image)
-        auto dssim_map = Tensor::ones(TensorShape(ssim_map.shape().dims()), Device::CUDA) - ssim_map;
+        auto dssim_map = Tensor::ones(TensorShape(ssim_map.shape().dims()), Device::GPU) - ssim_map;
         auto combined_loss_map = l1_map * l1_weight + dssim_map * ssim_weight;
 
         // Apply valid padding by cropping before mean (same as fused kernel)
@@ -82,7 +82,7 @@ protected:
         // 3. Adds L1 gradient (sign * l1_weight * dL_dmap)
 
         // Create gradient map matching fused kernel's approach
-        auto dL_dmap = Tensor::zeros(combined_loss_map.shape(), Device::CUDA);
+        auto dL_dmap = Tensor::zeros(combined_loss_map.shape(), Device::GPU);
         float grad_per_pixel = 1.0f / static_cast<float>(numel_for_grad);
         if (apply_valid_padding && H > 10 && W > 10) {
             auto cropped = dL_dmap.slice(2, 5, H - 5).slice(3, 5, W - 5);
@@ -109,8 +109,8 @@ protected:
 // Test basic fused forward correctness
 TEST_F(FusedL1SSIMTest, ForwardMatchesReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -135,8 +135,8 @@ TEST_F(FusedL1SSIMTest, ForwardMatchesReference) {
 // Test backward correctness
 TEST_F(FusedL1SSIMTest, BackwardMatchesReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -162,8 +162,8 @@ TEST_F(FusedL1SSIMTest, BackwardMatchesReference) {
 // Test various SSIM weights
 TEST_F(FusedL1SSIMTest, VariousSSIMWeights) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     std::vector<float> weights = {0.1f, 0.2f, 0.5f, 0.8f, 0.9f};
 
@@ -182,8 +182,8 @@ TEST_F(FusedL1SSIMTest, VariousSSIMWeights) {
 // Test with valid padding disabled
 TEST_F(FusedL1SSIMTest, NoValidPadding) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -203,11 +203,11 @@ TEST_F(FusedL1SSIMTest, NoValidPadding) {
 
 TEST_F(FusedL1SSIMTest, ErrorMapForwardMatchesSSIMReduction) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     auto ssim_result = ssim_forward_map(img1, img2, /*apply_valid_padding=*/false);
-    auto expected_error = Tensor::empty({H, W}, Device::CUDA);
+    auto expected_error = Tensor::empty({H, W}, Device::GPU);
     launch_ssim_to_error_map(ssim_result.ssim_map, expected_error);
 
     SSIMMapWorkspace workspace;
@@ -221,11 +221,11 @@ TEST_F(FusedL1SSIMTest, ErrorMapForwardMatchesSSIMReduction) {
 
 TEST_F(FusedL1SSIMTest, FusedChannelMeanMapSupportsInPlaceErrorMap) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     auto full_ssim = ssim_forward_map(img1, img2, /*apply_valid_padding=*/false);
-    auto expected_error = Tensor::empty({H, W}, Device::CUDA);
+    auto expected_error = Tensor::empty({H, W}, Device::GPU);
     launch_ssim_to_error_map(full_ssim.ssim_map, expected_error);
 
     FusedL1SSIMWorkspace workspace;
@@ -249,8 +249,8 @@ TEST_F(FusedL1SSIMTest, FusedChannelMeanMapSupportsInPlaceErrorMap) {
 // Test 3D input (no batch dimension)
 TEST_F(FusedL1SSIMTest, ThreeDimensionalInput) {
     const int C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -265,8 +265,8 @@ TEST_F(FusedL1SSIMTest, ThreeDimensionalInput) {
 // Test larger image sizes
 TEST_F(FusedL1SSIMTest, LargerImageSize) {
     const int N = 1, C = 3, H = 256, W = 256;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -282,7 +282,7 @@ TEST_F(FusedL1SSIMTest, LargerImageSize) {
 // Test identical images (loss should be 0)
 TEST_F(FusedL1SSIMTest, IdenticalImages) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img = Tensor::randn({N, C, H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -301,8 +301,8 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     FusedL1SSIMWorkspace workspace;
 
     // First call
-    auto img1a = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2a = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1a = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2a = Tensor::randn({N, C, H, W}, Device::GPU);
     auto [loss1, ctx1] = fused_l1_ssim_forward(img1a, img2a, ssim_weight, workspace, true);
     auto grad1 = fused_l1_ssim_backward(ctx1, workspace);
     // loss tensor aliases workspace.reduction_result — capture before reuse.
@@ -310,8 +310,8 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     const float grad1_norm = grad1.abs().sum().item<float>();
 
     // Second call with same workspace
-    auto img1b = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2b = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1b = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2b = Tensor::randn({N, C, H, W}, Device::GPU);
     auto [loss2, ctx2] = fused_l1_ssim_forward(img1b, img2b, ssim_weight, workspace, true);
     auto grad2 = fused_l1_ssim_backward(ctx2, workspace);
     const float loss2_value = loss2.item<float>();
@@ -329,8 +329,8 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
 // Test PhotometricLoss uses fused kernel
 TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
     const int C = 3, H = 64, W = 64;
-    auto rendered = Tensor::randn({C, H, W}, Device::CUDA);
-    auto gt = Tensor::randn({C, H, W}, Device::CUDA);
+    auto rendered = Tensor::randn({C, H, W}, Device::GPU);
+    auto gt = Tensor::randn({C, H, W}, Device::GPU);
 
     lfs::training::losses::PhotometricLoss loss_fn;
     lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = 0.2f};
@@ -344,16 +344,16 @@ TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
 }
 
 TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
-    auto valid = Tensor::zeros({1, 3, 16, 16}, Device::CUDA);
+    auto valid = Tensor::zeros({1, 3, 16, 16}, Device::GPU);
     FusedL1SSIMWorkspace workspace;
 
     EXPECT_THROW(
         (void)fused_l1_ssim_forward(
-            Tensor::zeros({3, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+            Tensor::zeros({3, 16}, Device::GPU), valid, 0.2f, workspace, true),
         std::exception);
     EXPECT_THROW(
         (void)fused_l1_ssim_forward(
-            Tensor::zeros({1, 3, 8, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+            Tensor::zeros({1, 3, 8, 16}, Device::GPU), valid, 0.2f, workspace, true),
         std::exception);
     EXPECT_THROW(
         (void)fused_l1_ssim_forward(
@@ -365,8 +365,8 @@ TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
         std::exception);
     EXPECT_THROW(
         (void)fused_l1_ssim_forward(
-            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
-            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
+            Tensor::empty({0, 3, 16, 16}, Device::GPU),
+            Tensor::empty({0, 3, 16, 16}, Device::GPU),
             0.2f, workspace, true),
         std::exception);
 
@@ -381,8 +381,8 @@ TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
 
 TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto pred = Tensor::rand({N, C, H, W}, Device::CUDA);
-    auto gt_float = Tensor::rand({N, C, H, W}, Device::CUDA);
+    auto pred = Tensor::rand({N, C, H, W}, Device::GPU);
+    auto gt_float = Tensor::rand({N, C, H, W}, Device::GPU);
     auto gt_u8 = (gt_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8);
     auto gt_quant = gt_u8.to(DataType::Float32) / 255.0f;
 
@@ -465,11 +465,11 @@ protected:
 
 TEST_F(MaskedFusedL1SSIMTest, ForwardBasic) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     // Create a mask with some regions masked out
-    auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
+    auto mask = Tensor::ones({H, W}, Device::GPU).to(DataType::UInt8);
     // Mask out a region
     auto mask_view = mask.slice(0, 0, H / 2).slice(1, 0, W / 2);
     mask_view.zero_();
@@ -514,10 +514,10 @@ TEST_F(MaskedFusedL1SSIMTest, SoftWeightsUseWeightedMeanNormalization) {
         (weight_sum * C + lfs::training::kernels::SSIM_EPSILON));
 
     const auto prediction = Tensor::from_vector(
-        prediction_data, {N, C, H, W}, Device::CUDA);
-    const auto target = Tensor::zeros({N, C, H, W}, Device::CUDA);
+        prediction_data, {N, C, H, W}, Device::GPU);
+    const auto target = Tensor::zeros({N, C, H, W}, Device::GPU);
     const auto weight = Tensor::from_vector(
-        weight_data, {H, W}, Device::CUDA);
+        weight_data, {H, W}, Device::GPU);
 
     MaskedFusedL1SSIMWorkspace workspace;
     const auto [loss, ctx] =
@@ -538,9 +538,9 @@ TEST_F(MaskedFusedL1SSIMTest, AllOneWeightMatchesUnmaskedTinyImage) {
     constexpr int W = 8;
     constexpr float ssim_weight = 0.2f;
 
-    const auto prediction = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto target = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto weight = Tensor::ones({H, W}, Device::CUDA);
+    const auto prediction = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto target = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto weight = Tensor::ones({H, W}, Device::GPU);
 
     FusedL1SSIMWorkspace unmasked_workspace;
     auto [unmasked_loss, unmasked_ctx] =
@@ -569,9 +569,9 @@ TEST_F(MaskedFusedL1SSIMTest, SoftBoundaryWeightsMatchSsimReference) {
     constexpr int W = 24;
     constexpr float ssim_weight = 0.35f;
 
-    const auto prediction = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto target = Tensor::rand({N, C, H, W}, Device::CUDA);
-    auto weight = Tensor::ones({H, W}, Device::CUDA);
+    const auto prediction = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto target = Tensor::rand({N, C, H, W}, Device::GPU);
+    auto weight = Tensor::ones({H, W}, Device::GPU);
     weight.slice(0, 0, 5).fill_(0.15f);
     weight.slice(1, W - 5, W).fill_(0.4f);
 
@@ -591,9 +591,9 @@ TEST_F(MaskedFusedL1SSIMTest, SoftBoundaryWeightsMatchSsimReference) {
 
 TEST_F(MaskedFusedL1SSIMTest, BackwardBasic) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto mask = Tensor::ones({H, W}, Device::GPU).to(DataType::UInt8);
 
     const float ssim_weight = 0.2f;
 
@@ -622,9 +622,9 @@ TEST_F(MaskedFusedL1SSIMTest, BackwardBasic) {
 
 TEST_F(MaskedFusedL1SSIMTest, FullMaskMatchesReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto mask = Tensor::ones({H, W}, Device::GPU).to(DataType::UInt8);
 
     const float ssim_weight = 0.2f;
 
@@ -642,11 +642,11 @@ TEST_F(MaskedFusedL1SSIMTest, FullMaskMatchesReference) {
 
 TEST_F(MaskedFusedL1SSIMTest, PartialMask) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     // Create checkerboard mask
-    auto mask = Tensor::zeros({H, W}, Device::CUDA);
+    auto mask = Tensor::zeros({H, W}, Device::GPU);
     for (int y = 0; y < H; y += 2) {
         for (int x = 0; x < W; x += 2) {
             auto pixel = mask.slice(0, y, y + 1).slice(1, x, x + 1);
@@ -667,9 +667,9 @@ TEST_F(MaskedFusedL1SSIMTest, PartialMask) {
 
 TEST_F(MaskedFusedL1SSIMTest, AllZeroMask) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto mask = Tensor::zeros({H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto mask = Tensor::zeros({H, W}, Device::GPU);
 
     const float ssim_weight = 0.2f;
 
@@ -684,14 +684,14 @@ TEST_F(MaskedFusedL1SSIMTest, AllZeroMask) {
 TEST_F(MaskedFusedL1SSIMTest, WorkspaceReuse) {
     const int N = 1, C = 3, H = 64, W = 64;
     const float ssim_weight = 0.2f;
-    auto mask = Tensor::ones({H, W}, Device::CUDA);
+    auto mask = Tensor::ones({H, W}, Device::GPU);
 
     MaskedFusedL1SSIMWorkspace workspace;
 
     // Multiple calls with same workspace
     for (int i = 0; i < 3; ++i) {
-        auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-        auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+        auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+        auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
         auto [loss, ctx] = masked_fused_l1_ssim_forward(img1, img2, mask, ssim_weight, workspace);
         auto grad = masked_fused_l1_ssim_backward(ctx, workspace);
@@ -703,11 +703,11 @@ TEST_F(MaskedFusedL1SSIMTest, WorkspaceReuse) {
 
 TEST_F(MaskedFusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto pred = Tensor::rand({N, C, H, W}, Device::CUDA);
-    auto gt_float = Tensor::rand({N, C, H, W}, Device::CUDA);
+    auto pred = Tensor::rand({N, C, H, W}, Device::GPU);
+    auto gt_float = Tensor::rand({N, C, H, W}, Device::GPU);
     auto gt_u8 = (gt_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8);
     auto gt_quant = gt_u8.to(DataType::Float32) / 255.0f;
-    auto mask = Tensor::ones({H, W}, Device::CUDA);
+    auto mask = Tensor::ones({H, W}, Device::GPU);
     mask.slice(0, 0, H / 2).slice(1, 0, W / 2).fill_(0.0f, nullptr);
     cudaDeviceSynchronize();
 
@@ -726,11 +726,11 @@ TEST_F(MaskedFusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
 
 TEST_F(MaskedFusedL1SSIMTest, UInt8TargetAndMaskMatchFloatReference) {
     const int N = 1, C = 3, H = 64, W = 64;
-    auto pred = Tensor::rand({N, C, H, W}, Device::CUDA);
-    auto gt_float = Tensor::rand({N, C, H, W}, Device::CUDA);
+    auto pred = Tensor::rand({N, C, H, W}, Device::GPU);
+    auto gt_float = Tensor::rand({N, C, H, W}, Device::GPU);
     auto gt_u8 = (gt_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8);
     auto gt_quant = gt_u8.to(DataType::Float32) / 255.0f;
-    auto mask_float = Tensor::ones({H, W}, Device::CUDA);
+    auto mask_float = Tensor::ones({H, W}, Device::GPU);
     mask_float.slice(0, 0, H / 2).slice(1, 0, W / 2).fill_(0.0f, nullptr);
     auto mask_u8 = mask_float.to(DataType::UInt8);
     cudaDeviceSynchronize();
@@ -756,9 +756,9 @@ TEST_F(FusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
     const int N = 1, C = 3, H = 64, W = 64;
     const float ssim_weight = 0.2f;
 
-    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto raw = Tensor::randn({N, C, H, W}, Device::GPU).abs() + 0.1f;
     auto corrected = raw.clone();
-    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto gt = Tensor::randn({N, C, H, W}, Device::GPU).abs() + 0.1f;
 
     FusedL1SSIMWorkspace standard_workspace;
     auto [standard_loss, standard_ctx] =
@@ -782,10 +782,10 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
     const int N = 1, C = 3, H = 64, W = 64;
     const float ssim_weight = 0.2f;
 
-    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto raw = Tensor::randn({N, C, H, W}, Device::GPU).abs() + 0.1f;
     auto corrected = raw.clone();
-    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
-    auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
+    auto gt = Tensor::randn({N, C, H, W}, Device::GPU).abs() + 0.1f;
+    auto mask = Tensor::ones({H, W}, Device::GPU).to(DataType::UInt8);
 
     MaskedFusedL1SSIMWorkspace standard_workspace;
     auto [standard_loss, standard_ctx] =
@@ -811,10 +811,10 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledAllZeroWeightReturnsZeroGradients) {
     constexpr int C = 3;
     constexpr int H = 16;
     constexpr int W = 16;
-    const auto corrected = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto raw = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto target = Tensor::rand({N, C, H, W}, Device::CUDA);
-    const auto weight = Tensor::zeros({H, W}, Device::CUDA);
+    const auto corrected = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto raw = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto target = Tensor::rand({N, C, H, W}, Device::GPU);
+    const auto weight = Tensor::zeros({H, W}, Device::GPU);
 
     MaskedDecoupledFusedL1SSIMWorkspace workspace;
     auto [loss, ctx] = masked_decoupled_fused_l1_ssim_forward(
@@ -830,7 +830,7 @@ TEST_F(MaskedFusedL1SSIMTest, DecoupledAllZeroWeightReturnsZeroGradients) {
 TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
     const int N = 1, C = 3, H = 64, W = 64;
     const float ssim_weight = 1.0f;
-    auto gt = Tensor::linspace(-1.0f, 1.0f, N * C * H * W, Device::CUDA).reshape({N, C, H, W});
+    auto gt = Tensor::linspace(-1.0f, 1.0f, N * C * H * W, Device::GPU).reshape({N, C, H, W});
     auto corrected = gt.clone();
     auto raw = gt * -0.6f;
 

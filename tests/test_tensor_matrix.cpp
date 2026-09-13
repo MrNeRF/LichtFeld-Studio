@@ -76,8 +76,8 @@ TEST_F(TensorMatrixTest, MatMul2D) {
                                  9, 10,
                                  11, 12}; // 3x2
 
-    auto custom_a = Tensor::from_vector(data_a, {2, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {2, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 3});
@@ -101,8 +101,8 @@ TEST_F(TensorMatrixTest, MatMulVectorMatrix) {
                                    6, 7,
                                    8, 9}; // 3x2
 
-    auto custom_vec = Tensor::from_vector(vec_data, {3}, Device::CUDA);
-    auto custom_mat = Tensor::from_vector(mat_data, {3, 2}, Device::CUDA);
+    auto custom_vec = Tensor::from_vector(vec_data, {3}, Device::GPU);
+    auto custom_mat = Tensor::from_vector(mat_data, {3, 2}, Device::GPU);
 
     auto torch_vec = torch::tensor(vec_data, torch::TensorOptions().device(torch::kCUDA));
     auto torch_mat = torch::tensor(mat_data, torch::TensorOptions().device(torch::kCUDA))
@@ -120,8 +120,8 @@ TEST_F(TensorMatrixTest, MatMulMatrixVector) {
                                    4, 5, 6}; // 2x3
     std::vector<float> vec_data = {7, 8, 9};
 
-    auto custom_mat = Tensor::from_vector(mat_data, {2, 3}, Device::CUDA);
-    auto custom_vec = Tensor::from_vector(vec_data, {3}, Device::CUDA);
+    auto custom_mat = Tensor::from_vector(mat_data, {2, 3}, Device::GPU);
+    auto custom_vec = Tensor::from_vector(vec_data, {3}, Device::GPU);
 
     auto torch_mat = torch::tensor(mat_data, torch::TensorOptions().device(torch::kCUDA))
                          .reshape({2, 3});
@@ -138,8 +138,8 @@ TEST_F(TensorMatrixTest, MatMulVectorVector) {
     std::vector<float> vec1_data = {1, 2, 3, 4};
     std::vector<float> vec2_data = {5, 6, 7, 8};
 
-    auto custom_vec1 = Tensor::from_vector(vec1_data, {4}, Device::CUDA);
-    auto custom_vec2 = Tensor::from_vector(vec2_data, {4}, Device::CUDA);
+    auto custom_vec1 = Tensor::from_vector(vec1_data, {4}, Device::GPU);
+    auto custom_vec2 = Tensor::from_vector(vec2_data, {4}, Device::GPU);
 
     auto torch_vec1 = torch::tensor(vec1_data, torch::TensorOptions().device(torch::kCUDA));
     auto torch_vec2 = torch::tensor(vec2_data, torch::TensorOptions().device(torch::kCUDA));
@@ -155,8 +155,8 @@ TEST_F(TensorMatrixTest, DotProduct) {
     std::vector<float> vec1_data = {1, 2, 3, 4};
     std::vector<float> vec2_data = {5, 6, 7, 8};
 
-    auto custom_vec1 = Tensor::from_vector(vec1_data, {4}, Device::CUDA);
-    auto custom_vec2 = Tensor::from_vector(vec2_data, {4}, Device::CUDA);
+    auto custom_vec1 = Tensor::from_vector(vec1_data, {4}, Device::GPU);
+    auto custom_vec2 = Tensor::from_vector(vec2_data, {4}, Device::GPU);
 
     auto torch_vec1 = torch::tensor(vec1_data, torch::TensorOptions().device(torch::kCUDA));
     auto torch_vec2 = torch::tensor(vec2_data, torch::TensorOptions().device(torch::kCUDA));
@@ -179,8 +179,8 @@ TEST_F(TensorMatrixTest, BatchMatMul) {
     std::iota(data_a.begin(), data_a.end(), 1.0f);
     std::iota(data_b.begin(), data_b.end(), 1.0f);
 
-    auto custom_a = Tensor::from_vector(data_a, {2, 3, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 4, 5}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {2, 3, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 4, 5}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 3, 4});
@@ -202,8 +202,8 @@ TEST_F(TensorMatrixTest, BatchMatMulBroadcast) {
     std::iota(data_a.begin(), data_a.end(), 1.0f);
     std::iota(data_b.begin(), data_b.end(), 1.0f);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 4, 5}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 4, 5}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({3, 4});
@@ -232,8 +232,8 @@ TEST_F(TensorMatrixTest, BatchMatMulLargeRowCount) {
         data_b[i] = static_cast<float>((static_cast<int>(i % 7) - 3) * 0.125f);
     }
 
-    auto custom_a = Tensor::from_vector(data_a, {batch, rows, inner}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {batch, inner, cols}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {batch, rows, inner}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {batch, inner, cols}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({static_cast<int64_t>(batch),
@@ -265,7 +265,7 @@ TEST_F(TensorMatrixTest, Transpose2D) {
     std::vector<float> data = {1, 2, 3,
                                4, 5, 6}; // 2x3
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3});
 
@@ -285,7 +285,7 @@ TEST_F(TensorMatrixTest, Transpose3D) {
     std::vector<float> data(2 * 3 * 4);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -306,7 +306,7 @@ TEST_F(TensorMatrixTest, TransposeSpecificDims) {
     std::vector<float> data(2 * 3 * 4);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -327,7 +327,7 @@ TEST_F(TensorMatrixTest, TransposeNegativeIndices) {
     std::vector<float> data(2 * 3 * 4 * 5);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4, 5});
 
@@ -347,13 +347,13 @@ TEST_F(TensorMatrixTest, TransposeNegativeIndices) {
 
 TEST_F(TensorMatrixTest, Eye) {
     // Test identity matrix creation
-    auto custom_result = Tensor::eye(5, Device::CUDA);
+    auto custom_result = Tensor::eye(5, Device::GPU);
     auto torch_result = torch::eye(5, torch::TensorOptions().device(torch::kCUDA));
 
     compare_tensors(custom_result, torch_result, 1e-6f, 1e-7f, "Eye_Square");
 
     // Test rectangular identity matrix
-    auto custom_rect = Tensor::eye(3, 5, Device::CUDA);
+    auto custom_rect = Tensor::eye(3, 5, Device::GPU);
     auto torch_rect = torch::eye(3, 5, torch::TensorOptions().device(torch::kCUDA));
 
     compare_tensors(custom_rect, torch_rect, 1e-6f, 1e-7f, "Eye_Rectangular");
@@ -363,7 +363,7 @@ TEST_F(TensorMatrixTest, Diag) {
     // Test creating diagonal matrix from vector
     std::vector<float> diag_data = {1, 2, 3, 4, 5};
 
-    auto custom_diag_vec = Tensor::from_vector(diag_data, {5}, Device::CUDA);
+    auto custom_diag_vec = Tensor::from_vector(diag_data, {5}, Device::GPU);
     auto torch_diag_vec = torch::tensor(diag_data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = Tensor::diag(custom_diag_vec);
@@ -384,9 +384,9 @@ TEST_F(TensorMatrixTest, MatMulChain) {
     std::vector<float> b_data = {5, 6, 7, 8};    // 2x2
     std::vector<float> c_data = {9, 10, 11, 12}; // 2x2
 
-    auto custom_a = Tensor::from_vector(a_data, {2, 2}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::CUDA);
-    auto custom_c = Tensor::from_vector(c_data, {2, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(a_data, {2, 2}, Device::GPU);
+    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::GPU);
+    auto custom_c = Tensor::from_vector(c_data, {2, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(a_data, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 2});
@@ -408,8 +408,8 @@ TEST_F(TensorMatrixTest, TransposeMatMul) {
     std::vector<float> b_data = {7, 8,
                                  9, 10}; // 2x2
 
-    auto custom_a = Tensor::from_vector(a_data, {2, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(a_data, {2, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(a_data, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 3});
@@ -431,8 +431,8 @@ TEST_F(TensorMatrixTest, MatMulTranspose) {
                                  9, 10,
                                  11, 12}; // 3x2
 
-    auto custom_a = Tensor::from_vector(a_data, {3, 2}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(b_data, {3, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(a_data, {3, 2}, Device::GPU);
+    auto custom_b = Tensor::from_vector(b_data, {3, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(a_data, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({3, 2});
@@ -453,8 +453,8 @@ TEST_F(TensorMatrixTest, DoubleTransposeMatMul) {
                                  9, 10,
                                  11, 12}; // 3x2
 
-    auto custom_a = Tensor::from_vector(a_data, {2, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(b_data, {3, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(a_data, {2, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(b_data, {3, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(a_data, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 3});
@@ -471,8 +471,8 @@ TEST_F(TensorMatrixTest, DoubleTransposeMatMul) {
 
 TEST_F(TensorMatrixTest, SingleElementMatMul) {
     // Test 1x1 matrix multiplication
-    auto custom_a = Tensor::full({1, 1}, 3.0f, Device::CUDA);
-    auto custom_b = Tensor::full({1, 1}, 4.0f, Device::CUDA);
+    auto custom_a = Tensor::full({1, 1}, 3.0f, Device::GPU);
+    auto custom_b = Tensor::full({1, 1}, 4.0f, Device::GPU);
 
     auto torch_a = torch::full({1, 1}, 3.0f, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::full({1, 1}, 4.0f, torch::TensorOptions().device(torch::kCUDA));
@@ -488,8 +488,8 @@ TEST_F(TensorMatrixTest, LargeMatMul) {
     // Test larger matrices
     const size_t n = 128;
 
-    auto custom_a = Tensor::randn({n, n}, Device::CUDA);
-    auto custom_b = Tensor::randn({n, n}, Device::CUDA);
+    auto custom_a = Tensor::randn({n, n}, Device::GPU);
+    auto custom_b = Tensor::randn({n, n}, Device::GPU);
 
     // Get data for torch tensors
     auto a_vec = custom_a.to_vector();
@@ -511,8 +511,8 @@ TEST_F(TensorMatrixTest, VeryLargeMatMul) {
     // Test even larger matrices for robustness
     const size_t n = 512;
 
-    auto custom_a = Tensor::randn({n, n}, Device::CUDA);
-    auto custom_b = Tensor::randn({n, n}, Device::CUDA);
+    auto custom_a = Tensor::randn({n, n}, Device::GPU);
+    auto custom_b = Tensor::randn({n, n}, Device::GPU);
 
     auto a_vec = custom_a.to_vector();
     auto b_vec = custom_b.to_vector();
@@ -533,8 +533,8 @@ TEST_F(TensorMatrixTest, RectangularMatMul) {
     // Test non-square matrix multiplication
     const size_t m = 47, n = 53, p = 61;
 
-    auto custom_a = Tensor::randn({m, n}, Device::CUDA);
-    auto custom_b = Tensor::randn({n, p}, Device::CUDA);
+    auto custom_a = Tensor::randn({m, n}, Device::GPU);
+    auto custom_b = Tensor::randn({n, p}, Device::GPU);
 
     auto a_vec = custom_a.to_vector();
     auto b_vec = custom_b.to_vector();
@@ -552,24 +552,24 @@ TEST_F(TensorMatrixTest, RectangularMatMul) {
 
 TEST_F(TensorMatrixTest, InvalidMatMulDimensionMismatch) {
     // Test dimension mismatch
-    auto a = Tensor::ones({2, 3}, Device::CUDA);
-    auto b = Tensor::ones({4, 5}, Device::CUDA);
+    auto a = Tensor::ones({2, 3}, Device::GPU);
+    auto b = Tensor::ones({4, 5}, Device::GPU);
 
     EXPECT_THROW(a.matmul(b), std::runtime_error);
 }
 
 TEST_F(TensorMatrixTest, InvalidBatchMatMulDimensionMismatch) {
     // Test batch dimension mismatch
-    auto a = Tensor::ones({2, 3, 4}, Device::CUDA);
-    auto b = Tensor::ones({3, 4, 5}, Device::CUDA);
+    auto a = Tensor::ones({2, 3, 4}, Device::GPU);
+    auto b = Tensor::ones({3, 4, 5}, Device::GPU);
 
     EXPECT_THROW(a.bmm(b), std::runtime_error);
 }
 
 TEST_F(TensorMatrixTest, InvalidDotProductDimensionMismatch) {
     // Test dot product with mismatched sizes
-    auto a = Tensor::ones({3}, Device::CUDA);
-    auto b = Tensor::ones({4}, Device::CUDA);
+    auto a = Tensor::ones({3}, Device::GPU);
+    auto b = Tensor::ones({4}, Device::GPU);
 
     EXPECT_THROW(a.dot(b), std::runtime_error);
 }
@@ -615,8 +615,8 @@ TEST_F(TensorMatrixTest, TransposeCPU) {
 
 TEST_F(TensorMatrixTest, MatMulWithZeros) {
     // Test matrix multiplication with zero matrix
-    auto custom_a = Tensor::randn({3, 4}, Device::CUDA);
-    auto custom_b = Tensor::zeros({4, 5}, Device::CUDA);
+    auto custom_a = Tensor::randn({3, 4}, Device::GPU);
+    auto custom_b = Tensor::zeros({4, 5}, Device::GPU);
 
     auto a_vec = custom_a.to_vector();
     auto torch_a = torch::tensor(a_vec, torch::TensorOptions().device(torch::kCUDA))
@@ -636,8 +636,8 @@ TEST_F(TensorMatrixTest, MatMulWithNegatives) {
     std::vector<float> a_data = {-1, 2, -3, 4};
     std::vector<float> b_data = {5, -6, -7, 8};
 
-    auto custom_a = Tensor::from_vector(a_data, {2, 2}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(a_data, {2, 2}, Device::GPU);
+    auto custom_b = Tensor::from_vector(b_data, {2, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(a_data, torch::TensorOptions().device(torch::kCUDA))
                        .reshape({2, 2});
@@ -654,8 +654,8 @@ TEST_F(TensorMatrixTest, MatMulWithNegatives) {
 
 TEST_F(TensorMatrixTest, MatMulWithIdentity) {
     // Test A @ I = A
-    auto custom_a = Tensor::randn({5, 5}, Device::CUDA);
-    auto custom_eye = Tensor::eye(5, Device::CUDA);
+    auto custom_a = Tensor::randn({5, 5}, Device::GPU);
+    auto custom_eye = Tensor::eye(5, Device::GPU);
 
     auto a_vec = custom_a.to_vector();
     auto torch_a = torch::tensor(a_vec, torch::TensorOptions().device(torch::kCUDA))
@@ -677,9 +677,9 @@ TEST_F(TensorMatrixTest, DiagMatMul) {
     std::vector<float> mat_data(4 * 5);
     std::iota(mat_data.begin(), mat_data.end(), 1.0f);
 
-    auto custom_diag_vec = Tensor::from_vector(diag_data, {4}, Device::CUDA);
+    auto custom_diag_vec = Tensor::from_vector(diag_data, {4}, Device::GPU);
     auto custom_diag = Tensor::diag(custom_diag_vec);
-    auto custom_mat = Tensor::from_vector(mat_data, {4, 5}, Device::CUDA);
+    auto custom_mat = Tensor::from_vector(mat_data, {4, 5}, Device::GPU);
 
     auto torch_diag_vec = torch::tensor(diag_data, torch::TensorOptions().device(torch::kCUDA));
     auto torch_diag = torch::diag(torch_diag_vec);

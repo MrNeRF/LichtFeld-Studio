@@ -64,7 +64,6 @@ namespace lfs::training {
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
 
         // Exposed for testing
-        int add_new_gs_test() { return add_new_gs(); }
         int add_new_gs_with_indices_test(const lfs::core::Tensor& sampled_idxs);
         int relocate_gs_test() { return relocate_gs(); }
 
@@ -72,7 +71,6 @@ namespace lfs::training {
         friend class ::CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
 
         // Helper functions
-        lfs::core::Tensor multinomial_sample(const lfs::core::Tensor& weights, int n, bool replacement = true);
         int relocate_gs();
         int add_new_gs();
         void inject_noise();

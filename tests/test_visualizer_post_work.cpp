@@ -5641,9 +5641,7 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto first_path = makeSplatFixture("bicycle_ref");
-        const auto second_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto second_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(first_path));
         ASSERT_TRUE(std::filesystem::exists(second_path));
 
@@ -6009,9 +6007,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =
@@ -6088,9 +6084,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =
@@ -14431,12 +14425,12 @@ namespace lfs::vis {
         auto cpu_model = lfs::test::licht::make_splat(65536);
         auto cuda_model = std::make_unique<lfs::core::SplatData>(
             0,
-            cpu_model->means().to(lfs::core::Device::CUDA),
-            cpu_model->sh0().to(lfs::core::Device::CUDA),
+            cpu_model->means().to(lfs::core::Device::GPU),
+            cpu_model->sh0().to(lfs::core::Device::GPU),
             lfs::core::Tensor{},
-            cpu_model->scaling_raw().to(lfs::core::Device::CUDA),
-            cpu_model->rotation_raw().to(lfs::core::Device::CUDA),
-            cpu_model->opacity_raw().to(lfs::core::Device::CUDA), 1.0f);
+            cpu_model->scaling_raw().to(lfs::core::Device::GPU),
+            cpu_model->rotation_raw().to(lfs::core::Device::GPU),
+            cpu_model->opacity_raw().to(lfs::core::Device::GPU), 1.0f);
         ASSERT_NE(viewer.getScene().addSplat("Async dirty", std::move(cuda_model)),
                   lfs::core::NULL_NODE);
         const auto* const node = viewer.getScene().getNode("Async dirty");

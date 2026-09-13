@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "fastgs_pose_evaluator.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "losses/photometric_loss.hpp"
 #include <algorithm>
 #include <cmath>
@@ -44,6 +45,7 @@ namespace lfs::training::camera_pose {
     }
 
     FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose) {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         // Reuse the same rigid-source validation as the controller. Do not
         // silently repair arbitrary matrices or mutate source Camera tensors.
         (void)BoundedPoseOptimizer(uid, pose, BoundedPoseConfig{});
@@ -57,6 +59,7 @@ namespace lfs::training::camera_pose {
     }
 
     std::pair<RenderOutput, FastRasterizeContext> FastGSPoseEvaluator::forward(const Matrix4& pose) {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         auto tensors = make_fastgs_pose_override(camera_.uid(), pose);
         auto result = fast_rasterize_forward(camera_, model_, background_, 0, 0, 0, 0,
                                              mip_filter_, background_image_, false, &tensors);
@@ -66,12 +69,13 @@ namespace lfs::training::camera_pose {
     }
 
     PoseImageEvaluation FastGSPoseEvaluator::evaluate(const Matrix4& pose) {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         auto rendered = forward(pose);
         const auto objective = objective_(rendered.first, true);
         if (!std::isfinite(objective.loss) || objective.loss < 0)
             throw std::invalid_argument("Nonfinite or negative camera pose baseline loss");
         const auto valid_gradient = [&](const Tensor& gradient, const Tensor& reference) {
-            return gradient.is_valid() && gradient.device() == Device::CUDA &&
+            return gradient.is_valid() && gpu_backend_of(gradient) == GpuBackend::CUDA &&
                    gradient.dtype() == DataType::Float32 && gradient.is_contiguous() &&
                    gradient.shape() == reference.shape() && gradient.stream() == reference.stream();
         };
@@ -91,6 +95,7 @@ namespace lfs::training::camera_pose {
     }
 
     double FastGSPoseEvaluator::loss(const Matrix4& pose) {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         if (!reprojection_guard_.allows(pose))
             return std::numeric_limits<double>::infinity();
         auto rendered = forward(pose);
@@ -105,7 +110,7 @@ namespace lfs::training::camera_pose {
 
     PoseObjective make_pose_photometric_objective(const Tensor& target, float lambda_dssim) {
         if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1 ||
-            !target.is_valid() || target.device() != Device::CUDA || target.ndim() != 3 ||
+            !target.is_valid() || gpu_backend_of(target) != GpuBackend::CUDA || target.ndim() != 3 ||
             target.shape()[0] != 3 || target.numel() == 0 ||
             (target.dtype() != DataType::Float32 && target.dtype() != DataType::UInt8))
             throw std::invalid_argument("Invalid pose photometric target or SSIM weight");
@@ -125,7 +130,7 @@ namespace lfs::training::camera_pose {
     }
 
     PoseObjective make_pose_mse_objective(const Tensor& target) {
-        if (!target.is_valid() || target.device() != Device::CUDA || target.dtype() != DataType::Float32 ||
+        if (!target.is_valid() || gpu_backend_of(target) != GpuBackend::CUDA || target.dtype() != DataType::Float32 ||
             target.ndim() != 3 || target.shape()[0] != 3 || target.numel() == 0 || !target.is_contiguous())
             throw std::invalid_argument("Pose MSE target must be contiguous CUDA float32 [3,H,W]");
         return [fixed_target = target.clone()](const RenderOutput& output, bool gradients) {

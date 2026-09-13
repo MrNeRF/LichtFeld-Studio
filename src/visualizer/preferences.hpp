@@ -5,6 +5,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -12,6 +13,11 @@
 #include <string_view>
 
 namespace lfs::vis {
+
+    struct TensorPreferenceState {
+        core::GpuBackend backend = core::GpuBackend::CUDA;
+        core::TensorBackendOptions options;
+    };
 
     struct McpPreferenceState {
         bool enabled = true;
@@ -60,6 +66,9 @@ namespace lfs::vis {
         [[nodiscard]] std::string viewportToolbarPosition();
         void setViewportToolbarFreeY(float value);
         [[nodiscard]] float viewportToolbarFreeY();
+
+        void setTensorBackend(const TensorPreferenceState& state);
+        [[nodiscard]] TensorPreferenceState tensorBackend();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();

@@ -585,7 +585,7 @@ namespace {
         params.optimization.max_cap = static_cast<int>(max_cap);
         params.freeze_lr_scale = 0.25f;
 
-        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::CUDA, sh_degree);
+        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::GPU, sh_degree);
         ASSERT_TRUE(sh_value::apply_shN_value_quant(*source_model));
         EXPECT_TRUE(source_model->shN_value_quantized() ||
                     source_model->shN_raw().dtype() == lfs::core::DataType::Float16);
@@ -610,12 +610,12 @@ namespace {
             auto* bytes = packed_cpu.ptr<uint8_t>();
             for (size_t i = 0; i < packed_cpu.numel(); ++i)
                 bytes[i] = static_cast<uint8_t>((i * 17 + 3) & 0xff);
-            means_state->exp_avg = packed_cpu.cuda();
+            means_state->exp_avg = packed_cpu.gpu();
             auto bounds_cpu = means_state->joint_bounds.cpu();
             auto* b = bounds_cpu.ptr<float>();
             for (size_t i = 0; i < bounds_cpu.numel(); ++i)
                 b[i] = (i % 2 == 0) ? -0.5f : 0.5f;
-            means_state->joint_bounds = bounds_cpu.cuda();
+            means_state->joint_bounds = bounds_cpu.gpu();
         }
 
         auto shN_before = source_model->shN_canonical_cpu();
@@ -625,7 +625,7 @@ namespace {
                         nullptr, nullptr, nullptr, nullptr)
                         .has_value());
 
-        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA, sh_degree);
+        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::GPU, sh_degree);
         lfs::training::MCMC target_strategy(*target_model);
         target_strategy.initialize(params.optimization);
         auto load_params = params;
@@ -708,7 +708,7 @@ namespace {
                      const std::string_view name) -> lfs::core::Tensor {
             calls.push_back({std::string{name}, capacity});
             EXPECT_EQ(dtype, lfs::core::DataType::Float32);
-            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::CUDA);
+            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::GPU);
             tensor.set_name(std::string{name});
             return tensor;
         };
@@ -922,7 +922,7 @@ namespace {
         params.optimization.max_cap = 16;
 
         const auto model_device = strategy_name == "igs+"
-                                      ? lfs::core::Device::CUDA
+                                      ? lfs::core::Device::GPU
                                       : lfs::core::Device::CPU;
         auto source_model = make_checkpoint_test_splat(4, model_device);
         auto source_result = lfs::training::StrategyFactory::instance().create(
@@ -1101,7 +1101,7 @@ namespace {
 
         auto params = make_params_json_test_params(temp_dir);
         params.dataset.data_path = temp_dir;
-        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         source_model->set_frozen_ranges({{1, 2}});
         lfs::training::MCMC source_strategy(*source_model);
         source_strategy.initialize(params.optimization);
@@ -1111,7 +1111,7 @@ namespace {
 
         lfs::core::Scene scene;
         add_checkpoint_test_camera(scene);
-        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         target_model->set_frozen_ranges({{0, 1}});
         scene.addSplat("Model", std::move(target_model));
         scene.setTrainingModelNode("Model");
@@ -1143,7 +1143,7 @@ namespace {
 
         auto params = make_params_json_test_params(temp_dir);
         params.dataset.data_path = temp_dir;
-        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         lfs::training::MCMC source_strategy(*source_model);
         source_strategy.initialize(params.optimization);
         ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
@@ -1152,7 +1152,7 @@ namespace {
 
         lfs::core::Scene scene;
         add_checkpoint_test_camera(scene);
-        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         target_model->set_frozen_ranges({{0, 1}});
         scene.addSplat("Model", std::move(target_model));
         scene.setTrainingModelNode("Model");
@@ -1316,7 +1316,7 @@ namespace {
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto opacities = lfs::core::Tensor::from_vector(
             std::vector<float>{-1.0f, 0.5f, 2.0f, -0.25f},
-            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA);
+            {size_t{4}, size_t{1}}, lfs::core::Device::GPU);
         ASSERT_TRUE(source_admm.initialize(opacities).has_value());
         ASSERT_TRUE(source_admm.update_state(opacities).has_value());
 
@@ -1376,7 +1376,7 @@ namespace {
         lfs::training::MCMC target_strategy(*target_model);
         lfs::training::ADMMSparsityOptimizer target_admm(kAdmmTestConfig);
         const auto target_opacity = lfs::core::Tensor::zeros(
-            {size_t{1}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{1}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(target_admm.initialize(target_opacity).has_value());
         ASSERT_TRUE(target_admm.is_initialized());
         auto loaded_params = params;
@@ -1404,7 +1404,7 @@ namespace {
         lfs::training::MCMC source_strategy(*source_model);
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto opacities = lfs::core::Tensor::zeros(
-            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{4}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(source_admm.initialize(opacities).has_value());
         ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
                         temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, &source_admm)
@@ -1436,7 +1436,7 @@ namespace {
         lfs::training::MCMC source_strategy(*source_model);
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto wrong_size_opacities = lfs::core::Tensor::zeros(
-            {size_t{3}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{3}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(source_admm.initialize(wrong_size_opacities).has_value());
 
         const auto saved = lfs::test::write_checkpoint_fixture(
@@ -1753,7 +1753,7 @@ namespace {
         TestName);
 
     TEST(CheckpointSplatSkipTest, SkipSerializedMatchesDeserializeStreamPosition) {
-        auto splat = make_checkpoint_test_splat(17, lfs::core::Device::CUDA, 3);
+        auto splat = make_checkpoint_test_splat(17, lfs::core::Device::GPU, 3);
         ASSERT_NE(splat, nullptr);
         splat->set_frozen_ranges({{3, 2}, {10, 1}});
 

@@ -16,6 +16,45 @@
 
     <div class="preferences-content">
       <div class="preferences-section" data-if="show_general">
+        <div class="section-header text-accent" data-class-is-expanded="tensor_backend_expanded" data-event-click="toggle_section('tensor_backend')">
+          <span class="section-arrow text-accent" data-class-is-expanded="tensor_backend_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.tensor_backend</span>
+        </div>
+        <div class="section-content" data-if="tensor_backend_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.tensor_backend</span>
+            <select class="preferences-select" data-value="tensor_backend">
+              <option value="cuda">@tr:preferences.tensor_cuda</option>
+              <option value="vulkan">@tr:preferences.tensor_vulkan</option>
+            </select>
+          </div>
+          <span class="preferences-description">@tr:preferences.tensor_restart</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.tensor_device</span>
+            <input class="preferences-select" type="text" data-value="tensor_vulkan_device" />
+          </div>
+          <span class="preferences-description">@tr:preferences.tensor_device_hint</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.tensor_validation</span>
+            <select class="preferences-select" data-value="tensor_vulkan_validation">
+              <option value="0">@tr:preferences.tensor_validation_off</option>
+              <option value="1">@tr:preferences.tensor_validation_api</option>
+              <option value="2">@tr:preferences.tensor_validation_sync</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.tensor_fp32_half</span>
+            <input type="checkbox" data-checked="tensor_force_fp32_half" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.tensor_no_atomic_float</span>
+            <input type="checkbox" data-checked="tensor_force_no_atomic_float" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.tensor_viewer_inputs</span>
+            <input type="checkbox" data-checked="tensor_viewer_vulkan_inputs" />
+          </div>
+        </div>
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.language</span>

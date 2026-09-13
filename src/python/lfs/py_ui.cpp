@@ -182,6 +182,7 @@ namespace lfs::python {
 
         // Dynamic texture tracking
         std::atomic<bool> g_texture_service_alive{true};
+        std::atomic<uint64_t> g_next_dynamic_texture_id{1};
         std::mutex g_dynamic_textures_mutex;
 
         class PyDynamicTexture;
@@ -226,28 +227,34 @@ namespace lfs::python {
 
             void update(const PyTensor& py_tensor) {
                 lfs::python::require_ui_texture_creation_thread();
-                auto t = py_tensor.tensor();
+                const auto t = py_tensor.tensor();
                 if (t.ndim() != 3)
                     throw std::invalid_argument("DynamicTexture requires 3D tensor [H, W, C]");
                 if (t.size(2) != 3 && t.size(2) != 4)
                     throw std::invalid_argument("DynamicTexture channels must be 3 (RGB) or 4 (RGBA)");
 
-                if (t.device() == core::Device::CPU)
-                    t = t.cuda();
                 const auto orig_dtype = t.dtype();
-                if (orig_dtype != core::DataType::Float32)
-                    t = t.to(core::DataType::Float32);
-                if (orig_dtype == core::DataType::UInt8)
-                    t = t / 255.0f;
+                const auto device_tensor = t.device() == core::Device::CPU ? t.gpu() : t;
+                const auto float_tensor = orig_dtype == core::DataType::Float32
+                                              ? device_tensor
+                                              : device_tensor.to(core::DataType::Float32);
+                const auto normalized = orig_dtype == core::DataType::UInt8
+                                            ? float_tensor / 255.0f
+                                            : float_tensor;
 
                 const int w = t.size(1);
                 const int h = t.size(0);
+                // This API is HWC. Resolve short images before the renderer's
+                // CHW-first inference mistakes their height for a channel axis.
+                const auto upload_tensor = (h == 1 || h == 3 || h == 4)
+                                               ? normalized.permute({2, 0, 1}).contiguous()
+                                               : normalized;
 
                 if (!texture_) {
                     texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
                 }
 
-                if (!texture_->upload(t, w, h) || !texture_->valid())
+                if (!texture_->upload(upload_tensor, w, h) || !texture_->valid())
                     throw std::runtime_error("Failed to update UI texture");
                 width_ = w;
                 height_ = h;
@@ -273,7 +280,9 @@ namespace lfs::python {
             }
 
             uint64_t texture_id() const {
-                return texture_ ? static_cast<uint64_t>(texture_->textureId()) : 0;
+                // RmlUI resolves this token through the live texture registry.
+                // CUDA interop textures do not have an overlay descriptor set.
+                return valid() ? registry_id_ : 0;
             }
 
             std::string rml_src_url(const int width, const int height) const {
@@ -295,6 +304,8 @@ namespace lfs::python {
             }
 
         private:
+            const uint64_t registry_id_ =
+                g_next_dynamic_texture_id.fetch_add(1, std::memory_order_relaxed);
             std::unique_ptr<lfs::vis::gui::VulkanUiTexture> texture_;
             std::string plugin_name_;
             int width_ = 0;
@@ -5261,6 +5272,30 @@ namespace lfs::python {
                 vis::clearSceneUpscalerPreference();
             },
             "Clear all saved scene reconstruction backend and preset preferences");
+
+        m.def("get_tensor_backend_preferences", [] {
+            const auto state = vis::UserPreferences::instance().tensorBackend();
+            nb::dict result;
+            result["backend"] = state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda";
+            result["vulkan_device"] = state.options.vulkan_device;
+            result["vulkan_validation"] = state.options.vulkan_validation;
+            result["force_fp32_half"] = state.options.force_fp32_half;
+            result["force_no_atomic_float"] = state.options.force_no_atomic_float;
+            result["viewer_vulkan_inputs"] = state.options.viewer_vulkan_inputs;
+            return result; }, "Get saved tensor backend preferences; changes apply after restart");
+
+        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, bool viewer_inputs) {
+                  if (backend != "cuda" && backend != "vulkan")
+                      throw nb::value_error("Backend must be cuda or vulkan");
+                  if (validation < 0 || validation > 2)
+                      throw nb::value_error("Validation must be 0, 1, or 2");
+                  const vis::TensorPreferenceState state{
+                      .backend = backend == "vulkan" ? core::GpuBackend::Vulkan : core::GpuBackend::CUDA,
+                      .options = {.vulkan_device = device, .vulkan_validation = validation,
+                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float,
+                                  .viewer_vulkan_inputs = viewer_inputs},
+                  };
+                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("viewer_vulkan_inputs") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

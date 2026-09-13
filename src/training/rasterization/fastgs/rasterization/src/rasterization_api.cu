@@ -5,7 +5,7 @@
 #include "backward.h"
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"

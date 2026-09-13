@@ -8,16 +8,16 @@
 # ============================================================================
 
 set(LFS_TENSOR_CUDA_SOURCES
-    tensor_ops.cu
-    tensor_warp_reduce.cu
-    tensor_matrix_ops.cu
-    tensor_broadcast_ops.cu
-    tensor_masking_ops.cu
-    tensor_random_ops.cu
-    tensor_strided_ops.cu
-    tensor_dot_optimized.cu
-    tensor_nn_ops.cu
-    tensor_fused_pointwise.cu
+    backend/cuda/kernels/tensor_ops.cu
+    backend/cuda/kernels/tensor_warp_reduce.cu
+    backend/cuda/kernels/tensor_matrix_ops.cu
+    backend/cuda/kernels/tensor_broadcast_ops.cu
+    backend/cuda/kernels/tensor_masking_ops.cu
+    backend/cuda/kernels/tensor_random_ops.cu
+    backend/cuda/kernels/tensor_strided_ops.cu
+    backend/cuda/kernels/tensor_dot_optimized.cu
+    backend/cuda/kernels/tensor_nn_ops.cu
+    backend/cuda/kernels/tensor_fused_pointwise.cu
 )
 
 if(LFS_TENSOR_CUDA_SOURCES)
@@ -37,6 +37,7 @@ if(LFS_TENSOR_CUDA_SOURCES)
             ${CMAKE_BINARY_DIR}/include
             PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/src
             ${CUDAToolkit_INCLUDE_DIRS}
     )
 
@@ -67,7 +68,7 @@ if(LFS_TENSOR_CUDA_SOURCES)
     # -O0 pin; tensor_ops.cu ICEs at -O0 (aggregate codegen) and must build at -O3.
     if(WIN32)
         set_source_files_properties(
-            tensor_broadcast_ops.cu
+            backend/cuda/kernels/tensor_broadcast_ops.cu
             PROPERTIES
             COMPILE_FLAGS "-O0"
         )

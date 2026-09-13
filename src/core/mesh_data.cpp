@@ -55,8 +55,8 @@ namespace lfs::core {
             nacc(i, 2) = n[2];
         }
 
-        if (vertices.device() == Device::CUDA) {
-            normals = normals.to(Device::CUDA);
+        if (vertices.device() == Device::GPU) {
+            normals = normals.to(Device::GPU);
         }
 
         mark_dirty();

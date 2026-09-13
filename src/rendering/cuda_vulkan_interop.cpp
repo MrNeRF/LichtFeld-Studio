@@ -4,8 +4,8 @@
 
 #include "cuda_vulkan_interop.hpp"
 
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "image_layout.hpp"
 
 #include <algorithm>
@@ -338,17 +338,16 @@ namespace lfs::rendering {
                 return false;
             }
 
-            lfs::core::Tensor prepared = tensor;
-            if (prepared.dtype() != lfs::core::DataType::UInt8 &&
-                prepared.dtype() != lfs::core::DataType::Float32) {
-                prepared = prepared.to(lfs::core::DataType::Float32);
-            }
-            if (prepared.device() != lfs::core::Device::CUDA) {
-                prepared = prepared.to(lfs::core::Device::CUDA, stream);
-            }
-            if (!prepared.is_contiguous()) {
-                prepared = prepared.contiguous();
-            }
+            // Assigning into a Tensor view copies into that view. Construct each
+            // representation separately so the surface kernel gets packed storage.
+            const auto typed = tensor.dtype() == lfs::core::DataType::UInt8 ||
+                                       tensor.dtype() == lfs::core::DataType::Float32
+                                   ? tensor
+                                   : tensor.to(lfs::core::DataType::Float32);
+            const auto gpu = typed.device() == lfs::core::Device::GPU
+                                 ? typed
+                                 : typed.to(lfs::core::Device::GPU, stream);
+            auto prepared = gpu.contiguous();
 
             out.tensor = std::move(prepared);
             out.width = width;
@@ -654,6 +653,7 @@ namespace lfs::rendering {
         if (!prepareCudaImageTensor(tensor, extent_, stream, prepared, last_error_)) {
             return false;
         }
+        upload_source_ = {};
         upload_source_ = std::move(prepared.tensor);
 
         const void* data = upload_source_.data_ptr();

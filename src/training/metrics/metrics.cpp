@@ -152,7 +152,7 @@ namespace lfs::training {
             image_data.reset();
 
             cam.set_image_dimensions(width, height);
-            return chw.to(lfs::core::Device::CUDA);
+            return chw.to(lfs::core::Device::GPU);
         }
     } // namespace
 
@@ -598,15 +598,15 @@ namespace lfs::training {
         auto cpu_tensor = lfs::core::Tensor::from_blob(
             img_data, lfs::core::TensorShape({H, W, 4}),
             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
         lfs::core::free_image(img_data);
 
         auto rgb = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         auto mask = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
         lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
             gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
@@ -626,7 +626,7 @@ namespace lfs::training {
             auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
             rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
             auto rgb_uint8 = lfs::core::Tensor::empty(
-                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                rgb_float.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::io::cuda::launch_float32_chw_to_uint8_chw(
                 rgb_float.ptr<float>(),
                 rgb_uint8.ptr<uint8_t>(),
@@ -681,7 +681,7 @@ namespace lfs::training {
             const auto& weights_path = *_lpips_weights_path;
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
-                    weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
+                    weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
                     lfs::core::nn::models::InputScaling::Identity);
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
@@ -809,7 +809,7 @@ namespace lfs::training {
                 try {
                     const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
                     const auto target_lpips = mask_image_for_lpips(
-                        gt_float.to(lfs::core::Device::CUDA), mask);
+                        gt_float.to(lfs::core::Device::GPU), mask);
                     const int image_height = static_cast<int>(gt_image.shape()[1]);
                     const int image_width = static_cast<int>(gt_image.shape()[2]);
                     const std::pair<int, int> image_size{image_height, image_width};

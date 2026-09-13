@@ -32,7 +32,7 @@ TEST_F(GradientAccumulationTest, OpacityRegularization_AccumulatesGradients) {
     constexpr float weight = 0.01f;
 
     // Create test data
-    auto opacity = Tensor::randn({N, 1}, Device::CUDA);
+    auto opacity = Tensor::randn({N, 1}, Device::GPU);
 
     // Test 1: Apply regularization to ZERO gradients
     spdlog::info("--- Test 1: Regularization on zero gradients ---");
@@ -80,7 +80,7 @@ TEST_F(GradientAccumulationTest, ScaleRegularization_AccumulatesGradients) {
     constexpr float weight = 0.01f;
 
     // Create test data
-    auto scaling = Tensor::randn({N, D}, Device::CUDA);
+    auto scaling = Tensor::randn({N, D}, Device::GPU);
 
     // Test 1: Apply regularization to ZERO gradients
     spdlog::info("--- Test 1: Regularization on zero gradients ---");
@@ -132,7 +132,7 @@ TEST_F(GradientAccumulationTest, MultipleAccumulations) {
     constexpr size_t N = 1000;
     constexpr float weight = 0.01f;
 
-    auto opacity = Tensor::randn({N, 1}, Device::CUDA);
+    auto opacity = Tensor::randn({N, 1}, Device::GPU);
     auto opacity_grad = Tensor::zeros_like(opacity);
 
     OpacityRegularization::Params params{.weight = weight};
@@ -163,12 +163,12 @@ TEST_F(GradientAccumulationTest, RasterGradient_ThenRegularization) {
     constexpr size_t N = 1000;
     constexpr float reg_weight = 0.01f;
 
-    auto opacity = Tensor::randn({N, 1}, Device::CUDA);
+    auto opacity = Tensor::randn({N, 1}, Device::GPU);
     auto opacity_grad = Tensor::zeros_like(opacity);
 
     // Simulate large gradients from rasterizer backward
     spdlog::info("Step 1: Simulate rasterizer backward (large gradients)");
-    auto raster_grads = Tensor::randn({N, 1}, Device::CUDA) * 0.01f; // Typical rasterizer magnitude
+    auto raster_grads = Tensor::randn({N, 1}, Device::GPU) * 0.01f; // Typical rasterizer magnitude
     opacity_grad = opacity_grad + raster_grads;
 
     float grad_after_raster = opacity_grad.abs().sum().item<float>();

@@ -111,6 +111,7 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        bool tensor_backend_adopted_ = false;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
@@ -172,6 +173,8 @@ namespace lfs::vis {
         [[nodiscard]] bool titlebarDragMovedEnough() const;
         [[nodiscard]] bool isTitlebarDragAtDisplayTop() const;
         void flushPendingTitlebarDoubleClick();
+        void adoptTensorBackendDevice();
+        void releaseTensorBackendDevice();
     };
 
 } // namespace lfs::vis

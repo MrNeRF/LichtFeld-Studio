@@ -172,7 +172,7 @@ namespace {
         auto exp_cpu = exposure_torch.contiguous().cpu();
         std::vector<float> exp_data(exp_cpu.data_ptr<float>(), exp_cpu.data_ptr<float>() + num_frames);
         auto exp_tensor = lfs::core::Tensor::from_vector(exp_data, {static_cast<size_t>(num_frames)},
-                                                         lfs::core::Device::CUDA);
+                                                         lfs::core::Device::GPU);
         // We need to set the params - use reflection or test the reg_loss directly
         // For now, create a manual test
 
@@ -721,8 +721,8 @@ namespace {
         auto ppisp_ptr = create_test_ppisp(num_cameras, num_frames, 1000, config);
         auto& ppisp = *ppisp_ptr;
 
-        auto rgb = lfs::core::Tensor::ones({3, 32, 32}, lfs::core::Device::CUDA).mul(0.5f);
-        auto grad_out = lfs::core::Tensor::ones({3, 32, 32}, lfs::core::Device::CUDA);
+        auto rgb = lfs::core::Tensor::ones({3, 32, 32}, lfs::core::Device::GPU).mul(0.5f);
+        auto grad_out = lfs::core::Tensor::ones({3, 32, 32}, lfs::core::Device::GPU);
 
         // Run forward pass
         auto output = ppisp.apply(rgb, 0, 0);

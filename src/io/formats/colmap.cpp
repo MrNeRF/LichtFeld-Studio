@@ -1736,9 +1736,9 @@ namespace lfs::io {
             colors[i * 3 + 2] = points[i].color[2];
         }
 
-        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CUDA);
+        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::GPU);
         Tensor colors_tensor = Tensor::from_blob(colors.data(), {N, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
+                                   .to(Device::GPU)
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));
@@ -1864,21 +1864,6 @@ namespace lfs::io {
                  lines.size(),
                  elapsed_ms(start));
         return lines;
-    }
-
-    std::vector<std::string> split_string(const std::string& s, char delimiter) {
-        std::vector<std::string> tokens;
-        size_t start = 0;
-        size_t end = s.find(delimiter);
-
-        while (end != std::string::npos) {
-            tokens.push_back(s.substr(start, end - start));
-            start = end + 1;
-            end = s.find(delimiter, start);
-        }
-        tokens.push_back(s.substr(start));
-
-        return tokens;
     }
 
     bool parse_image_metadata_line(const std::string& line, ImageData& img) {
@@ -2505,9 +2490,9 @@ namespace lfs::io {
             return {};
         }
 
-        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
+        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::GPU);
         Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
+                                   .to(Device::GPU)
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));

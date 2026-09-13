@@ -22,24 +22,6 @@ namespace lfs::python {
 
     namespace {
 
-        std::string python_type_to_json_type(const std::string& py_type) {
-            if (py_type == "int")
-                return "integer";
-            if (py_type == "float")
-                return "number";
-            if (py_type == "bool")
-                return "boolean";
-            if (py_type == "str")
-                return "string";
-            if (py_type.starts_with("list[int]") || py_type.starts_with("List[int]"))
-                return "array:integer";
-            if (py_type.starts_with("list[float]") || py_type.starts_with("List[float]"))
-                return "array:number";
-            if (py_type.starts_with("list") || py_type.starts_with("List"))
-                return "array";
-            return "string";
-        }
-
         mcp::json build_json_schema_property(const std::string& json_type, const std::string& description) {
             mcp::json prop;
             if (json_type.starts_with("array:")) {

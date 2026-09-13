@@ -77,13 +77,13 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ExtremeOpacity_ProducesNaN) {
         ratios_data[i] = 2 + static_cast<int>(i % 5); // Ratios between 2-6
     }
 
-    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::CUDA);
-    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::CUDA);
-    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::CUDA);
+    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::GPU);
+    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::GPU);
+    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::GPU);
 
     // Output tensors
-    Tensor new_opacities = Tensor::empty({N}, Device::CUDA, DataType::Float32);
-    Tensor new_scales = Tensor::empty({N, 3}, Device::CUDA, DataType::Float32);
+    Tensor new_opacities = Tensor::empty({N}, Device::GPU, DataType::Float32);
+    Tensor new_scales = Tensor::empty({N, 3}, Device::GPU, DataType::Float32);
 
     lfs::training::mcmc::launch_relocation_kernel(
         opacities.ptr<float>(),
@@ -129,12 +129,12 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_NormalOpacity_NoNaN) {
         ratios_data[i] = 1 + static_cast<int>(i % 10); // Ratios between 1-10
     }
 
-    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::CUDA);
-    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::CUDA);
-    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::CUDA);
+    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::GPU);
+    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::GPU);
+    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::GPU);
 
-    Tensor new_opacities = Tensor::empty({N}, Device::CUDA, DataType::Float32);
-    Tensor new_scales = Tensor::empty({N, 3}, Device::CUDA, DataType::Float32);
+    Tensor new_opacities = Tensor::empty({N}, Device::GPU, DataType::Float32);
+    Tensor new_scales = Tensor::empty({N, 3}, Device::GPU, DataType::Float32);
 
     lfs::training::mcmc::launch_relocation_kernel(
         opacities.ptr<float>(),
@@ -168,12 +168,12 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ReproduceGaussian15975) {
     std::vector<float> scales_data = {0.01f, 0.01f, 0.01f}; // Some scales
     std::vector<int> ratios_data = {2};                     // Ratio of 2
 
-    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::CUDA);
-    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::CUDA);
-    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::CUDA);
+    Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::GPU);
+    Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::GPU);
+    Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::GPU);
 
-    Tensor new_opacities = Tensor::empty({N}, Device::CUDA, DataType::Float32);
-    Tensor new_scales = Tensor::empty({N, 3}, Device::CUDA, DataType::Float32);
+    Tensor new_opacities = Tensor::empty({N}, Device::GPU, DataType::Float32);
+    Tensor new_scales = Tensor::empty({N, 3}, Device::GPU, DataType::Float32);
 
     lfs::training::mcmc::launch_relocation_kernel(
         opacities.ptr<float>(),
@@ -217,12 +217,12 @@ TEST_F(MCMCNaNFixTest, NewScalesLog_ProducesValidOutput) {
         std::vector<float> scales_data(N * 3, 0.1f);
         std::vector<int> ratios_data(N, 2);
 
-        Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::CUDA);
-        Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::CUDA);
-        Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::CUDA);
+        Tensor opacities = Tensor::from_vector(opacities_data, {N}, Device::CPU).to(Device::GPU);
+        Tensor scales = Tensor::from_vector(scales_data, {N, 3}, Device::CPU).to(Device::GPU);
+        Tensor ratios = Tensor::from_vector(ratios_data, {N}, Device::CPU).to(Device::GPU);
 
-        Tensor new_opacities = Tensor::empty({N}, Device::CUDA, DataType::Float32);
-        Tensor new_scales = Tensor::empty({N, 3}, Device::CUDA, DataType::Float32);
+        Tensor new_opacities = Tensor::empty({N}, Device::GPU, DataType::Float32);
+        Tensor new_scales = Tensor::empty({N, 3}, Device::GPU, DataType::Float32);
 
         lfs::training::mcmc::launch_relocation_kernel(
             opacities.ptr<float>(),

@@ -10,9 +10,22 @@
 
 namespace lfs::training::kernels {
 
+    /// SegmentAndIgnore band bounds for Float32 masks in [0,1], as returned by
+    /// the pipelined loader. UInt8 masks (including Camera::load_and_get_mask)
+    /// still carry 0..255 samples and are normalized by the fused kernels.
+    ///
+    ///   value > 250       → keep    (photometric weight 1, no opacity penalty)
+    ///   128 ≤ value ≤ 250 → segment (opacity penalty, no photometric weight)
+    ///   value < 128       → ignore  (no loss at all)
+    ///
+    /// Midpoints between adjacent eight-bit levels preserve their classification
+    /// despite floating-point error in the normalization by 255.
+    inline constexpr float kMaskKeepMin = 250.5f / 255.0f;
+    inline constexpr float kMaskSegmentMin = 127.5f / 255.0f;
+
     /// Photometric mask weight modes for the fused preprocess kernel.
     /// BinaryGt0: weight = (mask > 0)  — Segment / Ignore after binarize
-    /// SegmentAndIgnore: weight = (mask > 250) — keep only the "keep" band
+    /// SegmentAndIgnore: weight = (mask > kMaskKeepMin) — keep only the "keep" band
     enum class MaskPhotoMode : int {
         BinaryGt0 = 0,
         SegmentAndIgnore = 1,
@@ -20,7 +33,8 @@ namespace lfs::training::kernels {
 
     /// Opacity-penalty band modes.
     /// BinaryGt0: bg = 1 - mask_as_float (UInt8/Bool → 0/1; Float32 pass-through)
-    /// SegmentAndIgnore: bg = 1 iff 128 ≤ mask ≤ 250 (Ignore band is FG for penalty)
+    /// SegmentAndIgnore: bg = 1 iff kMaskSegmentMin ≤ mask ≤ kMaskKeepMin
+    /// (the Ignore band is FG for the penalty)
     enum class MaskOpacityMode : int {
         BinaryGt0 = 0,
         SegmentAndIgnore = 1,
@@ -29,8 +43,10 @@ namespace lfs::training::kernels {
     /// Fuse SegmentAndIgnore / Segment / Ignore photometric remapping + optional ROI
     /// into a single float32 [H,W] weight map (allocation-free; writes into `out`).
     ///
-    /// UInt8: nonzero → 1 (BinaryGt0) or value>250 → 1 (SegmentAndIgnore)
-    /// Float32: same comparisons on the raw float value.
+    /// UInt8 samples are scaled by 1/255 before the band comparison, so both
+    /// entry points share one value domain:
+    /// BinaryGt0 — UInt8: nonzero → 1; Float32: pass-through.
+    /// SegmentAndIgnore — value > kMaskKeepMin → 1.
     void launch_fuse_photometric_mask_weight_u8(
         const uint8_t* mask,
         const float* roi_weight, // nullable

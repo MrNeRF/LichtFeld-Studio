@@ -137,7 +137,7 @@ TEST(TensorLazyStatefulOpsTest, GpuRandIsEagerInLazyMode) {
 
     LazyTestGuard guard;
 
-    auto t = Tensor::rand({1000}, Device::CUDA, DataType::Float32);
+    auto t = Tensor::rand({1000}, Device::GPU, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
 

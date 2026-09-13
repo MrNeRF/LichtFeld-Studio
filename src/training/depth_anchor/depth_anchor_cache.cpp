@@ -101,9 +101,9 @@ namespace lfs::training {
         if (!means_in.is_valid() || means_in.ndim() != 2 || means_in.shape()[0] == 0) {
             return anchors;
         }
-        const auto means = means_in.device() == lfs::core::Device::CUDA
+        const auto means = means_in.device() == lfs::core::Device::GPU
                                ? means_in
-                               : means_in.to(lfs::core::Device::CUDA);
+                               : means_in.to(lfs::core::Device::GPU);
         const auto num_points = static_cast<std::size_t>(means.shape()[0]);
 
         // Robust world-space bounds of the anchor cloud: sparse reconstructions

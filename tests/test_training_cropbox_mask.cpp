@@ -396,8 +396,8 @@ TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
         false,
         &cpu_deleted);
 
-    const auto cuda_means = cpu_means.to(lfs::core::Device::CUDA);
-    const auto cuda_deleted = cpu_deleted.to(lfs::core::Device::CUDA);
+    const auto cuda_means = cpu_means.to(lfs::core::Device::GPU);
+    const auto cuda_deleted = cpu_deleted.to(lfs::core::Device::GPU);
     const auto cuda_mask = lfs::training::compute_cropbox_remove_mask(
         cuda_means,
         {-1.0f, -1.0f, -1.0f},
@@ -417,7 +417,7 @@ TEST(TrainingCropBoxMask, DampedOptimizerStepUsesComputedRejectedMask) {
     auto model = make_test_splat(
         {0.0f, 0.0f, 0.0f,
          2.0f, 0.0f, 0.0f},
-        lfs::core::Device::CUDA);
+        lfs::core::Device::GPU);
     const auto remove_mask = lfs::training::compute_cropbox_remove_mask(
         model->means(),
         {-1.0f, -1.0f, -1.0f},

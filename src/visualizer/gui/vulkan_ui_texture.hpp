@@ -6,9 +6,11 @@
 
 #include "core/export.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
     class Tensor;
@@ -64,13 +66,18 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;
         // Build a Rml::Image src URL referencing this texture's image view and sampler.
-        // The returned URL is stable as long as the underlying VkImage is not torn down
-        // (a same-size re-upload preserves the view; a resize destroys and recreates it).
+        // Same-size re-upload keeps the view and incarnation. Resize allocates a new
+        // image/view and a process-wide incarnation (URL `g=`), so RmlUi cannot reuse a
+        // cached descriptor when the driver recycles the view handle.
         [[nodiscard]] std::string rmlSrcUrl(int width, int height) const;
         void reset();
 
     private:
+        friend void setVulkanUiTextureContext(VulkanContext* context);
         struct Impl;
+        static std::size_t serviceOrphanedImpls(bool wait);
+        static void orphanImpl(Impl* impl);
+        static std::vector<Impl*> orphaned_impls_;
         Impl* impl_ = nullptr;
     };
 

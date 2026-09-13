@@ -9,6 +9,7 @@
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
+#include "rendering/selection_ops.hpp"
 #include <array>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -228,6 +229,7 @@ namespace lfs::vis {
             core::Tensor scratch;
             int* host_counts = nullptr;
             cudaEvent_t ready_event = nullptr;
+            lfs::rendering::SelectionCountTicket vulkan_ticket;
             bool pending = false;
             bool apply_to_scene = true;
             uint64_t sequence = 0;
@@ -293,11 +295,11 @@ namespace lfs::vis {
                                                       const SelectionProjectionContext& projection_context,
                                                       const char* undo_name,
                                                       SelectionCommitOptions options = {});
-        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size,
+                                                           const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
-        [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);

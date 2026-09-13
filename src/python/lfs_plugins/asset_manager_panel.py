@@ -176,27 +176,6 @@ class AssetManagerPanel(Panel):
         if self._handle:
             self._handle.dirty_all()
 
-    def _initialize_backend(self) -> bool:
-        self._catalog_load_failed = False
-        if not BACKEND_AVAILABLE:
-            self._catalog_load_failed = True
-            return False
-        try:
-            storage_path = resolve_asset_manager_storage_path()
-            storage_path.mkdir(parents=True, exist_ok=True)
-            self.STORAGE_PATH = storage_path
-            self.__class__.STORAGE_PATH = storage_path
-            self._asset_index = AssetIndex()
-            loaded = self._asset_index.load()
-            self._last_default_folder_path = str(resolve_default_asset_directory())
-            if not loaded:
-                self._catalog_load_failed = True
-            return loaded
-        except Exception as exc:
-            self._log_error("Failed to initialize Asset Manager: %s", exc)
-            self._catalog_load_failed = True
-            return False
-
     def _start_backend_initialization(self) -> None:
         if self._backend_load_active or not BACKEND_AVAILABLE:
             if not BACKEND_AVAILABLE:
@@ -482,12 +461,6 @@ class AssetManagerPanel(Panel):
         folders = getattr(self._asset_index, "folders", {}) if self._asset_index else {}
         return folders if isinstance(folders, dict) else {}
 
-    def _default_folder_id(self) -> Optional[str]:
-        folders = self._asset_index_folders()
-        if "default" in folders:
-            return "default"
-        return min(folders, key=lambda folder_id: self._sort_text(folders[folder_id].get("name"))) if folders else None
-
     def _asset_matches_query(self, asset: Dict[str, Any], query: str) -> bool:
         if not query:
             return True
@@ -513,10 +486,6 @@ class AssetManagerPanel(Panel):
         if self._selected_folder_id not in {*folders, SCOPE_ALL}:
             self._selected_folder_id = SCOPE_ALL
         self._update_selection_type()
-
-    def _repair_selected_folder(self) -> Optional[str]:
-        self._repair_selection()
-        return self._selected_folder_id
 
     def _update_selection_type(self) -> None:
         if len(self._selected_asset_ids) > 1:
@@ -1053,9 +1022,6 @@ class AssetManagerPanel(Panel):
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
 
-    def on_load_asset(self, _handle, _ev, args):
-        self._load_asset(self._resolve_event_value(args, _ev, "data-asset-id"))
-
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:
             return
@@ -1558,10 +1524,6 @@ class AssetManagerPanel(Panel):
                 self._handle.dirty(field)
         self._request_model_update()
 
-    def _update_all_record_lists(self):
-        self._refresh_records(assets=True, folders=True)
-        return {"counts": {"folders": len(self.get_folder_list()), "assets": len(self.get_filtered_assets())}}
-
     def _dirty_model(self, *fields):
         field_set = set(fields)
         self._refresh_records(
@@ -1610,17 +1572,6 @@ class AssetManagerPanel(Panel):
         )
         self._asset_window_scroll_top, self._asset_window_client_height, self._asset_window_client_width = values
         return any(abs(before - after) > 0.5 for before, after in zip(old, values))
-
-    def _sync_gallery_card_width(self, doc=None) -> bool:
-        old = self._asset_card_slot_width
-        self._sync_asset_window_viewport(doc)
-        available = max(
-            ASSET_CARD_PREFERRED_WIDTH_DP,
-            self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
-        )
-        columns = max(1, int(available // ASSET_CARD_PREFERRED_WIDTH_DP))
-        self._asset_card_slot_width = max(1.0, available / columns)
-        return abs(old - self._asset_card_slot_width) > 0.5
 
     def _bind_dom_event_listeners(self, doc) -> None:
         shell = doc.get_element_by_id("asset-shell")
@@ -2175,13 +2126,6 @@ class AssetManagerPanel(Panel):
 
     def _on_close_panel(self, _handle=None, _event=None, _args=None):
         lf.ui.set_panel_enabled(self.id, False)
-
-    @staticmethod
-    def _log_info(message: str, *args: Any) -> None:
-        text = message % args if args else message
-        logger = getattr(lf, "log", None)
-        log = getattr(logger, "info", None)
-        (log if callable(log) else _log.info)(text)
 
     @staticmethod
     def _log_warn(message: str, *args: Any) -> None:

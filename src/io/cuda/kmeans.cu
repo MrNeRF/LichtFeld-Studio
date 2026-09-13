@@ -141,12 +141,12 @@ namespace lfs::io {
             cudaEvent_t stop_ = nullptr;
         };
 
-        // Tensor::cuda() deep-copies CUDA tensors in this codebase; borrow when possible.
+        // Tensor::gpu() deep-copies GPU tensors in this codebase; borrow when possible.
         Tensor as_cuda_contiguous(const Tensor& data) {
-            if (data.device() == Device::CUDA) {
+            if (data.device() == Device::GPU) {
                 return data.is_contiguous() ? data : data.contiguous();
             }
-            return data.cuda().contiguous();
+            return data.gpu().contiguous();
         }
 
         __device__ __forceinline__ std::uint32_t shAt_device(
@@ -247,7 +247,7 @@ namespace lfs::io {
 
         Tensor sample_unique_indices_gpu(const int n, const int count, const unsigned int seed) {
             auto indices = sample_unique_indices(n, count, seed);
-            return Tensor::from_vector(indices, {static_cast<size_t>(count)}, Device::CUDA);
+            return Tensor::from_vector(indices, {static_cast<size_t>(count)}, Device::GPU);
         }
 
         void build_csr_offsets_gpu(
@@ -256,8 +256,8 @@ namespace lfs::io {
             int* d_indices,
             const int k,
             const int num_clusters) {
-            auto cluster_keys = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            auto sorted_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
+            auto cluster_keys = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
+            auto sorted_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
 
             LFS_CUDA_CHECK(cudaMemcpy(cluster_keys.ptr<int>(), d_membership,
                                       k * sizeof(int), cudaMemcpyDeviceToDevice));
@@ -491,13 +491,16 @@ namespace lfs::io {
                 }
             }
             __syncthreads();
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
             const int warp = tid / 32;
             nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> a[3];
             for (int d = 0; d < D; d += 16)
                 nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + (start + (warp / 2) * 16) * D + d, D);
+#endif
             for (int base = 0; base < k; base += C) {
                 if (tid < C)
                     norms[tid] = base + tid < k ? centroid_norms[base + tid] : 0;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                 nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, half, nvcuda::wmma::col_major> b;
                 nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
                 nvcuda::wmma::fill_fragment(acc, 0.0f);
@@ -507,7 +510,11 @@ namespace lfs::io {
                 }
                 nvcuda::wmma::store_matrix_sync(&approx[(warp / 2) * 16][(warp % 2) * 16], acc, C + 4, nvcuda::wmma::mem_row_major);
                 __syncthreads();
+#else
+                __syncthreads();
+#endif
                 for (int c = lane; c < C && base + c < k; c += 4) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                     const float estimate = fmaf(-2.0f, approx[row][c], norms[c]);
                     // Half rounding contributes at most (2*u+u*u)*(||x||^2+
                     // ||c||^2), u=2^-11, to the score. The remaining relative
@@ -516,6 +523,7 @@ namespace lfs::io {
                     // Out-of-range values always take the reference path.
                     const float margin = 0.0011f * (point_norm[row] + norms[c]) + 1e-8f;
                     if (!point_safe[row] || !(norms[c] >= 0 && norms[c] < 4.0e9f) || !isfinite(estimate) || estimate <= best + margin) {
+#endif
                         float dot = 0;
 #pragma unroll
                         for (int d = 0; d < 45; ++d)
@@ -526,7 +534,9 @@ namespace lfs::io {
                             best = dist;
                             best_id = id;
                         }
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                     }
+#endif
                 }
                 for (int delta = 2; delta > 0; delta /= 2) {
                     const float other = __shfl_xor_sync(0xffffffffu, best, delta, 4);
@@ -783,8 +793,8 @@ namespace lfs::io {
 
             if (n <= k) {
                 auto centroids = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
+                                               Device::GPU, DataType::Float32);
+                auto labels = Tensor::arange(n).to(DataType::Int32).gpu();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                     /*stream=*/nullptr, "io.kmeans.swizzled_gather_points");
@@ -796,7 +806,7 @@ namespace lfs::io {
             }
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                           Device::CUDA, DataType::Float32);
+                                           Device::GPU, DataType::Float32);
             float* d_centroids = centroids.ptr<float>();
 
             {
@@ -809,11 +819,11 @@ namespace lfs::io {
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
             }
 
-            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::GPU, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-            auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
+                                               Device::GPU, DataType::Float32);
+            auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
+            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Float32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_n_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
@@ -1124,7 +1134,7 @@ namespace lfs::io {
             Tensor& group_offsets,
             Tensor& group_task_offsets,
             int& num_tasks) {
-            auto group_keys = Tensor::zeros({static_cast<size_t>(n_points)}, Device::CUDA, DataType::Int32);
+            auto group_keys = Tensor::zeros({static_cast<size_t>(n_points)}, Device::GPU, DataType::Int32);
             LFS_CUDA_CHECK(cudaMemcpy(group_keys.ptr<int>(), d_membership,
                                       static_cast<size_t>(n_points) * sizeof(int), cudaMemcpyDeviceToDevice));
 
@@ -1141,7 +1151,7 @@ namespace lfs::io {
                 offsets_ptr);
 
             auto group_tile_counts = Tensor::zeros(
-                {static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::GPU, DataType::Int32);
             build_group_tile_counts_kernel<<<1, BLOCK_SIZE>>>(
                 group_offsets.ptr<int>(), group_tile_counts.ptr<int>());
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.build_group_tile_counts");
@@ -1222,8 +1232,8 @@ namespace lfs::io {
 
             if (n <= k) {
                 auto centroids = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
+                                               Device::GPU, DataType::Float32);
+                auto labels = Tensor::arange(n).to(DataType::Int32).gpu();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                     /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_gather");
@@ -1243,7 +1253,7 @@ namespace lfs::io {
             }
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                           Device::CUDA, DataType::Float32);
+                                           Device::GPU, DataType::Float32);
             float* d_centroids = centroids.ptr<float>();
 
             {
@@ -1257,9 +1267,9 @@ namespace lfs::io {
             }
 
             auto super_centroids = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
-                                                 Device::CUDA, DataType::Float32);
-            auto super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            auto super_norms = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Float32);
+                                                 Device::GPU, DataType::Float32);
+            auto super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
+            auto super_norms = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::GPU, DataType::Float32);
 
             {
                 std::random_device rd;
@@ -1272,8 +1282,8 @@ namespace lfs::io {
             }
 
             auto super_sums = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
-                                            Device::CUDA, DataType::Float32);
-            auto super_counts = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Int32);
+                                            Device::GPU, DataType::Float32);
+            auto super_counts = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::GPU, DataType::Int32);
 
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_k_assign = (k + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
@@ -1310,35 +1320,35 @@ namespace lfs::io {
                 super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
-            auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
-            auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
+            auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::GPU, DataType::Int32);
+            auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
             build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                   super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
             if (init_sampling_timer) {
                 init_sampling_timer->record_stop();
             }
 
-            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::GPU, DataType::Int32);
             auto point_super_membership = Tensor::zeros(
-                {static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(n)}, Device::GPU, DataType::Int32);
             auto sorted_point_idx = Tensor::zeros(
-                {static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(n)}, Device::GPU, DataType::Int32);
             auto group_offsets = Tensor::zeros(
-                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::GPU, DataType::Int32);
             auto group_task_offsets = Tensor::zeros(
-                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::GPU, DataType::Int32);
             auto nearest_supers = Tensor::zeros(
                 {static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(NUM_NEAREST_SUPERS)},
-                Device::CUDA, DataType::Int32);
+                Device::GPU, DataType::Int32);
             auto group_candidate_offsets = Tensor::zeros(
-                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::GPU, DataType::Int32);
             auto group_candidate_supers = Tensor::zeros(
                 {static_cast<size_t>(NUM_SUPER_CLUSTERS * NUM_NEAREST_SUPERS)},
-                Device::CUDA, DataType::Int32);
+                Device::GPU, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-            auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
+                                               Device::GPU, DataType::Float32);
+            auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Int32);
+            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::GPU, DataType::Float32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_n_super_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;

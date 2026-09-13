@@ -19,7 +19,7 @@ namespace {
             shape.push_back(t.size(i));
         }
         std::vector<float> data(cpu.data_ptr<float>(), cpu.data_ptr<float>() + cpu.numel());
-        return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+        return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::GPU);
     }
 
     bool tensors_close(const torch::Tensor& expected, const lfs::core::Tensor& actual,

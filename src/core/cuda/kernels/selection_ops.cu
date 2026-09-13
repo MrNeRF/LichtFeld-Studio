@@ -3,6 +3,7 @@
 
 #include "core/cuda/selection_ops.hpp"
 #include "core/cuda_error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include <cassert>
 #include <cfloat>
@@ -176,63 +177,6 @@ namespace lfs::core::cuda {
             out_mask[idx] = mask[idx];
         }
 
-        __global__ void opacity_threshold_kernel(
-            const float* __restrict__ opacity_raw,
-            uint8_t* __restrict__ out_mask,
-            float min_opacity, float max_opacity, uint8_t group_id,
-            int N) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= N)
-                return;
-
-            const float activated = 1.0f / (1.0f + expf(-opacity_raw[idx]));
-            out_mask[idx] = (activated >= min_opacity && activated <= max_opacity) ? group_id : 0;
-        }
-
-        __global__ void scale_threshold_kernel(
-            const float* __restrict__ scale_raw,
-            uint8_t* __restrict__ out_mask,
-            float max_scale, uint8_t group_id,
-            int N) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= N)
-                return;
-
-            const float sx = expf(scale_raw[idx * 3]);
-            const float sy = expf(scale_raw[idx * 3 + 1]);
-            const float sz = expf(scale_raw[idx * 3 + 2]);
-            const float max_s = fmaxf(sx, fmaxf(sy, sz));
-            out_mask[idx] = (max_s <= max_scale) ? group_id : 0;
-        }
-
-        // SH_C0 constant for decoding DC spherical harmonic component to RGB
-        constexpr float SH_C0 = 0.28209479177387814f;
-
-        __device__ inline float decode_sh_color(float sh_val) {
-            return fminf(1.0f, fmaxf(0.0f, 0.5f + sh_val * SH_C0));
-        }
-
-        __global__ void color_threshold_kernel(
-            const float* __restrict__ sh0,
-            uint8_t* __restrict__ out_mask,
-            float ref_r, float ref_g, float ref_b,
-            float threshold, uint8_t group_id,
-            int N) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= N)
-                return;
-
-            // SH0 is stored as [N, 1, 3] or [N, 3] — stride is always 3 floats per gaussian
-            const float r = decode_sh_color(sh0[idx * 3]);
-            const float g = decode_sh_color(sh0[idx * 3 + 1]);
-            const float b = decode_sh_color(sh0[idx * 3 + 2]);
-
-            const bool match = fabsf(r - ref_r) <= threshold &&
-                               fabsf(g - ref_g) <= threshold &&
-                               fabsf(b - ref_b) <= threshold;
-            out_mask[idx] = match ? group_id : 0;
-        }
-
         __device__ inline void atomicMinFloat(float* addr, float val) {
             int* addr_as_int = reinterpret_cast<int*>(addr);
             int old = *addr_as_int, assumed;
@@ -309,7 +253,7 @@ namespace lfs::core::cuda {
 
             // Compute AABB via parallel reduction
             // aabb[0..2] = min_xyz, aabb[3..5] = max_xyz
-            auto aabb_buf = Tensor::empty({6}, Device::CUDA, DataType::Float32);
+            auto aabb_buf = Tensor::empty({6}, Device::GPU, DataType::Float32);
             {
                 float init[6] = {FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX};
                 LFS_CUDA_CHECK_MSG(
@@ -348,8 +292,8 @@ namespace lfs::core::cuda {
             int num_cells = static_cast<int>(total);
 
             // Compute cell IDs
-            auto cell_ids = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::Int32);
-            auto sorted_indices = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::Int32);
+            auto cell_ids = Tensor::empty({static_cast<size_t>(N)}, Device::GPU, DataType::Int32);
+            auto sorted_indices = Tensor::empty({static_cast<size_t>(N)}, Device::GPU, DataType::Int32);
 
             compute_cell_ids<<<blocks, BLOCK_SIZE, 0, stream>>>(
                 pos_ptr, cell_ids.ptr<int>(),
@@ -365,8 +309,8 @@ namespace lfs::core::cuda {
             thrust::sort_by_key(thrust::cuda::par.on(stream), ci_ptr, ci_ptr + N, si_ptr);
 
             // Build cell start/end
-            auto cell_start = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
-            auto cell_end = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
+            auto cell_start = Tensor::empty({static_cast<size_t>(num_cells)}, Device::GPU, DataType::Int32);
+            auto cell_end = Tensor::empty({static_cast<size_t>(num_cells)}, Device::GPU, DataType::Int32);
             thrust::fill(thrust::cuda::par_nosync.on(stream),
                          thrust::device_ptr<int>(cell_start.ptr<int>()),
                          thrust::device_ptr<int>(cell_start.ptr<int>()) + num_cells, -1);
@@ -391,8 +335,17 @@ namespace lfs::core::cuda {
     } // namespace
 
     Tensor selection_grow(const Tensor& mask, const Tensor& means, float radius, uint8_t group_id) {
-        assert(mask.device() == Device::CUDA);
-        assert(means.device() == Device::CUDA);
+        if (lfs::core::gpu_backend_of(mask) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Selection grow is unavailable on the Vulkan tensor backend");
+            }
+            return mask;
+        }
+        assert(mask.device() == Device::GPU);
+        assert(means.device() == Device::GPU);
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
@@ -410,7 +363,7 @@ namespace lfs::core::cuda {
         cudaStream_t stream = mask.stream();
         auto grid = build_grid(means, radius, stream);
 
-        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU, DataType::UInt8);
 
         int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         grow_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -425,8 +378,17 @@ namespace lfs::core::cuda {
     }
 
     Tensor selection_shrink(const Tensor& mask, const Tensor& means, float radius) {
-        assert(mask.device() == Device::CUDA);
-        assert(means.device() == Device::CUDA);
+        if (lfs::core::gpu_backend_of(mask) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Selection shrink is unavailable on the Vulkan tensor backend");
+            }
+            return mask;
+        }
+        assert(mask.device() == Device::GPU);
+        assert(means.device() == Device::GPU);
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
@@ -444,7 +406,7 @@ namespace lfs::core::cuda {
         cudaStream_t stream = mask.stream();
         auto grid = build_grid(means, radius, stream);
 
-        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU, DataType::UInt8);
 
         int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         shrink_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -453,82 +415,6 @@ namespace lfs::core::cuda {
             grid.grid_min, grid.inv_cell_size, grid.grid_dims,
             radius * radius, N);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.shrink");
-
-        nvtxRangePop();
-        return out_mask;
-    }
-
-    Tensor select_by_opacity(const Tensor& opacity_raw, float min_opacity, float max_opacity, uint8_t group_id) {
-        assert(opacity_raw.device() == Device::CUDA);
-        assert(opacity_raw.dtype() == DataType::Float32);
-
-        nvtxRangePush("select_by_opacity");
-
-        const int N = static_cast<int>(opacity_raw.numel());
-        if (N == 0) {
-            nvtxRangePop();
-            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
-        }
-
-        auto out_mask = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
-
-        int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        opacity_threshold_kernel<<<blocks, BLOCK_SIZE, 0, opacity_raw.stream()>>>(
-            opacity_raw.ptr<float>(), out_mask.ptr<uint8_t>(),
-            min_opacity, max_opacity, group_id, N);
-        LFS_CUDA_LAUNCH_CHECK(opacity_raw.stream(), "core.selection.opacity_threshold");
-
-        nvtxRangePop();
-        return out_mask;
-    }
-
-    Tensor select_by_scale(const Tensor& scale_raw, float max_scale, uint8_t group_id) {
-        assert(scale_raw.device() == Device::CUDA);
-        assert(scale_raw.dtype() == DataType::Float32);
-        assert(scale_raw.ndim() == 2 && scale_raw.size(1) == 3);
-
-        nvtxRangePush("select_by_scale");
-
-        const int N = static_cast<int>(scale_raw.size(0));
-        if (N == 0) {
-            nvtxRangePop();
-            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
-        }
-
-        auto out_mask = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
-
-        int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        scale_threshold_kernel<<<blocks, BLOCK_SIZE, 0, scale_raw.stream()>>>(
-            scale_raw.ptr<float>(), out_mask.ptr<uint8_t>(),
-            max_scale, group_id, N);
-        LFS_CUDA_LAUNCH_CHECK(scale_raw.stream(), "core.selection.scale_threshold");
-
-        nvtxRangePop();
-        return out_mask;
-    }
-
-    Tensor select_by_color(const Tensor& sh0,
-                           float ref_r, float ref_g, float ref_b,
-                           float threshold, uint8_t group_id) {
-        assert(sh0.device() == Device::CUDA);
-        assert(sh0.dtype() == DataType::Float32);
-
-        nvtxRangePush("select_by_color");
-
-        // Support both [N, 1, 3] and [N, 3] layouts
-        const int N = static_cast<int>(sh0.size(0));
-        if (N == 0) {
-            nvtxRangePop();
-            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
-        }
-
-        auto out_mask = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
-
-        int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        color_threshold_kernel<<<blocks, BLOCK_SIZE, 0, sh0.stream()>>>(
-            sh0.ptr<float>(), out_mask.ptr<uint8_t>(),
-            ref_r, ref_g, ref_b, threshold, group_id, N);
-        LFS_CUDA_LAUNCH_CHECK(sh0.stream(), "core.selection.color_threshold");
 
         nvtxRangePop();
         return out_mask;

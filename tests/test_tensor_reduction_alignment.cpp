@@ -48,7 +48,7 @@ TEST_F(TensorReductionAlignmentTest, SumDim1_MisalignedSegments) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, cols}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.sum(1);
 
         cudaDeviceSynchronize();
@@ -78,7 +78,7 @@ TEST_F(TensorReductionAlignmentTest, MeanDim1_MisalignedSegments) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, cols}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.mean(1);
 
         cudaDeviceSynchronize();
@@ -110,7 +110,7 @@ TEST_F(TensorReductionAlignmentTest, MaxDim1_MisalignedSegments) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, cols}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.max(1);
 
         cudaDeviceSynchronize();
@@ -142,7 +142,7 @@ TEST_F(TensorReductionAlignmentTest, MinDim1_MisalignedSegments) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, cols}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.min(1);
 
         cudaDeviceSynchronize();
@@ -167,7 +167,7 @@ TEST_F(TensorReductionAlignmentTest, CudaStateNotCorrupted) {
         std::vector<float> data(ROWS * COLS, 1.0f);
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, COLS}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.sum(1);
         cudaDeviceSynchronize();
     }
@@ -180,7 +180,7 @@ TEST_F(TensorReductionAlignmentTest, CudaStateNotCorrupted) {
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
     ASSERT_NE(ptr, nullptr);
 
-    const Tensor new_tensor = Tensor::zeros({256, 256}, Device::CUDA, DataType::Float32);
+    const Tensor new_tensor = Tensor::zeros({256, 256}, Device::GPU, DataType::Float32);
     const Tensor exp_result = new_tensor.exp();
 
     cudaDeviceSynchronize();
@@ -200,7 +200,7 @@ TEST_F(TensorReductionAlignmentTest, SumDim1_KernelBoundaries) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({ROWS, cols}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.sum(1);
 
         cudaDeviceSynchronize();
@@ -226,7 +226,7 @@ TEST_F(TensorReductionAlignmentTest, SumDim1_VariousRowCounts) {
 
         const Tensor t = Tensor::from_blob(data.data(), TensorShape({rows, COLS}),
                                            Device::CPU, DataType::Float32)
-                             .cuda();
+                             .gpu();
         const Tensor result = t.sum(1);
 
         cudaDeviceSynchronize();

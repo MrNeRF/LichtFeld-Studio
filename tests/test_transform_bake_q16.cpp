@@ -33,12 +33,12 @@ namespace {
     };
 
     SplatData make_random_sh3(const size_t n, const uint32_t seed = 42) {
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> sh_dist(-1.0f, 1.0f);
@@ -50,28 +50,28 @@ namespace {
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 3; ++i)
                 p[i] = mean_dist(rng);
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
         {
             auto cpu = shN_can.cpu();
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 15 * 3; ++i)
                 p[i] = sh_dist(rng);
-            shN_can = cpu.to(Device::CUDA);
+            shN_can = cpu.to(Device::GPU);
         }
         {
             auto cpu = scaling.cpu();
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 3; ++i)
                 p[i] = scale_dist(rng);
-            scaling = cpu.to(Device::CUDA);
+            scaling = cpu.to(Device::GPU);
         }
         {
             auto cpu = rotation.cpu();
             auto* r = cpu.ptr<float>();
             for (size_t i = 0; i < n; ++i)
                 r[i * 4] = 1.0f;
-            rotation = cpu.to(Device::CUDA);
+            rotation = cpu.to(Device::GPU);
         }
 
         return SplatData(kShDegree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);

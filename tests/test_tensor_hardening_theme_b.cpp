@@ -10,7 +10,7 @@ using namespace tensor_hardening;
 
 TEST_F(CudaTest, B1_Float16TransposeContiguousDispatchesAKernel) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
-    const auto ours = lfs_float_tensor(values, {2, 3}, Device::CUDA)
+    const auto ours = lfs_float_tensor(values, {2, 3}, Device::GPU)
                           .to(DataType::Float16)
                           .transpose(0, 1)
                           .contiguous();
@@ -81,7 +81,7 @@ TEST_F(CudaTest, B2_HWCToCHWInt64UploadFallsBackToGenericDispatch) {
 }
 
 TEST_F(CudaTest, B3_MultiAxisProdWritesEveryOutputElement) {
-    const auto ours = Tensor::full({2, 2, 2}, 2.0f, Device::CUDA).prod({0, 1});
+    const auto ours = Tensor::full({2, 2, 2}, 2.0f, Device::GPU).prod({0, 1});
     const auto theirs = torch::full({2, 2, 2}, 2.0f,
                                     torch::TensorOptions().device(torch::kCUDA))
                             .prod(0)

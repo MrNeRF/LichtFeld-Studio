@@ -16,12 +16,12 @@ namespace {
 
     // Helper function to create a simple SplatData for testing
     SplatData create_test_splat_data(size_t n_points = 10) {
-        auto means = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::CUDA);
-        auto shN = Tensor::randn({n_points, 15, 3}, Device::CUDA);
-        auto scaling = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto rotation = Tensor::randn({n_points, 4}, Device::CUDA);
-        auto opacity = Tensor::randn({n_points, 1}, Device::CUDA);
+        auto means = Tensor::randn({n_points, 3}, Device::GPU);
+        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::GPU);
+        auto shN = Tensor::randn({n_points, 15, 3}, Device::GPU);
+        auto scaling = Tensor::randn({n_points, 3}, Device::GPU);
+        auto rotation = Tensor::randn({n_points, 4}, Device::GPU);
+        auto opacity = Tensor::randn({n_points, 1}, Device::GPU);
 
         SplatData splat_data(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
         // Note: gradients are allocated by AdamOptimizer, not SplatData
@@ -340,7 +340,7 @@ namespace {
         // Simulate training loop
         for (int iter = 0; iter < 10; iter++) {
             // Simulate gradients
-            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::ones(splat_data.means().shape(), Device::CUDA);
+            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::ones(splat_data.means().shape(), Device::GPU);
 
             // Optimize
             optimizer.step(iter);
@@ -372,7 +372,7 @@ namespace {
         // Simulate training loop
         for (int iter = 0; iter < 20; iter++) {
             // Simulate gradients
-            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::randn(splat_data.means().shape(), Device::CUDA);
+            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::randn(splat_data.means().shape(), Device::GPU);
 
             // Optimize
             optimizer.step(iter);

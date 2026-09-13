@@ -5,7 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
-#include "internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 namespace lfs::core::nn {
     namespace {

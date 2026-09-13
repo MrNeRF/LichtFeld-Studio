@@ -317,7 +317,6 @@ namespace lfs::vis {
             };
             void initDevResourceHotReload();
             void pollDevResourceHotReload();
-            DevResourceScanResult scanDevResourceFiles(bool detect_changes);
             static DevResourceScanResult scanDevResourceFilesSnapshot(
                 std::filesystem::path rml_dir,
                 std::filesystem::path locale_dir,

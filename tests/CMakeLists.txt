@@ -343,8 +343,16 @@ set(TEST_FILES
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
+    test_tensor_integer_and_reduce_policy.cpp
+    test_selection_attribute_ops.cpp
+    test_selection_screen_ops.cpp
+    test_selection_tensor_projection.cpp
+    test_export_band_pack.cpp
+    test_point_cloud_merge.cpp
+    test_display_tensors.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
+    test_tensor_async_consts.cpp
     test_tensor_stress.cpp
     test_tensor_matrix.cpp
     test_slice_mm_bug.cpp
@@ -381,6 +389,8 @@ set(TEST_FILES
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
+    test_tensor_cuda_byte_image.cpp
+    test_image_tensor.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
@@ -532,6 +542,11 @@ set(TEST_FILES
     test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
+    test_tensor_backend_selection.cpp
+    test_tensor_backend_selftest.cpp
+    test_tensor_seam_regressions.cpp
+    test_tensor_backend_facade.cpp
+    test_tensor_backend_facade_c.cpp
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
@@ -595,6 +610,27 @@ set(TEST_FILES
     test_error_envelope.cpp
     test_plugin_localization.cpp
 )
+if(LFS_TENSOR_VULKAN)
+    list(APPEND TEST_FILES
+        test_tensor_backend_validators.cpp
+        test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_allocation_padding.cpp
+        test_tensor_vulkan_adoption.cpp
+        test_tensor_vulkan_pointwise.cpp
+        test_tensor_vulkan_reduce.cpp
+        test_tensor_vulkan_index.cpp
+        test_tensor_vulkan_matrix_nn.cpp
+        test_tensor_vulkan_random.cpp
+        test_tensor_vulkan_buffer.cpp
+        test_tensor_vulkan_cuda_bridge.cpp
+        test_tensor_backend_parity.cpp
+        test_ply_vulkan_q16_bands.cpp
+        test_viewer_vulkan_load.cpp
+        test_viewer_no_cuda.cpp
+        test_selection_mask_ops.cpp
+        test_sh_quant_tensor_program.cpp
+    )
+endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
@@ -1024,7 +1060,6 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
-    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
@@ -1259,6 +1294,71 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     CUDA::cudart
 )
 
+# Standalone GUI-workload tensor bench. Built with tests; NOT registered with
+# ctest. Public tensor API plus tensor_backend selection/sync.
+add_executable(bench_tensor_gui
+    bench_tensor_gui.cpp
+)
+set_target_properties(bench_tensor_gui PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_tensor_gui PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_tensor_gui PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
+add_executable(bench_selection_tensor EXCLUDE_FROM_ALL bench_selection_tensor.cpp)
+set_target_properties(bench_selection_tensor PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_selection_tensor PRIVATE ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(bench_selection_tensor PRIVATE lfs_rendering CUDA::cudart)
+
+add_executable(tensor_backend_corpus
+    tensor_backend_corpus.cpp
+)
+set_target_properties(tensor_backend_corpus PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_backend_corpus PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_backend_corpus PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
+add_executable(tensor_interface_freeze
+    test_tensor_interface_freeze.cpp
+)
+set_target_properties(tensor_interface_freeze PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_interface_freeze PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_interface_freeze PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+add_test(NAME tensor_interface_freeze COMMAND tensor_interface_freeze)
+
 add_executable(bench_nn_ops EXCLUDE_FROM_ALL
     bench_nn_ops.cpp
 )
@@ -1299,7 +1399,7 @@ message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
 message(STATUS "  Build tests: ninja lichtfeld_tests")
 message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
-message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
+message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead bench_tensor_gui")
 message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")
 
 add_test(NAME lichtfeld.decimate.perf

@@ -11,6 +11,7 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/export.hpp"
+#include "core/tensor_fwd.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -47,5 +48,15 @@ namespace lfs::core::sh_value_quant {
     // Implemented in lfs_core so the flag is process-wide across DSOs.
     LFS_CORE_API void set_enabled_for_testing(std::optional<bool> enabled);
     [[nodiscard]] LFS_CORE_API bool enabled();
+
+    /// Tensor-program encode of float4-swizzled SH-rest into pad-dropped u16
+    /// codes (Float16 container) plus float2 bounds per 256-splat block.
+    LFS_CORE_API void encode_shN_float4_to_u16_tensor(
+        const Tensor& src_float4_swizzled,
+        std::size_t n_primitives,
+        std::uint32_t slots_per_prim,
+        std::uint32_t n_cells_per_prim,
+        Tensor& codes_out,
+        Tensor& bounds_out);
 
 } // namespace lfs::core::sh_value_quant

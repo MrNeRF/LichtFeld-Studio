@@ -93,6 +93,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -2424,43 +2425,6 @@ namespace lfs::vis::gui {
             return alpha;
         }
 
-        [[nodiscard]] glm::vec4 cameraFrustumColor(const lfs::core::Camera& camera,
-                                                   const size_t camera_index,
-                                                   const RenderSettings& settings,
-                                                   const std::span<const glm::vec3> per_camera_colors,
-                                                   const float alpha,
-                                                   const bool focused,
-                                                   const bool disabled,
-                                                   const bool emphasized) {
-            const bool has_override = camera_index < per_camera_colors.size();
-            const bool is_validation = camera.image_name().find("test") != std::string::npos;
-            glm::vec3 color = is_validation ? settings.eval_camera_color : settings.train_camera_color;
-            if (has_override) {
-                const glm::vec3 override_color = per_camera_colors[camera_index];
-                if (std::isfinite(override_color.x) &&
-                    std::isfinite(override_color.y) &&
-                    std::isfinite(override_color.z)) {
-                    color = override_color;
-                }
-            }
-
-            float final_alpha = alpha;
-            if (emphasized) {
-                color = glm::vec3(1.0f, 0.55f, 0.0f);
-                final_alpha = std::min(1.0f, final_alpha + 0.4f);
-            }
-            if (focused) {
-                color = is_validation ? glm::vec3(0.9f, 0.75f, 0.0f)
-                                      : glm::vec3(1.0f, 0.55f, 0.0f);
-                final_alpha = std::min(1.0f, final_alpha + 0.3f);
-            }
-            if (disabled) {
-                color = glm::mix(color, glm::vec3(0.5f), 0.5f);
-                final_alpha *= 0.5f;
-            }
-            return glm::vec4(color, std::clamp(final_alpha, 0.0f, 1.0f));
-        }
-
         [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
             const lfs::core::Camera& camera,
             const glm::mat4& visualizer_camera_to_world,
@@ -4393,6 +4357,19 @@ namespace lfs::vis::gui {
             return std::nullopt;
         }
 
+        // Some Wayland compositors independently present the custom SDL cursor
+        // and the Vulkan selection-brush fallback. SDL may use XWayland inside a
+        // Wayland desktop, so consult the session markers as well as its active
+        // video driver. The fallback has identical selection semantics, so keep
+        // hardware brush cursors off in these sessions to avoid a duplicate ring.
+        const char* const video_driver = SDL_GetCurrentVideoDriver();
+        const char* const session_type = std::getenv("XDG_SESSION_TYPE");
+        if ((video_driver && std::strcmp(video_driver, "wayland") == 0) ||
+            (session_type && std::strcmp(session_type, "wayland") == 0) ||
+            std::getenv("WAYLAND_DISPLAY")) {
+            return std::nullopt;
+        }
+
         const auto* const selection_tool = viewer_->getSelectionTool();
         if (!selection_tool || !selection_tool->isEnabled() ||
             viewer_->getEditorContext().getActiveTool() != ToolType::Selection) {
@@ -5115,16 +5092,6 @@ namespace lfs::vis::gui {
         }
 
         result.file_times = std::move(next_times);
-        return result;
-    }
-
-    GuiManager::DevResourceScanResult GuiManager::scanDevResourceFiles(const bool detect_changes) {
-        auto result = scanDevResourceFilesSnapshot(dev_resource_watch_.rml_dir,
-                                                   dev_resource_watch_.locale_dir,
-                                                   dev_resource_watch_.file_times,
-                                                   detect_changes);
-        if (!result.scan_failed)
-            dev_resource_watch_.file_times = result.file_times;
         return result;
     }
 

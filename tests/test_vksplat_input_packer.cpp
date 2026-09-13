@@ -110,17 +110,17 @@ namespace {
         const std::size_t n = in.n;
         const int shn_coeffs = in.shn_coeffs;
 
-        Tensor means = Tensor::from_vector(in.means, {n, std::size_t{3}}, Device::CUDA).to(DataType::Float32);
-        Tensor sh0 = Tensor::from_vector(in.sh0, {n, std::size_t{1}, std::size_t{3}}, Device::CUDA).to(DataType::Float32);
+        Tensor means = Tensor::from_vector(in.means, {n, std::size_t{3}}, Device::GPU).to(DataType::Float32);
+        Tensor sh0 = Tensor::from_vector(in.sh0, {n, std::size_t{1}, std::size_t{3}}, Device::GPU).to(DataType::Float32);
         Tensor shN = shn_coeffs > 0
                          ? Tensor::from_vector(in.shN,
                                                {n, static_cast<std::size_t>(shn_coeffs), std::size_t{3}},
-                                               Device::CUDA)
+                                               Device::GPU)
                                .to(DataType::Float32)
                          : Tensor{};
-        Tensor scaling = Tensor::from_vector(in.scaling, {n, std::size_t{3}}, Device::CUDA).to(DataType::Float32);
-        Tensor rotation = Tensor::from_vector(in.rotation, {n, std::size_t{4}}, Device::CUDA).to(DataType::Float32);
-        Tensor opacity = Tensor::from_vector(in.opacity, {n, std::size_t{1}}, Device::CUDA).to(DataType::Float32);
+        Tensor scaling = Tensor::from_vector(in.scaling, {n, std::size_t{3}}, Device::GPU).to(DataType::Float32);
+        Tensor rotation = Tensor::from_vector(in.rotation, {n, std::size_t{4}}, Device::GPU).to(DataType::Float32);
+        Tensor opacity = Tensor::from_vector(in.opacity, {n, std::size_t{1}}, Device::GPU).to(DataType::Float32);
 
         auto splat = std::make_unique<SplatData>(in.max_sh_degree,
                                                  std::move(means),
@@ -731,7 +731,7 @@ TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {
     SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x0A91u);
     auto splat = buildSplatData(in);
 
-    Tensor copied = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+    Tensor copied = Tensor::empty({n}, Device::GPU, DataType::Float32);
     auto copy_status = copyRawOpacityToBuffer(*splat, copied.ptr<float>(), copied.stream());
     ASSERT_TRUE(copy_status.has_value()) << copy_status.error();
     const auto unmasked = copied.cpu().to_vector();
@@ -743,11 +743,11 @@ TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {
     const auto mask = Tensor::from_vector(
                           std::vector<int>{0, 1, 0, 1, 0},
                           {n},
-                          Device::CUDA)
+                          Device::GPU)
                           .to(DataType::Bool);
     splat->soft_delete(mask);
 
-    Tensor masked = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+    Tensor masked = Tensor::empty({n}, Device::GPU, DataType::Float32);
     copy_status = copyRawOpacityToBuffer(*splat, masked.ptr<float>(), masked.stream());
     ASSERT_TRUE(copy_status.has_value()) << copy_status.error();
     const auto masked_values = masked.cpu().to_vector();
@@ -770,7 +770,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     const auto first_mask = Tensor::from_vector(
                                 std::vector<int>{0, 1, 0, 0, 0},
                                 {n},
-                                Device::CUDA)
+                                Device::GPU)
                                 .to(DataType::Bool);
     const Tensor first_newly_deleted = splat->soft_delete(first_mask);
 
@@ -787,7 +787,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     const auto second_mask = Tensor::from_vector(
                                  std::vector<int>{0, 1, 1, 0, 1},
                                  {n},
-                                 Device::CUDA)
+                                 Device::GPU)
                                  .to(DataType::Bool);
     const Tensor second_newly_deleted = splat->soft_delete(second_mask);
 
@@ -802,7 +802,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     const auto undelete_mask = Tensor::from_vector(
                                    std::vector<int>{0, 1, 0, 0, 1},
                                    {n},
-                                   Device::CUDA)
+                                   Device::GPU)
                                    .to(DataType::Bool);
     splat->undelete(undelete_mask);
 
@@ -820,7 +820,7 @@ namespace {
 
     void assertDeletedMaskPackerContract(const SplatData& splat) {
         const auto n = static_cast<std::size_t>(splat.size());
-        Tensor opacity_dst = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        Tensor opacity_dst = Tensor::empty({n}, Device::GPU, DataType::Float32);
         auto status = copyRawOpacityToBuffer(splat, opacity_dst.ptr<float>(), opacity_dst.stream());
         ASSERT_TRUE(status.has_value()) << status.error()
                                         << " (N=" << n
@@ -831,7 +831,7 @@ namespace {
         if (splat.has_deleted_mask()) {
             const Tensor& deleted = splat.deleted();
             EXPECT_EQ(deleted.dtype(), DataType::Bool);
-            EXPECT_EQ(deleted.device(), Device::CUDA);
+            EXPECT_EQ(deleted.device(), Device::GPU);
             EXPECT_TRUE(deleted.is_contiguous());
             EXPECT_EQ(static_cast<std::size_t>(deleted.numel()), n);
         }
@@ -876,7 +876,7 @@ TEST(VksplatInputPackerTest, GrowWithActiveDeletedMaskKeepsPackerContract) {
     const auto mask = Tensor::from_vector(
                           std::vector<int>{0, 1, 0, 0, 1, 0, 0, 0},
                           {n},
-                          Device::CUDA)
+                          Device::GPU)
                           .to(DataType::Bool);
     splat->soft_delete(mask);
     ASSERT_TRUE(splat->has_deleted_mask());
@@ -901,7 +901,7 @@ TEST(VksplatInputPackerTest, CompactWithActiveDeletedMaskKeepsPackerContract) {
     const auto mask = Tensor::from_vector(
                           std::vector<int>{0, 1, 0, 1, 0, 0, 1, 0, 0, 0},
                           {n},
-                          Device::CUDA)
+                          Device::GPU)
                           .to(DataType::Bool);
     splat->soft_delete(mask);
     ASSERT_TRUE(splat->has_deleted_mask());
@@ -926,7 +926,7 @@ TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy)
     const auto mask = Tensor::from_vector(
                           std::vector<int>{0, 1, 0, 0, 1, 0},
                           {n},
-                          Device::CUDA)
+                          Device::GPU)
                           .to(DataType::Bool);
     splat->soft_delete(mask);
 
@@ -939,7 +939,7 @@ TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy)
               static_cast<std::size_t>(splat->size()));
 
     Tensor opacity_dst = Tensor::empty({static_cast<std::size_t>(splat->size())},
-                                       Device::CUDA, DataType::Float32);
+                                       Device::GPU, DataType::Float32);
     auto status = copyRawOpacityToBuffer(*splat, opacity_dst.ptr<float>(), opacity_dst.stream());
     // Soft-skip path must succeed (stale mask treated as absent for this frame).
     ASSERT_TRUE(status.has_value()) << status.error();

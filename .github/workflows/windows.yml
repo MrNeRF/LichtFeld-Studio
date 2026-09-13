@@ -30,7 +30,11 @@ jobs:
       - name: Download Python embeddable
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip" -OutFile python-embed.zip
+          # Retry connection resets as well as HTTP errors; never extract a failed download.
+          curl.exe --fail --location --retry 3 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 180 --output python-embed.zip "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download Python embeddable after retries (curl exit $LASTEXITCODE)"
+          }
           Expand-Archive python-embed.zip -DestinationPath python-embed
 
       - name: Test uv sync with embedded Python

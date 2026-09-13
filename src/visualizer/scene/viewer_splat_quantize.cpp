@@ -9,6 +9,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 
 #include <algorithm>
@@ -29,6 +30,9 @@ namespace lfs::vis {
 
         [[nodiscard]] bool rendererReady(const lfs::core::Tensor& tensor) {
             if (!tensor.is_valid() || tensor.numel() == 0) {
+                return true;
+            }
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
                 return true;
             }
             return tensor.is_external_storage() &&
@@ -73,6 +77,37 @@ namespace lfs::vis {
             throw std::runtime_error(std::move(message));
         }
 
+        void decodeViewerSplatShNIfNeeded(const std::filesystem::path& path,
+                                          lfs::core::SplatData& model) {
+            const bool shN_is_float16 = model.shN_raw().is_valid() &&
+                                        model.shN_raw().dtype() == lfs::core::DataType::Float16;
+            if (lfs::core::sh_value_quant::enabled() || !shN_is_float16) {
+                return;
+            }
+            const size_t capacity = model.means_raw().is_valid()
+                                        ? std::max(model.means_raw().capacity(), static_cast<size_t>(model.size()))
+                                        : static_cast<size_t>(model.size());
+            if (model.shN_value_quantized()) {
+                model.shN_set_from_canonical(model.shN_canonical(), capacity);
+            } else {
+                model.shN_raw() = model.shN_raw().to(lfs::core::DataType::Float32);
+            }
+            if (!model.has_tensor_allocator() || !model.shN_raw().is_valid() ||
+                model.shN_raw().numel() == 0) {
+                return;
+            }
+            const lfs::core::Tensor source = model.shN_raw().is_contiguous()
+                                                 ? model.shN_raw()
+                                                 : model.shN_raw().contiguous();
+            lfs::core::Tensor destination = model.allocate_named_param(
+                source.shape(), source.capacity(), lfs::core::DataType::Float32, "SplatData.shN");
+            destination.set_name("SplatData.shN");
+            destination.copy_from(source);
+            model.shN_raw() = std::move(destination);
+            LOG_INFO("Viewer SH q16 disabled for '{}'; decoded SH rest into FP32 Vulkan-external storage",
+                     lfs::core::path_to_utf8(path));
+        }
+
         void encodeViewerSplatShNIfNeeded(const std::filesystem::path& path,
                                           lfs::core::SplatData& model) {
             if (!model.has_tensor_allocator()) {
@@ -81,9 +116,12 @@ namespace lfs::vis {
                 return;
             }
 
+            decodeViewerSplatShNIfNeeded(path, model);
+
             const bool shN_only_not_ready =
                 baseAttrsRendererReady(model) && !shNStorageRendererReady(model);
             const bool should_encode =
+                lfs::core::sh_value_quant::enabled() &&
                 (isPlyPath(path) || shN_only_not_ready) &&
                 !model.shN_value_quantized() &&
                 model.shN_raw().is_valid() &&

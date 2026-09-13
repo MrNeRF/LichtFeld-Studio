@@ -774,16 +774,6 @@ namespace lfs::vis::gui {
         apply();
     }
 
-    bool VramHudOverlay::isDueForProcessSample(std::chrono::milliseconds interval) {
-        const auto now = std::chrono::steady_clock::now();
-        if (last_process_sample_ == std::chrono::steady_clock::time_point{} ||
-            now - last_process_sample_ >= interval) {
-            last_process_sample_ = now;
-            return true;
-        }
-        return false;
-    }
-
     void VramHudOverlay::apply() {
         if (!document_ || !root_)
             return;

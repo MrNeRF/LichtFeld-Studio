@@ -56,15 +56,6 @@ namespace lfs::training::kernels {
         R[8] = 1.0f - 2.0f * (x * x + y * y); // r22
     }
 
-    /**
-     * @brief Matrix-vector multiply: out = R * v (where R is 3x3, v is 3x1)
-     */
-    __device__ inline void matvec_3x3(const float* R, const float* v, float* out) {
-        out[0] = R[0] * v[0] + R[1] * v[1] + R[2] * v[2];
-        out[1] = R[3] * v[0] + R[4] * v[1] + R[5] * v[2];
-        out[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
-    }
-
     // ============================================================================
     // Duplicate Gaussians Kernels (Split into two to avoid warp divergence)
     // ============================================================================
@@ -525,7 +516,7 @@ namespace lfs::training::kernels {
         if (scratch) {
             LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
                            "positive-median input exceeds CUB's int item-count limit");
-            scratch->ensure_n(n, lfs::core::Device::CUDA);
+            scratch->ensure_n(n, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(scratch->n_capacity >= n &&
                                scratch->selected.is_valid() &&
                                scratch->selected.ptr<float>() != nullptr,
@@ -550,7 +541,7 @@ namespace lfs::training::kernels {
                 cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
                                       n_int, PositivePred{}, stream),
                 "positive_median select size");
-            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::CUDA);
+            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(temp_bytes == 0 ||
                                (scratch->select_temp.is_valid() &&
                                 scratch->select_temp_bytes >= temp_bytes &&
@@ -570,7 +561,7 @@ namespace lfs::training::kernels {
                 cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
                                                n_int, 0, sizeof(float) * 8, stream),
                 "positive_median sort size");
-            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::CUDA);
+            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(sort_bytes == 0 ||
                                (scratch->sort_temp.is_valid() &&
                                 scratch->sort_temp_bytes >= sort_bytes &&

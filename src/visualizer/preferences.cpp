@@ -588,6 +588,48 @@ namespace lfs::vis {
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
     }
 
+    void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["tensor_backend"] = {
+            {"backend", state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda"},
+            {"vulkan_device", state.options.vulkan_device},
+            {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
+            {"force_fp32_half", state.options.force_fp32_half},
+            {"force_no_atomic_float", state.options.force_no_atomic_float},
+            {"viewer_vulkan_inputs", state.options.viewer_vulkan_inputs},
+        };
+        impl_->saveLocked();
+    }
+
+    TensorPreferenceState UserPreferences::tensorBackend() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        TensorPreferenceState result;
+        const auto it = impl_->values.find("tensor_backend");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto backend = it->find("backend"); backend != it->end() &&
+                                                      backend->is_string() && *backend == "vulkan")
+            result.backend = core::GpuBackend::Vulkan;
+        if (const auto device = it->find("vulkan_device"); device != it->end() && device->is_string())
+            result.options.vulkan_device = device->get<std::string>();
+        if (const auto mode = it->find("vulkan_validation"); mode != it->end() && mode->is_number_integer()) {
+            const auto value = mode->get<std::int64_t>();
+            if (value >= 0 && value <= 2)
+                result.options.vulkan_validation = static_cast<int>(value);
+        }
+        const auto read_bool = [&](const char* key, bool& value) {
+            const auto field = it->find(key);
+            if (field != it->end() && field->is_boolean())
+                value = field->get<bool>();
+        };
+        read_bool("force_fp32_half", result.options.force_fp32_half);
+        read_bool("force_no_atomic_float", result.options.force_no_atomic_float);
+        read_bool("viewer_vulkan_inputs", result.options.viewer_vulkan_inputs);
+        return result;
+    }
+
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

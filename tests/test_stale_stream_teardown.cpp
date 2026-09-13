@@ -8,9 +8,9 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-#include "core/tensor/internal/stream_lifetime.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -32,7 +32,7 @@ namespace {
     };
 
     void stamp_if_cuda(Tensor& tensor, cudaStream_t stream) {
-        if (tensor.is_valid() && tensor.device() == Device::CUDA) {
+        if (tensor.is_valid() && tensor.device() == Device::GPU) {
             tensor.set_stream(stream);
         }
     }
@@ -46,7 +46,7 @@ TEST_F(StaleStreamTeardownTest, DeadHomeStreamCpuDoesNotPoisonThread) {
     Tensor tensor;
     {
         CUDAStreamGuard guard(user_stream);
-        tensor = Tensor::full({8}, 3.25f, Device::CUDA);
+        tensor = Tensor::full({8}, 3.25f, Device::GPU);
         tensor = tensor * 2.0f;
     }
     ASSERT_TRUE(tensor.is_valid());
@@ -66,7 +66,7 @@ TEST_F(StaleStreamTeardownTest, DeadHomeStreamCpuDoesNotPoisonThread) {
 
     EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 
-    const Tensor fresh = Tensor::ones({32}, Device::CUDA);
+    const Tensor fresh = Tensor::ones({32}, Device::GPU);
     EXPECT_EQ(fresh.count_nonzero(), 32u);
     EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 }
@@ -79,22 +79,22 @@ TEST_F(StaleStreamTeardownTest, DetachFromStreamsCoversBoundsThenCanonicalSuccee
     constexpr int sh_degree = 1;
 
     SplatData model(sh_degree,
-                    Tensor::zeros({n, size_t{3}}, Device::CUDA),
-                    Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA),
-                    Tensor::zeros({n, size_t{3}, size_t{3}}, Device::CUDA),
-                    Tensor::zeros({n, size_t{3}}, Device::CUDA),
-                    Tensor::zeros({n, size_t{4}}, Device::CUDA),
-                    Tensor::zeros({n, size_t{1}}, Device::CUDA),
+                    Tensor::zeros({n, size_t{3}}, Device::GPU),
+                    Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU),
+                    Tensor::zeros({n, size_t{3}, size_t{3}}, Device::GPU),
+                    Tensor::zeros({n, size_t{3}}, Device::GPU),
+                    Tensor::zeros({n, size_t{4}}, Device::GPU),
+                    Tensor::zeros({n, size_t{1}}, Device::GPU),
                     1.0f);
 
     const auto coeffs_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
     ASSERT_GT(coeffs_rest, 0u);
     model.shN() = Tensor::zeros({sh_value_quant::sh_value_u16_count(n, coeffs_rest)},
-                                Device::CUDA, DataType::Float16);
+                                Device::GPU, DataType::Float16);
     model.shN_value_bounds() =
-        Tensor::zeros({sh_value_quant::n_bounds_for_prims(n), size_t{2}}, Device::CUDA);
-    model.deleted() = Tensor::zeros_bool({n}, Device::CUDA);
-    model._densification_info = Tensor::zeros({n}, Device::CUDA);
+        Tensor::zeros({sh_value_quant::n_bounds_for_prims(n), size_t{2}}, Device::GPU);
+    model.deleted() = Tensor::zeros_bool({n}, Device::GPU);
+    model._densification_info = Tensor::zeros({n}, Device::GPU);
 
     stamp_if_cuda(model.means_raw(), user_stream);
     stamp_if_cuda(model.sh0_raw(), user_stream);
@@ -123,7 +123,7 @@ TEST_F(StaleStreamTeardownTest, DetachFromStreamsCoversBoundsThenCanonicalSuccee
     };
     for (const Tensor* tensor : members) {
         ASSERT_TRUE(tensor->is_valid());
-        ASSERT_EQ(tensor->device(), Device::CUDA);
+        ASSERT_EQ(tensor->device(), Device::GPU);
         EXPECT_EQ(tensor->stream(), nullptr);
     }
     EXPECT_EQ(model.shN_value_bounds().stream(), nullptr);
@@ -160,7 +160,7 @@ TEST_F(StaleStreamTeardownTest, RetiredStreamRegistryReuseCycle) {
     Tensor tensor;
     {
         CUDAStreamGuard guard(stream_a);
-        tensor = Tensor::full({4}, 1.0f, Device::CUDA);
+        tensor = Tensor::full({4}, 1.0f, Device::GPU);
     }
     ASSERT_TRUE(tensor.is_valid());
     ASSERT_EQ(tensor.stream(), stream_a);

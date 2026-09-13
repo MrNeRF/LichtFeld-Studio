@@ -4,7 +4,6 @@
 
 from importlib import import_module
 from pathlib import Path
-import re
 from types import ModuleType, SimpleNamespace
 import sys
 
@@ -226,20 +225,3 @@ def test_document_sync_binds_toolbar_model_without_task_progress(overlays_module
     assert "show_import_overlay" not in document.model.bound_funcs
     assert "show_video_overlay" not in document.model.bound_funcs
     assert "overlay_action" not in document.model.bound_events
-
-
-def test_progress_overlay_is_a_separate_full_window_rml_surface():
-    repo_root = Path(__file__).resolve().parents[2]
-    resources = repo_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    viewport_rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
-    progress_rml = (resources / "progress_overlay.rml").read_text(encoding="utf-8")
-    progress_rcss = (resources / "progress_overlay.rcss").read_text(encoding="utf-8")
-
-    assert "import-status-overlay" not in viewport_rml
-    assert "video-status-overlay" not in viewport_rml
-    assert 'id="progress-backdrop"' in progress_rml
-    assert 'id="progress-dialog"' in progress_rml
-    backdrop_rule = re.search(r"\.progress-backdrop\s*\{(?P<body>[^}]*)\}", progress_rcss)
-    assert backdrop_rule is not None
-    assert "width: 100%;" in backdrop_rule.group("body")
-    assert "height: 100%;" in backdrop_rule.group("body")

@@ -15,7 +15,7 @@ using namespace lfs::training::kernels;
 namespace {
 
     Tensor make_rgb(int H, int W, float base) {
-        auto t = Tensor::empty({1, 3, static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+        auto t = Tensor::empty({1, 3, static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU);
         auto cpu = Tensor::empty({1, 3, static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CPU);
         float* p = cpu.ptr<float>();
         for (int c = 0; c < 3; ++c) {
@@ -27,7 +27,7 @@ namespace {
                 }
             }
         }
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
 } // namespace

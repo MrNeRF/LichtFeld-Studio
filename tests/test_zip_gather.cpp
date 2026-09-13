@@ -33,15 +33,15 @@ namespace {
 TEST_F(ZipGatherTest, TwoInputsHonorIndependentStridesAndClampIndices) {
     auto input1 = Tensor::from_vector(
         std::vector<float>{10.0f, 11.0f, 20.0f, 21.0f, 30.0f, 31.0f},
-        {6}, Device::CUDA);
+        {6}, Device::GPU);
     auto input2 = Tensor::from_vector(
         std::vector<float>{100.0f, 101.0f, 102.0f,
                            200.0f, 201.0f, 202.0f,
                            300.0f, 301.0f, 302.0f},
-        {9}, Device::CUDA);
-    auto indices = Tensor::from_vector(std::vector<int>{-1, 0, 2, 7}, {4}, Device::CUDA);
-    auto output1 = Tensor::empty({4}, Device::CUDA);
-    auto output2 = Tensor::empty({4}, Device::CUDA);
+        {9}, Device::GPU);
+    auto indices = Tensor::from_vector(std::vector<int>{-1, 0, 2, 7}, {4}, Device::GPU);
+    auto output1 = Tensor::empty({4}, Device::GPU);
+    auto output2 = Tensor::empty({4}, Device::GPU);
 
     tensor_ops::launch_zip_gather_2(
         input1.ptr<float>(), input2.ptr<float>(), indices.ptr<int>(),
@@ -54,19 +54,19 @@ TEST_F(ZipGatherTest, TwoInputsHonorIndependentStridesAndClampIndices) {
 
 TEST_F(ZipGatherTest, ThreeInputsHonorIndependentStrides) {
     auto input1 = Tensor::from_vector(
-        std::vector<float>{10.0f, 20.0f, 30.0f}, {3}, Device::CUDA);
+        std::vector<float>{10.0f, 20.0f, 30.0f}, {3}, Device::GPU);
     auto input2 = Tensor::from_vector(
         std::vector<float>{100.0f, 101.0f, 200.0f, 201.0f, 300.0f, 301.0f},
-        {6}, Device::CUDA);
+        {6}, Device::GPU);
     auto input3 = Tensor::from_vector(
         std::vector<float>{1000.0f, 1001.0f, 1002.0f, 1003.0f,
                            2000.0f, 2001.0f, 2002.0f, 2003.0f,
                            3000.0f, 3001.0f, 3002.0f, 3003.0f},
-        {12}, Device::CUDA);
-    auto indices = Tensor::from_vector(std::vector<int>{1, 0, 2}, {3}, Device::CUDA);
-    auto output1 = Tensor::empty({3}, Device::CUDA);
-    auto output2 = Tensor::empty({3}, Device::CUDA);
-    auto output3 = Tensor::empty({3}, Device::CUDA);
+        {12}, Device::GPU);
+    auto indices = Tensor::from_vector(std::vector<int>{1, 0, 2}, {3}, Device::GPU);
+    auto output1 = Tensor::empty({3}, Device::GPU);
+    auto output2 = Tensor::empty({3}, Device::GPU);
+    auto output3 = Tensor::empty({3}, Device::GPU);
 
     tensor_ops::launch_zip_gather_3(
         input1.ptr<float>(), input2.ptr<float>(), input3.ptr<float>(), indices.ptr<int>(),
@@ -80,10 +80,10 @@ TEST_F(ZipGatherTest, ThreeInputsHonorIndependentStrides) {
 }
 
 TEST_F(ZipGatherTest, EmptyInputLeavesOutputsUntouched) {
-    auto input = Tensor::empty({0}, Device::CUDA);
-    auto indices = Tensor::from_vector(std::vector<int>{0, 1}, {2}, Device::CUDA);
-    auto output1 = Tensor::full({2}, -7.0f, Device::CUDA);
-    auto output2 = Tensor::full({2}, -9.0f, Device::CUDA);
+    auto input = Tensor::empty({0}, Device::GPU);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 1}, {2}, Device::GPU);
+    auto output1 = Tensor::full({2}, -7.0f, Device::GPU);
+    auto output2 = Tensor::full({2}, -9.0f, Device::GPU);
 
     tensor_ops::launch_zip_gather_2(
         input.ptr<float>(), input.ptr<float>(), indices.ptr<int>(),

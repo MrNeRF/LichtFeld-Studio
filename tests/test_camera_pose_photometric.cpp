@@ -3,6 +3,7 @@
 
 #include "core/argument_parser.hpp"
 #include "core/camera.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -530,6 +531,14 @@ namespace {
     }
 
     TEST_F(CameraPosePhotometricTest, RejectsInvalidContractsBeforeBackward) {
+        // Pose uploads feed CUDA kernels even when the caller selects Vulkan
+        // for generic GPU factories. This needs no Vulkan device allocation.
+        {
+            const GpuBackendScope backend_scope(GpuBackend::Vulkan);
+            const auto pose = make_fastgs_pose_override(camera->uid(), identity_transform());
+            EXPECT_EQ(gpu_backend_of(pose.world_view_transform), GpuBackend::CUDA);
+            EXPECT_EQ(gpu_backend_of(pose.cam_position), GpuBackend::CUDA);
+        }
         auto invalid_pose = pose_tensors(identity_transform());
         invalid_pose.cam_position = Tensor::zeros({3}, Device::CPU);
         EXPECT_FALSE(fast_rasterize_forward(*camera, *scene, background, 0, 0, 0, 0,

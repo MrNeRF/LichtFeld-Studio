@@ -10,7 +10,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include <cuda_runtime_api.h>
 

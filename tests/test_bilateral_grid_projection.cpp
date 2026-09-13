@@ -48,7 +48,7 @@ namespace {
                 }
             }
         }
-        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
 
         std::vector<float> means(static_cast<size_t>(c), 0.0f);
         for (int ni = 0; ni < n; ++ni) {
@@ -119,7 +119,7 @@ namespace {
                 }
             }
         }
-        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
         grid.project_mean(true);
         const std::vector<float> after = cpu_copy(grids);
         for (int ni = 0; ni < n; ++ni) {
@@ -215,7 +215,7 @@ namespace {
         for (size_t i = 0; i < host.size(); ++i) {
             host[i] += 0.05f * std::sin(0.17f * static_cast<float>(i));
         }
-        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
 
         const float gpu_tv = grid.tv_loss_gpu().cpu().item<float>();
         const float cpu = cpu_tv(host, 2, 12, 3, 3, 3);
@@ -349,7 +349,7 @@ namespace {
         for (size_t i = 0; i < host.size(); ++i) {
             host[i] += 0.05f * std::sin(0.19f * static_cast<float>(i));
         }
-        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
 
         const int slice = grid.channels() * kL * kH * kW;
         std::vector<float> grad0(static_cast<size_t>(slice));
@@ -382,7 +382,7 @@ namespace {
                 // are omitted (standard lazy Adam).
                 cpu_dense_adam_step(cpu[img], *grads[img], step, current_lr, config);
                 grid.grad_slice().copy_from(
-                    Tensor::from_vector(*grads[img], grid.grad_slice().shape(), Device::CUDA));
+                    Tensor::from_vector(*grads[img], grid.grad_slice().shape(), Device::GPU));
                 grid.optimizer_step(img);
             }
             grid.scheduler_step();
@@ -400,7 +400,7 @@ namespace {
         // All-images optimizer_step must stay equivalent to dense Adam: every
         // image is visited each call, so last_step catch-up is a no-op.
         BilateralGrid dense_grid(kImages, kW, kH, kL, kIters, config);
-        dense_grid.grids().copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        dense_grid.grids().copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
         CpuAdamState dense_cpu[2];
         for (int img = 0; img < kImages; ++img) {
             dense_cpu[img].param.assign(host.begin() + img * slice,
@@ -414,7 +414,7 @@ namespace {
             for (int img = 0; img < kImages; ++img) {
                 cpu_dense_adam_step(dense_cpu[img], *grads[img], step, current_lr, config);
                 dense_grid.grad_slice().copy_from(
-                    Tensor::from_vector(*grads[img], dense_grid.grad_slice().shape(), Device::CUDA));
+                    Tensor::from_vector(*grads[img], dense_grid.grad_slice().shape(), Device::GPU));
                 dense_grid.optimizer_step(img);
             }
             dense_grid.scheduler_step();
@@ -441,7 +441,7 @@ namespace {
             host[i] = 0.15f * std::sin(0.23f * static_cast<float>(i + 1)) +
                       0.07f * std::cos(0.09f * static_cast<float>(i));
         }
-        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::CUDA));
+        grids.copy_from(Tensor::from_vector(host, grids.shape(), Device::GPU));
         grid.project_mean(false);
 
         const int c = grid.channels();

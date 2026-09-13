@@ -876,8 +876,6 @@ namespace lfs::vis {
         void requestRenderFollowUp();
         void requestTemporalFollowUp();
         void notifyAsyncLodResultsReady();
-        void requestResizeTrainingPause(TrainerManager* trainer_manager);
-        void releaseResizeTrainingPause();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         [[nodiscard]] GTComparisonImageLookup getOrQueueGTComparisonImage(
             GTComparisonImageJobRequest request);
@@ -1071,8 +1069,6 @@ namespace lfs::vis {
         bool gt_async_held_flip_y_ = false;
         lfs::rendering::FrameMetadata gt_async_held_metadata_{};
         std::optional<GTPresentedView> gt_async_held_view_;
-        TrainerManager* resize_training_pause_trainer_ = nullptr;
-        bool resize_training_pause_active_ = false;
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};

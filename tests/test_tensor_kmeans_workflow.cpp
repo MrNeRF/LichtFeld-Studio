@@ -16,8 +16,8 @@ TEST(TensorKMeansWorkflowTest, KMeansPlusPlusSelectionPipeline) {
                            0.0f, 1.0f,
                            1.0f, 0.0f,
                            2.0f, 2.0f},
-        {4, 2}, Device::CUDA);
-    auto centroids = Tensor::zeros({2, 2}, Device::CUDA);
+        {4, 2}, Device::GPU);
+    auto centroids = Tensor::zeros({2, 2}, Device::GPU);
     centroids[0] = data[0];
 
     const auto active_centroids = centroids.slice(0, 0, 1);

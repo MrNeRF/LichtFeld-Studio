@@ -599,7 +599,7 @@ namespace lfs::test::licht {
     }
 
     std::unique_ptr<core::SplatData> make_matrix_splat(const bool cuda) {
-        const Device device = cuda ? Device::CUDA : Device::CPU;
+        const Device device = cuda ? Device::GPU : Device::CPU;
         constexpr std::size_t count = 4;
         std::vector<float> means{
             1.0f,

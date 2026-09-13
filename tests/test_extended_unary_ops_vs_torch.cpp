@@ -111,7 +111,7 @@ protected:
         }
         return Tensor::from_blob(t_cpu.data_ptr<float>(), TensorShape(shape),
                                  Device::CPU, DataType::Float32)
-            .to(Device::CUDA);
+            .to(Device::GPU);
     }
 };
 
@@ -394,7 +394,7 @@ TEST_F(ExtendedUnaryOpsVsTorchTest, Isfinite_AllFinite) {
 
 TEST_F(ExtendedUnaryOpsVsTorchTest, AllOps_EmptyTensor) {
     auto torch_t = torch::empty({0}, torch::device(torch::kCUDA));
-    auto ours = Tensor::empty({0}, Device::CUDA, DataType::Float32);
+    auto ours = Tensor::empty({0}, Device::GPU, DataType::Float32);
 
     // These should all handle empty tensors gracefully
     EXPECT_EQ(ours.log2().numel(), 0);

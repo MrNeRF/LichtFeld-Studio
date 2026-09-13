@@ -8,6 +8,7 @@
 #include "core/exportable_storage.hpp"
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/tensor_backend.hpp"
 #include "window/window_manager.hpp"
 
 #include <algorithm>
@@ -251,7 +252,7 @@ namespace lfs::vis {
         return lfs::core::Tensor::from_external_owner(
             cuda_ptr,
             std::move(shape),
-            lfs::core::Device::CUDA,
+            lfs::core::Device::GPU,
             dtype,
             owner,
             cap_rows,
@@ -475,7 +476,7 @@ namespace lfs::vis {
             auto t = lfs::core::Tensor::from_external_owner(
                 data,
                 std::move(shape),
-                lfs::core::Device::CUDA,
+                lfs::core::Device::GPU,
                 dtype,
                 std::move(owner),
                 clamped,
@@ -487,6 +488,19 @@ namespace lfs::vis {
     }
 
     lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator() {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return [](lfs::core::TensorShape shape,
+                      const size_t capacity,
+                      const lfs::core::DataType dtype,
+                      const std::string_view name) -> lfs::core::Tensor {
+                (void)capacity;
+                auto tensor = lfs::core::Tensor::empty(
+                    std::move(shape), lfs::core::Device::GPU, dtype);
+                tensor.set_name(std::string{name});
+                return tensor;
+            };
+        }
+
         auto* const window_manager = services().windowOrNull();
         auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
         if (!context || !context->externalMemoryInteropEnabled()) {
@@ -500,7 +514,7 @@ namespace lfs::vis {
             const std::string debug_name{name};
             if (keepFloatShNInPooledCuda(debug_name, dtype)) {
                 auto pooled = lfs::core::Tensor::zeros_direct(
-                    std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
+                    std::move(shape), capacity, lfs::core::Device::GPU, dtype);
                 pooled.set_name(debug_name);
                 return pooled;
             }

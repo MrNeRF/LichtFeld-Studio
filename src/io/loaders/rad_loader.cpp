@@ -126,17 +126,17 @@ namespace lfs::io {
             LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration (chunks={})",
                      data.lod_tree->chunk_count());
         } else {
-            // Move tensors to CUDA for Vulkan renderer compatibility.
-            data.means_raw() = data.means_raw().to(Device::CUDA);
-            data.sh0_raw() = data.sh0_raw().to(Device::CUDA);
+            // Move tensors to GPU for Vulkan renderer compatibility.
+            data.means_raw() = data.means_raw().to(Device::GPU);
+            data.sh0_raw() = data.sh0_raw().to(Device::GPU);
             if (data.shN_raw().is_valid() && data.shN_raw().numel() > 0) {
-                data.shN_raw() = data.shN_raw().to(Device::CUDA);
+                data.shN_raw() = data.shN_raw().to(Device::GPU);
             }
-            data.scaling_raw() = data.scaling_raw().to(Device::CUDA);
-            data.rotation_raw() = data.rotation_raw().to(Device::CUDA);
-            data.opacity_raw() = data.opacity_raw().to(Device::CUDA);
+            data.scaling_raw() = data.scaling_raw().to(Device::GPU);
+            data.rotation_raw() = data.rotation_raw().to(Device::GPU);
+            data.opacity_raw() = data.opacity_raw().to(Device::GPU);
             if (data.has_deleted_mask()) {
-                data.deleted() = data.deleted().to(Device::CUDA);
+                data.deleted() = data.deleted().to(Device::GPU);
             }
         }
 

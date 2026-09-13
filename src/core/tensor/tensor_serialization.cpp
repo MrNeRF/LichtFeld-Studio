@@ -143,7 +143,7 @@ namespace lfs::core {
             throw std::runtime_error(
                 "Alternate tensor encoding requires a serialization sink");
         }
-        const Tensor host = tensor.device() == Device::CUDA ? tensor.to_pageable_host() : tensor;
+        const Tensor host = tensor.device() == Device::GPU ? tensor.to_pageable_host() : tensor;
         const Tensor src = host.is_contiguous() ? host : host.contiguous();
         if (src.dtype() != descriptor.dtype ||
             src.shape() != descriptor.serialized_shape) {
@@ -194,7 +194,7 @@ namespace lfs::core {
             if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {
                 throw std::runtime_error("Invalid tensor file: unsupported dtype");
             }
-            if (header.device > static_cast<uint8_t>(Device::CUDA)) {
+            if (header.device > static_cast<uint8_t>(Device::GPU)) {
                 throw std::runtime_error("Invalid tensor file: unsupported device");
             }
 
@@ -336,23 +336,22 @@ namespace lfs::core {
                     };
                 Tensor loaded;
                 run_timed(&TensorLoadTiming::alloc_ms, [&] {
-                    loaded = Tensor::empty(parsed.shape, Device::CUDA,
+                    loaded = Tensor::empty(parsed.shape, Device::GPU,
                                            parsed.dtype);
                     loaded.set_stream(stream);
                 });
                 if (parsed.payload_bytes > 0) {
                     run_timed(&TensorLoadTiming::read_ms, [&] {
-                        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
-                            cudaMemcpyAsync(
-                                loaded.data_ptr(), remaining.data(),
-                                static_cast<std::size_t>(parsed.payload_bytes),
-                                cudaMemcpyHostToDevice, stream),
-                            stream,
-                            reinterpret_cast<uintptr_t>(loaded.data_ptr()),
-                            reinterpret_cast<uintptr_t>(remaining.data()),
-                            static_cast<std::size_t>(parsed.payload_bytes),
-                            "while uploading serialized tensor payload shape={} dtype={} to CUDA",
-                            parsed.shape.str(), dtype_name(parsed.dtype));
+                        internal::backend_ops_for(loaded).copy_host_to_device(
+                            internal::CopyRequest{
+                                .src = internal::raw_storage_ref(
+                                    const_cast<void*>(static_cast<const void*>(remaining.data())),
+                                    parsed.dtype),
+                                .dst = internal::storage_ref(loaded),
+                                .bytes = static_cast<std::size_t>(parsed.payload_bytes),
+                                .synchronous = false,
+                                .context = internal::ExecContext{stream},
+                            });
                         loaded.record_stream(stream);
                     });
                 }

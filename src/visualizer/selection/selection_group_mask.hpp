@@ -5,6 +5,7 @@
 
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <array>
 #include <cassert>
@@ -41,31 +42,40 @@ namespace lfs::vis::selection {
         bool& cached_host_mask_valid) {
         bool device_recreated = false;
         if (!device_mask.is_valid() ||
-            device_mask.device() != core::Device::CUDA ||
+            device_mask.device() != core::Device::GPU ||
             device_mask.dtype() != core::DataType::Int32 ||
             device_mask.numel() != LOCKED_GROUPS_WORDS) {
-            device_mask = core::Tensor::zeros({LOCKED_GROUPS_WORDS}, core::Device::CUDA, core::DataType::Int32);
+            device_mask = core::Tensor::zeros({LOCKED_GROUPS_WORDS}, core::Device::GPU, core::DataType::Int32);
             device_recreated = true;
         }
 
         const auto locked_bitmask = build_locked_group_mask(scene);
         const bool needs_upload =
             device_recreated || !cached_host_mask_valid || locked_bitmask != cached_host_mask;
+        const bool host_locked_pointer =
+            !lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) ||
+            lfs::core::gpu_backend_of(device_mask) == lfs::core::GpuBackend::Vulkan;
 
         if (needs_upload) {
             cached_host_mask = locked_bitmask;
-            if (const auto err = cudaMemcpyAsync(device_mask.ptr<uint32_t>(),
-                                                 cached_host_mask.data(),
-                                                 sizeof(cached_host_mask),
-                                                 cudaMemcpyHostToDevice,
-                                                 device_mask.stream());
-                err != cudaSuccess) {
+            if (host_locked_pointer) {
+                cached_host_mask_valid = true;
+            } else if (const auto err = cudaMemcpyAsync(device_mask.ptr<uint32_t>(),
+                                                        cached_host_mask.data(),
+                                                        sizeof(cached_host_mask),
+                                                        cudaMemcpyHostToDevice,
+                                                        device_mask.stream());
+                       err != cudaSuccess) {
                 cached_host_mask_valid = false;
                 return std::unexpected(cudaGetErrorString(err));
+            } else {
+                cached_host_mask_valid = true;
             }
-            cached_host_mask_valid = true;
         }
 
+        if (host_locked_pointer) {
+            return cached_host_mask.data();
+        }
         return device_mask.ptr<uint32_t>();
     }
 

@@ -73,7 +73,7 @@ namespace {
     }
 
     lfs::core::Tensor randn(const std::vector<std::size_t>& shape, lfs::core::DataType dtype) {
-        auto t = lfs::core::Tensor::randn(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+        auto t = lfs::core::Tensor::randn(lfs::core::TensorShape(shape), lfs::core::Device::GPU);
         if (dtype == lfs::core::DataType::Float16) {
             return t.to(lfs::core::DataType::Float16);
         }
@@ -112,8 +112,8 @@ namespace {
         }
         lfs::core::free_image(data);
         const lfs::core::TensorShape shape({1, 3, static_cast<std::size_t>(height), static_cast<std::size_t>(image_width)});
-        return {lfs::core::Tensor::from_vector(left, shape, lfs::core::Device::CUDA),
-                lfs::core::Tensor::from_vector(right, shape, lfs::core::Device::CUDA)};
+        return {lfs::core::Tensor::from_vector(left, shape, lfs::core::Device::GPU),
+                lfs::core::Tensor::from_vector(right, shape, lfs::core::Device::GPU)};
     }
 
     struct Distribution {
@@ -255,7 +255,7 @@ TEST(NnBench, DISABLED_ReportTable) {
         auto ws = lfs::core::Tensor::empty(
             lfs::core::TensorShape{std::vector<std::size_t>{
                 (bytes + lfs::core::dtype_size(dtype) - 1) / lfs::core::dtype_size(dtype)}},
-            lfs::core::Device::CUDA, dtype);
+            lfs::core::Device::GPU, dtype);
         const float ms = time_op(warmup, std::max(iters / 4, 5), [&] {
             auto o = lfs::core::nn::conv2d(in, w, nullptr, p, &ws);
             (void)o;
@@ -299,7 +299,7 @@ TEST(NnBench, DISABLED_LpipsFullResolution) {
         if (only_dtype != nullptr && std::strcmp(only_dtype, label) != 0) {
             continue;
         }
-        auto loaded = lfs::core::nn::models::Lpips::load(weights, lfs::core::Device::CUDA, dtype);
+        auto loaded = lfs::core::nn::models::Lpips::load(weights, lfs::core::Device::GPU, dtype);
         ASSERT_TRUE(loaded.has_value()) << loaded.error().detail();
         auto model = std::move(*loaded);
         const auto result = timed_lpips(model, pair.first, pair.second);

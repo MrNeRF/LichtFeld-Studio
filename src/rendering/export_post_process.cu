@@ -18,41 +18,6 @@ namespace lfs::rendering::exportpp {
             return static_cast<unsigned char>(clamped * 255.0f + 0.5f);
         }
 
-        __global__ void unpack_u8_hwc_kernel(const unsigned char* __restrict__ src, const int num_pixels,
-                                             const int src_channels, float* __restrict__ rgb_chw,
-                                             float* __restrict__ alpha) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= num_pixels)
-                return;
-
-            constexpr float kInv255 = 1.0f / 255.0f;
-            const unsigned char* const px = src + static_cast<size_t>(idx) * static_cast<size_t>(src_channels);
-            const size_t np = static_cast<size_t>(num_pixels);
-            rgb_chw[idx] = static_cast<float>(px[0]) * kInv255;
-            rgb_chw[np + idx] = static_cast<float>(px[1]) * kInv255;
-            rgb_chw[2 * np + idx] = static_cast<float>(px[2]) * kInv255;
-            if (alpha != nullptr) {
-                alpha[idx] = static_cast<float>(px[3]) * kInv255;
-            }
-        }
-
-        __global__ void pack_chw_u8_hwc_kernel(const float* __restrict__ rgb_chw, const float* __restrict__ alpha,
-                                               unsigned char* __restrict__ dst, const int num_pixels,
-                                               const int dst_channels) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= num_pixels)
-                return;
-
-            const size_t np = static_cast<size_t>(num_pixels);
-            unsigned char* const px = dst + static_cast<size_t>(idx) * static_cast<size_t>(dst_channels);
-            px[0] = floatToU8(rgb_chw[idx]);
-            px[1] = floatToU8(rgb_chw[np + idx]);
-            px[2] = floatToU8(rgb_chw[2 * np + idx]);
-            if (dst_channels == 4) {
-                px[3] = floatToU8(alpha[idx]);
-            }
-        }
-
         __global__ void composite_environment_band_kernel(const CompositeParams p,
                                                           const float* __restrict__ env_pixels,
                                                           const float* __restrict__ rgb_chw,
@@ -92,20 +57,6 @@ namespace lfs::rendering::exportpp {
         }
 
     } // namespace
-
-    cudaError_t launchUnpackU8Hwc(const unsigned char* const src, const int num_pixels, const int src_channels,
-                                  float* const rgb_chw, float* const alpha, const cudaStream_t stream) {
-        unpack_u8_hwc_kernel<<<divUp(num_pixels, kBlockSize), kBlockSize, 0, stream>>>(
-            src, num_pixels, src_channels, rgb_chw, alpha);
-        return cudaPeekAtLastError();
-    }
-
-    cudaError_t launchPackChwU8Hwc(const float* const rgb_chw, const float* const alpha, unsigned char* const dst,
-                                   const int num_pixels, const int dst_channels, const cudaStream_t stream) {
-        pack_chw_u8_hwc_kernel<<<divUp(num_pixels, kBlockSize), kBlockSize, 0, stream>>>(
-            rgb_chw, alpha, dst, num_pixels, dst_channels);
-        return cudaPeekAtLastError();
-    }
 
     cudaError_t launchCompositeEnvironmentBand(const CompositeParams& params, const float* const env_pixels,
                                                const float* const rgb_chw, const float* const alpha,

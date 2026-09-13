@@ -61,8 +61,8 @@ TEST_F(MaskedSelectRowsTest, SelectRowsFrom2DTensor_CUDA) {
     const std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
     const std::vector<bool> mask_data = {true, false, true, false, true};
 
-    const auto tensor = Tensor::from_vector(data, {5, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(mask_data, {5}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {5, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(mask_data, {5}, Device::GPU);
     const auto result = tensor.index_select(0, mask);
 
     const auto torch_tensor = torch::tensor(data, torch::kCUDA).reshape({5, 3});
@@ -76,8 +76,8 @@ TEST_F(MaskedSelectRowsTest, SelectRowsFrom2DTensor_CUDA) {
 
 TEST_F(MaskedSelectRowsTest, SelectNoRows) {
     const std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    const auto tensor = Tensor::from_vector(data, {2, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(std::vector<bool>{false, false}, {2}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {2, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(std::vector<bool>{false, false}, {2}, Device::GPU);
     const auto result = tensor.index_select(0, mask);
 
     EXPECT_EQ(result.size(0), 0);
@@ -86,8 +86,8 @@ TEST_F(MaskedSelectRowsTest, SelectNoRows) {
 
 TEST_F(MaskedSelectRowsTest, SelectAllRows) {
     const std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    const auto tensor = Tensor::from_vector(data, {2, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(std::vector<bool>{true, true}, {2}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {2, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(std::vector<bool>{true, true}, {2}, Device::GPU);
     const auto result = tensor.index_select(0, mask);
 
     EXPECT_EQ(result.size(0), 2);
@@ -97,12 +97,12 @@ TEST_F(MaskedSelectRowsTest, SelectAllRows) {
 TEST_F(MaskedSelectRowsTest, SplatDataCropping_CUDA) {
     constexpr size_t N = 2000000;
 
-    const auto means = Tensor::randn({N, 3}, Device::CUDA);
-    const auto scaling = Tensor::randn({N, 3}, Device::CUDA);
-    const auto rotation = Tensor::randn({N, 4}, Device::CUDA);
-    const auto sh0 = Tensor::randn({N, 1, 3}, Device::CUDA);
+    const auto means = Tensor::randn({N, 3}, Device::GPU);
+    const auto scaling = Tensor::randn({N, 3}, Device::GPU);
+    const auto rotation = Tensor::randn({N, 4}, Device::GPU);
+    const auto sh0 = Tensor::randn({N, 1, 3}, Device::GPU);
 
-    auto deleted = Tensor::rand({N}, Device::CUDA) < 0.04f;
+    auto deleted = Tensor::rand({N}, Device::GPU) < 0.04f;
     const auto visible_mask = deleted.logical_not();
     const size_t expected = visible_mask.to(DataType::Int32).sum().item<int>();
 
@@ -116,8 +116,8 @@ TEST_F(MaskedSelectRowsTest, SelectRowsFrom3DTensor_CUDA) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    const auto tensor = Tensor::from_vector(data, {4, 2, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, true, false}, {4}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {4, 2, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, true, false}, {4}, Device::GPU);
     const auto result = tensor.index_select(0, mask);
 
     const auto torch_tensor = torch::tensor(data, torch::kCUDA).reshape({4, 2, 3});
@@ -143,8 +143,8 @@ TEST_F(MaskedSelectRowsTest, SelectRowsInt32_CPU) {
 
 TEST_F(MaskedSelectRowsTest, SelectRowsInt32_CUDA) {
     const std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-    const auto tensor = Tensor::from_vector(data, {3, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, true}, {3}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {3, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, true}, {3}, Device::GPU);
     const auto result = tensor.index_select(0, mask);
 
     EXPECT_EQ(result.dtype(), DataType::Int32);
@@ -159,8 +159,8 @@ TEST_F(MaskedSelectRowsTest, CPUCUDAConsistency_Float32) {
 
     const auto result_cpu = Tensor::from_vector(data, {4, 4}, Device::CPU)
                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::CPU));
-    const auto result_cuda = Tensor::from_vector(data, {4, 4}, Device::CUDA)
-                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::CUDA));
+    const auto result_cuda = Tensor::from_vector(data, {4, 4}, Device::GPU)
+                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::GPU));
 
     const auto cpu_vec = result_cpu.to_vector();
     const auto cuda_vec = result_cuda.cpu().to_vector();
@@ -175,8 +175,8 @@ TEST_F(MaskedSelectRowsTest, CPUCUDAConsistency_Int32) {
 
     const auto result_cpu = Tensor::from_vector(data, {4, 3}, Device::CPU)
                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::CPU));
-    const auto result_cuda = Tensor::from_vector(data, {4, 3}, Device::CUDA)
-                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::CUDA));
+    const auto result_cuda = Tensor::from_vector(data, {4, 3}, Device::GPU)
+                                 .index_select(0, Tensor::from_vector(mask_data, {4}, Device::GPU));
 
     const auto cpu_vec = result_cpu.to_vector_int();
     const auto cuda_vec = result_cuda.cpu().to_vector_int();
@@ -189,8 +189,8 @@ TEST_F(MaskedSelectRowsTest, RandomMaskStress_CUDA) {
     constexpr size_t N = 100000;
     constexpr size_t M = 10;
 
-    const auto tensor = Tensor::randn({N, M}, Device::CUDA);
-    const auto mask = Tensor::rand({N}, Device::CUDA) < 0.3f;
+    const auto tensor = Tensor::randn({N, M}, Device::GPU);
+    const auto mask = Tensor::rand({N}, Device::GPU) < 0.3f;
     const auto result = tensor.index_select(0, mask);
 
     const size_t expected = mask.to(DataType::Int32).sum().item<int>();
@@ -212,8 +212,8 @@ TEST_F(MaskedSelectRowsTest, CompareWithPyTorch_LargeScale) {
         mask_data[i] = (i % 5 != 0);
     }
 
-    const auto tensor = Tensor::from_vector(data, {N, M}, Device::CUDA);
-    const auto mask = Tensor::from_vector(mask_data, {N}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {N, M}, Device::GPU);
+    const auto mask = Tensor::from_vector(mask_data, {N}, Device::GPU);
 
     const auto torch_tensor = torch::tensor(data, torch::kCUDA).reshape({static_cast<long>(N), static_cast<long>(M)});
     std::vector<int64_t> torch_mask_data(N);
@@ -249,8 +249,8 @@ TEST_F(MaskedSelectRowsTest, OperatorBracket_2D_CUDA) {
     const std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
     const std::vector<bool> mask_data = {true, false, true, true};
 
-    const auto tensor = Tensor::from_vector(data, {4, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(mask_data, {4}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {4, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(mask_data, {4}, Device::GPU);
 
     // Use operator[] like PyTorch: tensor[mask]
     const Tensor result = tensor[mask];
@@ -268,8 +268,8 @@ TEST_F(MaskedSelectRowsTest, OperatorBracket_3D_CUDA) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    const auto tensor = Tensor::from_vector(data, {4, 2, 3}, Device::CUDA);
-    const auto mask = Tensor::from_vector(std::vector<bool>{false, true, true, false}, {4}, Device::CUDA);
+    const auto tensor = Tensor::from_vector(data, {4, 2, 3}, Device::GPU);
+    const auto mask = Tensor::from_vector(std::vector<bool>{false, true, true, false}, {4}, Device::GPU);
 
     const Tensor result = tensor[mask];
 
@@ -287,8 +287,8 @@ TEST_F(MaskedSelectRowsTest, OperatorBracket_LargeScale_CUDA) {
     constexpr size_t N = 100000;
     constexpr size_t M = 3;
 
-    const auto tensor = Tensor::randn({N, M}, Device::CUDA);
-    const auto mask = Tensor::rand({N}, Device::CUDA) < 0.3f;
+    const auto tensor = Tensor::randn({N, M}, Device::GPU);
+    const auto mask = Tensor::rand({N}, Device::GPU) < 0.3f;
 
     // Test operator[]
     const Tensor result = tensor[mask];
@@ -312,11 +312,11 @@ TEST_F(MaskedSelectRowsTest, OperatorBracket_PointCloudFilter_CUDA) {
     // Simulates the trim_distant_points use case
     constexpr size_t N = 50000;
 
-    const auto means = Tensor::randn({N, 3}, Device::CUDA);
-    const auto colors = Tensor::randn({N, 3}, Device::CUDA);
+    const auto means = Tensor::randn({N, 3}, Device::GPU);
+    const auto colors = Tensor::randn({N, 3}, Device::GPU);
 
     // Create a mask keeping 95% of points
-    const auto keep_mask = Tensor::rand({N}, Device::CUDA) < 0.95f;
+    const auto keep_mask = Tensor::rand({N}, Device::GPU) < 0.95f;
     const size_t expected = keep_mask.to(DataType::Int32).sum().item<int>();
 
     // Filter using operator[]
@@ -335,9 +335,9 @@ TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
                            2.0f, 20.0f,
                            3.0f, 30.0f,
                            4.0f, 40.0f},
-        {4, 2}, Device::CUDA);
+        {4, 2}, Device::GPU);
     const auto deleted = Tensor::from_vector(
-        std::vector<bool>{false, true, false, true}, {4}, Device::CUDA);
+        std::vector<bool>{false, true, false, true}, {4}, Device::GPU);
 
     const Tensor kept = rows[~deleted];
     EXPECT_EQ(kept.shape(), TensorShape({2, 2}));

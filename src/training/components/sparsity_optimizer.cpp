@@ -105,9 +105,9 @@ namespace lfs::training {
     void ADMMSparsityOptimizer::deserialize(std::istream& is) {
         auto [z, u, opa_sigmoid] = read_serialized_state(is);
 
-        z_ = z.cuda();
-        u_ = u.cuda();
-        opa_sigmoid_ = opa_sigmoid.cuda();
+        z_ = z.gpu();
+        u_ = u.gpu();
+        opa_sigmoid_ = opa_sigmoid.gpu();
         initialized_ = true;
     }
 
@@ -180,7 +180,7 @@ namespace lfs::training {
 
             // u = zeros_like(opa)
             u_ = lfs::core::Tensor::zeros(opa_sigmoid_.shape(),
-                                          lfs::core::Device::CUDA,
+                                          lfs::core::Device::GPU,
                                           lfs::core::DataType::Float32);
 
             // z = prune_z(opa + u)
@@ -320,7 +320,7 @@ namespace lfs::training {
             int n_prune = static_cast<int>(config_.prune_ratio * opa.shape()[0]);
 
             if (n_prune == 0) {
-                return lfs::core::Tensor::zeros_bool({opa.shape()[0]}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros_bool({opa.shape()[0]}, lfs::core::Device::GPU);
             }
 
             // Find indices of smallest opacities using sort
@@ -331,8 +331,8 @@ namespace lfs::training {
             auto prune_indices = sorted_indices.slice(0, 0, n_prune).to(lfs::core::DataType::Int64);
 
             // Create boolean mask and use proper index_put_ (now that it's fixed!)
-            auto mask = lfs::core::Tensor::zeros_bool({opa.shape()[0]}, lfs::core::Device::CUDA);
-            auto true_values = lfs::core::Tensor::ones_bool({static_cast<size_t>(n_prune)}, lfs::core::Device::CUDA);
+            auto mask = lfs::core::Tensor::zeros_bool({opa.shape()[0]}, lfs::core::Device::GPU);
+            auto true_values = lfs::core::Tensor::ones_bool({static_cast<size_t>(n_prune)}, lfs::core::Device::GPU);
 
             // Use index_put_ to set mask values
             mask.index_put_({prune_indices}, true_values);
@@ -353,12 +353,12 @@ namespace lfs::training {
 
     lfs::core::Tensor ADMMSparsityOptimizer::prune_z(const lfs::core::Tensor& z) {
         if (z.numel() == 0) {
-            return lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::CUDA);
+            return lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::GPU);
         }
 
         int index = static_cast<int>(config_.prune_ratio * z.shape()[0]);
         if (index == 0) {
-            return lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::CUDA);
+            return lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::GPU);
         }
 
         // Sort to find threshold
@@ -372,7 +372,7 @@ namespace lfs::training {
         // This keeps values above threshold, zeros out values below
         auto threshold_mask = (z > z_threshold);
         auto result = lfs::core::Tensor::where(threshold_mask, z,
-                                               lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::CUDA));
+                                               lfs::core::Tensor::zeros(z.shape(), lfs::core::Device::GPU));
 
         return result;
     }

@@ -219,8 +219,8 @@ TEST_F(LossWorkspaceUnionTest, ActiveVariantAllocationMatchesRequiredAtTwoShapes
 // Loss values must match between arena-backed and independently-allocated fused workspaces.
 TEST_F(LossWorkspaceUnionTest, ArenaFusedLossMatchesIndependent) {
     const int N = 1, C = 3, H = 48, W = 48;
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
     const float ssim_weight = 0.2f;
     const std::vector<size_t> shape = {static_cast<size_t>(N), static_cast<size_t>(C),
                                        static_cast<size_t>(H), static_cast<size_t>(W)};
@@ -256,8 +256,8 @@ TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
     const std::vector<size_t> shape = {1, 3, 32, 48};
 
     // Drive fused via public forward, then request another mode on the same arena.
-    auto rendered = Tensor::randn({32, 48, 3}, Device::CUDA);
-    auto gt = Tensor::randn({32, 48, 3}, Device::CUDA);
+    auto rendered = Tensor::randn({32, 48, 3}, Device::GPU);
+    auto gt = Tensor::randn({32, 48, 3}, Device::GPU);
     lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = 0.2f};
     auto result = loss.forward(rendered, gt, params);
     ASSERT_TRUE(result.has_value()) << result.error();
@@ -302,9 +302,9 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
 
     // Grad equivalence: two independent runs with different workspaces must match
     // (HasSigmaPartials=false is deterministic and replaces zeros).
-    auto corrected = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto corrected = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto raw = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto gt = Tensor::randn({N, C, H, W}, Device::GPU);
 
     DecoupledFusedL1SSIMWorkspace a, b;
     auto [loss_a, ctx_a] = decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, a, true);
@@ -417,8 +417,8 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_LT(arena_max, pure_pre);
 
     // Gradients must match the fused path within fp16 tolerance.
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::randn({N, C, H, W}, Device::GPU);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::GPU);
 
     FusedL1SSIMWorkspace fused;
     auto [floss, fctx] = fused_l1_ssim_forward(img1, img2, ssim_weight, fused, true);
@@ -438,7 +438,7 @@ TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
     EXPECT_LT(max_dec, 2e-3) << "decoupled fp16 vs fused max abs " << max_dec;
 
     // Masked full-ones mask must match unmasked fused within fp16 tol.
-    auto ones_mask = Tensor::ones({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+    auto ones_mask = Tensor::ones({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU);
     MaskedFusedL1SSIMWorkspace mws;
     auto [mloss, mctx] = masked_fused_l1_ssim_forward(img1, img2, ones_mask, ssim_weight, mws);
     auto mgrad = masked_fused_l1_ssim_backward(mctx, mws).cpu().contiguous();

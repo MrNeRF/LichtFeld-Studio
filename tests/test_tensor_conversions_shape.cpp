@@ -129,7 +129,7 @@ protected:
 TEST_F(TensorConversionsShapesTest, Float32ToInt32) {
     std::vector<float> data = {1.5f, 2.7f, 3.2f, 4.9f};
 
-    auto custom_t = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Int32);
@@ -142,7 +142,7 @@ TEST_F(TensorConversionsShapesTest, Float32ToInt32) {
 TEST_F(TensorConversionsShapesTest, Int32ToFloat32) {
     std::vector<int> data = {1, 2, 3, 4, 5};
 
-    auto custom_t = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Float32);
@@ -155,7 +155,7 @@ TEST_F(TensorConversionsShapesTest, Int32ToFloat32) {
 TEST_F(TensorConversionsShapesTest, Float32ToBool) {
     std::vector<float> data = {0.0f, 1.0f, 2.0f, 0.0f, -1.0f};
 
-    auto custom_t = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Bool);
@@ -168,7 +168,7 @@ TEST_F(TensorConversionsShapesTest, Float32ToBool) {
 TEST_F(TensorConversionsShapesTest, BoolToFloat32) {
     std::vector<bool> data = {true, false, true, false};
 
-    auto custom_t = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_t = torch::tensor({1, 0, 1, 0}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Float32);
@@ -196,7 +196,7 @@ TEST_F(TensorConversionsShapesTest, UInt8ToBoolNormalizesLikeTorch) {
 TEST_F(TensorConversionsShapesTest, ConversionPreservesShape) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
 
-    auto custom_t = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 2}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 2});
 
     auto custom_result = custom_t.to(DataType::Int32);
@@ -209,7 +209,7 @@ TEST_F(TensorConversionsShapesTest, ConversionPreservesShape) {
 }
 
 TEST_F(TensorConversionsShapesTest, ConversionIdempotent) {
-    auto custom_t = Tensor::ones({5}, Device::CUDA, DataType::Float32);
+    auto custom_t = Tensor::ones({5}, Device::GPU, DataType::Float32);
     auto torch_t = torch::ones({5}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Float32);
@@ -225,7 +225,7 @@ TEST_F(TensorConversionsShapesTest, ConversionIdempotent) {
 // ============= Shape Operations Tests =============
 
 TEST_F(TensorConversionsShapesTest, SqueezeAll) {
-    auto custom_t = Tensor::zeros({2, 1, 3, 1, 4}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 1, 3, 1, 4}, Device::GPU);
     auto torch_t = torch::zeros({2, 1, 3, 1, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.squeeze();
@@ -238,7 +238,7 @@ TEST_F(TensorConversionsShapesTest, SqueezeAll) {
 }
 
 TEST_F(TensorConversionsShapesTest, SqueezeSpecificDim) {
-    auto custom_t = Tensor::zeros({2, 1, 3, 1, 4}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 1, 3, 1, 4}, Device::GPU);
     auto torch_t = torch::zeros({2, 1, 3, 1, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     // Squeeze dimension 1 (size 1)
@@ -252,7 +252,7 @@ TEST_F(TensorConversionsShapesTest, SqueezeSpecificDim) {
 }
 
 TEST_F(TensorConversionsShapesTest, SqueezeNegativeDim) {
-    auto custom_t = Tensor::zeros({2, 1, 3, 1}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 1, 3, 1}, Device::GPU);
     auto torch_t = torch::zeros({2, 1, 3, 1}, torch::TensorOptions().device(torch::kCUDA));
 
     // Squeeze last dimension (index -1) which has size 1
@@ -266,7 +266,7 @@ TEST_F(TensorConversionsShapesTest, SqueezeNegativeDim) {
 }
 
 TEST_F(TensorConversionsShapesTest, SqueezeNoDims) {
-    auto custom_t = Tensor::zeros({2, 3, 4}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 3, 4}, Device::GPU);
     auto torch_t = torch::zeros({2, 3, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.squeeze();
@@ -278,7 +278,7 @@ TEST_F(TensorConversionsShapesTest, SqueezeNoDims) {
 }
 
 TEST_F(TensorConversionsShapesTest, UnsqueezeDim) {
-    auto custom_t = Tensor::zeros({2, 3}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 3}, Device::GPU);
     auto torch_t = torch::zeros({2, 3}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.unsqueeze(1);
@@ -291,7 +291,7 @@ TEST_F(TensorConversionsShapesTest, UnsqueezeDim) {
 }
 
 TEST_F(TensorConversionsShapesTest, UnsqueezeNegativeDim) {
-    auto custom_t = Tensor::zeros({2, 3}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 3}, Device::GPU);
     auto torch_t = torch::zeros({2, 3}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.unsqueeze(-1);
@@ -307,7 +307,7 @@ TEST_F(TensorConversionsShapesTest, FlattenDefault) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 3, 4});
 
     auto custom_result = custom_t.flatten();
@@ -317,7 +317,7 @@ TEST_F(TensorConversionsShapesTest, FlattenDefault) {
 }
 
 TEST_F(TensorConversionsShapesTest, FlattenPartial) {
-    auto custom_t = Tensor::zeros({2, 3, 4, 5}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 3, 4, 5}, Device::GPU);
     auto torch_t = torch::zeros({2, 3, 4, 5}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.flatten(1, 2);
@@ -330,7 +330,7 @@ TEST_F(TensorConversionsShapesTest, FlattenPartial) {
 }
 
 TEST_F(TensorConversionsShapesTest, FlattenNegativeDims) {
-    auto custom_t = Tensor::zeros({2, 3, 4}, Device::CUDA);
+    auto custom_t = Tensor::zeros({2, 3, 4}, Device::GPU);
     auto torch_t = torch::zeros({2, 3, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.flatten(-2, -1);
@@ -348,7 +348,7 @@ TEST_F(TensorConversionsShapesTest, ReshapeBasic) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {24}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.reshape({2, 3, 4});
@@ -361,7 +361,7 @@ TEST_F(TensorConversionsShapesTest, ReshapeWithInference) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {24}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.reshape({-1, 6});
@@ -377,7 +377,7 @@ TEST_F(TensorConversionsShapesTest, ReshapeInvalidSize) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {24}, Device::GPU);
 
     // Try to reshape 24 elements to 25 elements
     EXPECT_THROW(custom_t.reshape({5, 5}), std::runtime_error);
@@ -387,7 +387,7 @@ TEST_F(TensorConversionsShapesTest, ViewAlias) {
     std::vector<float> data(12);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {12}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {12}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.view({3, 4});
@@ -402,7 +402,7 @@ TEST_F(TensorConversionsShapesTest, Permute) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 3, 4});
 
     std::vector<int> perm = {2, 0, 1};
@@ -420,7 +420,7 @@ TEST_F(TensorConversionsShapesTest, Permute) {
 TEST_F(TensorConversionsShapesTest, Transpose2D) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
 
-    auto custom_t = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 3});
 
     auto custom_result = custom_t.t();
@@ -433,7 +433,7 @@ TEST_F(TensorConversionsShapesTest, TransposeSpecificDims) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 3, 4});
 
     auto custom_result = custom_t.transpose(0, 2);
@@ -455,8 +455,8 @@ TEST_F(TensorConversionsShapesTest, CatBasic) {
     std::vector<float> data_a(12, 1.0f);
     std::vector<float> data_b(8, 2.0f);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 4}, Device::GPU);
 
     auto torch_a = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::ones({2, 4}, torch::TensorOptions().device(torch::kCUDA)) * 2.0f;
@@ -476,8 +476,8 @@ TEST_F(TensorConversionsShapesTest, CatAlongDim1) {
     std::vector<float> data_a(12, 1.0f);
     std::vector<float> data_b(8, 2.0f);
 
-    auto custom_a = Tensor::from_vector(data_a, {4, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4, 2}, Device::GPU);
 
     auto torch_a = torch::ones({4, 3}, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::ones({4, 2}, torch::TensorOptions().device(torch::kCUDA)) * 2.0f;
@@ -494,8 +494,8 @@ TEST_F(TensorConversionsShapesTest, CatAlongDim1) {
 }
 
 TEST_F(TensorConversionsShapesTest, CatDim1Debug) {
-    auto a = Tensor::ones({2, 3}, Device::CUDA);
-    auto b = Tensor::ones({2, 2}, Device::CUDA) * 2.0f;
+    auto a = Tensor::ones({2, 3}, Device::GPU);
+    auto b = Tensor::ones({2, 2}, Device::GPU) * 2.0f;
 
     std::vector<Tensor> tensors;
     tensors.push_back(std::move(a));
@@ -521,8 +521,8 @@ TEST_F(TensorConversionsShapesTest, StackBasic) {
     std::vector<float> data_a(12, 1.0f);
     std::vector<float> data_b(12, 2.0f);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 4}, Device::GPU);
 
     auto torch_a = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA)) * 2.0f;
@@ -543,7 +543,7 @@ TEST_F(TensorConversionsShapesTest, StackBasic) {
 TEST_F(TensorConversionsShapesTest, CloneBasic) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
 
-    auto custom_t = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_clone = custom_t.clone();
@@ -557,7 +557,7 @@ TEST_F(TensorConversionsShapesTest, CloneBasic) {
 }
 
 TEST_F(TensorConversionsShapesTest, ClonePreservesProperties) {
-    auto custom_t = Tensor::ones({3, 4}, Device::CUDA, DataType::Float32);
+    auto custom_t = Tensor::ones({3, 4}, Device::GPU, DataType::Float32);
     auto torch_t = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_clone = custom_t.clone();
@@ -572,7 +572,7 @@ TEST_F(TensorConversionsShapesTest, Contiguous) {
     std::vector<float> data(12);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {3, 4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {3, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 4});
 
     // Transpose makes it non-contiguous
@@ -592,7 +592,7 @@ TEST_F(TensorConversionsShapesTest, SliceBasic) {
     std::vector<float> data(80);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {10, 8}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {10, 8}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({10, 8});
 
     auto custom_result = custom_t.slice(0, 2, 7);
@@ -605,7 +605,7 @@ TEST_F(TensorConversionsShapesTest, SliceMultipleDims) {
     std::vector<float> data(120);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {5, 6, 4}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {5, 6, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({5, 6, 4});
 
     std::vector<std::pair<int, int>> ranges = {{1, 4}, {2, 5}, {0, 3}};
@@ -620,7 +620,7 @@ TEST_F(TensorConversionsShapesTest, SliceMultipleDims) {
 TEST_F(TensorConversionsShapesTest, ExpandBasic) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f};
 
-    auto custom_t = Tensor::from_vector(data, {1, 3}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {1, 3}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({1, 3});
 
     std::vector<int> target_shape = {4, 3};
@@ -633,7 +633,7 @@ TEST_F(TensorConversionsShapesTest, ExpandBasic) {
 TEST_F(TensorConversionsShapesTest, BroadcastTo) {
     std::vector<float> data = {1.0f, 2.0f};
 
-    auto custom_t = Tensor::from_vector(data, {2, 1}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {2, 1}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 1});
 
     auto custom_result = custom_t.broadcast_to({2, 5});
@@ -647,11 +647,11 @@ TEST_F(TensorConversionsShapesTest, BroadcastTo) {
 TEST_F(TensorConversionsShapesTest, IndexSelectBasic) {
     std::vector<float> data = {0, 1, 2, 3, 4};
 
-    auto custom_t = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     std::vector<int> indices_data = {0, 2, 4};
-    auto custom_indices = Tensor::from_vector(indices_data, {3}, Device::CUDA);
+    auto custom_indices = Tensor::from_vector(indices_data, {3}, Device::GPU);
     auto torch_indices = torch::tensor({0, 2, 4}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto custom_result = custom_t.index_select(0, custom_indices);
@@ -665,7 +665,7 @@ TEST_F(TensorConversionsShapesTest, IndexSelectBasic) {
 TEST_F(TensorConversionsShapesTest, ConversionChain) {
     std::vector<float> data = {1.5f, 2.7f, 3.2f};
 
-    auto custom_t = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {3}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.to(DataType::Int32).to(DataType::Float32);
@@ -678,7 +678,7 @@ TEST_F(TensorConversionsShapesTest, ShapeManipulationChain) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {24}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.reshape({2, 3, 4})
@@ -703,7 +703,7 @@ TEST_F(TensorConversionsShapesTest, ComplexReshapeAndTranspose) {
     std::vector<float> data(120);
     std::iota(data.begin(), data.end(), 0.0f);
 
-    auto custom_t = Tensor::from_vector(data, {120}, Device::CUDA);
+    auto custom_t = Tensor::from_vector(data, {120}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_t.reshape({2, 3, 4, 5})
@@ -725,14 +725,14 @@ TEST_F(TensorConversionsShapesTest, DeviceTransfer) {
     auto custom_cpu = Tensor::from_vector(data, {4}, Device::CPU);
     auto torch_cpu = torch::tensor(data, torch::TensorOptions().device(torch::kCPU));
 
-    // CPU to CUDA
-    auto custom_cuda = custom_cpu.to(Device::CUDA);
+    // CPU to GPU
+    auto custom_cuda = custom_cpu.to(Device::GPU);
     auto torch_cuda = torch_cpu.to(torch::kCUDA);
 
-    EXPECT_EQ(custom_cuda.device(), Device::CUDA);
+    EXPECT_EQ(custom_cuda.device(), Device::GPU);
     compare_tensors(custom_cuda, torch_cuda, 1e-6f, 1e-7f, "CPUtoCUDA");
 
-    // CUDA to CPU
+    // GPU to CPU
     auto custom_back = custom_cuda.to(Device::CPU);
     auto torch_back = torch_cuda.to(torch::kCPU);
 

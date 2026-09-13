@@ -36,21 +36,6 @@ namespace lfs::core::nn::device {
         }
     }
 
-    __device__ __forceinline__ float ld_f32(const void* ptr, const bool is_half) {
-        if (is_half) {
-            return __half2float(*static_cast<const __half*>(ptr));
-        }
-        return *static_cast<const float*>(ptr);
-    }
-
-    __device__ __forceinline__ void st_f32(void* ptr, const float value, const bool is_half) {
-        if (is_half) {
-            *static_cast<__half*>(ptr) = __float2half_rn(value);
-        } else {
-            *static_cast<float*>(ptr) = value;
-        }
-    }
-
     __device__ __forceinline__ float ld_strided(const void* base, const long long index,
                                                 const bool is_half) {
         if (is_half) {
@@ -130,12 +115,6 @@ namespace lfs::core::nn::device {
 #if __CUDA_ARCH__ >= 800
         asm volatile("cp.async.wait_group 0;\n");
 #endif
-    }
-
-    // 8-half (16-byte) xor swizzle. Consecutive rows at a fixed 16-byte
-    // column hit distinct smem banks (32 banks x 4 bytes).
-    __device__ __forceinline__ int xor_swizzle_col(const int row, const int col) {
-        return col ^ ((row & 7) << 3);
     }
 
 } // namespace lfs::core::nn::device

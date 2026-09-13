@@ -326,41 +326,6 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager.getFocusedSplitPanel(), SplitViewPanelId::Right);
     }
 
-    // main explicitly resolves to getFocusedSplitPanel(), then uses the same path as
-    // left/right. With Right focused, pin that native downstream result and preserve
-    // the other camera. Python tests cover token-to-panel parsing.
-    TEST_F(InputControllerPanelCameraTest, MainResolvesToTheFocusedPanelForBothActions) {
-        Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
-        RenderingManager rendering_manager;
-        services().set(&rendering_manager);
-        SceneManager scene_manager;
-        scene_manager.getScene().addPointCloud("points", makePointCloud());
-        ToolContext tool_context(nullptr, &scene_manager, &primary_viewport, nullptr);
-        controller.setToolContext(&tool_context);
-
-        enableIndependentDual(primary_viewport);
-        auto& secondary_viewport =
-            rendering_manager.resolvePanelViewport(primary_viewport, SplitViewPanelId::Right);
-
-        seedCamera(primary_viewport, glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(-7.0f, -7.0f, -7.0f));
-        seedCamera(secondary_viewport, glm::vec3(9.0f, 8.0f, 7.0f), glm::vec3(-4.0f, -4.0f, -4.0f));
-        rendering_manager.setFocusedSplitPanel(SplitViewPanelId::Right);
-
-        // Home, panel='main' -> the RIGHT (focused) panel.
-        controller.resetCameraForPanel(rendering_manager.getFocusedSplitPanel());
-        EXPECT_EQ(secondary_viewport.camera.t, glm::vec3(9.0f, 8.0f, 7.0f));
-        EXPECT_EQ(primary_viewport.camera.t, glm::vec3(-7.0f, -7.0f, -7.0f));
-
-        // Eye, panel='main' -> the RIGHT (focused) panel, and focus still does
-        // not move.
-        seedCamera(secondary_viewport, glm::vec3(9.0f, 8.0f, 7.0f), glm::vec3(-4.0f, -4.0f, -4.0f));
-        ASSERT_TRUE(controller.focusSelectionForPanel(rendering_manager.getFocusedSplitPanel()));
-        EXPECT_NE(secondary_viewport.camera.t, glm::vec3(-4.0f, -4.0f, -4.0f));
-        EXPECT_EQ(primary_viewport.camera.t, glm::vec3(-7.0f, -7.0f, -7.0f));
-        EXPECT_EQ(rendering_manager.getFocusedSplitPanel(), SplitViewPanelId::Right);
-    }
-
     // --- shared depth anchor ------------------------------------------------
     // Off-focus Home moves the addressed camera and preserves the shared anchor. Its
     // depth box follows that camera only after the panel gains focus and publishes a

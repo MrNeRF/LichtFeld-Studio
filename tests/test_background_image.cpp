@@ -18,7 +18,7 @@ protected:
 
     static Tensor createTestImage(const int c, const int h, const int w, const float value) {
         return Tensor::full({static_cast<size_t>(c), static_cast<size_t>(h), static_cast<size_t>(w)},
-                            value, Device::CUDA, DataType::Float32);
+                            value, Device::GPU, DataType::Float32);
     }
 
     static Tensor createGradientImage(const int c, const int h, const int w) {
@@ -32,14 +32,14 @@ protected:
                 }
             }
         }
-        return cpu_tensor.to(Device::CUDA);
+        return cpu_tensor.to(Device::GPU);
     }
 };
 
 TEST_F(BackgroundImageTest, BilinearResize_IdentityWhenSameSize) {
     constexpr int C = 3, H = 64, W = 64;
     const auto src = createTestImage(C, H, W, 0.5f);
-    auto dst = Tensor::empty({C, H, W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, H, W, H, W, nullptr);
@@ -52,7 +52,7 @@ TEST_F(BackgroundImageTest, BilinearResize_IdentityWhenSameSize) {
 TEST_F(BackgroundImageTest, BilinearResize_Upscale2x) {
     constexpr int C = 3, SRC_H = 64, SRC_W = 64, DST_H = 128, DST_W = 128;
     const auto src = createTestImage(C, SRC_H, SRC_W, 0.7f);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -64,7 +64,7 @@ TEST_F(BackgroundImageTest, BilinearResize_Upscale2x) {
 TEST_F(BackgroundImageTest, BilinearResize_Downscale2x) {
     constexpr int C = 3, SRC_H = 128, SRC_W = 128, DST_H = 64, DST_W = 64;
     const auto src = createTestImage(C, SRC_H, SRC_W, 0.3f);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -76,7 +76,7 @@ TEST_F(BackgroundImageTest, BilinearResize_Downscale2x) {
 TEST_F(BackgroundImageTest, BilinearResize_NonSquareAspectRatio) {
     constexpr int C = 3, SRC_H = 64, SRC_W = 128, DST_H = 128, DST_W = 64;
     const auto src = createTestImage(C, SRC_H, SRC_W, 0.5f);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -91,7 +91,7 @@ TEST_F(BackgroundImageTest, BilinearResize_NonSquareAspectRatio) {
 TEST_F(BackgroundImageTest, BilinearResize_PreservesValueRange) {
     constexpr int C = 3, SRC_H = 64, SRC_W = 64, DST_H = 128, DST_W = 128;
     const auto src = createGradientImage(C, SRC_H, SRC_W);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -104,7 +104,7 @@ TEST_F(BackgroundImageTest, BilinearResize_PreservesValueRange) {
 TEST_F(BackgroundImageTest, BilinearResize_LargeImage) {
     constexpr int C = 3, SRC_H = 1080, SRC_W = 1920, DST_H = 540, DST_W = 960;
     const auto src = createTestImage(C, SRC_H, SRC_W, 0.5f);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -117,9 +117,9 @@ TEST_F(BackgroundImageTest, BilinearResize_LargeImage) {
 TEST_F(BackgroundImageTest, BackgroundBlendWithImage_FullyOpaque) {
     constexpr int H = 64, W = 64;
     const auto image = createTestImage(3, H, W, 0.8f);
-    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 1.0f, Device::CUDA);
+    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 1.0f, Device::GPU);
     const auto bg_image = createTestImage(3, H, W, 0.2f);
-    auto output = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
+    auto output = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_background_blend_with_image(
         image.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
@@ -132,9 +132,9 @@ TEST_F(BackgroundImageTest, BackgroundBlendWithImage_FullyOpaque) {
 TEST_F(BackgroundImageTest, BackgroundBlendWithImage_FullyTransparent) {
     constexpr int H = 64, W = 64;
     const auto image = createTestImage(3, H, W, 0.0f);
-    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.0f, Device::CUDA);
+    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.0f, Device::GPU);
     const auto bg_image = createTestImage(3, H, W, 0.6f);
-    auto output = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
+    auto output = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_background_blend_with_image(
         image.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
@@ -147,9 +147,9 @@ TEST_F(BackgroundImageTest, BackgroundBlendWithImage_FullyTransparent) {
 TEST_F(BackgroundImageTest, BackgroundBlendWithImage_HalfTransparent) {
     constexpr int H = 64, W = 64;
     const auto image = createTestImage(3, H, W, 0.4f);
-    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.5f, Device::CUDA);
+    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.5f, Device::GPU);
     const auto bg_image = createTestImage(3, H, W, 0.8f);
-    auto output = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
+    auto output = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_background_blend_with_image(
         image.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
@@ -163,11 +163,11 @@ TEST_F(BackgroundImageTest, BackgroundBlendWithImage_HalfTransparent) {
 TEST_F(BackgroundImageTest, BackgroundBlendWithImage_MatchesSolidColorUniform) {
     constexpr int H = 64, W = 64;
     const auto image = createTestImage(3, H, W, 0.3f);
-    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.7f, Device::CUDA);
+    const auto alpha = Tensor::full({static_cast<size_t>(H), static_cast<size_t>(W)}, 0.7f, Device::GPU);
     const auto bg_image = createTestImage(3, H, W, 0.5f);
-    const auto bg_color = Tensor::full({3}, 0.5f, Device::CUDA);
-    auto output_image = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
-    auto output_color = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
+    const auto bg_color = Tensor::full({3}, 0.5f, Device::GPU);
+    auto output_image = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
+    auto output_color = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_background_blend_with_image(
         image.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
@@ -191,14 +191,14 @@ TEST_F(BackgroundImageTest, BackgroundBlendRoundTripInPlace_SolidColor) {
             alpha_ptr[y * W + x] = 0.2f + 0.6f * static_cast<float>(x + y) / static_cast<float>((H - 1) + (W - 1));
         }
     }
-    const auto alpha = alpha_cpu.to(Device::CUDA);
+    const auto alpha = alpha_cpu.to(Device::GPU);
 
     auto bg_color_cpu = Tensor::empty({3}, Device::CPU, DataType::Float32);
     float* bg_ptr = bg_color_cpu.ptr<float>();
     bg_ptr[0] = 0.1f;
     bg_ptr[1] = 0.4f;
     bg_ptr[2] = 0.7f;
-    const auto bg_color = bg_color_cpu.to(Device::CUDA);
+    const auto bg_color = bg_color_cpu.to(Device::GPU);
 
     auto buffer = raw_image.clone();
     lfs::training::kernels::launch_fused_background_blend(
@@ -223,7 +223,7 @@ TEST_F(BackgroundImageTest, BackgroundBlendRoundTripInPlace_BackgroundImage) {
             alpha_ptr[y * W + x] = 0.1f + 0.8f * static_cast<float>(y) / static_cast<float>(H - 1);
         }
     }
-    const auto alpha = alpha_cpu.to(Device::CUDA);
+    const auto alpha = alpha_cpu.to(Device::GPU);
 
     auto bg_image_cpu = Tensor::empty({3, H, W}, Device::CPU, DataType::Float32);
     float* bg_ptr = bg_image_cpu.ptr<float>();
@@ -234,7 +234,7 @@ TEST_F(BackgroundImageTest, BackgroundBlendRoundTripInPlace_BackgroundImage) {
             }
         }
     }
-    const auto bg_image = bg_image_cpu.to(Device::CUDA);
+    const auto bg_image = bg_image_cpu.to(Device::GPU);
 
     auto buffer = raw_image.clone();
     lfs::training::kernels::launch_fused_background_blend_with_image(
@@ -252,7 +252,7 @@ TEST_F(BackgroundImageTest, GradAlphaWithImage_ZeroGradImage) {
     constexpr int H = 64, W = 64;
     const auto grad_image = createTestImage(3, H, W, 0.0f);
     const auto bg_image = createTestImage(3, H, W, 0.5f);
-    auto grad_alpha = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA, DataType::Float32);
+    auto grad_alpha = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_grad_alpha_with_image(
         grad_image.ptr<float>(), bg_image.ptr<float>(),
@@ -266,9 +266,9 @@ TEST_F(BackgroundImageTest, GradAlphaWithImage_UniformBgMatchesSolid) {
     constexpr int H = 64, W = 64;
     const auto grad_image = createTestImage(3, H, W, 0.3f);
     const auto bg_image = createTestImage(3, H, W, 0.5f);
-    const auto bg_color = Tensor::full({3}, 0.5f, Device::CUDA);
-    auto grad_alpha_image = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA, DataType::Float32);
-    auto grad_alpha_color = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA, DataType::Float32);
+    const auto bg_color = Tensor::full({3}, 0.5f, Device::GPU);
+    auto grad_alpha_image = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU, DataType::Float32);
+    auto grad_alpha_color = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_grad_alpha_with_image(
         grad_image.ptr<float>(), bg_image.ptr<float>(),
@@ -289,13 +289,13 @@ TEST_F(BackgroundImageTest, GradAlphaWithImage_CorrectFormula) {
     std::fill(gi, gi + 4, 0.1f);
     std::fill(gi + 4, gi + 8, 0.2f);
     std::fill(gi + 8, gi + 12, 0.3f);
-    const auto grad_image = grad_image_cpu.to(Device::CUDA);
+    const auto grad_image = grad_image_cpu.to(Device::GPU);
 
     auto bg_image_cpu = Tensor::empty({3, 2, 2}, Device::CPU, DataType::Float32);
     std::fill(bg_image_cpu.ptr<float>(), bg_image_cpu.ptr<float>() + 12, 1.0f);
-    const auto bg_image = bg_image_cpu.to(Device::CUDA);
+    const auto bg_image = bg_image_cpu.to(Device::GPU);
 
-    auto grad_alpha = Tensor::empty({2, 2}, Device::CUDA, DataType::Float32);
+    auto grad_alpha = Tensor::empty({2, 2}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_grad_alpha_with_image(
         grad_image.ptr<float>(), bg_image.ptr<float>(),
@@ -319,10 +319,10 @@ TEST_F(BackgroundImageTest, GradAlphaHWCUsesChannelLastLayout) {
             4.0f, 5.0f, 6.0f,
             7.0f, 8.0f, 9.0f,
             10.0f, 11.0f, 12.0f},
-        {H, W, 3}, Device::CUDA);
+        {H, W, 3}, Device::GPU);
     const auto background = Tensor::from_vector(
-        std::vector<float>{0.5f, 0.25f, 0.125f}, {3}, Device::CUDA);
-    auto grad_alpha = Tensor::empty({H, W}, Device::CUDA, DataType::Float32);
+        std::vector<float>{0.5f, 0.25f, 0.125f}, {3}, Device::GPU);
+    auto grad_alpha = Tensor::empty({H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_grad_alpha(
         grad_image.ptr<float>(), background.ptr<float>(), grad_alpha.ptr<float>(),
@@ -437,7 +437,7 @@ TEST_F(BackgroundImageTest, Checkpoint_EmptyImagePathNotSerialized) {
 TEST_F(BackgroundImageTest, BilinearResize_SinglePixel) {
     constexpr int C = 3;
     const auto src = createTestImage(C, 1, 1, 0.42f);
-    auto dst = Tensor::empty({C, 1, 1}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, 1, 1}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, 1, 1, 1, 1, nullptr);
@@ -449,7 +449,7 @@ TEST_F(BackgroundImageTest, BilinearResize_SinglePixel) {
 TEST_F(BackgroundImageTest, BilinearResize_UpscaleToSingleRow) {
     constexpr int C = 3, SRC_H = 4, SRC_W = 4, DST_H = 1, DST_W = 16;
     const auto src = createTestImage(C, SRC_H, SRC_W, 0.5f);
-    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::CUDA, DataType::Float32);
+    auto dst = Tensor::empty({C, DST_H, DST_W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_bilinear_resize_chw(
         src.ptr<float>(), dst.ptr<float>(), C, SRC_H, SRC_W, DST_H, DST_W, nullptr);
@@ -471,8 +471,8 @@ TEST_F(BackgroundImageTest, BackgroundBlendWithImage_VaryingAlpha) {
             a[y * W + x] = static_cast<float>(y) / static_cast<float>(H - 1);
         }
     }
-    const auto alpha = alpha_cpu.to(Device::CUDA);
-    auto output = Tensor::empty({3, H, W}, Device::CUDA, DataType::Float32);
+    const auto alpha = alpha_cpu.to(Device::GPU);
+    auto output = Tensor::empty({3, H, W}, Device::GPU, DataType::Float32);
 
     lfs::training::kernels::launch_fused_background_blend_with_image(
         image.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
@@ -499,7 +499,7 @@ TEST_F(BackgroundImageTest, MultiSize_ResizeToMultipleDifferentSizes) {
         {96, 144}};
 
     for (const auto& [h, w] : camera_sizes) {
-        auto resized = Tensor::empty({static_cast<size_t>(BASE_C), static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CUDA, DataType::Float32);
+        auto resized = Tensor::empty({static_cast<size_t>(BASE_C), static_cast<size_t>(h), static_cast<size_t>(w)}, Device::GPU, DataType::Float32);
 
         lfs::training::kernels::launch_bilinear_resize_chw(
             base_image.ptr<float>(), resized.ptr<float>(),
@@ -532,8 +532,8 @@ TEST_F(BackgroundImageTest, MultiSize_BlendWithDifferentSizes) {
         const auto render = createTestImage(3, tc.h, tc.w, tc.render_val);
         const auto bg = createTestImage(3, tc.h, tc.w, tc.bg_val);
         const auto alpha = Tensor::full({tc.h, tc.w},
-                                        tc.alpha_val, Device::CUDA);
-        auto output = Tensor::empty({3, tc.h, tc.w}, Device::CUDA, DataType::Float32);
+                                        tc.alpha_val, Device::GPU);
+        auto output = Tensor::empty({3, tc.h, tc.w}, Device::GPU, DataType::Float32);
 
         lfs::training::kernels::launch_fused_background_blend_with_image(
             render.ptr<float>(), alpha.ptr<float>(), bg.ptr<float>(),
@@ -564,14 +564,14 @@ TEST_F(BackgroundImageTest, MultiSize_InterleavedSizeChanges) {
     for (size_t iter = 0; iter < size_sequence.size(); ++iter) {
         const auto [h, w] = size_sequence[iter];
 
-        auto bg_resized = Tensor::empty({static_cast<size_t>(BASE_C), static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CUDA, DataType::Float32);
+        auto bg_resized = Tensor::empty({static_cast<size_t>(BASE_C), static_cast<size_t>(h), static_cast<size_t>(w)}, Device::GPU, DataType::Float32);
         lfs::training::kernels::launch_bilinear_resize_chw(
             base_image.ptr<float>(), bg_resized.ptr<float>(),
             BASE_C, BASE_H, BASE_W, h, w, nullptr);
 
         const auto render = createTestImage(3, h, w, 0.3f);
-        const auto alpha = Tensor::full({static_cast<size_t>(h), static_cast<size_t>(w)}, 0.6f, Device::CUDA);
-        auto output = Tensor::empty({3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CUDA, DataType::Float32);
+        const auto alpha = Tensor::full({static_cast<size_t>(h), static_cast<size_t>(w)}, 0.6f, Device::GPU);
+        auto output = Tensor::empty({3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::GPU, DataType::Float32);
 
         lfs::training::kernels::launch_fused_background_blend_with_image(
             render.ptr<float>(), alpha.ptr<float>(), bg_resized.ptr<float>(),
@@ -591,7 +591,7 @@ TEST_F(BackgroundImageTest, MultiSize_GradientWithDifferentSizes) {
         const auto grad_image = createTestImage(3, h, w, 0.2f);
         const auto bg_image = createTestImage(3, h, w, 0.5f);
         auto grad_alpha = Tensor::empty({static_cast<size_t>(h), static_cast<size_t>(w)},
-                                        Device::CUDA, DataType::Float32);
+                                        Device::GPU, DataType::Float32);
 
         lfs::training::kernels::launch_fused_grad_alpha_with_image(
             grad_image.ptr<float>(), bg_image.ptr<float>(),

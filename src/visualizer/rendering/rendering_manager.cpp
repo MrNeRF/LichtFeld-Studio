@@ -6,6 +6,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
@@ -387,28 +388,6 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::requestResizeTrainingPause(TrainerManager* const trainer_manager) {
-        if (resize_training_pause_active_ || !trainer_manager || !trainer_manager->isRunning()) {
-            return;
-        }
-
-        trainer_manager->pauseTrainingTemporary();
-        resize_training_pause_trainer_ = trainer_manager;
-        resize_training_pause_active_ = true;
-    }
-
-    void RenderingManager::releaseResizeTrainingPause() {
-        if (!resize_training_pause_active_) {
-            return;
-        }
-
-        if (resize_training_pause_trainer_) {
-            resize_training_pause_trainer_->resumeTrainingTemporary();
-        }
-        resize_training_pause_trainer_ = nullptr;
-        resize_training_pause_active_ = false;
-    }
-
     void RenderingManager::setLodAvailable(bool available) {
         lod_available_ = available;
         if (available) {
@@ -568,7 +547,9 @@ namespace lfs::vis {
             point_cloud_vulkan_renderer_->reset();
         }
         frame_lifecycle_service_.resetModelTracking();
-        lfs::core::Tensor::trim_memory_pool();
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            lfs::core::Tensor::trim_memory_pool();
+        }
     }
 
     void RenderingManager::noteVksplatIdleFrame(const bool training_active) {

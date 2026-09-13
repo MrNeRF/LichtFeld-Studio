@@ -269,20 +269,6 @@ namespace lfs::core {
             return out;
         }
 
-        [[nodiscard]] float strict_add(const float a, const float b) {
-            volatile float out = a + b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_sub(const float a, const float b) {
-            volatile float out = a - b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_prod3(const float a, const float b, const float c) {
-            return strict_mul(strict_mul(a, b), c);
-        }
-
         [[nodiscard]] float fma_dot3(const float a0,
                                      const float b0,
                                      const float a1,
@@ -1211,7 +1197,7 @@ namespace lfs::core {
             auto result = simplify_workset(workset, options, std::move(progress));
             if (!result)
                 return std::unexpected(result.error());
-            return make_splat_from_workset(*result, Device::CUDA);
+            return make_splat_from_workset(*result, Device::GPU);
         } catch (const std::exception& e) {
             LOG_ERROR("simplify_splats failed: {}", e.what());
             return std::unexpected(e.what());
@@ -1233,7 +1219,7 @@ namespace lfs::core {
                 return std::unexpected(result.error());
 
             SplatSimplifyResult out;
-            out.splat = make_splat_from_workset(*result, Device::CUDA);
+            out.splat = make_splat_from_workset(*result, Device::GPU);
             out.merge_tree = std::move(history.tree);
             return out;
         } catch (const std::exception& e) {

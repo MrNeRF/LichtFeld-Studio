@@ -211,11 +211,6 @@ namespace lfs::io {
             return (size + 7) & ~7;
         }
 
-        // Padding bytes required to reach 8-byte alignment
-        inline size_t pad8_len(size_t size) {
-            return (8 - (size & 7)) & 7;
-        }
-
         // ============================================================================
         // Half-Precision Float Conversion
         // ============================================================================
@@ -1474,45 +1469,6 @@ namespace lfs::io {
                 default:
                     result.data = encode_ln_f16(data, dims, count);
                     result.encoding = "ln_f16";
-                    result.compression = "none";
-                    break;
-                }
-
-                return result;
-            }
-
-            static EncodedProperty encode_orientation(const float* data, size_t count, RadOrientationEncoding encoding) {
-                EncodedProperty result;
-                std::vector<float> xyz(count * 3);
-                for (size_t i = 0; i < count; ++i) {
-                    xyz[i * 3 + 0] = data[i * 4 + 0];
-                    xyz[i * 3 + 1] = data[i * 4 + 1];
-                    xyz[i * 3 + 2] = data[i * 4 + 2];
-                }
-
-                switch (encoding) {
-                case RadOrientationEncoding::F32:
-                    result.data = encode_f32(xyz.data(), 3, count);
-                    result.encoding = "f32";
-                    result.compression = "none";
-                    break;
-
-                case RadOrientationEncoding::F16:
-                    result.data = encode_f16(xyz.data(), 3, count);
-                    result.encoding = "f16";
-                    result.compression = "none";
-                    break;
-
-                case RadOrientationEncoding::Oct88R8:
-                    result.data = encode_quat_oct88r8(data, count);
-                    result.encoding = "oct88r8";
-                    result.compression = "none";
-                    break;
-
-                default:
-                    // Auto-detect: use oct88r8 for compact storage
-                    result.data = encode_quat_oct88r8(data, count);
-                    result.encoding = "oct88r8";
                     result.compression = "none";
                     break;
                 }
