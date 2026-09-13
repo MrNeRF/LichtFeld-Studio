@@ -53,6 +53,12 @@
 #include "training/training_setup.hpp"
 
 namespace lfs::training {
+    struct TrainerBilateralGridTestAccess {
+        static BilateralGrid& grid(Trainer& trainer) {
+            return *trainer.bilateral_grid_;
+        }
+    };
+
     struct TrainerRetryTestAccess {
         static bool should_retry(const lfs::Error& error, const unsigned attempts) {
             const Trainer::MutationStamp stamp{
@@ -1054,6 +1060,84 @@ namespace {
         params.optimization.sh_degree = 0;
         params.optimization.max_cap = 16;
         return params;
+    }
+
+    TEST(TrainerBilateralGridTest, PreservesSparseCameraSlotsAcrossFilteringAndCheckpoint) {
+        using lfs::core::Camera;
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        using lfs::training::TrainerBilateralGridTestAccess;
+
+        for (const bool exposure : {false, true}) {
+            for (const int excluded_uid : {0, 7, 19}) {
+                for (const int filter : {0, 1, 2}) {
+                    SCOPED_TRACE(std::format("exposure={} excluded={} filter={}", exposure, excluded_uid, filter));
+                    const auto root = std::filesystem::temp_directory_path() /
+                                      ("lfs_grid_slots_" + lfs::core::generate_uuid_v4().to_string());
+                    std::filesystem::create_directories(root);
+                    auto params = make_params_json_test_params(root);
+                    params.dataset.data_path = root;
+                    params.optimization.enable_eval = filter == 2;
+                    params.optimization.use_bilateral_grid = !exposure;
+                    params.optimization.use_exposure_correction = exposure;
+                    params.optimization.bilateral_grid_X = 2;
+                    params.optimization.bilateral_grid_Y = 2;
+                    params.optimization.bilateral_grid_W = 2;
+
+                    lfs::core::Scene scene;
+                    const auto group = scene.addGroup("Cameras");
+                    for (const int uid : {0, 7, 19}) {
+                        const auto name = std::format("camera_{}.png", uid);
+                        auto camera = std::make_shared<Camera>(
+                            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                            100.0f, 100.0f, 32.0f, 32.0f, Tensor{}, Tensor{},
+                            lfs::core::CameraModelType::PINHOLE, name,
+                            std::filesystem::path{}, std::filesystem::path{}, 64, 64, uid);
+                        camera->set_has_image(filter != 1 || uid != excluded_uid);
+                        camera->set_split(filter == 2 && uid == excluded_uid
+                                              ? lfs::core::CameraSplit::Eval
+                                              : lfs::core::CameraSplit::Train);
+                        scene.addCamera(name, group, std::move(camera));
+                        scene.setCameraTrainingEnabled(name, filter != 0 || uid != excluded_uid);
+                    }
+                    scene.addSplat("Model", make_checkpoint_test_splat(4, Device::CUDA));
+                    scene.setTrainingModelNode("Model");
+                    lfs::training::Trainer trainer(scene);
+                    const auto initialized = trainer.initialize(params);
+                    ASSERT_TRUE(initialized.has_value()) << initialized.error();
+                    auto& grid = TrainerBilateralGridTestAccess::grid(trainer);
+                    EXPECT_EQ(grid.num_images(), 20);
+
+                    const auto rgb = Tensor::full({3, 4, 4}, 0.4f, Device::CUDA);
+                    const auto grad = Tensor::full({3, 4, 4}, 0.01f, Device::CUDA);
+                    for (const auto& camera : scene.getActiveCameras()) {
+                        const int uid = camera->uid();
+                        EXPECT_TRUE(grid.apply(rgb, uid).is_valid());
+                        EXPECT_TRUE(grid.backward(rgb, grad, uid).is_valid());
+                        EXPECT_TRUE(grid.tv_loss_gpu(uid).is_valid());
+                        grid.step_image(uid, 0.01f);
+                    }
+                    const auto before = grid.apply(rgb, 19).cpu().to_vector();
+                    const auto stored_grids = grid.grids().cpu().to_vector();
+                    std::stringstream checkpoint(std::ios::in | std::ios::out | std::ios::binary);
+                    grid.serialize(checkpoint);
+                    lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+                    loaded.deserialize(checkpoint);
+                    grid.adopt_checkpoint_state(loaded);
+                    EXPECT_EQ(grid.num_images(), 20);
+                    EXPECT_EQ(grid.grids().cpu().to_vector(), stored_grids);
+                    const auto after = grid.apply(rgb, 19).cpu().to_vector();
+                    ASSERT_EQ(after.size(), before.size());
+                    // Deserialization recomputes the floating-point projection state.
+                    for (size_t i = 0; i < after.size(); ++i) {
+                        EXPECT_NEAR(after[i], before[i], 1e-6f);
+                    }
+                    trainer.shutdown();
+                    std::filesystem::remove_all(root);
+                }
+            }
+        }
     }
 
     TEST(CheckpointFrozenRangesRoundTripTest, EmbeddedSplatRangesSurviveFullCheckpoint) {

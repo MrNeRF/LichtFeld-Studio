@@ -1265,7 +1265,6 @@ namespace lfs::training {
         current_iteration_ = 0;
         current_loss_ = 0.0f;
         train_dataset_size_ = 0;
-        total_cameras_count_ = 0;
         setCameraLossHeatmap(nullptr);
 
         LOG_DEBUG("Trainer cleanup complete");
@@ -1325,11 +1324,19 @@ namespace lfs::training {
                     1, get_total_iterations() - params_.optimization.exposure_correction_grid_start_iter);
             }
 
-            // BilateralGrid is indexed with cam->uid() in the training loop. Those UIDs stay
-            // in the original camera space even when train/val splits are enabled, so the grid
-            // must be sized for the full camera set rather than only the training subset.
+            // Training and checkpoint state use the original camera UID as the slot.
+            // Disabled, missing-image and evaluation cameras must not shrink that space.
+            int camera_slots = 0;
+            for (const auto& camera : scene_->getAllCameras()) {
+                const int uid = camera->uid();
+                if (uid < 0 || uid == std::numeric_limits<int>::max()) {
+                    return std::unexpected(std::format(
+                        "Invalid camera UID {} for bilateral grid", uid));
+                }
+                camera_slots = std::max(camera_slots, uid + 1);
+            }
             bilateral_grid_ = std::make_unique<BilateralGrid>(
-                static_cast<int>(total_cameras_count_),
+                camera_slots,
                 params_.optimization.bilateral_grid_X,
                 params_.optimization.bilateral_grid_Y,
                 params_.optimization.bilateral_grid_W,
@@ -1341,7 +1348,7 @@ namespace lfs::training {
                      params_.optimization.bilateral_grid_X,
                      params_.optimization.bilateral_grid_Y,
                      params_.optimization.bilateral_grid_W,
-                     total_cameras_count_,
+                     camera_slots,
                      train_dataset_size_);
 
             return {};
@@ -2880,7 +2887,7 @@ namespace lfs::training {
             dataset_config.max_width = params.dataset.max_width;
             dataset_config.test_every = params.dataset.test_every;
 
-            // Get source cameras from Scene nodes or base_dataset_
+            // Get enabled cameras with images from the scene
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
             std::vector<std::shared_ptr<lfs::core::Camera>> train_cameras;
             std::vector<std::shared_ptr<lfs::core::Camera>> val_cameras;
@@ -2932,20 +2939,9 @@ namespace lfs::training {
                     }
                     assert(train_cameras.size() + val_cameras.size() == source_cameras.size());
                 }
-            } else if (base_dataset_) {
-                source_cameras = base_dataset_->get_cameras();
-                std::erase_if(source_cameras, [](const auto& camera) {
-                    return !camera || !camera->has_image();
-                });
-                if (source_cameras.empty()) {
-                    return std::unexpected(
-                        "Dataset has no cameras with image files available for training");
-                }
             } else {
                 return std::unexpected("No camera source available");
             }
-
-            total_cameras_count_ = source_cameras.size();
 
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());
@@ -2953,24 +2949,10 @@ namespace lfs::training {
 
             // Handle dataset split based on evaluation flag
             if (params.optimization.enable_eval) {
-                if (scene_) {
-                    train_dataset_ = std::make_shared<CameraDataset>(
-                        train_cameras, dataset_config, CameraDataset::Split::ALL);
-                    val_dataset_ = std::make_shared<CameraDataset>(
-                        val_cameras, dataset_config, CameraDataset::Split::ALL);
-                } else {
-                    // Create train/val split
-                    train_dataset_ = std::make_shared<CameraDataset>(
-                        source_cameras, dataset_config, CameraDataset::Split::TRAIN,
-                        provided_splits_ ? std::make_optional(std::get<0>(*provided_splits_)) : std::nullopt);
-                    val_dataset_ = std::make_shared<CameraDataset>(
-                        source_cameras, dataset_config, CameraDataset::Split::VAL,
-                        provided_splits_ ? std::make_optional(std::get<1>(*provided_splits_)) : std::nullopt);
-
-                    LOG_INFO("Created train/val split: {} train, {} val images",
-                             train_dataset_->size(),
-                             val_dataset_->size());
-                }
+                train_dataset_ = std::make_shared<CameraDataset>(
+                    train_cameras, dataset_config, CameraDataset::Split::ALL);
+                val_dataset_ = std::make_shared<CameraDataset>(
+                    val_cameras, dataset_config, CameraDataset::Split::ALL);
                 if (train_dataset_->size() == 0) {
                     return std::unexpected("Evaluation split leaves no training images. Increase Test Every or disable evaluation.");
                 }
@@ -3597,7 +3579,6 @@ namespace lfs::training {
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
-        base_dataset_.reset();
         train_dataset_.reset();
         val_dataset_.reset();
         setCameraLossHeatmap(nullptr);
