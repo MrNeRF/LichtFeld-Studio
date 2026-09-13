@@ -1870,4 +1870,46 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(InputControllerFocusTest, SetPivotCentersSharedComparisonCamera) {
+        for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::PLYComparison,
+                                SplitViewMode::IndependentDual}) {
+            for (const double click_x : {60.0, 160.0}) {
+                SCOPED_TRACE(static_cast<int>(mode));
+                SCOPED_TRACE(click_x);
+                Viewport primary(200, 200);
+                InputController controller(nullptr, primary);
+                RenderingManager rendering;
+                services().set(&rendering);
+                controller.updateViewportBounds(0, 0, 200, 200);
+                rendering.restoreSplitViewMode(mode, primary);
+                auto& target = rendering.resolvePanelViewport(
+                    primary, mode == SplitViewMode::IndependentDual && click_x > 100
+                                 ? SplitViewPanelId::Right
+                                 : SplitViewPanelId::Left);
+                target.camera.R = glm::mat3(1.0f);
+                target.camera.t = glm::vec3(0.0f, 0.0f, -5.0f);
+                target.camera.pivot = glm::vec3(0.0f);
+                // Exercise the normal right-button double click binding.
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_PRESS, click_x, 80.0);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_RELEASE, click_x, 80.0);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_PRESS, click_x, 80.0);
+                ASSERT_TRUE(target.camera.isGliding());
+                target.camera.finishGlide();
+                // Centering a perspective orbit pivot puts it on the camera's
+                // forward axis, regardless of which side of the wipe was clicked.
+                const auto direction = glm::transpose(target.camera.R) *
+                                       (target.camera.pivot - target.camera.t);
+                EXPECT_NEAR(direction.x, 0.0f, 1e-5f);
+                EXPECT_NEAR(direction.y, 0.0f, 1e-5f);
+                EXPECT_NEAR(glm::length(direction), 5.0f, 1e-5f);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_RELEASE, click_x, 80.0);
+                services().clear();
+            }
+        }
+    }
+
 } // namespace lfs::vis
