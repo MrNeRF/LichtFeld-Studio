@@ -191,14 +191,16 @@
 .mp-url-input {
     flex: 1;
     min-width: 120dp;
-    height: 28dp;
-    min-height: 28dp;
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
 }
 
 .mp-install-btn {
     flex-shrink: 0;
-    height: 28dp;
-    min-height: 28dp;
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
 }
 
 .mp-formats-header {
