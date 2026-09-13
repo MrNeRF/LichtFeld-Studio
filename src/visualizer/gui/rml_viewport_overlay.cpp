@@ -985,6 +985,7 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setProjectDragOverlay(ProjectDragOverlayState state) {
         if (project_drag_overlay_.visible == state.visible &&
+            project_drag_overlay_.gallery_scene == state.gallery_scene &&
             project_drag_overlay_.label == state.label) {
             return;
         }
@@ -1004,6 +1005,10 @@ namespace lfs::vis::gui {
                 "width",
                 std::format("{:.1f}px", std::max(vp_size_.x - viewport_content_offset_, 0.0f)));
         }
+        if (auto* const title = document_->GetElementById("project-drop-title"))
+            title->SetClass("hidden", project_drag_overlay_.gallery_scene);
+        if (auto* const title = document_->GetElementById("gallery-drop-title"))
+            title->SetClass("hidden", !project_drag_overlay_.gallery_scene);
         if (auto* const label = document_->GetElementById("project-drop-label")) {
             label->SetInnerRML(
                 Rml::StringUtilities::EncodeRml(project_drag_overlay_.label));

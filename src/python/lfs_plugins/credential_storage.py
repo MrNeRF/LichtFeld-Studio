@@ -116,7 +116,8 @@ class KeychainBackend:
         # Interactive commands travel through stdin, never process arguments.
         encoded = base64.b64encode(value).decode('ascii')
         command = f'add-generic-password -U -s {self.service} -a {self.account} -w {encoded}\n'
-        self._run('-i', input=command.encode('ascii'))
+        if self._run('-i', input=command.encode('ascii')).returncode:
+            raise OSError('Keychain did not save the credentials')
         if self.read() != value:
             raise OSError('Keychain did not save the credentials')
 
@@ -130,40 +131,50 @@ def default_backend(path):
     system = platform.system()
     if system == 'Windows':
         return DPAPIBackend(Path(path).with_suffix('.dpapi'))
-    if system == 'Darwin' and (executable := shutil.which('security')):
-        return KeychainBackend(path, executable)
+    if system == 'Darwin':
+        executable = shutil.which('security')
+        if executable or Path(path).with_suffix('.migrated').exists():
+            return KeychainBackend(path, executable or '/usr/bin/security')
     return FileBackend(path)
 
 
 class CredentialStorage:
     def __init__(self, path, backend=None):
         self.legacy = FileBackend(path)
+        self.migrated = FileBackend(Path(path).with_suffix(".migrated"))
         self.backend = backend if backend is not None else default_backend(path)
         self.plaintext = type(self.backend) is FileBackend and self.backend.path == self.legacy.path
 
     def read(self):
-        value = self.backend.read()
         if self.plaintext:
-            return value
-        legacy = self.legacy.read()
-        if value is None and legacy is not None:
-            # Persist and verify before deleting the migration source.
-            self.backend.write(legacy)
-            value = self.backend.read()
-            if value != legacy:
-                raise OSError('Credential migration could not be verified')
-        if value is not None and legacy is not None:
+            return self.backend.read()
+        # A receipt is written only after an equal readback. Even if the secure
+        # item later becomes unreadable, a leftover plaintext copy must go.
+        if self.migrated.read() is not None:
             self.legacy.delete()
+            return self.backend.read()
+        value = self.backend.read()
+        legacy = self.legacy.read()
+        if legacy is not None:
+            # A pre-existing secure item may belong to an older account.
+            self.write(legacy)
+            return legacy
         return value
 
     def write(self, value):
         self.backend.write(value)
+        if self.backend.read() != value:
+            raise OSError('Credential migration could not be verified')
         if not self.plaintext:
+            self.migrated.write(b'verified\n')
             self.legacy.delete()
 
     def delete(self):
         errors = []
-        backends = [self.backend, self.legacy, FileBackend(self.legacy.path.with_suffix('.dpapi'))]
+        backends = [self.backend, self.legacy, FileBackend(self.legacy.path.with_suffix('.dpapi')), self.migrated]
+        if platform.system() == 'Darwin' and not isinstance(self.backend, KeychainBackend):
+            # The system binary remains addressable when a restricted PATH hid it.
+            backends.append(KeychainBackend(self.legacy.path, shutil.which('security') or '/usr/bin/security'))
         for backend in backends:
             try:
                 backend.delete()

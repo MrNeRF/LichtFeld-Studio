@@ -48,7 +48,7 @@ def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):
 def test_inline_device_flow_uses_complete_uri_and_cancel(convenience, panel_module, monkeypatch):
     panel, _, _ = convenience
     calls = []
-    account = SimpleNamespace(start_device_flow=lambda: calls.append('start') or True,
+    account = SimpleNamespace(base_url='https://portal.example', start_device_flow=lambda: calls.append('start') or True,
         cancel_device_flow=lambda: calls.append('cancel'),
         snapshot=lambda: SimpleNamespace(user_code='ABCD-EFGH', verification_uri_complete='https://portal.example/link?code=ABCD-EFGH'))
     panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(account=account))

@@ -1408,12 +1408,30 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 26"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 27"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
+        EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
+        EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
 
         persisted.close();
         std::filesystem::remove_all(root, filesystem_error);
+    }
+
+    // FG2 C2: defaults, profile migration, and intentional rebinding/unbinding.
+    TEST_F(InputControllerFocusTest, GalleryActionsHaveRebindableNativeDefaults) {
+        using namespace input;
+        InputBindings bindings;
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::ASSET_GALLERY_PRIMARY);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT), Action::ASSET_GALLERY_COPY_LINK);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::ASSET_REFRESH);
+        EXPECT_EQ(actionFromName("asset_refresh"), Action::ASSET_REFRESH);
+        bindings.setBinding(ToolMode::GLOBAL, Action::ASSET_REFRESH, KeyTrigger{KEY_F6, MODIFIER_CTRL});
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F6, MODIFIER_CTRL), Action::ASSET_REFRESH);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::NONE);
+        bindings.clearBinding(ToolMode::GLOBAL, Action::ASSET_REFRESH);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F6, MODIFIER_CTRL), Action::NONE);
     }
 
     TEST_F(InputControllerFocusTest, McpRuntimeShortcutsDispatchDuringPythonCapture) {

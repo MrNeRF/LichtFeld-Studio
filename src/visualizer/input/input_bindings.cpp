@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 26; // Version 26 adds scene graph grouping actions.
-        constexpr Action LAST_ACTION = Action::UNGROUP_SELECTED_SCENE_NODE;
+        constexpr int PROFILE_VERSION = 27; // Version 27 adds Asset Manager gallery actions.
+        constexpr Action LAST_ACTION = Action::ASSET_REFRESH;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -537,7 +537,11 @@ namespace lfs::vis::input {
                   def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING)) ||
                 (version < 26 &&
                  (def.action == Action::GROUP_SELECTED_SCENE_NODES ||
-                  def.action == Action::UNGROUP_SELECTED_SCENE_NODE));
+                  def.action == Action::UNGROUP_SELECTED_SCENE_NODE)) ||
+                (version < 27 &&
+                 (def.action == Action::ASSET_GALLERY_PRIMARY ||
+                  def.action == Action::ASSET_GALLERY_COPY_LINK ||
+                  def.action == Action::ASSET_REFRESH));
             if (!should_add) {
                 continue;
             }
@@ -1030,6 +1034,9 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_C, MODIFIER_CTRL}, Action::COPY_SELECTION, "Copy"},
             {KeyTrigger{KEY_X, MODIFIER_CTRL}, Action::CUT_SELECTION, "Cut"},
             {KeyTrigger{KEY_V, MODIFIER_CTRL}, Action::PASTE_SELECTION, "Paste"},
+            {KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::ASSET_GALLERY_PRIMARY, "Gallery Primary Action"},
+            {KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ASSET_GALLERY_COPY_LINK, "Copy Gallery Link"},
+            {KeyTrigger{KEY_F5, MODIFIER_NONE}, Action::ASSET_REFRESH, "Refresh Assets"},
             // Selection mode shortcuts
             {KeyTrigger{KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
             {KeyTrigger{KEY_1, MODIFIER_CTRL}, Action::SELECT_MODE_CENTERS, "Centers"},
@@ -1229,6 +1236,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "Toggle Scene Selection Visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "Toggle Scene Selection Training";
         case Action::GROUP_SELECTED_SCENE_NODES: return "Group Selected Scene Nodes";
+        case Action::ASSET_GALLERY_PRIMARY: return "Gallery Primary Action";
+        case Action::ASSET_GALLERY_COPY_LINK: return "Copy Gallery Link";
+        case Action::ASSET_REFRESH: return "Refresh Assets";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
@@ -1320,6 +1330,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "toggle_scene_selection_visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "toggle_scene_selection_training";
         case Action::GROUP_SELECTED_SCENE_NODES: return "group_selected_scene_nodes";
+        case Action::ASSET_GALLERY_PRIMARY: return "asset_gallery_primary";
+        case Action::ASSET_GALLERY_COPY_LINK: return "asset_gallery_copy_link";
+        case Action::ASSET_REFRESH: return "asset_refresh";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
@@ -2022,6 +2035,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
         case Action::TOGGLE_SCENE_SELECTION_TRAINING:
         case Action::GROUP_SELECTED_SCENE_NODES:
+        case Action::ASSET_GALLERY_PRIMARY:
+        case Action::ASSET_GALLERY_COPY_LINK:
+        case Action::ASSET_REFRESH:
         case Action::UNGROUP_SELECTED_SCENE_NODE:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:

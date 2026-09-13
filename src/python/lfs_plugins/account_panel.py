@@ -19,6 +19,7 @@ __lfs_panel_classes__ = ["AccountPanel"]
 __lfs_panel_ids__ = ["lfs.account"]
 
 _ERROR_TRANSLATION_KEYS = {
+    "unsafe_portal_url": "asset_manager.gallery.error.unsafe_url",
     "access_denied": "account.error.access_denied",
     "authorization_pending": "account.error.authorization_pending",
     "expired_token": "account.error.expired_token",
@@ -145,14 +146,25 @@ class AccountPanel(Panel):
         if element:
             element.add_event_listener("click", callback)
 
-    def _open_verification_uri(self, _event) -> None:
+    def _safe_verification_uri(self):
+        from .portal_security import checked_portal_url
         uri = self._service.snapshot().verification_uri_complete
+        if not uri:
+            return ''
+        try:
+            return checked_portal_url(self._service, uri)
+        except ValueError:
+            self._service._set_signed_out('unsafe_portal_url')
+            return ''
+
+    def _open_verification_uri(self, _event) -> None:
+        uri = self._safe_verification_uri()
         if uri:
             self._opened_verification_uri = uri
             lf.ui.open_url(uri)
 
     def _maybe_open_verification_uri(self) -> None:
-        uri = self._service.snapshot().verification_uri_complete
+        uri = self._safe_verification_uri()
         if uri and uri != self._opened_verification_uri:
             self._opened_verification_uri = uri
             lf.ui.open_url(uri)
@@ -187,7 +199,7 @@ class AccountPanel(Panel):
                 pass
 
     def _copy_verification_uri(self, _event) -> None:
-        uri = self._service.snapshot().verification_uri_complete
+        uri = self._safe_verification_uri()
         if uri:
             lf.ui.set_clipboard_text(uri)
 

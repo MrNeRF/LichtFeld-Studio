@@ -74,6 +74,7 @@ namespace lfs::vis::gui {
 
         struct ProjectDragOverlayState {
             bool visible = false;
+            bool gallery_scene = false;
             std::string label;
         };
 

@@ -180,6 +180,21 @@ namespace lfs::vis::gui {
         }
     }
 
+    bool RmlPythonPanelAdapter::onViewportDrop(const std::string& type, const std::string& data) {
+        if (type != "application/x-lichtfeld-gallery-scene" || !isMounted() ||
+            !lfs::python::can_acquire_gil())
+            return false;
+        const lfs::python::GilAcquire gil;
+        try {
+            if (!nb::hasattr(panel_instance_, "gallery_viewport_drop"))
+                return false;
+            return nb::cast<bool>(panel_instance_.attr("gallery_viewport_drop")(data));
+        } catch (const std::exception& e) {
+            LOG_ERROR("Gallery viewport drop failed: {}", e.what());
+            return false;
+        }
+    }
+
     void RmlPythonPanelAdapter::callOnUnload(Rml::ElementDocument* doc) {
         if (!doc || !isMounted() || !lfs::python::can_acquire_gil())
             return;

@@ -8,7 +8,8 @@
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
     <div id="project-drop-overlay" class="project-drop-overlay hidden">
         <div class="project-drop-card">
-            <div class="project-drop-title">@tr:asset_manager.drag.open_project</div>
+            <div id="project-drop-title" class="project-drop-title">@tr:asset_manager.drag.open_project</div>
+            <div id="gallery-drop-title" class="project-drop-title hidden">@tr:asset_manager.gallery.action.pull_open</div>
             <div id="project-drop-label" class="project-drop-label"></div>
         </div>
     </div>

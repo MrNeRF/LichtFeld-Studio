@@ -6931,10 +6931,12 @@ namespace lfs::vis::gui {
         const auto resolve_project_asset_drag = [this, &sdl_input]() {
             constexpr std::string_view kProjectPayloadType =
                 "application/x-lichtfeld-project";
+            constexpr std::string_view kGalleryPayloadType =
+                "application/x-lichtfeld-gallery-scene";
             const auto payload = rmlui_manager_.dragPayload();
             const auto hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
             const bool can_drop =
-                payload && payload->type == kProjectPayloadType &&
+                payload && (payload->type == kProjectPayloadType || payload->type == kGalleryPayloadType) &&
                 isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
                 !hit.blocks_pointer && !hit.blocks_mouse_button;
 
@@ -6942,6 +6944,12 @@ namespace lfs::vis::gui {
                 const auto released = rmlui_manager_.takeReleasedDragPayload();
                 rml_viewport_overlay_.setProjectDragOverlay({});
                 if (released && can_drop) {
+                    if (released->type == kGalleryPayloadType) {
+                        const auto panel = PanelRegistry::instance().get_panel_instance("lfs.asset_manager");
+                        if (panel)
+                            panel->onViewportDrop(released->type, released->data);
+                        return;
+                    }
                     const auto path = lfs::core::utf8_to_path(released->data);
                     lfs::core::events::cmd::ProjectOpen{
                         .path = path,
@@ -6955,6 +6963,7 @@ namespace lfs::vis::gui {
 
             rml_viewport_overlay_.setProjectDragOverlay({
                 .visible = can_drop,
+                .gallery_scene = can_drop && payload->type == kGalleryPayloadType,
                 .label = can_drop ? payload->label : std::string{},
             });
         };

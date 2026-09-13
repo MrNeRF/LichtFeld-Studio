@@ -31,6 +31,7 @@ namespace lfs::vis::gui {
                               int height_mode = 0, bool has_draw = false);
         ~RmlPythonPanelAdapter() override;
 
+        bool onViewportDrop(const std::string& type, const std::string& data) override;
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         void setPollVisibility(bool visible) override;

@@ -275,17 +275,33 @@ def test_unpinned_download_restarts_with_clear_message(tmp_path, monkeypatch, et
     assert (tmp_path/'file.ply').read_bytes() == b'data'
 
 
-def test_zip_slip_licht_never_publishes_destination(tmp_path, monkeypatch):
-    stream = io.BytesIO()
-    with zipfile.ZipFile(stream, 'w') as archive:
-        archive.writestr('../../outside', 'private data')
-    data = stream.getvalue()
+def test_X2_zip_slip_download_reaches_bundle_validation(tmp_path, monkeypatch):
+    from test_gallery_bundle import archive_bytes
+    from lfs_plugins import gallery_bundle, gallery_preparation
+    data = archive_bytes(extras=[('../outside.ply', b'private data')])
     client, scene = _download_client(len(data))
-    monkeypatch.setattr(portal_gallery, 'urlopen', lambda *a, **k: _response(data))
-    destination = tmp_path/'project.licht'
-    with pytest.raises(ValueError):
+    reads = []
+    def opened(*a, **k):
+        reads.append(True)
+        return _response(data)
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    destination = tmp_path/'project.lfsg'
+    with pytest.raises(gallery_bundle.BundleError, match='member|entries|files'):
         client.download(scene['id'], destination)
-    assert list(tmp_path.iterdir()) == []
+    assert reads == [True] and not destination.exists()
+    assert not (tmp_path/'.project.lfsg.part').exists()
+    # The same real archive also enters the staging/extraction entry point.
+    archive = tmp_path/'untrusted.lfsg'
+    archive.write_bytes(data)
+    with pytest.raises(gallery_bundle.BundleError):
+        gallery_preparation.unpack_bundle(tmp_path, archive, tmp_path/(str(uuid.uuid4()) + '.scene'))
+    assert not (tmp_path/'outside.ply').exists()
+    # Control: this is otherwise a valid bundle and copies its real node bytes.
+    valid = archive_bytes()
+    client, scene = _download_client(len(valid))
+    monkeypatch.setattr(portal_gallery, 'urlopen', lambda *a, **k: _response(valid))
+    client.download(scene['id'], destination)
+    assert destination.read_bytes() == valid
 
 
 def test_native_licht_embedded_path_is_rejected_before_publish(tmp_path, monkeypatch):
@@ -437,6 +453,11 @@ def test_remove_and_publish_as_new_confirm_public_scene(gallery, monkeypatch, pa
     assert prompts[0][1].endswith('confirm.' + action)
     prompts[0][-1](prompts[0][-2][0])
     assert not actions
+    manager._gallery_command(action)
+    prompts[-1][-1](prompts[-1][-2][-1])
+    assert len(actions) == 1
+    if action == 'remove':
+        assert actions == [(remote['id'], remote['revision'])]
 
 
 def test_asset_manager_return_after_five_minutes_refreshes_immediately(gallery, monkeypatch):

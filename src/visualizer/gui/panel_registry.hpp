@@ -162,6 +162,12 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        // Called on the GUI thread only after a native viewport drop hit test.
+        virtual bool onViewportDrop(const std::string& type, const std::string& data) {
+            (void)type;
+            (void)data;
+            return false;
+        }
         virtual void draw(const PanelDrawContext& ctx) = 0;
         virtual bool poll(const PanelDrawContext& ctx) {
             (void)ctx;
