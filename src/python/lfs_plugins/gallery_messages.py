@@ -14,12 +14,18 @@ def localize_message(message):
         return ""
     import lichtfeld as lf
     text = redact(message)
+    if text == lf.ui.tr("asset_manager.gallery.error.unsafe_url"):
+        return text
     lower = text.casefold()
     if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
         return text  # Keep the explanation of restart versus resume visible.
     # Already localized messages/keys are not fed back through the diagnostic
     # classifier. These patterns describe only the old English journal format.
     rules = (
+        (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
+        (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
+        (r'waiting for the portal connection', 'info.waiting_connection'),
+        (r'unsafe portal url|unsafe_portal_url', 'error.unsafe_url'),
         (r'account changed|account or .*changed|previous account', 'error.account_changed'),
         (r'sign out and reconnect|approve gallery', 'error.access'),
         (r'sign in|account details.*loading', 'sidebar.sign_in'),

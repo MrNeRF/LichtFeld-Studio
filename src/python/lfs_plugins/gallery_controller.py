@@ -15,7 +15,7 @@ import lichtfeld as lf
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
 from .gallery_view import capture_camera_path, capture_view, restore_camera_path, restore_view
 from . import gallery_preparation
-from .portal_security import redact, safe_filename
+from .portal_security import redact, safe_filename, checked_portal_url
 
 def tr(key, **values):
     from .localization import safe_format
@@ -44,6 +44,8 @@ class GalleryController:
         self._export_identity = None
         self._export_progress = 0
         self._phase_poll_scheduled = False
+        self._phase_poll_timer = None
+        self._phase_poll_generation = 0
         self._import_started = None
         self._import_detached = False
         self._project_link = None
@@ -88,6 +90,7 @@ class GalleryController:
     def close(self):
         """Release timers/subscribers when the plugin runtime shuts down."""
         self._closed = True
+        self._cancel_phase_poll()
         if self._timer:
             self._timer.cancel()
             self._timer = None
@@ -411,7 +414,9 @@ class GalleryController:
             groups.append(("view", ()))
         if local_view.get("cameraPath") != remote_view.get("cameraPath"):
             groups.append(("track", ()))
-        if not link.get("commitUuid") or asset.get("commit_uuid") != link["commitUuid"]:
+        if (not link.get("commitUuid") or asset.get("commit_uuid") != link["commitUuid"]
+                or link.get("contentRevision") and scene.get("contentRevision")
+                and link["contentRevision"] != scene["contentRevision"]):
             groups.append(("content", ()))
         if not groups:
             self._message = tr("state.unknown")
@@ -422,10 +427,15 @@ class GalleryController:
 
         def choose(index):
             if self.service.identity() != identity or self._project_identity() != expected_project:
+                self._decision_pending = False
                 return
             if index == len(groups):
                 self._decision_pending = False
-                apply()
+                try:
+                    self._resolve_pending_uploads(asset["id"], scene["id"], identity, apply)
+                except Exception as exc:
+                    self._message = friendly_error(exc)
+                self._schedule_tick()
                 return
             name, keys = groups[index]
             buttons = [tr("action.cancel"), tr("conflict.mine"), tr("conflict.portal")]
@@ -442,6 +452,8 @@ class GalleryController:
             lf.ui.confirm_dialog(tr("action.resolve"), tr("conflict.group", title=scene["title"], group=tr("conflict." + name)), buttons, selected)
 
         def apply():
+            if self.service.identity() != identity or self._project_identity() != expected_project:
+                raise ValueError("The account or current project changed. Review it before resolving.")
             metadata = copy.deepcopy(local)
             for name, keys in groups:
                 if decisions[name] == "portal":
@@ -461,11 +473,49 @@ class GalleryController:
             elif "content" in decisions:
                 metadata.update(replaceSceneId=scene["id"], baseRevision=scene["revision"])
                 self._operation_project = asset["id"]
-                self._publish(metadata, expected_project=expected_project, upload_format=self.upload_format)
+                environment_source = str(lf.get_render_settings().environment_map_path) if view.get("environment") else None
+                restore_view(lf, view, environment_path=environment_source)
+                self._publish(metadata, expected_project=expected_project, environment_source=environment_source,
+                    upload_format=self.upload_format)
             else:
-                self.service.edit(scene["id"], scene["revision"], metadata)
+                # Apply reviewed settings before recording the new shared baseline.
+                # The native save persists both VIEW and SEQR in this project.
+                environment_source = str(lf.get_render_settings().environment_map_path) if view.get("environment") else None
+                restore_view(lf, view, environment_path=environment_source)
+                def saved():
+                    self.service.edit(scene["id"], scene["revision"], metadata,
+                        commit_uuid=str(lf.io.inspect_project(asset["path"]).commit_uuid))
+                self._save_current_project(saved)
             self._schedule_tick()
         choose(0)
+
+    def _resolve_pending_uploads(self, project_id, scene_id, identity, continuation):
+        """Retire only the failed replacement explicitly superseded by Resolve."""
+        if self.service.identity() != identity:
+            self._decision_pending = False
+            return
+        if self.service.busy:
+            self._decision_pending = True
+            def idle():
+                self._decision_pending = False
+                self._resolve_pending_uploads(project_id, scene_id, identity, continuation)
+            self._after_service = idle
+            return
+        self._refresh_model()
+        pending = next((j for j in self._state["jobs"] if j.get("project") == project_id
+            and j.get("status") == "conflict" and j.get("metadata", {}).get("replaceSceneId") == scene_id), None)
+        if pending:
+            self.service.discard(pending["id"])
+            self._decision_pending = True
+            def retired():
+                self._decision_pending = False
+                current = next(j for j in self.service.snapshot()["jobs"] if j["id"] == pending["id"])
+                if current["status"] != "canceled":
+                    raise ValueError(current.get("message") or "The previous upload could not be canceled.")
+                self._resolve_pending_uploads(project_id, scene_id, identity, continuation)
+            self._after_service = retired
+        else:
+            continuation()
 
     def confirm_action(self, key, title, continuation):
         """Native confirmation shared by Asset Manager actions."""
@@ -505,10 +555,10 @@ class GalleryController:
             return
         url = self.service.account.base_url + "/gallery/scenes/" + str(uuid.UUID(scene["id"])) + "/"
         if action == "copy" and scene.get("visibility") == "public" and scene.get("viewerUrl"):
-            lf.ui.set_clipboard_text(scene["viewerUrl"])
+            lf.ui.set_clipboard_text(checked_portal_url(self.service.account, scene["viewerUrl"]))
         else:
             tab = "manage" if action == "copy" else action if action in ("story", "display", "manage") else "story"
-            lf.ui.open_url(url + "?tab=" + tab)
+            lf.ui.open_url(checked_portal_url(self.service.account, url + "?tab=" + tab))
 
     def pull_asset(self, asset, scene, destination=None, *, open_after=False):
         self._check_identity()
@@ -581,6 +631,7 @@ class GalleryController:
         def unsubscribe():
             self._subscribers.pop(callback, None)
             self._asset_subscribers.discard(callback)
+            self._cancel_phase_poll()
             if not self._asset_subscribers and self._hidden_since is None:
                 self._hidden_since = time.monotonic()
             if not any(self._subscribers.values()) and not self.offline:
@@ -683,6 +734,8 @@ class GalleryController:
 
     def _tick_body(self):
         self._check_identity()
+        if not self._phase_poll_scheduled:
+            self._advance_phases()
         now = time.monotonic()
         if self._refresh_pending and not self.service.busy:
             self._refresh_pending = False
@@ -696,7 +749,7 @@ class GalleryController:
                 self.checked_at = time.time()
                 self._backoff = 5.0
                 self._next_refresh = now + (30 if any(self._subscribers.values()) else self.preferences()["refreshMinutes"] * 60)
-        if now >= self._next_refresh and not self._refresh_pending and not self.service.busy:
+        if now >= self._next_refresh and not self._refresh_pending and not self._panel_busy():
             if self.service.snapshot().get("signed_in"):
                 self.refresh()
         self._refresh_model()
@@ -719,6 +772,10 @@ class GalleryController:
                     self.service.discard(job_id)
             elif self._resume_queue:
                 self.service.resume(self._resume_queue.pop(0))
+            elif not self._panel_busy() and any(j.get("status") == "paused" and j.get("retryAt", float("inf")) <= time.time()
+                                              for j in self._state["jobs"]):
+                job = next(j for j in self._state["jobs"] if j.get("status") == "paused" and j.get("retryAt", float("inf")) <= time.time())
+                self.service.resume(job["id"])
             else:
                 try:
                     self._finish_pulls()
@@ -830,6 +887,7 @@ class GalleryController:
         self._pull_overrides = None
         self._undo_pull = None
         self._after_service = None
+        self._decision_pending = False
         self.checked_at = 0
         self.offline = False
         self._next_refresh = 0
@@ -907,18 +965,36 @@ class GalleryController:
         # Operation snapshots are pinned by the initiating command. The Asset
         # Manager owns its editable fields and refreshes clean drafts itself.
 
+    def _cancel_phase_poll(self):
+        self._phase_poll_generation += 1
+        if self._phase_poll_timer:
+            self._phase_poll_timer.cancel()
+            self._phase_poll_timer = None
+        self._phase_poll_scheduled = False
+
     def _schedule_phase_poll(self):
-        # Native export/import must finish even when the user closes this panel.
-        # Only scheduling runs on the timer; all app access stays on the UI thread.
+        # Detached work advances on the owned controller tick, without panel callbacks.
+        if self._closed or not self._subscribers:
+            self._schedule_tick()
+            return
         if self._phase_poll_scheduled or not (self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending):
             return
         self._phase_poll_scheduled = True
-        timer = threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(self._poll_phases))
+        generation = self._phase_poll_generation
+        def poll():
+            if self._closed or generation != self._phase_poll_generation:
+                return
+            self._poll_phases()
+        timer = threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(poll))
         timer.daemon = True
+        self._phase_poll_timer = timer
         timer.start()
 
     def _poll_phases(self):
         self._phase_poll_scheduled = False
+        self._phase_poll_timer = None
+        if self._closed:
+            return
         self._advance_phases()
         self._schedule_phase_poll()
 

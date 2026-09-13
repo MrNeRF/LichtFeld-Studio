@@ -1915,7 +1915,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return None
         asset = self._asset_dict(self._gallery_drag[0]) or {}
         folder = element.get_attribute("data-folder-id", "")
-        if (not asset.get("remote_only") and folder == SCOPE_PUBLISHED
+        if (folder == SCOPE_PUBLISHED
                 or asset.get("remote_only") and folder in self._asset_index_folders()):
             return element
         return None

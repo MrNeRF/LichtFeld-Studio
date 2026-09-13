@@ -4,15 +4,65 @@
 from __future__ import annotations
 
 import hashlib
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
 import http.client
 import http.server
 import json
 import random
+import re
+import tempfile
 import threading
 import time
 import urllib.parse
 
 SHELL_MARKER = "GALLERY_STRESS_DB_JSON:"
+
+
+def run_directory(root):
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    return Path(tempfile.mkdtemp(prefix=stamp + '-', dir=root))
+
+
+def studio_log_excerpt(directory, limit=20):
+    """Stream large debug logs, retaining useful diagnostics over frame chatter."""
+    relevant, fallback = deque(maxlen=limit), deque(maxlen=limit)
+    ansi = re.compile(r'\x1b\[[0-9;]*m')
+    match = re.compile(r'gallery|portal|upload|download|sync|error|warn|exception|traceback|failed', re.I)
+    paths = sorted(directory.glob('*.log'), key=lambda p: (p.stat().st_mtime_ns, p.name))
+    for path in paths:
+        if not (path.name.startswith('studio-') or path.name == 'editor-diagnostics.log'):
+            continue
+        with path.open(errors='replace') as stream:
+            for raw in stream:
+                line = ansi.sub('', raw.rstrip())
+                if not line or '[perf]' in line:
+                    continue
+                entry = f'{path.name}: {line}'
+                fallback.append(entry)
+                if path.name == 'editor-diagnostics.log' or match.search(line):
+                    relevant.append(entry)
+    return list(relevant or fallback)
+
+
+def portal_poster_requests(lines, identifiers):
+    paths = {f'/api/gallery/v1/splats/{key}/thumbnail' for key in identifiers}
+    result = []
+    for line in lines:
+        match = re.search(r'"GET (\S+) HTTP/[\d.]+" (\d{3}) (\d+)', line)
+        if match and (path := urllib.parse.urlsplit(match[1]).path) in paths:
+            result.append(dict(path=path, status=int(match[2]), response_bytes=int(match[3])))
+    return result
+
+
+def assert_poster_requests(events, identifiers, status):
+    paths = sorted(f'/api/gallery/v1/splats/{key}/thumbnail' for key in identifiers)
+    assert sorted(e['path'] for e in events) == paths, f'Missing or duplicate poster requests: {events}'
+    assert all(e.get('status') == status for e in events), events
+    assert all((e['response_bytes'] == 0 if status == 304 else e['response_bytes'] > 0)
+               for e in events), events
 
 
 def shell_json(output):
@@ -23,20 +73,71 @@ def shell_json(output):
     return json.loads(rows[0])
 
 
-def remote_json(mcp, expression):
+def remote_json(mcp, expression, deadline=None):
     """Use H's framed MCP reader, paging large snapshots below its output limit.
 
     Evaluate once so a live job cannot change halfway through serialization.
     Chunk sizes also leave room for the frame emitter's JSON escaping.
     """
-    mcp.rpc(f"_lfs_stress_json = json.dumps({expression}, ensure_ascii=True)")
-    first = mcp.value("dict(size=len(_lfs_stress_json), data=_lfs_stress_json[:1024])")
+    def execute(code, result):
+        # A paged read shares the polling deadline; each page must not restart
+        # the launcher's 75-second transport timeout.
+        import validate_gallery_sync as e2e
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("snapshot read exceeded wait deadline")
+        response = mcp.call("tools/call", {"name": "editor_run", "arguments": {
+            "code": code + "\n" + e2e.result_code(result),
+            "timeout_ms": max(1, int(min(60., remaining) * 1000)),
+            "show_console": False, "output_max_chars": e2e.EDITOR_OUTPUT_LIMIT,
+            "output_tail": True}}, timeout=remaining)
+        structured = response.get("structuredContent") or {}
+        output = structured.get("output", {}).get("text", "")
+        try:
+            _, diagnostics = e2e.split_marked_output(output)
+        except ValueError:
+            diagnostics = output
+        if diagnostics.strip():
+            mcp.diagnostics(diagnostics)
+        if structured.get("running") or structured.get("timed_out"):
+            raise TimeoutError("snapshot editor did not finish before the deadline")
+        return e2e.marked_json(e2e.editor_output(response))
+
+    rpc = mcp.rpc if deadline is None else lambda code: execute(code, "None")
+    value = mcp.value if deadline is None else lambda expression: execute("", expression)
+    rpc(f"_lfs_stress_json = json.dumps({expression}, ensure_ascii=True)")
+    first = value("dict(size=len(_lfs_stress_json), data=_lfs_stress_json[:1024])")
     if not 0 <= first["size"] <= 64 * 1024 * 1024:
         raise ValueError("Stress snapshot exceeds 64 MiB")
     chunks = [first["data"]]
     for offset in range(1024, first["size"], 1024):
-        chunks.append(mcp.value(f"_lfs_stress_json[{offset}:{offset+1024}]"))
+        chunks.append(value(f"_lfs_stress_json[{offset}:{offset+1024}]"))
     return json.loads("".join(chunks))
+
+
+def panel_refresh_ready(observed, previous_label, snapshot):
+    """Accept rendered checked text or selection counts matching fresh links.
+
+    Stress scenarios select at most one asset. Also check remote card IDs so
+    unchanged counts cannot hide a coalesced listing or account-switch update.
+    """
+    linked_scenes = {link["sceneId"] for key, link in snapshot["links"].items()
+                     if key in observed["catalog"]}
+    expected_cards = sorted("remote:" + scene["id"] for scene in snapshot["scenes"]
+                            if scene.get("status") == "ready" and scene["id"] not in linked_scenes)
+    if observed["cards"] != expected_cards:
+        return False
+    label = observed["checked"]
+    if label and label != previous_label and label == observed["checked_label"]:
+        return True
+    if observed["selection_count"] > 1:
+        return False
+    asset = observed["selected"] or {}
+    count = int(bool(asset) and not asset.get("remote_only", False))
+    available = count and observed["available"]
+    linked = bool(snapshot["links"].get(asset.get("id")))
+    return observed["counts"] == dict(count=count, ready=int(available and not linked),
+                                      linked=int(available and linked), missing=int(count and not available))
 
 
 def scenario_seed(seed, name):
@@ -89,8 +190,8 @@ def retry_evidence(events):
 def safe_job(job):
     # Checkpoints can contain signed storage URLs. Preserve useful evidence only.
     result = {key: job[key] for key in ("id", "kind", "project", "status", "completed", "total",
-              "message", "serverProcessing", "interrupted", "path", "sceneId") if key in job}
-    result["uploadId"] = (job.get("checkpoint") or {}).get("uploadId")
+              "message", "reason", "serverProcessing", "interrupted", "path", "sceneId") if key in job}
+    result["uploadId"] = (job.get("checkpoint") or {}).get("uploadId", job.get("uploadId"))
     result["stagedImport"] = {key: value for key, value in job.get("stagedImport", {}).items()
                               if key in ("state", "path", "message")}
     return result

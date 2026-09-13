@@ -1,4 +1,7 @@
 {
+    "asset_manager.gallery.error.download_damaged": "The downloaded file is damaged or was changed on the portal.",
+    "asset_manager.gallery.error.download_size": "The downloaded file is larger than the portal declared.",
+    "asset_manager.gallery.info.waiting_connection": "Waiting for the portal connection. The transfer will resume automatically.",
   "_language_name": "English",
   "menu": {
     "file": "File",
@@ -2661,6 +2664,9 @@
   "asset_manager.gallery.confirm.update_all": "Update these public scenes? Their published content will be replaced:\n{title}",
   "asset_manager.gallery.empty.published": "No published scenes yet — pick a project and press Publish",
   "asset_manager.gallery.empty.pull": "or pull a scene from your gallery",
+  "asset_manager.gallery.error.unsafe_url": "This link does not belong to your portal and was blocked.",
+  "asset_manager.gallery.drop.review_first": "Review changes first",
+  "asset_manager.gallery.drop.already_published": "Already in your gallery",
   "asset_manager.gallery.drop.up_to_date": "Already up to date",
   "preferences.gallery.title": "Gallery",
   "preferences.gallery.format": "Default upload format",

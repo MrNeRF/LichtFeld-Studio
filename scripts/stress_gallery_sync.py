@@ -21,7 +21,8 @@ import urllib.request
 import validate_gallery_sync as e2e
 from gallery_sync_e2e_common import (FaultProxy, assert_retained_parts,
     assert_revision_progress, confirmation_label, remote_json, retry_evidence, safe_job,
-    scenario_seed, shell_json, SHELL_MARKER)
+    scenario_seed, shell_json, panel_refresh_ready, run_directory, studio_log_excerpt,
+    portal_poster_requests, assert_poster_requests, SHELL_MARKER)
 
 SCENARIOS = (
     "round_trip_cycles", "web_edits_during_idle", "conflict_both_sides", "replaced_elsewhere",
@@ -30,6 +31,15 @@ SCENARIOS = (
     "listing_scale", "thumbnail_cache", "bad_downloads", "rate_limit_429",
 )
 TERMINAL = {"completed", "error", "paused", "conflict", "canceled"}
+MAX_WAIT = 120.
+PANEL_REFRESH = """dict(
+    checked=(element.get_inner_rml().strip() if
+        (doc := lf.ui.rml.get_document('lfs.asset_manager')) is not None and
+        (element := doc.query_selector('.gallery-checked')) is not None else None),
+    checked_label=p._gallery_checked_label(), counts=p._gallery_counts(),
+    selection_count=p.get_selected_count(), selected=p._get_selected_asset(),
+    available=p._project_available(p._get_selected_asset() or {}),
+    catalog=sorted(p._asset_index_assets()), cards=sorted(p._gallery_remote_assets()))"""
 
 
 def positive(value):
@@ -49,9 +59,12 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--large-fixture", type=Path)
     parser.add_argument("--report", type=Path, default=Path("gallery-sync-stress.md"))
+    parser.add_argument("--artifacts-root", type=Path,
+                        help="Parent for unique run directories (default: <report stem>-artifacts)")
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--display", default=":94")
-    parser.add_argument("--timeout", type=positive, default=600.)
+    parser.add_argument("--timeout", type=positive, default=120.,
+                        help="Seconds per wait (capped at 120)")
     parser.add_argument("--watchdog-seconds", type=positive, default=130.,
                         help="Hold processing for longer than the product watchdog bound")
     args = parser.parse_args(argv)
@@ -78,7 +91,8 @@ def render_report(rows, command):
              "Revision tokens are opaque hashes. Advancement means a new token for each distinct edit; exchange times must not decrease.",
              "", "| Scenario | Result | Seconds | Evidence / failure |", "| --- | --- | ---: | --- |"]
     for row in rows:
-        detail = row.get("error", "") or f"[JSON](<{row['json']}>)"
+        detail = row.get("error", "") or row.get('reason', '')
+        detail += f" [JSON](<{row['json']}>)"
         if row.get("screenshot"):
             detail += f" [failure screenshot](<{row['screenshot']}>)"
         lines.append(f"| {row['name']} | {row['status']} | {row['seconds']:.2f} | {e2e.md_cell(detail)} |")
@@ -90,9 +104,10 @@ def render_report(rows, command):
 class StressRun(e2e.Run):
     def __init__(self, args, command, name, directory):
         options = copy.copy(args)
+        options.timeout = min(args.timeout, MAX_WAIT)
         options.portal_origin = options.junit = None
         options.display_explicit = options.strict_display = True
-        options.format, options.auth_timeout = "sog", args.timeout
+        options.format, options.auth_timeout = "sog", options.timeout
         options.report = directory / f"{name}-launcher.md"
         super().__init__(options, command)
         self.name = name
@@ -102,38 +117,59 @@ class StressRun(e2e.Run):
         self.other = None
         self.observations = []
         self.account_name = "A"
+        self.expected_exit = None
+        self.last_jobs = []
+        self.last_wait = None
+        self.modal_presses = []
+        self.gallery_diagnostics = {}
+
+    def stop_app(self, *, crash=False):
+        # Match the process object, so a later unexpected relaunch exit still fails.
+        self.expected_exit = self.app
+        self.observe("expected Studio exit", dict(pid=self.app.pid, signal="SIGKILL" if crash else "SIGTERM"))
+        self.stop(self.app, crash=crash)
 
     def observe(self, label, value):
         self.observations.append(dict(label=label, seconds=time.monotonic() - self.started, value=value))
 
     def rpc(self, code):
+        timeout = min(self.args.timeout, MAX_WAIT)
         return e2e.editor_output(self.mcp.call("tools/call", {"name": "editor_run", "arguments": {
-            "code": code, "timeout_ms": int(self.args.timeout * 1000), "show_console": False}},
-            timeout=self.args.timeout + 15))
+            "code": code, "timeout_ms": int(timeout * 1000), "show_console": False}},
+            timeout=timeout))
 
     def value(self, expression):
-        return remote_json(self.mcp, expression)
+        return remote_json(self.mcp, expression, deadline=getattr(self, "_wait_deadline", None))
 
-    def until(self, callback, label, timeout=None):
-        deadline = time.monotonic() + (timeout or self.args.timeout)
+    def until(self, callback, label, timeout=None, *, accept=bool):
+        duration = min(MAX_WAIT, self.args.timeout, timeout if timeout is not None else MAX_WAIT)
+        deadline = time.monotonic() + duration
         notice = time.monotonic()
         last = None
-        while time.monotonic() < deadline:
-            if self.app and self.app.poll() is not None:
-                raise AssertionError("Studio exited unexpectedly")
-            if self.worker and self.worker.poll() is not None:
-                raise AssertionError("Processing loop exited; inspect worker log")
-            last = callback()
-            if last:
-                return last
-            if time.monotonic() - notice > 20:
-                print(f"{self.name}: waiting for {label}", flush=True)
-                notice = time.monotonic()
-            time.sleep(.15)
-        raise TimeoutError(f"{label}; last={last!r}")
+        previous_deadline = getattr(self, "_wait_deadline", None)
+        self._wait_deadline = min(deadline, previous_deadline) if previous_deadline is not None else deadline
+        try:
+            while time.monotonic() < self._wait_deadline:
+                if self.app and self.app is not getattr(self, 'expected_exit', None) and self.app.poll() is not None:
+                    raise AssertionError(f"{label}: Studio exited unexpectedly; last={last!r}")
+                if self.worker and self.worker.poll() is not None:
+                    raise AssertionError(f"{label}: Processing loop exited; last={last!r}")
+                last = callback()
+                if time.monotonic() < self._wait_deadline and accept(last):
+                    return last
+                if time.monotonic() - notice > 20:
+                    print(f"{self.name}: waiting for {label}; last={last!r}", flush=True)
+                    notice = time.monotonic()
+                time.sleep(min(.15, max(0., self._wait_deadline - time.monotonic())))
+            raise TimeoutError("wait deadline exceeded")
+        except TimeoutError as exc:
+            raise TimeoutError(f"{label} (limit {duration:g}s); last={last!r}; {exc}") from exc
+        finally:
+            self.last_wait = dict(label=label, last=last)
+            self._wait_deadline = previous_deadline
 
-    def wait_value(self, expression, label, timeout=None):
-        return self.until(lambda: self.value(expression), label, timeout)
+    def wait_value(self, expression, label, timeout=None, *, accept=bool):
+        return self.until(lambda: self.value(expression), label, timeout, accept=accept)
 
     def db(self, code, expression="None"):
         output = self.manage("shell", "-c", "import json\nfrom gallery.models import Scene, Upload, UploadPart, Gallery\n"
@@ -200,7 +236,8 @@ class StressRun(e2e.Run):
         self.panel()
         self.sign_in()
         self.rpc("p.refresh_catalog()")
-        self.wait_value("bool(p._asset_index_assets())", "catalog")
+        self.wait_value("[a['path'] for a in p._asset_index_assets().values()]", "catalog contains stress.licht",
+                        accept=lambda paths: any(Path(path).name == "stress.licht" for path in paths))
         self.asset_id = self.value("next(a['id'] for a in p._asset_index_assets().values() if Path(a['path']).name == 'stress.licht')")
         self.select()
         self.worker_start()
@@ -210,31 +247,61 @@ class StressRun(e2e.Run):
         self.rpc(f"p._select_asset_id({self.asset_id!r})")
 
     def refresh(self):
-        self.wait_value("not new.busy", "idle before refresh")
-        self.rpc("p._controller().refresh()")
-        self.wait_value("not new.busy and new.snapshot()['refresh_ok']", "gallery refresh")
-        self.wait_value("p._gallery_state.get('checkedAt') == new.snapshot()['checkedAt']", "panel refresh")
+        previous_label = self.begin_refresh()
+        self.finish_refresh(previous_label)
+
+    def begin_refresh(self):
+        self.wait_value("new.busy", "idle before refresh", accept=lambda busy: not busy)
+        previous_label = self.value(PANEL_REFRESH)["checked"]
+        # Capture on Studio's clock immediately before starting the request.
+        self.rpc("_stress_refresh_t0 = time.time()\np._controller().refresh()")
+        return previous_label
+
+    def finish_refresh(self, previous_label):
+        result = self.wait_value("""(lambda s: dict(snapshot=dict(checkedAt=s['checkedAt'],
+            refresh_ok=s['refresh_ok'], links={k: dict(sceneId=v['sceneId']) for k, v in s['links'].items()},
+            scenes=[dict(id=v['id'], status=v.get('status')) for v in s['scenes']]),
+            busy=new.busy, t0=_stress_refresh_t0))(new.snapshot())""",
+            "gallery refresh: fresh checkedAt, idle and refresh_ok",
+            accept=lambda value: value["snapshot"]["checkedAt"] >= value["t0"]
+                and not value["busy"] and value["snapshot"]["refresh_ok"])
+        self.wait_value(PANEL_REFRESH, "panel refresh: checked label or counts and remote cards",
+            accept=lambda value: panel_refresh_ready(value, previous_label, result["snapshot"]))
 
     def state(self, state, label=None):
-        self.wait_value(f"p._gallery_facts(p._asset_dict({self.asset_id!r}) or {{}})['state'] == {state!r}", state)
+        self.wait_value(f"p._gallery_facts(p._asset_dict({self.asset_id!r}) or {{}})", state,
+                        accept=lambda facts: facts["state"] == state)
         if label:
-            self.wait_value(f"p._gallery_badge(p._asset_dict({self.asset_id!r}))['gallery_label'] == {label!r}", label)
+            self.wait_value(f"p._gallery_badge(p._asset_dict({self.asset_id!r}) or {{}})", label,
+                            accept=lambda badge: badge["gallery_label"] == label)
         self.observe("badge", self.value(f"p._gallery_badge(p._asset_dict({self.asset_id!r}))"))
 
     def jobs_now(self):
-        return self.value("new.snapshot()['jobs']")
+        jobs = self.value("new.snapshot()['jobs']")
+        self.last_jobs = [safe_job(job) for job in jobs]
+        return jobs
+
+    def wait_job(self, identifier, predicate, label):
+        latest = None
+        def observe():
+            nonlocal latest
+            latest = next((j for j in self.jobs_now() if j['id'] == identifier), None)
+            return safe_job(latest) if latest is not None else dict(id=identifier, status='not found')
+        self.until(observe, label, accept=lambda _: latest is not None and predicate(latest))
+        return latest
 
     def finish_job(self, identifier, expected="completed"):
-        job = self.until(lambda: next((j for j in self.jobs_now() if j["id"] == identifier and j["status"] in TERMINAL), None),
-                         f"job {identifier} terminal")
+        job = self.wait_job(identifier, lambda j: j['status'] in TERMINAL, f"job {identifier} terminal")
         self.observe("job", safe_job(job))
         if job["status"] != expected:
             raise AssertionError(f"Expected {expected}: {safe_job(job)}")
-        self.wait_value("not new.busy", "worker idle")
+        self.wait_value("new.busy", "worker idle", accept=lambda busy: not busy)
         return job
 
     def new_job(self, before):
-        jobs = self.until(lambda: [j for j in self.jobs_now() if j["id"] not in before], "new transfer")
+        observed = self.until(lambda: [safe_job(j) for j in self.jobs_now()], "new transfer",
+                              accept=lambda jobs: any(j['id'] not in before for j in jobs))
+        jobs = [j for j in observed if j['id'] not in before]
         if len(jobs) != 1:
             raise AssertionError(f"Expected one new transfer: {[safe_job(j) for j in jobs]}")
         return jobs[0]["id"]
@@ -252,7 +319,8 @@ p._gallery_visibility = 'private'
 p._gallery_command('publish')
 """)
         job = self.finish_job(self.new_job(before))
-        self.wait_value(f"{self.asset_id!r} in new.snapshot()['links']", "publication link")
+        self.wait_value("sorted(new.snapshot()['links'])", "publication link",
+                        accept=lambda links: self.asset_id in links)
         self.scene_id = self.value(f"new.snapshot()['links'][{self.asset_id!r}]['sceneId']")
         self.refresh()
         self.state("equal", "Up to date")
@@ -282,7 +350,8 @@ p._gallery_command('publish')
     def open_save(self, exposure=None, camera=None):
         path = self.value(f"p._asset_dict({self.asset_id!r})['path']")
         self.rpc(f"if lf.project_poll_write().get('path') != {path!r}:\n    lf.project_open({path!r}, discard_changes=True, keep_asset_manager_open=True)")
-        self.wait_value(f"lf.project_poll_write().get('path') == {path!r} and not lf.ui.get_import_state().get('active')", "open project")
+        self.wait_value("dict(write=lf.project_poll_write(), importing=lf.ui.get_import_state())", "open project",
+                        accept=lambda value: value['write'].get('path') == path and not value['importing'].get('active'))
         code = f"lf.get_render_settings().color_exposure = {exposure!r}\n" if exposure is not None else ""
         if camera:
             code += f"assert lf.ui.set_camera_path({camera!r})\n"
@@ -301,13 +370,35 @@ p._gallery_command('publish')
         # has consumed and cleared its pending confirmation tuple.
         modal = self.value("lf.ui.modal_get()")
         if modal:
-            self.mcp.tool("ui_modal_press", label=confirmation_label(modal))
+            self.press_modal(confirmation_label(modal), modal)
+
+    def press_modal(self, label, modal=None):
+        modal = modal if modal is not None else self.value("lf.ui.modal_get()")
+        assert modal, f"No modal open for {label!r}"
+        assert any(b['label'] == label and b.get('enabled', True) for b in modal['buttons']), modal
+        event = dict(label=label, title=modal.get('title', ''),
+                     body=modal.get('body', modal.get('message', '')), buttons=copy.deepcopy(modal['buttons']),
+                     modal=copy.deepcopy(modal), outcome='attempted')
+        self.modal_presses.append(event)
+        self.observe('modal press', event)
+        deadline = getattr(self, '_wait_deadline', None)
+        timeout = min(75., self.args.timeout, deadline - time.monotonic() if deadline is not None else MAX_WAIT)
+        if timeout <= 0:
+            event.update(outcome='error', error='modal press exceeded wait deadline')
+            raise TimeoutError('modal press exceeded wait deadline')
+        try:
+            result = self.mcp.call('tools/call', {'name': 'ui_modal_press', 'arguments': {'label': label}}, timeout=timeout)
+            event['outcome'] = 'error' if result and result.get('isError') else 'returned'
+            return result
+        except Exception as exc:
+            event.update(outcome='error', error=str(exc))
+            raise
 
     def wait_equal_confirming(self, description):
         def ready():
             self.confirm_if_open()
-            return self.value(f"not new.busy and p._gallery_facts(p._asset_dict({self.asset_id!r}))['state'] == 'equal'")
-        self.until(ready, description)
+            return self.value(f"dict(busy=new.busy, facts=p._gallery_facts(p._asset_dict({self.asset_id!r}) or {{}}))")
+        self.until(ready, description, accept=lambda value: not value['busy'] and value['facts']['state'] == 'equal')
 
     def edit_db(self, fields):
         self.db(f"Scene.objects.filter(pk={self.scene_id!r}).update(**{fields!r})")
@@ -326,8 +417,9 @@ p._gallery_command('publish')
         self.rpc("p._gallery_command('resolve')")
         labels = {"mine": "Keep mine", "portal": "Keep portal", "both": "Keep both"}
         pressed = []
-        deadline = time.monotonic() + self.args.timeout
-        while time.monotonic() < deadline:
+        buttons = []
+        def ready():
+            nonlocal buttons
             modal = self.value("lf.ui.modal_get()")
             if modal:
                 # Discover actual localized button labels from the product, not guessed tool IDs.
@@ -335,18 +427,18 @@ p._gallery_command('publish')
                 available = [button['label'] for button in modal['buttons'] if button.get('enabled', True)]
                 if not any(label in available for label in buttons):
                     self.confirm_if_open()
-                    continue
+                    return dict(modal=modal, pressed=list(pressed))
                 label = buttons[{"mine": 0, "portal": 1, "both": 2}[choice]]
                 if choice == "both" and label not in available:
                     label = buttons[0]
                 assert label in available, modal
-                self.mcp.tool("ui_modal_press", label=label)
+                self.press_modal(label, modal)
                 pressed.append(label)
-            elif pressed and self.value("not p._controller()._decision_pending"):
-                break
-            time.sleep(.1)
-        if not pressed:
-            raise AssertionError(f"Resolve {labels[choice]} never presented choices")
+            return dict(modal=modal, pressed=list(pressed), **self.value(
+                f"dict(busy=new.busy, facts=p._gallery_facts(p._asset_dict({self.asset_id!r}) or {{}}))"))
+        self.until(ready, f"Resolve {labels[choice]} choices applied", accept=lambda value:
+            bool(value['pressed']) and value['modal'] is None and not value['busy']
+            and value['facts']['state'] == 'equal')
         if choice == "both" and buttons[2] not in pressed:
             raise AssertionError("Camera conflict never offered Keep both")
         self.observe("resolve buttons", pressed)
@@ -449,7 +541,7 @@ p._gallery_command('publish')
                         number += 1
                 status, done = self.api("POST", f"/splats/uploads/{upload['id']}/complete", {"parts": parts})
                 assert status in (200, 202), (status, done)
-                deadline = time.monotonic() + self.args.timeout
+                deadline = time.monotonic() + min(self.args.timeout, MAX_WAIT)
                 while done.get("status") == "processing" and time.monotonic() < deadline:
                     time.sleep(.2)
                     status, done = self.api("GET", f"/splats/uploads/{upload['id']}")
@@ -494,7 +586,7 @@ p._gallery_command('publish')
         assert self.remote()["contentRevision"] == replacement["contentRevision"], "Studio silently overwrote replacement"
         # Dismiss an already-open review before requesting the explicit Pull-first review.
         if self.value("lf.ui.modal_get() is not None"):
-            self.mcp.tool("ui_modal_press", label="Cancel")
+            self.press_modal("Cancel")
         self.refresh()
         self.state("diverged", "Changed here and on portal")
         self.select()
@@ -541,8 +633,8 @@ assert lf.project_save(wait=True)
         return self.db("", f"list(UploadPart.objects.filter(upload_id={upload_id!r}).order_by('number').values('number', 'etag', 'size'))")
 
     def mid_upload(self, identifier):
-        return self.until(lambda: next((j for j in self.jobs_now() if j["id"] == identifier
-            and j["total"] > 0 and .3 <= j["completed"] / j["total"] <= .7 and not j.get("serverProcessing")), None), "30–70% upload")
+        return self.wait_job(identifier, lambda j: j["total"] > 0
+            and .3 <= j["completed"] / j["total"] <= .7 and not j.get("serverProcessing"), "30–70% upload")
 
     def kill_during_upload(self):
         path = self.large_fixture()
@@ -551,21 +643,23 @@ assert lf.project_save(wait=True)
         identifier = self.queue_large(path)
         middle = self.mid_upload(identifier)
         upload_id = middle["checkpoint"]["uploadId"]
-        self.stop(self.app, crash=True)
+        self.observe("killed at", safe_job(middle))
+        original_home = self.home
+        self.stop_app(crash=True)
         # Let the last proxy handler finish observing the killed socket before
         # measuring restart traffic; otherwise an old PUT could be counted twice.
         self.until(lambda: all('finished' in e for e in self.proxy.snapshot()), "killed upload socket closed", 30)
         before = self.part_rows(upload_id)
         marker = len(self.proxy.snapshot())
-        self.observe("killed at", safe_job(middle))
         self.start_app()
+        assert self.home == original_home, "Relaunch changed LFS_HOME"
         self.panel()
         self.sign_in()
         jobs = self.jobs_now()
+        self.observe("restored interrupted jobs", [safe_job(j) for j in jobs])
         assert len(jobs) == 1 and jobs[0]["id"] == identifier and jobs[0].get("interrupted") and jobs[0]["status"] == "paused", [safe_job(j) for j in jobs]
         self.rpc(f"p._controller().command('resume', {identifier!r})")
-        self.until(lambda: next((j for j in self.jobs_now() if j['id'] == identifier and j.get('serverProcessing')), None),
-                   "resumed parts accepted before processor cleanup")
+        self.wait_job(identifier, lambda j: j.get('serverProcessing'), "resumed parts accepted before processor cleanup")
         after = self.part_rows(upload_id)
         events = self.proxy.snapshot()[marker:]
         sent = sum(e["request_bytes"] for e in events if e["method"] == "PUT")
@@ -582,7 +676,7 @@ assert lf.project_save(wait=True)
         identifier = self.queue_large(path)
         self.mid_upload(identifier)
         self.stop(self.portal)
-        job = self.until(lambda: next((j for j in self.jobs_now() if j["id"] == identifier and j["status"] in {"error", "paused"}), None), "upload needs retry")
+        job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}, "upload needs retry")
         self.observe("upload outage", safe_job(job))
         self.assert_responsive()
         self.portal_restart()
@@ -596,17 +690,17 @@ assert lf.project_save(wait=True)
         before = self.value("sorted(p._asset_index_assets())")
         self.proxy.download_bps = 4 * 1024 * 1024
         download = self.pull(remote_only=True)
-        self.until(lambda: next((j for j in self.jobs_now() if j["id"] == download and j["completed"] > 0
-                                and j["completed"] < j["total"] * .7), None), "download in progress")
+        self.wait_job(download, lambda j: 0 < j['completed'] < j['total'] * .7, "download in progress")
         self.stop(self.portal)
-        job = self.until(lambda: next((j for j in self.jobs_now() if j["id"] == download and j["status"] in {"error", "paused"}), None), "download needs retry")
+        job = self.wait_job(download, lambda j: j['status'] in {'error', 'paused'}, "download needs retry")
         self.observe("download outage", safe_job(job))
         assert self.value("sorted(p._asset_index_assets())") == before, "Partial project registered"
         self.assert_responsive()
         self.portal_restart()
         self.rpc(f"p._controller().command('resume', {download!r})")
         self.finish_job(download)
-        self.wait_value(f"len(p._asset_index_assets()) == {len(before)+1}", "resumed download registration")
+        self.wait_value("sorted(p._asset_index_assets())", "resumed download registration",
+                        accept=lambda ids: set(before) < set(ids) and len(ids) == len(before) + 1)
 
     def assert_responsive(self):
         started = time.monotonic()
@@ -621,7 +715,7 @@ assert lf.project_save(wait=True)
         self.select()
         self.rpc(f"p._gallery_command('publish')\np._gallery_upload_format = 'sog'\np._gallery_title = {self.prefix+'watchdog'!r}\np._gallery_command('publish')")
         identifier = self.new_job(before)
-        self.until(lambda: next((j for j in self.jobs_now() if j["id"] == identifier and j.get("serverProcessing")), None), "portal checking")
+        self.wait_job(identifier, lambda j: j.get('serverProcessing'), "portal checking")
         deadline = time.monotonic() + self.args.watchdog_seconds
         while time.monotonic() < deadline:
             self.assert_responsive()
@@ -632,9 +726,9 @@ assert lf.project_save(wait=True)
             self.observe("watchdog", safe_job(job))
             time.sleep(min(1., max(0., deadline - time.monotonic())))
         self.rpc("p._controller().command('pause')")
-        self.wait_value("not new.busy", "Cancel stops waiting", 10)
+        self.wait_value("new.busy", "Cancel stops waiting", 10, accept=lambda busy: not busy)
         self.rpc(f"new.discard({identifier!r})")
-        self.wait_value("not new.busy", "Cancel portal upload", 10)
+        self.wait_value("new.busy", "Cancel portal upload", 10, accept=lambda busy: not busy)
         self.worker_start()
         self.assert_scene_count(0)
 
@@ -670,7 +764,9 @@ sync_module._service = new
 p._controller().service = new
 p._controller().refresh()
 """)
-        self.wait_value("not new.busy and new.snapshot()['connected']", "account switched")
+        self.wait_value("(lambda s: dict(busy=new.busy, connected=s['connected'], email=s['email']))(new.snapshot())",
+                        "account switched", accept=lambda value:
+                        not value['busy'] and value['connected'] and value['email'] == email)
         self.account_name = name
         self.refresh()
 
@@ -694,13 +790,14 @@ assert not list((new.root/'posters').glob('*.png'))
         assert self.value("{k: v['sceneId'] for k, v in new.snapshot()['links'].items()}") == {k: v["sceneId"] for k, v in old["links"].items()}
         self.assert_link()
 
-    def two_studios_one_account(self):
-        self.publish()
+    def launch_second_studio(self):
         options = copy.copy(self.args)
         options.display = ":" + str(int(options.display[1:]) + 1)
         self.other = StressRun(options, self.command, self.name + "-B", self.report.parent)
         other = self.other
         other.started, other.home, other.origin = time.monotonic(), self.home, self.origin
+        other.backend = self.backend
+        assert other.mcp.url != self.mcp.url, "Studios must use distinct MCP ports"
         # sign_in's local mode needs the owned portal handle, but B must not own/stop it.
         other.portal = self.portal
         other.start_display()
@@ -709,24 +806,46 @@ assert not list((new.root/'posters').glob('*.png'))
         other.sign_in()
         other.asset_id, other.scene_id = self.asset_id, self.scene_id
         other.rpc("p.refresh_catalog()")
-        other.wait_value(f"{self.asset_id!r} in p._asset_index_assets()", "B shared catalog")
+        other.wait_value("sorted(p._asset_index_assets())", "B shared catalog", accept=lambda ids: self.asset_id in ids)
         other.refresh()
         assert other.link()["sceneId"] == self.scene_id
+        self.observe("second Studio", dict(home=str(other.home), display=other.args.display,
+                                           mcp=other.mcp.url, backend=other.backend, artifacts=str(other.artifacts)))
+        return other
+
+    def two_studios_one_account(self):
+        self.publish()
+        other = self.launch_second_studio()
+        # Establish a shared baseline before B's edit, so the digest test proves
+        # that edit persisted and is independent of journal recovery during startup.
+        self.refresh()
         before = self.value("new._disk_digest")
+        assert before == other.value("new._disk_digest")
         other.open_save(exposure=2.65)
         other.update()
         after = other.value("new._disk_digest")
         assert before != after, "B did not write shared journal"
+        assert self.value("new._disk_digest") == before, "A unexpectedly reloaded B's edit"
+        assert self.value("new._journal_digest()") == after, "B's digest does not match disk"
         self.rpc(f"new.edit({self.scene_id!r}, {self.link()['revision']!r}, {{'title': 'must not clobber'}})")
-        self.wait_value("not new.busy", "A stale write refused")
+        self.wait_value("dict(busy=new.busy, message=new.snapshot()['message'])", "A stale write refused",
+                        accept=lambda value: not value['busy'] and 'Another LichtFeld Studio' in value['message'])
         assert self.value("new._stale"), "A did not detect changed journal digest"
         assert "Another LichtFeld Studio" in self.value("new.message")
+        assert self.value("new._journal_digest()") == after, "Rejected A write changed the journal"
+        self.observe("stale journal refused", dict(before=before, after=after, message=self.value("new.message")))
         self.refresh()
-        assert self.value("new._disk_digest") == after
+        assert not self.value("new._stale")
+        assert self.value("new._disk_digest") == after, "Refresh did not load B's journal digest"
+        assert self.value("new._disk_digest") == self.value("new._journal_digest()")
         assert self.remote()["title"] != "must not clobber"
         assert set(self.value("list(new.snapshot()['links'])")) == set(other.value("list(new.snapshot()['links'])"))
         self.assert_link()
-        self.observe("shared journal", dict(before=before, after=after))
+        # Refresh changes the in-memory checkedAt timestamp independently in A/B.
+        a_link, b_link = self.link(), other.link()
+        assert {k: v for k, v in a_link.items() if k != 'checkedAt'} == {
+            k: v for k, v in b_link.items() if k != 'checkedAt'}, "Refresh did not load B's link"
+        self.observe("shared journal", dict(before=before, after=after, refreshed=self.value("new._disk_digest")))
 
     def seed_scenes(self, count):
         identifiers = self.db(f"""import uuid
@@ -741,13 +860,19 @@ Scene.objects.bulk_create(rows)
     def listing_scale(self):
         identifiers = self.seed_scenes(300)
         self.proxy.list_delay = 1
-        self.rpc("p._controller().refresh()")
-        self.wait_value("new.busy", "refresh actively running", 5)
+        marker = len(self.proxy.snapshot())
+        previous_label = self.begin_refresh()
+        self.until(lambda: self.proxy.snapshot()[marker:], "listing request in flight", 5,
+            accept=lambda events: any(e['path'] == '/api/gallery/v1/splats' and 'finished' not in e for e in events))
         started = time.monotonic()
         self.assert_responsive()
-        assert self.value("new.busy"), "Responsiveness probe missed the active refresh"
-        self.wait_value("not new.busy and new.snapshot()['refresh_ok']", "300-scene refresh")
-        self.wait_value("len(p._gallery_remote_assets()) == 300", "300 remote cards")
+        finished = time.monotonic()
+        self.finish_refresh(previous_label)
+        assert any(e['path'] == '/api/gallery/v1/splats' and e['started'] <= started
+                   and e.get('finished', 0) >= finished for e in self.proxy.snapshot()[marker:]), \
+            "Responsiveness probe missed the in-flight listing request"
+        self.wait_value("sorted(p._gallery_remote_assets())", "300 remote cards",
+                        accept=lambda cards: cards == sorted('remote:' + key for key in identifiers))
         cards = self.value("sorted(p._gallery_remote_assets())")
         assert cards == sorted("remote:" + key for key in identifiers), "Pagination lost/duplicated cards"
         self.observe("listing scale", dict(seconds=time.monotonic()-started, cards=len(cards)))
@@ -764,22 +889,55 @@ Scene.objects.bulk_create(rows)
     def thumbnail_cache(self):
         identifiers = self.seed_scenes(50)
         self.set_posters(identifiers)
+        marker = len(self.proxy.snapshot())
         self.refresh()
-        self.wait_value("len(new.snapshot()['posters']) == 50", "50 posters cached")
+        self.wait_value("sorted(new.snapshot()['posters'])", "50 posters cached",
+                        accept=lambda posters: posters == sorted(identifiers))
         self.rpc("p._select_folder_id('__gallery__')\np.set_view_mode(None, None, ['gallery'])")
-        visited = set()
-        for offset in range(0, 10000, 250):
-            page = self.value(f"(setattr(p, '_asset_window_scroll_top', {offset}), [a['id'] for a in p._window_assets(p._filtered_assets())])[1]")
-            visited.update(page)
+        self.wait_value("(p._sync_asset_window_viewport(), p._asset_window_client_height)[1]",
+                        "gallery scroll viewport", accept=lambda height: height > 0)
+        initial = [e for e in self.proxy.snapshot()[marker:] if e['path'].endswith('/thumbnail')]
+        assert_poster_requests(initial, identifiers, 200)
+        cards = self.value("[a['id'] for a in p._filtered_assets()]")
+        assert set(cards) == {'remote:' + key for key in identifiers}, cards
+        visited, pages = set(), []
+        for index, card in enumerate(cards):
+            if card in visited:
+                continue
+            page = self.grid_page(index)
+            pages.append(page)
+            self.observe('grid page', page)
+            assert card in page['cards'], f"Scroll window did not reach {card}: {page}"
+            visited.update(page['cards'])
             self.assert_responsive()
         assert set("remote:" + key for key in identifiers) <= visited, "Grid paging did not visit all cards"
         marker = len(self.proxy.snapshot())
         self.refresh()
         events = [e for e in self.proxy.snapshot()[marker:] if e["path"].endswith("/thumbnail")]
-        assert all(e["status"] == 304 and e["response_bytes"] == 0 for e in events), events
-        cache = self.value("dict(bytes=sum(f.stat().st_size for f in (new.root/'posters').glob('*.png')), bound=__import__('lfs_plugins.gallery_sync', fromlist=['MAX_POSTER_BYTES']).MAX_POSTER_BYTES)")
+        assert_poster_requests(events, identifiers, 304)
+        # Confirm the requests also reached Django; proxy-only counts can hide
+        # injected responses. Match IDs to exclude unrelated log entries.
+        portal_lines = [line for path in self.artifacts.glob('portal-*.log')
+                        if path.name != 'portal-manage.log'
+                        for line in path.read_text(errors='replace').splitlines()]
+        poster_requests = portal_poster_requests(portal_lines, identifiers)
+        self.observe('portal poster requests', poster_requests)
+        assert len(poster_requests) == len(identifiers) * 2, f"Portal poster count: {len(poster_requests)}"
+        assert_poster_requests([e for e in poster_requests if e['status'] == 200], identifiers, 200)
+        assert_poster_requests([e for e in poster_requests if e['status'] == 304], identifiers, 304)
+        cache = self.value("dict(bytes=sum(f.stat().st_size for f in (new.root/'posters').glob('*.png')), bound=__import__('lfs_plugins.gallery_preferences', fromlist=['read_preferences']).read_preferences(new.root)['posterCacheMiB'] * 1024 * 1024)")
         assert cache["bytes"] <= cache["bound"], cache
-        self.observe("thumbnail cache", dict(cache=cache, conditional_requests=len(events), cards_visited=len(visited)))
+        self.observe("thumbnail cache", dict(cache=cache, initial_requests=len(initial),
+            conditional_requests=len(events), portal_poster_requests=len(poster_requests),
+            cards_visited=len(visited), pages=len(pages)))
+
+    def grid_page(self, index):
+        # This API updates the actual scroll element as well as Python state;
+        # a frame's viewport synchronization cannot undo the requested page.
+        return self.value(f"""(p._sync_asset_window_viewport(), p._scroll_cursor_into_view({index}),
+            p._refresh_records(assets=True), dict(index={index}, top=p._asset_window_scroll_top,
+            height=p._asset_window_client_height, width=p._asset_window_client_width,
+            cards=[a['id'] for a in p._window_assets(p._filtered_assets())]))[-1]""")
 
     def bad_downloads(self):
         self.publish()
@@ -794,8 +952,8 @@ Scene.objects.bulk_create(rows)
                 self.db(f"s=Scene.objects.get(pk={self.scene_id!r})\np=storage.local_path(s.object_key)\n"
                         "with p.open('r+b') as stream:\n    stream.truncate(max(1, p.stat().st_size//2))")
             identifier = self.pull(remote_only=True)
-            job = self.until(lambda: next((j for j in self.jobs_now() if j["id"] == identifier and
-                (j["status"] in {"error", "paused"} or j.get("stagedImport", {}).get("state") == "failed")), None), "specific bad-download failure")
+            job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}
+                or j.get('stagedImport', {}).get('state') == 'failed', "specific bad-download failure")
             message = job.get("stagedImport", {}).get("message") or job["message"]
             assert any(word in message.lower() for word in ("incomplete", "invalid", "corrupt", "size", "truncat", "container", "checksum")), message
             assert self.value("sorted(p._asset_index_assets())") == baseline, "Bad download registered a project"
@@ -804,9 +962,9 @@ Scene.objects.bulk_create(rows)
             if stage:
                 assert not Path(stage).exists(), "Failed staging was not cleaned"
             self.observe(mode, safe_job(job))
-            self.wait_value("not new.busy", "bad transfer idle")
+            self.wait_value("new.busy", "bad transfer idle", accept=lambda busy: not busy)
             self.rpc(f"new.discard({identifier!r})")
-            self.wait_value("not new.busy", "bad transfer discarded")
+            self.wait_value("new.busy", "bad transfer discarded", accept=lambda busy: not busy)
 
     def rate_limit_429(self):
         self.proxy.faults = True
@@ -823,6 +981,9 @@ Scene.objects.bulk_create(rows)
         try:
             if self.app and self.app.poll() is None:
                 result["jobs"] = [safe_job(job) for job in self.jobs_now()]
+                self.gallery_diagnostics = self.value(f"""dict(message=new.snapshot().get('message', ''),
+                    facts=p._gallery_facts(p._asset_dict({self.asset_id!r}) or {{}}))""")
+                result['gallery'] = self.gallery_diagnostics
                 result["links"] = self.value("new.snapshot()['links']")
         except Exception as exc:
             result["studio_evidence_error"] = str(exc)
@@ -832,6 +993,21 @@ Scene.objects.bulk_create(rows)
         except Exception as exc:
             result["db_evidence_error"] = str(exc)
         result["logs"] = {path.name: path.read_text(errors="replace").splitlines()[-30:] for path in self.artifacts.glob("*.log")}
+        if self.other:
+            result['second_studio'] = self.other.evidence()
+        return result
+
+    def diagnostics(self):
+        """No RPC: usable after a crash, a transport timeout or evidence failure."""
+        result = dict(jobs=self.last_jobs, last_wait=self.last_wait,
+                      observations=self.observations, modal_presses=self.modal_presses,
+                      gallery=self.gallery_diagnostics)
+        try:
+            result['log_excerpt'] = studio_log_excerpt(self.artifacts)
+        except OSError as exc:
+            result.update(log_excerpt=[], log_excerpt_error=str(exc))
+        if self.other:
+            result['second_studio'] = self.other.diagnostics()
         return result
 
     def cleanup(self):
@@ -866,9 +1042,7 @@ def main(argv=None):
     args = parse_args(argv)
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), *(argv if argv is not None else sys.argv[1:])])
     args.report = args.report.resolve()
-    directory = args.report.parent / (args.report.stem + "-artifacts")
-    # Refuse to overwrite evidence from an earlier run.
-    directory.mkdir(parents=True, exist_ok=False)
+    directory = run_directory((args.artifacts_root or args.report.parent / (args.report.stem + "-artifacts")).resolve())
     rows = []
     stopped = False
     def interrupted(*_):
@@ -878,7 +1052,9 @@ def main(argv=None):
         for name in args.scenarios:
             started = time.monotonic()
             row = dict(name=name, seed=scenario_seed(args.seed, name), status="FAIL", seconds=0,
-                       json=str(directory / (name + ".json")))
+                       json=str(directory / (name + ".json")), artifacts=str(directory),
+                       jobs=[], observations=[], log_excerpt=[], modal_presses=[], last_wait=None,
+                       message='', reason='')
             run = None
             print(f"SCENARIO {name} seed={row['seed']}", flush=True)
             try:
@@ -899,6 +1075,7 @@ def main(argv=None):
                         row["screenshot_error"] = str(capture)
             finally:
                 if run:
+                    failure_wait = getattr(run, 'last_wait', None)
                     try:
                         row["evidence"] = run.evidence()
                     except (Exception, KeyboardInterrupt) as exc:
@@ -909,6 +1086,26 @@ def main(argv=None):
                         row["cleanup"] = "Scenes deleted; owned processes stopped; " + ("profile retained" if args.keep else "temporary files removed")
                     except Exception as exc:
                         row.update(status="FAIL", cleanup_error=str(exc))
+                    if callable(getattr(run, 'diagnostics', None)):
+                        try:
+                            row.update(run.diagnostics())
+                            row['last_wait'] = failure_wait
+                        except Exception as exc:
+                            row.update(status='FAIL', diagnostics_error=str(exc))
+                if row['status'] == 'FAIL':
+                    # Always explicit, even when startup failed before a job existed.
+                    row['reason'] = '; '.join(str(row[key]) for key in
+                        ('error', 'evidence_error', 'cleanup_error', 'diagnostics_error') if row.get(key))
+                    messages = [j.get('message', '') or j.get('reason', '') for j in row['jobs']]
+                    gallery = row.get('gallery', {})
+                    messages += [gallery.get('message', ''), gallery.get('facts', {}).get('reason', '')]
+                    last = (row.get('last_wait') or {}).get('last')
+                    if isinstance(last, dict):
+                        messages += [last.get('message', ''), last.get('reason', ''),
+                                     last.get('facts', {}).get('reason', '')]
+                    row['message'] = '\n'.join(dict.fromkeys(m for m in messages if m)) or 'No job message available: ' + row['reason']
+                    if not row['log_excerpt']:
+                        row.setdefault('log_excerpt_error', 'No Studio log lines available (Studio may not have started).')
                 row["seconds"] = time.monotonic() - started
                 Path(row["json"]).write_text(json.dumps(row, indent=2, default=str) + "\n")
                 rows.append(row)

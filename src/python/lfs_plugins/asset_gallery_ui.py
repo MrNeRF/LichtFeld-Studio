@@ -416,7 +416,8 @@ class GalleryAssetMixin:
                 elif action == "connect_browser":
                     url = account.snapshot().verification_uri_complete
                     if url:
-                        lf.ui.open_url(url)
+                        from .portal_security import checked_portal_url
+                        lf.ui.open_url(checked_portal_url(account, url))
                 return
             if action.startswith("toast_"):
                 toast = self._gallery_toast or {}
@@ -565,6 +566,12 @@ class GalleryAssetMixin:
             return
         self._select_asset_id(identifier)
         if asset.get("remote_only"):
+            if folder == SCOPE_PUBLISHED:
+                self._show_gallery_toast(tr("drop.already_published"))
+                if self._handle:
+                    self._handle.dirty_all()
+                self._request_model_update()
+                return
             target = self._asset_index_folders().get(folder)
             if not target:
                 return
@@ -572,12 +579,16 @@ class GalleryAssetMixin:
             # The shared pull review and controller validate existence/overwrite.
             self._gallery_pull_review = False
             self._gallery_command("pull")
-        elif folder == SCOPE_PUBLISHED and self._project_available(asset):
+        elif folder == SCOPE_PUBLISHED:
             facts = self._gallery_facts(asset)
-            if facts["state"] == "equal":
+            if not self._project_available(asset):
+                self._show_gallery_toast(tr("drop.review_first"))
+            elif facts["state"] == "equal":
                 self._show_gallery_toast(tr("drop.up_to_date"))
             elif facts["action"] in ("publish", "update"):
                 self._gallery_command(facts["action"])
+            else:
+                self._show_gallery_toast(tr("drop.review_first"))
         if self._handle:
             self._handle.dirty_all()
         self._request_model_update()
@@ -617,7 +628,10 @@ class GalleryAssetMixin:
             self._gallery_toast_timer.cancel()
         toast = dict(text=text, identity=self._gallery_state.get("identity"), **actions)
         self._gallery_toast = toast
+        generation = self._mount_generation
         def expire():
+            if not self._panel_mounted or generation != self._mount_generation:
+                return
             if self._gallery_toast is toast:
                 self._gallery_toast = None
                 if self._handle:
@@ -653,7 +667,10 @@ class GalleryAssetMixin:
             self._gallery_undo_timer.cancel()
         undo = (time.monotonic() + 8, action)
         self._gallery_undo = undo
+        generation = self._mount_generation
         def expire():
+            if not self._panel_mounted or generation != self._mount_generation:
+                return
             if self._gallery_undo is undo:
                 if kind == "pull" and (self._gallery_state.get("undoPull") or {}).get("operation"):
                     return

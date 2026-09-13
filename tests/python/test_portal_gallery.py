@@ -120,7 +120,7 @@ def test_download_cancellation_preserves_existing_file(tmp_path, monkeypatch):
     identifier = str(uuid.uuid4())
     scene = {"id": identifier, "contentLength": 8, "revision": "original"}
     account = SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=lambda *a: {
-        "url": "https://storage.example/scene.ply", "scene": scene})
+        "url": "https://portal.lichtfeld.io/scene.ply", "scene": scene})
     client = portal_gallery.PortalGalleryClient(account)
     monkeypatch.setattr(portal_gallery, "urlopen", lambda *a, **kw: io.BytesIO(b"ply\nnew!"))
     destination = tmp_path / "local.ply"
@@ -136,7 +136,7 @@ def test_download_rejects_scene_changed_before_publish(tmp_path, monkeypatch):
     identifier = str(uuid.uuid4())
     def request(method, path, body):
         if path.endswith("/download"):
-            return {"url": "https://storage.example/data", "scene": {"id": identifier, "contentLength": 4, "revision": "old"}}
+            return {"url": "https://portal.lichtfeld.io/data", "scene": {"id": identifier, "contentLength": 4, "revision": "old"}}
         return {"revision": "changed"}
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=request))
     monkeypatch.setattr(portal_gallery, "urlopen", lambda *a, **kw: io.BytesIO(b"data"))

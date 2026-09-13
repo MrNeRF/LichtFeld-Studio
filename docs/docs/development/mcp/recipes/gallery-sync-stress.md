@@ -16,6 +16,7 @@ python3 -B scripts/stress_gallery_sync.py \
   --portal-python /home/gauss/lfs-runs/galleryam/portalenv/bin/python \
   --display :94 --cycles 3 --seed 731 \
   --watchdog-seconds 130 \
+  --artifacts-root /home/gauss/lfs-runs/galleryam/gallery-sync-stress-artifacts \
   --report /home/gauss/lfs-runs/galleryam/gallery-sync-stress.md
 ```
 
@@ -53,14 +54,14 @@ same-path request against the response's `Retry-After` interval.
 | `web_edits_during_idle` | Title, description, visibility and camera changes show Portal changes. Poster/presentation changes preserve shared-domain freshness and cause no 409 on the next Update. |
 | `conflict_both_sides` | Changed here and on portal; actual resolution dialogs exercise Mine, Portal and camera Both; chosen title, camera frames and journal domain tokens checked. |
 | `replaced_elsewhere` | Independent HTTP replacement upload, stale domain write returns 409/currentRevisions, Studio cannot overwrite replacement content, portal-first resolution then successful Update. |
-| `kill_during_upload` | SIGKILL at 30–70%, interrupted journal job restored, same job resumed, retained UploadPart ETags/sizes preserved, fewer bytes sent than the full file, one live scene. |
+| `kill_during_upload` | Expected SIGKILL at 30–70%, relaunch on the same `LFS_HOME` with sign-in re-injected, paused/Interrupted journal job restored, same job resumed, retained UploadPart ETags/sizes preserved, fewer bytes sent than the full file, one live scene. Unexpected exits of the relaunched process still fail. |
 | `portal_down_mid_transfer` | Portal stopped during both upload and download, recoverable transfer status, editor remains responsive, no partial project registration, restart/resume succeeds. |
 | `slow_processing_watchdog` | Worker withheld for `--watchdog-seconds`; responsive editor, visibly checking or recoverable job, cancel stops waiting and discards upload. |
 | `remote_delete_and_recreate` | Soft deletion, Removed on portal, Publish again creates a different scene ID. |
 | `account_switch` | A's links/jobs/posters exist first; switching to B clears cards, posters and tray; switching back restores A's links. |
-| `two_studios_one_account` | Distinct displays/MCP ports share a profile; B sees and updates A's link; A's stale write is refused until refresh loads the changed journal digest. |
+| `two_studios_one_account` | Distinct displays/MCP ports share a profile and portal backend; B owns only its Studio/display processes. B sees and updates A's link; A's stale write leaves B's disk digest unchanged, and refresh loads that digest and link while clearing the stale state. |
 | `listing_scale` | Exactly 300 unique remote cards across pagination, measured refresh and editor response under two seconds, second list request returns 304. An explicit one-second proxy hold makes the concurrent responsiveness probe observable. |
-| `thumbnail_cache` | Fifty real PNG posters, Published gallery-grid window traversal, bounded on-disk cache, unchanged poster requests return 304 without image bytes. |
+| `thumbnail_cache` | Fifty real PNG posters; traverse the Published grid with the panel's scroll-window API until every card is visited, using viewport dimensions rather than a fixed pixel range. Both the proxy and portal log must show exactly 50 initial 200 responses and 50 conditional 304 responses with no image bytes. Cache bytes must fit the configured `posterCacheMiB` bound. |
 | `bad_downloads` | Inflated declared download length and truncated stored .licht fail with specific messages, no registration, temporary download/import staging removed. |
 | `rate_limit_429` | Round-trip scenario through the seeded fault schedule; successful exchanges and measured Retry-After compliance. |
 
@@ -74,7 +75,8 @@ valid saved project with more than 24 MiB. Otherwise the harness writes five mil
 deterministic Gaussian PLY records, loads them using Studio's `lf.io`, and saves a
 native `.licht`. The generated file must be at least 200 MB. It does not append
 invalid padding to a container. Generation needs substantial memory, GPU memory,
-disk space and time; `--timeout` increases operation deadlines. Transfer pacing is
+disk space and time. Polling waits default to 120 seconds and are capped at 120
+even if `--timeout` is higher; smaller values shorten the waits. Transfer pacing is
 4 MiB/s so the kill/down window can be observed without racing localhost speed.
 
 Set `--watchdog-seconds` above the product's configured no-progress bound. In a
@@ -84,11 +86,22 @@ behavior; it does not claim a watchdog exists.
 
 The Markdown report has PASS/FAIL and duration per scenario; each scenario has a
 JSON file with timed observations, portal rows, sanitized transfer summaries and
-the last 30 lines of each process log. Failure screenshots are captured through
+the last 30 lines of each process log. Every FAIL row also includes `message`,
+`reason`, cached `jobs` (including their message/reason), the full structured
+`last_wait`, and a `log_excerpt` of the last 20 relevant Studio/editor lines with
+frame-performance chatter removed. These fields survive a crash or failure while
+collecting evidence; startup failures explicitly explain unavailable logs/jobs.
+`modal_presses` captures each attempted press's title, body, complete button list,
+chosen label and outcome before calling MCP, including Resolve and Cancel. A
+second Studio's evidence and diagnostics are included under `second_studio`.
+Failure screenshots are captured through
 `render_capture_window`; if startup/capture fails, JSON explains why no screenshot
-exists. Log and screenshot artifacts survive profile cleanup. Reusing an existing
-artifact directory is refused to prevent overwriting evidence. Choose a new report
-filename for subsequent runs. Any invariant, setup or cleanup failure exits 1;
+exists. Log and screenshot artifacts survive profile cleanup. Each invocation
+creates a unique UTC timestamp/random-suffix directory under `--artifacts-root`
+(default: `<report stem>-artifacts` beside the report). Existing roots are accepted;
+prior runs' files remain untouched. Reusing the report filename updates its links
+to the new run's directory, including JSON links for failures. Any invariant, setup
+or cleanup failure exits 1;
 later scenarios still run unless interrupted. SIGINT/SIGTERM enter cleanup.
 
 Run the helper tests without Studio or Django:

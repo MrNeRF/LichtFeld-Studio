@@ -503,12 +503,16 @@ class PortalAccountService:
             remember_secrets(start.get("device_code"), start.get("user_code"))
             device_code = self._required_text(start, "device_code")
             user_code = self._required_text(start, "user_code")
-            verification_uri = self._required_text(start, "verification_uri")
-            verification_uri_complete = self._required_text(start, "verification_uri_complete")
+            from .portal_security import portal_url
+            verification_uri = portal_url(self.base_url, self._required_text(start, "verification_uri"))
+            verification_uri_complete = portal_url(self.base_url, self._required_text(start, "verification_uri_complete"))
             expires_in = self._required_number(start, "expires_in")
             interval = self._required_number(start, "interval")
         except PortalHTTPError as exc:
             self._set_signed_out(exc.error or "sign_in_failed")
+            return
+        except ValueError:
+            self._set_signed_out("unsafe_portal_url")
             return
         except (OSError, PortalProtocolError):
             self._set_signed_out("sign_in_unavailable")

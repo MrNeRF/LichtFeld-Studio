@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -256,7 +257,7 @@ def test_main_continues_after_failure_and_cleans_each_scenario(tmp_path, monkeyp
                         "--scenarios", "listing_scale,thumbnail_cache"])
     assert code == 1 and cleaned == ["listing_scale", "thumbnail_cache"]
     assert "FAIL" in report.read_text() and "PASS" in report.read_text()
-    first = json.loads((tmp_path / "report-artifacts/listing_scale.json").read_text())
+    first = json.loads(next((tmp_path / 'report-artifacts').glob('*/listing_scale.json')).read_text())
     assert first["evidence"]["observed"] and "intentional" in first["error"]
 
 
@@ -274,5 +275,516 @@ def test_evidence_failure_still_cleans_and_reports_failure(tmp_path, monkeypatch
     code = stress.main(["--build-dir", "/tmp/build", "--portal-source", "/tmp/portal", "--report", str(report),
                         "--scenarios", "listing_scale"])
     assert code == 1 and cleaned == [True]
-    row = json.loads((tmp_path / 'evidence-artifacts/listing_scale.json').read_text())
+    row = json.loads(next((tmp_path / 'evidence-artifacts').glob('*/listing_scale.json')).read_text())
     assert row['evidence_error'] == 'log disappeared' and row['status'] == 'FAIL'
+
+
+@pytest.fixture
+def waiting_run(monkeypatch):
+    run = object.__new__(stress.StressRun)
+    run.args = args('--timeout', '600')
+    run.app = run.worker = None
+    run.name = 'test'
+    run.now = 0.
+    run.started = 0.
+    run.observations, run.modal_presses, run.last_jobs = [], [], []
+    def advance(seconds):
+        run.now += seconds
+    monkeypatch.setattr(stress.time, 'monotonic', lambda: run.now)
+    monkeypatch.setattr(stress.time, 'sleep', advance)
+    return run
+
+
+@pytest.mark.parametrize('timeout,limit', [(None, 120), (600, 120), (.4, .4)])
+def test_wait_caps_deadline_and_reports_observed_facts(waiting_run, timeout, limit):
+    run = waiting_run
+    run.value = lambda _: {'state': 'remote', 'poll_time': run.now}
+    with pytest.raises(TimeoutError) as caught:
+        run.wait_value('facts', 'expected equal', timeout, accept=lambda v: v['state'] == 'equal')
+    assert run.now == pytest.approx(limit)
+    assert 'expected equal' in str(caught.value) and "'state': 'remote'" in str(caught.value)
+    assert 'poll_time' in str(caught.value)
+    assert run._wait_deadline is None
+
+
+def test_wait_respects_shorter_cli_limit_and_false_is_success(waiting_run):
+    run = waiting_run
+    run.args.timeout = .2
+    run.value = lambda _: False
+    assert run.wait_value('new.busy', 'idle', accept=lambda busy: not busy) is False
+    assert run.now == 0
+    with pytest.raises(TimeoutError, match='limit 0.2s'):
+        run.wait_value('new.busy', 'active', 100)
+    assert run.now == pytest.approx(.2)
+
+
+def test_wait_transport_timeout_keeps_last_observation(waiting_run):
+    run = waiting_run
+    def value(_):
+        if run.now:
+            raise TimeoutError('MCP timed out')
+        return {'status': 'processing'}
+    run.value = value
+    with pytest.raises(TimeoutError, match="transfer.*last=.*processing.*MCP timed out"):
+        run.wait_value('job', 'transfer', accept=lambda v: v['status'] == 'completed')
+
+
+def test_wait_job_reports_progress_without_checkpoint_secrets(waiting_run):
+    run = waiting_run
+    run.args.timeout = .2
+    run.jobs_now = lambda: [dict(id='j', status='running', completed=17, total=100,
+                               checkpoint={'uploadId': 'u', 'url': 'SECRET'})]
+    with pytest.raises(TimeoutError) as caught:
+        run.wait_job('j', lambda j: j['status'] == 'completed', 'job terminal')
+    assert 'running' in str(caught.value) and '17' in str(caught.value)
+    assert 'SECRET' not in str(caught.value)
+
+
+def panel_observation(**overrides):
+    return dict(checked='Checked just now', checked_label='Checked just now',
+                counts=dict(count=1, ready=0, linked=1, missing=0), selection_count=1,
+                selected=dict(id='a'), available=True, catalog=['a'], cards=[], **overrides)
+
+
+def test_panel_accepts_unchanged_relative_label_and_current_counts():
+    assert common.panel_refresh_ready(panel_observation(), 'Checked just now',
+        dict(links={'a': {'sceneId': 's'}}, scenes=[]))
+
+
+def test_panel_rejects_stale_counts_and_listing_then_accepts_updated_dom():
+    observed = panel_observation()
+    fresh = dict(links={}, scenes=[dict(id='s', status='ready')])
+    assert not common.panel_refresh_ready(observed, 'Checked just now', fresh)
+    observed['cards'] = ['remote:s']
+    assert not common.panel_refresh_ready(observed, 'Checked just now', fresh)
+    observed['checked'] = observed['checked_label'] = 'Checked a moment ago'
+    assert common.panel_refresh_ready(observed, 'Checked just now', fresh)
+    observed['checked'] = 'Offline'
+    assert not common.panel_refresh_ready(observed, 'Checked just now', fresh)
+
+
+def test_panel_excludes_linked_and_deleted_remote_cards():
+    observed = panel_observation()
+    fresh = dict(links={'a': {'sceneId': 's'}}, scenes=[dict(id='s', status='ready'),
+                 dict(id='deleted', status='deleted'), dict(id='other', status='ready')])
+    assert not common.panel_refresh_ready(observed, observed['checked'], fresh)
+    observed['cards'] = ['remote:other']
+    assert common.panel_refresh_ready(observed, observed['checked'], fresh)
+
+
+def test_refresh_waits_for_fresh_success_idle_and_coalesced_panel(waiting_run):
+    """Execute the actual remote expressions without a panel _gallery_state."""
+    run = waiting_run
+    samples = iter([(99., False, True), (101., True, True), (102., False, False), (105., False, True)])
+    class Service:
+        busy = False
+        polls = 0
+        def snapshot(self):
+            self.polls += 1
+            checked, self.busy, ok = next(samples)
+            return dict(checkedAt=checked, refresh_ok=ok, links={'a': {'sceneId': 's'}}, scenes=[])
+    service = Service()
+    class Panel:
+        polls = 0
+        def _controller(self): return self
+        def refresh(self):
+            assert namespace['_stress_refresh_t0'] == 100.
+        def _gallery_counts(self):
+            self.polls += 1
+            linked = int(self.polls >= 3)
+            return dict(count=1, ready=1-linked, linked=linked, missing=0)
+        def _gallery_checked_label(self): return 'Checked just now'
+        def get_selected_count(self): return 1
+        def _get_selected_asset(self): return dict(id='a')
+        def _project_available(self, asset): return True
+        def _asset_index_assets(self): return {'a': dict(id='a')}
+        def _gallery_remote_assets(self): return {}
+    panel = Panel()
+    element = SimpleNamespace(get_inner_rml=lambda: 'Checked just now')
+    doc = SimpleNamespace(query_selector=lambda selector: element)
+    namespace = dict(new=service, p=panel, time=SimpleNamespace(time=lambda: 100.),
+                     lf=SimpleNamespace(ui=SimpleNamespace(rml=SimpleNamespace(get_document=lambda _: doc))))
+    run.value = lambda expression: eval(expression, namespace)
+    run.rpc = lambda code: exec(code, namespace)
+    run.refresh()
+    assert service.polls == 4 and panel.polls == 3
+    assert run.now >= .6
+
+
+def test_bounded_remote_snapshot_pages_share_remaining_transport_budget(waiting_run):
+    import io
+    from contextlib import redirect_stdout
+    run = waiting_run
+    expected = ['scene ' + str(i) for i in range(300)]
+    class MCP:
+        def __init__(self):
+            self.scope = dict(json=json, expected=expected)
+            self.timeouts = []
+            self.diagnostics = lambda _: None
+        def call(self, method, params, timeout):
+            assert method == 'tools/call'
+            assert params['arguments']['timeout_ms'] <= timeout * 1000
+            self.timeouts.append(timeout)
+            run.now += .1
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exec(params['arguments']['code'], self.scope)
+            return {'structuredContent': {'success': True, 'output': {'text': output.getvalue()}}}
+    mcp = MCP()
+    assert common.remote_json(mcp, 'expected', deadline=5) == expected
+    assert len(mcp.timeouts) > 3
+    assert all(b < a for a, b in zip(mcp.timeouts, mcp.timeouts[1:]))
+    run.now = 0
+    with pytest.raises(TimeoutError, match='snapshot read exceeded wait deadline'):
+        common.remote_json(mcp, 'expected', deadline=.15)
+    assert run.now == pytest.approx(.2)
+
+
+@pytest.mark.parametrize('flag', ['running', 'timed_out'])
+def test_remote_editor_timeout_has_wait_context_and_diagnostics(waiting_run, flag):
+    run = waiting_run
+    diagnostics = []
+    run.mcp = SimpleNamespace(diagnostics=diagnostics.append, call=lambda *a, **kw:
+        {'structuredContent': {'success': True, flag: True, 'output': {'text': 'partial diagnostic'}}})
+    with pytest.raises(TimeoutError, match='panel refresh.*last=None.*snapshot editor'):
+        run.wait_value('True', 'panel refresh')
+    assert diagnostics == ['partial diagnostic']
+
+
+def test_modal_confirmation_shares_wait_deadline(waiting_run):
+    run = waiting_run
+    calls = []
+    run.mcp = SimpleNamespace(call=lambda *a, **kw: calls.append((a, kw)))
+    run._wait_deadline = .5
+    run.press_modal('Keep portal', {'title': 'Resolve', 'body': 'Changes', 'buttons': [{'label': 'Keep portal'}]})
+    assert calls[0][1]['timeout'] == .5
+    run.now = .5
+    with pytest.raises(TimeoutError, match='modal press'):
+        run.press_modal('Keep portal', {'title': 'Resolve', 'body': 'Changes', 'buttons': [{'label': 'Keep portal'}]})
+    assert len(calls) == 1
+
+
+def test_intentional_kill_does_not_hide_a_relaunch_crash(waiting_run):
+    run = waiting_run
+    killed = SimpleNamespace(pid=12, exited=False)
+    killed.poll = lambda: -9 if killed.exited else None
+    run.app = killed
+    run.stop = lambda proc, crash=False: setattr(proc, 'exited', True)
+    run.stop_app(crash=True)
+    assert run.until(lambda: True, 'killed socket closed')
+    assert run.observations[-1]['value'] == dict(pid=12, signal='SIGKILL')
+    run.app = SimpleNamespace(poll=lambda: -11)
+    with pytest.raises(AssertionError, match='Studio exited unexpectedly'):
+        run.until(lambda: True, 'relaunch')
+
+
+def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run, tmp_path):
+    run = waiting_run
+    run.home = tmp_path / 'profile'
+    run.proxy = SimpleNamespace(snapshot=lambda: [])
+    run.app = SimpleNamespace(pid=12, poll=lambda: -9)
+    run.stop = lambda *a, **kw: None
+    run.large_fixture = lambda: tmp_path / 'large.licht'
+    run.queue_large = lambda _: 'job'
+    middle = dict(id='job', total=16, completed=8, checkpoint=dict(uploadId='upload'))
+    run.mid_upload = lambda _: middle
+    parts = [dict(number=1, etag='retained', size=8)]
+    run.part_rows = lambda _: parts
+    calls = []
+    run.worker_stop = lambda: calls.append('worker stopped')
+    run.worker_start = lambda: calls.append('worker started')
+    def start():
+        assert run.expected_exit is run.app
+        assert run.home == tmp_path / 'profile'
+        calls.append('relaunch')
+        run.app = SimpleNamespace(poll=lambda: None)
+    run.start_app = start
+    run.panel = lambda: calls.append('panel')
+    run.sign_in = lambda: calls.append('sign in')
+    def jobs():
+        assert 'sign in' in calls
+        return [dict(id='job', status='paused', interrupted=True, message='Interrupted')]
+    run.jobs_now = jobs
+    run.rpc = lambda code: calls.append(code)
+    run.wait_job = lambda *a: None
+    run.finish_job = lambda _: calls.append('completed')
+    run.assert_scene_count = lambda n: calls.append(('scenes', n))
+    # Supply actual resumed bytes after the restart marker.
+    def parts_after(_):
+        run.proxy.snapshot = lambda: [dict(method='PUT', request_bytes=8, finished=1)]
+        return parts
+    original_panel = run.panel
+    def panel():
+        original_panel()
+        run.part_rows = parts_after
+    run.panel = panel
+    run.kill_during_upload()
+    assert calls.index('relaunch') < calls.index('panel') < calls.index('sign in')
+    resume = next(c for c in calls if isinstance(c, str) and "command('resume'" in c)
+    assert calls.index('sign in') < calls.index(resume) < calls.index('completed')
+    assert ('scenes', 1) in calls
+    assert any(o['label'] == 'restored interrupted jobs' for o in run.observations)
+
+
+def test_second_launcher_has_shared_oracle_and_profile_but_owns_only_its_processes(waiting_run, tmp_path, monkeypatch):
+    run = waiting_run
+    run.command, run.report, run.home = 'test', tmp_path / 'launcher.md', tmp_path / 'home'
+    run.origin, run.backend = 'http://127.0.0.1:22', 'http://127.0.0.1:23'
+    run.portal = object()
+    run.mcp = SimpleNamespace(url='http://127.0.0.1:24/mcp')
+    run.asset_id, run.scene_id = 'asset', 'scene'
+    calls = []
+    class Second:
+        def __init__(self, options, command, name, directory):
+            self.args = options
+            self.mcp = SimpleNamespace(url='http://127.0.0.1:25/mcp')
+            self.artifacts = directory / 'second'
+            self.processes = []
+        def start_display(self):
+            assert self.args.display == ':95'
+            calls.append('display')
+        def start_app(self):
+            assert self.home == run.home and self.origin == run.origin
+            assert self.backend == run.backend
+            calls.append('app')
+        def panel(self): calls.append('panel')
+        def sign_in(self):
+            assert self.portal is run.portal and self.portal not in self.processes
+            calls.append('auth')
+        def rpc(self, code): pass
+        def wait_value(self, *a, **kw): pass
+        def refresh(self): pass
+        def link(self): return dict(sceneId='scene')
+    monkeypatch.setattr(stress, 'StressRun', Second)
+    other = run.launch_second_studio()
+    assert other is run.other
+    assert calls == ['display', 'app', 'panel', 'auth']
+    assert run.args.display == ':94'
+
+
+@pytest.mark.parametrize('width,height', [(250, 230), (1000, 400)])
+def test_grid_pages_use_real_panel_window_and_scroll_api(waiting_run, width, height):
+    """Run the product's viewport math without importing the native UI module."""
+    import ast
+    import math
+    import typing
+    source = ast.parse((SCRIPTS.parent / 'src/python/lfs_plugins/asset_manager_panel.py').read_text())
+    methods = {'_sync_asset_window_viewport', '_scroll_cursor_into_view', '_gallery_columns', '_window_assets'}
+    panel_class = next(n for n in source.body if isinstance(n, ast.ClassDef) and any(
+        isinstance(m, ast.FunctionDef) and m.name == '_window_assets' for m in n.body))
+    selected = [n for n in source.body if isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id.startswith('ASSET_') for t in n.targets)]
+    selected += [n for n in panel_class.body if isinstance(n, ast.FunctionDef) and n.name in methods]
+    scope = dict(math=math, List=typing.List, Dict=typing.Dict, Any=typing.Any)
+    exec(compile(ast.Module(body=selected, type_ignores=[]), '<panel viewport methods>', 'exec'), scope)
+    panel = SimpleNamespace(_view_mode='gallery', _asset_window_scroll_top=0.,
+        _asset_window_client_height=height, _asset_window_client_width=width)
+    scroll = SimpleNamespace(scroll_top=0., client_height=height, client_width=width)
+    panel._asset_scroll_container = lambda doc=None: scroll
+    for name in methods:
+        setattr(panel, name, scope[name].__get__(panel))
+    cards = [dict(id=f'remote:{i}') for i in range(50)]
+    panel._filtered_assets = lambda: cards
+    panel._refresh_records = lambda **kw: None
+    waiting_run.value = lambda expression: eval(expression, {'p': panel})
+    visited = set()
+    for index, card in enumerate(cards):
+        if card['id'] in visited:
+            continue
+        page = waiting_run.grid_page(index)
+        assert card['id'] in page['cards']
+        visited.update(page['cards'])
+        assert scroll.scroll_top == page['top']
+        panel._sync_asset_window_viewport()  # subsequent frames keep the new page
+        assert panel._asset_window_scroll_top == page['top']
+    assert visited == {c['id'] for c in cards}
+    if width == 250:
+        assert scroll.scroll_top > 10000  # old fixed range could never reach the end
+
+
+def test_poster_log_parser_counts_query_urls_and_conditional_bytes():
+    lines = ['[date] "GET /api/gallery/v1/splats/a/thumbnail?size=256 HTTP/1.1" 200 858',
+             '[date] "GET /api/gallery/v1/splats/a/thumbnail?size=256 HTTP/1.1" 304 0',
+             '[date] "GET /api/gallery/v1/splats/other/thumbnail HTTP/1.1" 200 9']
+    events = common.portal_poster_requests(lines, ['a'])
+    assert len(events) == 2
+    common.assert_poster_requests(events[:1], ['a'], 200)
+    common.assert_poster_requests(events[1:], ['a'], 304)
+    for bad in ([], events[1:] * 2, [dict(events[1], response_bytes=1)],
+                [dict(events[1], path='/api/gallery/v1/splats/b/thumbnail')]):
+        with pytest.raises(AssertionError):
+            common.assert_poster_requests(bad, ['a'], 304)
+
+
+def test_unique_artifact_directories_preserve_existing_evidence(tmp_path):
+    root = tmp_path / 'artifacts'
+    first = common.run_directory(root)
+    (first / 'saved.json').write_text('old evidence')
+    second = common.run_directory(root)
+    assert first != second and first.parent == second.parent == root
+    assert (first / 'saved.json').read_text() == 'old evidence'
+
+
+def test_log_excerpt_keeps_last_twenty_relevant_lines_over_frame_noise(tmp_path):
+    lines = [f'\x1b[31m[error] gallery upload reason {i}\x1b[0m' for i in range(30)]
+    lines += ['[perf] gallery frame took 0.01ms'] * 300
+    (tmp_path / 'studio-0.log').write_text('\n'.join(lines))
+    (tmp_path / 'portal-server.log').write_text('portal error should not replace Studio lines')
+    excerpt = common.studio_log_excerpt(tmp_path)
+    assert len(excerpt) == 20
+    assert excerpt[0].endswith('reason 10') and excerpt[-1].endswith('reason 29')
+    assert '\x1b' not in ''.join(excerpt)
+
+
+def test_modal_attempt_survives_failed_transport_with_complete_dialog(waiting_run):
+    run = waiting_run
+    modal = dict(title='Resolve camera', body='Both versions changed.', buttons=[
+        dict(label='Cancel'), dict(label='Mine'), dict(label='Portal'), dict(label='Both', enabled=False)])
+    def fail(*a, **kw): raise TimeoutError('socket closed')
+    run.mcp = SimpleNamespace(call=fail)
+    with pytest.raises(TimeoutError, match='socket closed'):
+        run.press_modal('Portal', modal)
+    modal['buttons'].clear()
+    saved = run.modal_presses[0]
+    assert saved['title'] == 'Resolve camera' and saved['body'] == 'Both versions changed.'
+    assert len(saved['buttons']) == 4 and saved['label'] == 'Portal' and saved['outcome'] == 'error'
+    assert run.observations[0]['value'] == saved
+
+
+def test_failure_json_retains_jobs_wait_modal_and_logs_even_if_evidence_fails(tmp_path, monkeypatch):
+    class FakeRun:
+        app = None
+        def __init__(self, args, command, name, directory):
+            self.artifacts = directory / 'studio'
+            self.artifacts.mkdir()
+            (self.artifacts / 'studio-0.log').write_text('\n'.join(f'gallery failed {i}' for i in range(25)))
+            self.last_jobs = [dict(id='j', message='Disk interrupted', reason='storage unavailable')]
+            self.last_wait = dict(label='job terminal', last=dict(message='Disk interrupted'))
+            self.observations = [dict(label='job', value=self.last_jobs[0])]
+            self.modal_presses = [dict(title='Resolve', body='Changes', buttons=[dict(label='Mine')], label='Mine')]
+            self.gallery_diagnostics = {}
+            self.other = None
+        def setup(self): pass
+        def listing_scale(self): raise AssertionError('invariant')
+        def evidence(self): raise OSError('evidence RPC failed')
+        def cleanup(self): pass
+        diagnostics = stress.StressRun.diagnostics
+    monkeypatch.setattr(stress, 'StressRun', FakeRun)
+    report = tmp_path / 'report.md'
+    argv = ['--build-dir', '/tmp/build', '--portal-source', '/tmp/portal', '--report', str(report),
+            '--artifacts-root', str(tmp_path / 'runs'), '--scenarios', 'listing_scale']
+    for _ in range(2):
+        assert stress.main(argv) == 1
+    files = sorted((tmp_path / 'runs').glob('*/listing_scale.json'))
+    assert len(files) == 2
+    row = json.loads(files[-1].read_text())
+    assert row['status'] == 'FAIL' and row['message'] == 'Disk interrupted'
+    assert row['jobs'][0]['reason'] == 'storage unavailable'
+    assert 'evidence RPC failed' in row['reason'] and row['last_wait']['last']['message'] == 'Disk interrupted'
+    assert len(row['log_excerpt']) == 20 and row['modal_presses'][0]['title'] == 'Resolve'
+    assert row['observations']
+    assert f'[JSON](<{files[-1]}>)' in report.read_text()
+
+
+@pytest.mark.parametrize('clobber', [False, True])
+def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, clobber):
+    run = waiting_run
+    run.scene_id = 'scene'
+    run.publish = lambda: None
+    run.disk = run.loaded = 'before'
+    run.stale = False
+    run.refreshed = 0
+    def refresh():
+        run.loaded = run.disk
+        run.stale = False
+        run.refreshed += 1
+    run.refresh = refresh
+    run.link = lambda: dict(sceneId='scene', revision=run.loaded, checkedAt=10)
+    run.remote = lambda: dict(title='B title')
+    run.assert_link = lambda: None
+    def b_update(): run.disk = 'after'
+    def b_value(expression):
+        if expression == 'new._disk_digest': return run.disk
+        if expression == "list(new.snapshot()['links'])": return ['asset']
+        raise AssertionError(expression)
+    other = SimpleNamespace(open_save=lambda **kw: None, update=b_update, value=b_value,
+        link=lambda: dict(sceneId='scene', revision='after', checkedAt=5))
+    run.launch_second_studio = lambda: other
+    def value(expression):
+        return {'new._disk_digest': run.loaded, 'new._journal_digest()': run.disk,
+                'new._stale': run.stale, 'new.message': 'Another LichtFeld Studio changed the journal',
+                "list(new.snapshot()['links'])": ['asset']}[expression]
+    run.value = value
+    def stale_write(code):
+        assert "'must not clobber'" in code
+        run.stale = True
+        if clobber:
+            run.disk = 'clobbered'
+    run.rpc = stale_write
+    run.wait_value = lambda expression, label, **kw: kw['accept'](dict(
+        busy=False, message='Another LichtFeld Studio changed the journal'))
+    if clobber:
+        with pytest.raises(AssertionError, match='Rejected A write changed the journal'):
+            run.two_studios_one_account()
+    else:
+        run.two_studios_one_account()
+        assert run.refreshed == 2 and run.loaded == 'after' and not run.stale
+        assert run.observations[-1]['value'] == dict(before='before', after='after', refreshed='after')
+
+
+@pytest.mark.parametrize('cache_bytes,bound,passes', [(1, 1, True), (2, 1, False)])
+def test_thumbnail_scenario_asserts_configured_cache_bound(waiting_run, tmp_path, cache_bytes, bound, passes):
+    run = waiting_run
+    run.artifacts = tmp_path
+    ids = [str(i) for i in range(50)]
+    cards = ['remote:' + key for key in ids]
+    run.seed_scenes = lambda n: ids if n == 50 else []
+    run.set_posters = lambda _: None
+    events = []
+    run.proxy = SimpleNamespace(snapshot=lambda: list(events))
+    def refresh():
+        status = 304 if events else 200
+        with (tmp_path / 'portal-restart-1.log').open('a') as log:
+            for key in ids:
+                path = f'/api/gallery/v1/splats/{key}/thumbnail'
+                size = 0 if status == 304 else 858
+                events.append(dict(path=path, status=status, response_bytes=size))
+                log.write(f'"GET {path}?size=256 HTTP/1.1" {status} {size}\n')
+    run.refresh = refresh
+    run.wait_value = lambda *a, **kw: None
+    run.rpc = lambda _: None
+    run.grid_page = lambda index: dict(cards=cards)
+    run.assert_responsive = lambda: None
+    def value(expression):
+        if expression == "[a['id'] for a in p._filtered_assets()]": return cards
+        assert "read_preferences(new.root)['posterCacheMiB']" in expression
+        return dict(bytes=cache_bytes, bound=bound)
+    run.value = value
+    if passes:
+        run.thumbnail_cache()
+        result = run.observations[-1]['value']
+        assert result['cards_visited'] == 50 and result['portal_poster_requests'] == 100
+    else:
+        with pytest.raises(AssertionError):
+            run.thumbnail_cache()
+
+
+def test_constructor_failure_has_explicit_unavailable_diagnostics(tmp_path, monkeypatch):
+    def failed(*args): raise PermissionError('loopback socket unavailable')
+    monkeypatch.setattr(stress, 'StressRun', failed)
+    report = tmp_path / 'setup.md'
+    assert stress.main(['--build-dir', '/tmp/build', '--portal-source', '/tmp/portal',
+                        '--report', str(report), '--scenarios', 'listing_scale']) == 1
+    row = json.loads(next((tmp_path / 'setup-artifacts').glob('*/listing_scale.json')).read_text())
+    assert row['last_wait'] is None and row['log_excerpt'] == [] and row['jobs'] == []
+    assert row['observations'] == [] and row['modal_presses'] == []
+    assert 'loopback socket unavailable' in row['reason']
+    assert row['message'].startswith('No job message available:')
+    assert 'may not have started' in row['log_excerpt_error']
+
+
+def test_safe_job_keeps_reason_and_is_idempotent():
+    job = dict(id='j', message='Interrupted', reason='socket closed', checkpoint=dict(uploadId='u', url='SECRET'))
+    safe = common.safe_job(job)
+    assert common.safe_job(safe) == safe
+    assert safe['reason'] == 'socket closed' and 'SECRET' not in json.dumps(safe)

@@ -19,7 +19,7 @@ from pathlib import Path
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
 from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused,
     GalleryProcessingTimeout, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight)
-from .portal_retry import transfer_attempts
+from .portal_retry import transfer_attempts, is_transient
 from .portal_security import redact, safe_filename
 from .credential_storage import FileBackend
 from . import gallery_bundle, gallery_preparation
@@ -105,7 +105,7 @@ def _validate_journal(data):
             identifiers.add(job["id"])
             require(job.get("status") in ("queued", "running", "paused", "error", "conflict", "completed", "canceled"))
             require(job.get("kind", "upload") in ("upload", "download"))
-            for key in ('createdAt', 'finishedAt', 'processingDeadline'):
+            for key in ('createdAt', 'finishedAt', 'processingDeadline', 'retryAt'):
                 require(key not in job or (type(job[key]) in (int, float) and math.isfinite(job[key]) and job[key] >= 0))
             require('attempts' not in job or (type(job['attempts']) is int and job['attempts'] >= 0))
             for key in ("serverProcessing", "packaged", "needsAttention"):
@@ -140,6 +140,10 @@ def friendly_error(exc):
     if isinstance(exc, PortalHTTPError):
         if exc.error == "gallery_relink_required":
             return "Sign out and reconnect your LichtFeld Studio account to approve gallery access. Your local work is safe."
+        if exc.status == 400 and exc.error in (
+                "Invalid portable LichtFeld project.", "Project checksum failed.",
+                "Embedded project asset checksum failed."):
+            return "The downloaded file is damaged or was changed on the portal."
         return {
             401: "Sign in again, then resume the transfer.",
             403: "Gallery access is unavailable for this account. Check your account on the portal.",
@@ -187,6 +191,7 @@ class GallerySync:
         self._owner = None
         self._source_formats = []
         self._max_file_bytes = DEFAULT_MAX_FILE_BYTES
+        self._portal_owned_hosts = ()
         self._quota_bytes = None
         self._used_bytes = None
         self._completion = None
@@ -294,7 +299,18 @@ class GallerySync:
                               key=lambda job: job['finishedAt'], reverse=True)
             recent = {job['id'] for job in terminal[:200] if job['finishedAt'] >= now - 30 * 86400}
             bucket['jobs'][:] = [job for job in bucket['jobs'] if job['status'] not in ('completed', 'canceled')
-                or job['id'] in recent or job.get('localUpdate', {}).get('backupPath')]
+                or job['id'] in recent or self._owns_recovery_path(job)]
+
+    @staticmethod
+    def _owns_recovery_path(job):
+        # Retain durable ownership until explicit cleanup removes the records.
+        def owns(value):
+            if not isinstance(value, dict):
+                return False
+            return any((bool(item) and (key in ('backupPath', 'recoveryPath', 'downloadPath')
+                        or key == 'path' and (value is not job or job.get('kind') == 'download')))
+                       or isinstance(item, dict) and owns(item) for key, item in value.items())
+        return owns(job)
 
     def _journal_digest(self):
         encoded = self._journal_bytes()
@@ -361,6 +377,7 @@ class GallerySync:
             raise ValueError("The account changed. Refresh the gallery before continuing.")
         client = PortalGalleryClient(self.account, expected_session=self._session, revision_domains=self._revision_domains)
         client.max_file_bytes = self._max_file_bytes
+        client.portal_owned_hosts = self._portal_owned_hosts
         client.scene_tokens = {s["id"]: copy.deepcopy(s) for s in self.scenes}
         return client
 
@@ -425,6 +442,7 @@ class GallerySync:
                 self._completion = None if not same else self._completion
                 self._source_formats = capabilities.get("sourceFormats", [])
                 self._max_file_bytes = capabilities.get("maxFileBytes", DEFAULT_MAX_FILE_BYTES)
+                self._portal_owned_hosts = copy.deepcopy(capabilities.get("portalOwnedHosts", ()))
                 self._quota_bytes = capabilities.get("quotaBytes")
                 self._used_bytes = capabilities.get("usedBytes")
                 version = capabilities.get("revisionDomains", 0)
@@ -449,6 +467,7 @@ class GallerySync:
             if identity != self._poster_identity or not snap.signed_in:
                 shutil.rmtree(self.root / "posters", ignore_errors=True)
                 self._poster_entries.clear()
+                self._portal_owned_hosts = ()
                 self._poster_identity = identity
                 self._list_etag = None
                 self.scenes = []
@@ -699,6 +718,7 @@ class GallerySync:
                 with self._lock:
                     if extend_processing:
                         job["processingDeadline"] = time.time() + PROCESSING_TIMEOUT
+                    job.pop("retryAt", None)
                     job.update(status="running", interrupted=False, needsAttention=False, serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
                     self.message = job["message"]
                 self._save()
@@ -799,6 +819,9 @@ class GallerySync:
                 with self._lock:
                     job.update(status="paused" if isinstance(exc, GalleryTransferCanceled) else "conflict"
                         if isinstance(exc, PortalHTTPError) and exc.status == 409 else "error", message=friendly_error(exc))
+                    if is_transient(exc):
+                        job.update(status="paused", retryAt=time.time() + 30,
+                            message="Waiting for the portal connection. The transfer will resume automatically.")
                     if isinstance(exc, GalleryTransferCanceled):
                         job["message"] = (("Paused. The pinned download will resume from its saved bytes." if (job.get('checkpoint') or {}).get('representationId')
                             else "Paused. The download will restart from zero because the portal has no pinned representation.") if job.get("kind") == "download"

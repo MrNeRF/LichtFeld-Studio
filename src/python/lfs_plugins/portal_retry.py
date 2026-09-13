@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 import math
+import errno
 import random
 import socket
 import time
@@ -38,6 +39,16 @@ def transfer_attempts(callback, cancel):
         _context.reset(token)
 
 
+def is_transient(exc):
+    status = getattr(exc, 'status', getattr(exc, 'code', None))
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return (status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+            or isinstance(reason, (TimeoutError, socket.timeout, ConnectionError))
+            or isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN
+            or isinstance(exc, urllib.error.URLError) and isinstance(reason, OSError)
+            and reason.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ETIMEDOUT))
+
+
 def retry_call(operation, *, idempotent, attempts=4, sleep=None):
     callback, cancel = _context.get()
     for attempt in range(attempts):
@@ -49,10 +60,7 @@ def retry_call(operation, *, idempotent, attempts=4, sleep=None):
         try:
             return operation()
         except Exception as exc:
-            status = getattr(exc, 'status', getattr(exc, 'code', None))
-            reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-            transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599) or isinstance(reason, (TimeoutError, socket.timeout, ConnectionError))
-            if not idempotent or not transient or attempt + 1 >= attempts:
+            if not idempotent or not is_transient(exc) or attempt + 1 >= attempts:
                 raise
             after = getattr(exc, 'retry_after', None)
             if after is None:

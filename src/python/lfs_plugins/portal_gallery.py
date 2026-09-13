@@ -61,6 +61,16 @@ def disk_preflight(allocations):
 
 
 def validate_download(path, extension, cancel=None):
+    try:
+        _validate_download(path, extension, cancel)
+    except ValueError as exc:
+        # Preserve the validator's exception type for callers that distinguish
+        # container and archive failures, while giving the UI one damage reason.
+        exc.args = (f"The downloaded file is damaged or was changed on the portal. {exc}",)
+        raise
+
+
+def _validate_download(path, extension, cancel=None):
     """Admit the native publishing subset and verify embedded bytes before use."""
     from . import gallery_bundle
     from .portable_project import ProjectFile
@@ -111,6 +121,7 @@ class PortalGalleryClient:
         self.list_etag = None
         self.scene_tokens = {}
         self.max_file_bytes = None
+        self.portal_owned_hosts = ()
         self.processing_deadline = None
         self.user_agent = "LichtFeld-Studio/" + getattr(account, "_client_version", _default_client_version())
 
@@ -121,6 +132,7 @@ class PortalGalleryClient:
             version = result.get("revisionDomains", 0)
             self.revision_domains = version if type(version) is int else 0
             self.max_file_bytes = result.get("maxFileBytes", DEFAULT_MAX_FILE_BYTES)
+            self.portal_owned_hosts = result.get("portalOwnedHosts", ())
         return result
 
     def _response(self, path, *, etag=None, max_bytes=4 * 1024 * 1024):
@@ -240,13 +252,11 @@ class PortalGalleryClient:
         return self._request("POST", f"/splats/uploads/{_identifier(upload_id)}/cancel", {})
 
     def _storage_url(self, url):
-        parsed = urllib.parse.urlsplit(url)
-        origin = urllib.parse.urlsplit(self.account.base_url)
-        local = (origin.scheme == parsed.scheme == 'http' and origin.hostname == '127.0.0.1'
-                 and parsed.netloc == origin.netloc)
-        if (parsed.scheme != "https" and not local) or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.fragment:
-            raise PortalProtocolError("Invalid gallery storage URL")
-        return url
+        from .portal_security import portal_url
+        try:
+            return portal_url(self.account.base_url, url, self.portal_owned_hosts)
+        except ValueError:
+            raise PortalProtocolError("Unsafe portal URL") from None
 
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
                  checkpoint=None, on_checkpoint=lambda value: None, on_message=lambda message: None,
