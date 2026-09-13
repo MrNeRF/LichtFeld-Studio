@@ -1317,7 +1317,7 @@ namespace lfs::vis {
         }
         const bool selection_pointer_blocked =
             op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
-            (over_gui || (!input_router_ && !isInViewport(x, y)) || isCameraNavigating());
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
         if (!selection_pointer_blocked &&
             dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
