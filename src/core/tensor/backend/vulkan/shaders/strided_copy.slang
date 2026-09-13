@@ -43,6 +43,21 @@ void storeByte(uint64_t address, uint64_t index, uint value)
     } while (true);
 }
 
+void storeMaskedWord(uint64_t wordAddress, uint packed, uint mask)
+{
+    Ptr<uint, Access.ReadWrite> word =
+        (Ptr<uint, Access.ReadWrite>)wordAddress;
+    uint assumed = word[0];
+    uint observed;
+    do
+    {
+        const uint replacement = (assumed & ~mask) | packed;
+        InterlockedCompareExchange(word[0], assumed, replacement, observed);
+        if (observed == assumed) return;
+        assumed = observed;
+    } while (true);
+}
+
 uint64_t logicalOffset(uint linear, uniform Parameters parameters)
 {
     uint64_t offset = 0;
@@ -61,6 +76,49 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    // UInt8/Bool gather: one invocation owns one aligned output word. A word
+    // fully inside the contiguous output range is a direct store; a
+    // leading/trailing partial word uses CAS so neighboring bytes stay intact.
+    // Scatter keeps per-byte CAS because strided stores can share a word.
+    // Host dispatch for this path is the number of covering words, not elements.
+    if (kScatter == 0 && (kInputDType == 4 || kInputDType == 5) &&
+        (kOutputDType == 4 || kOutputDType == 5))
+    {
+        if (parameters.count == 0u)
+            return;
+        const uint64_t start = parameters.outputAddress;
+        const uint64_t end = start + uint64_t(parameters.count);
+        const uint64_t firstWord = start & ~uint64_t(3);
+        const uint wordCount =
+            uint(((end - uint64_t(1)) >> 2) - (start >> 2) + uint64_t(1));
+        for (uint wordIndex = dispatchThreadId.x; wordIndex < wordCount;
+             wordIndex += stride)
+        {
+            const uint64_t wordAddress =
+                firstWord + uint64_t(wordIndex) * uint64_t(4);
+            uint packed = 0;
+            uint mask = 0;
+            for (uint lane = 0; lane < 4u; ++lane)
+            {
+                const uint64_t byteAddress = wordAddress + uint64_t(lane);
+                if (byteAddress >= start && byteAddress < end)
+                {
+                    const uint elementIndex = uint(byteAddress - start);
+                    packed |= loadByte(parameters.inputAddress,
+                                       logicalOffset(elementIndex, parameters))
+                              << (lane * 8u);
+                    mask |= 255u << (lane * 8u);
+                }
+            }
+            if (mask == 0u)
+                continue;
+            if (mask == 0xffffffffu)
+                ((Ptr<uint, Access.ReadWrite>)wordAddress)[0] = packed;
+            else
+                storeMaskedWord(wordAddress, packed, mask);
+        }
+        return;
+    }
     for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
         const uint64_t strided = logicalOffset(index, parameters);

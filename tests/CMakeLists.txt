@@ -388,6 +388,7 @@ set(TEST_FILES
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
+    test_tensor_cuda_byte_image.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
@@ -608,6 +609,7 @@ if(LFS_TENSOR_VULKAN)
     list(APPEND TEST_FILES
         test_tensor_backend_validators.cpp
         test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_allocation_padding.cpp
         test_tensor_vulkan_adoption.cpp
         test_tensor_vulkan_pointwise.cpp
         test_tensor_vulkan_reduce.cpp
@@ -1287,6 +1289,26 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     CUDA::cudart
 )
 
+# Standalone GUI-workload tensor bench. Built with tests; NOT registered with
+# ctest. Public tensor API plus tensor_backend selection/sync.
+add_executable(bench_tensor_gui
+    bench_tensor_gui.cpp
+)
+set_target_properties(bench_tensor_gui PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_tensor_gui PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_tensor_gui PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
 add_executable(tensor_backend_corpus
     tensor_backend_corpus.cpp
 )
@@ -1364,7 +1386,7 @@ message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
 message(STATUS "  Build tests: ninja lichtfeld_tests")
 message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
-message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
+message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead bench_tensor_gui")
 message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")
 
 add_test(NAME lichtfeld.decimate.perf
