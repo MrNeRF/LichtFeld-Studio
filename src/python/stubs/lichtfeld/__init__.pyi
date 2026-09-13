@@ -282,8 +282,11 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
-def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False, overwrite: bool = False) -> bool:
     """Create and bind a new .licht project at path"""
+
+def project_create_pending() -> bool:
+    """Whether a stop-then-create is queued and has not bound yet"""
 
 def project_embed_dataset() -> None:
     """Embed the active project's external dataset verbatim"""

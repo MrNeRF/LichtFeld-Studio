@@ -87,7 +87,8 @@ namespace {
         }
         lfs::Result<void> projectCreateAt(
             const std::filesystem::path&,
-            lfs::vis::ProjectSwitchDisposition) override {
+            lfs::vis::ProjectSwitchDisposition,
+            bool = false) override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
