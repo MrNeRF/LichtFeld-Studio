@@ -596,12 +596,16 @@ p._gallery_command('publish')
         self.assert_scene_count(1)
 
     def large_fixture(self):
+        path = self.home / "projects" / "large.licht"
         if self.args.large_fixture:
-            path = self.args.large_fixture
+            if self.args.large_fixture.resolve() != path.resolve():
+                shutil.copyfile(self.args.large_fixture, path)
+            self.rpc(f"lf.project_open({str(path)!r}, discard_changes=True, keep_asset_manager_open=True)")
+            self.wait_value("dict(write=lf.project_poll_write(), importing=lf.ui.get_import_state())", "open large fixture",
+                accept=lambda value: value['write'].get('path') == str(path) and not value['importing'].get('active'))
         else:
-            # No real container builder exists in test_gallery_sync. Generate valid
-            # Gaussian PLY records, load through lf.io and let native Save write .licht.
-            path = self.home / "projects" / "large.licht"
+            # Build a saved project in Studio; the publish command below prepares
+            # its embedded data into the portal's publication format.
             ply = self.root / "large.ply"
             names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
                      "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
@@ -614,26 +618,55 @@ p._gallery_command('publish')
                     if sys.byteorder != "little":
                         values.byteswap()
                     output.write(values.tobytes())
-            self.rpc(f"""assert lf.project_create({str(path)!r}, discard_changes=True)
+            self.rpc(f"""lf.new_project(discard_changes=True)
 loaded = lf.io.load({str(ply)!r}).splat_data
 assert loaded is not None
 lf.get_scene().add_splat('Stress Gaussian payload', loaded.means_raw, loaded.sh0_raw, loaded.shN_raw,
     loaded.scaling_raw, loaded.rotation_raw, loaded.opacity_raw)
-assert lf.project_save(wait=True)
+assert lf.project_save_as({str(path)!r}, wait=True)
 """)
             assert path.stat().st_size >= 200_000_000, "Generated .licht compressed below 200 MB; pass --large-fixture"
         assert path.stat().st_size > 24 * 1024 * 1024, "Large fixture must span at least four 8 MiB parts"
-        self.observe("large fixture", dict(path=str(path), bytes=path.stat().st_size))
+        self.large_node_count = self.value("len([n for n in lf.get_scene().get_nodes(lf.scene.NodeType.SPLAT) if n.gaussian_count > 0 and lf.get_scene().is_node_effectively_visible(n.id)])")
+        assert self.large_node_count > 0, "Large fixture has no publishable splat nodes"
+        # Exercise closed-project preparation (lf.prepare_gallery_project).
+        self.rpc("lf.new_project(discard_changes=True)\nassert not lf.project_has_path()\np.refresh_catalog()")
+        self.observe("large fixture", dict(path=str(path), bytes=path.stat().st_size, nodes=self.large_node_count))
         return path
 
     def queue_large(self, path):
-        return self.value(f"new.queue_upload({str(path)!r}, {{'title': {self.prefix + 'large'!r}, 'visibility': 'private'}}, 'stress-large')")
+        assets = self.wait_value("list(p._asset_index_assets().values())", "large project card",
+            accept=lambda assets: any(a['path'] == str(path) for a in assets))
+        self.asset_id = next(a['id'] for a in assets if a['path'] == str(path))
+        before = {j['id'] for j in self.jobs_now()}
+        self.select()
+        self.rpc(f"""assert not lf.project_has_path()
+p._gallery_expanded = True
+p._gallery_command('publish')
+assert p._gallery_review
+p._gallery_upload_format = 'studio'
+p._gallery_title = {self.prefix + 'large'!r}
+p._gallery_description = 'Local adversarial sync fixture'
+p._gallery_visibility = 'private'
+p._gallery_command('publish')
+""")
+        return self.new_job(before)
+
+    def assert_large_scene(self, job):
+        self.scene_id = job['result']['id']
+        self.assert_scene_count(1)
+        row = self.db(f"scene = Scene.objects.get(pk={self.scene_id!r}, ready=True, deleted_at__isnull=True)",
+            "dict(id=str(scene.id), title=scene.title, nodes=len(scene.bundle_index.get('manifest', {}).get('nodes', [])))")
+        self.observe("large published scene", row)
+        assert row['id'] == self.scene_id and row['title'] == self.prefix + 'large', row
+        assert row['nodes'] == self.large_node_count, (row, self.large_node_count)
 
     def part_rows(self, upload_id):
         return self.db("", f"list(UploadPart.objects.filter(upload_id={upload_id!r}).order_by('number').values('number', 'etag', 'size'))")
 
     def mid_upload(self, identifier):
-        return self.wait_job(identifier, lambda j: j["total"] > 0
+        return self.wait_job(identifier, lambda j: j['status'] == 'running'
+            and j.get('checkpoint', {}).get('uploadId') and j["total"] > 24 * 1024 * 1024
             and .3 <= j["completed"] / j["total"] <= .7 and not j.get("serverProcessing"), "30–70% upload")
 
     def kill_during_upload(self):
@@ -666,41 +699,51 @@ assert lf.project_save(wait=True)
         assert_retained_parts(before, after, middle["total"], sent)
         self.observe("resume parts", dict(before=before, after=after, resumed_bytes=sent, total=middle["total"]))
         self.worker_start()
-        self.finish_job(identifier)
+        self.assert_large_scene(self.finish_job(identifier))
         assert len(self.jobs_now()) == 1
-        self.assert_scene_count(1)
 
     def portal_down_mid_transfer(self):
         path = self.large_fixture()
+        self.worker_stop()
         self.proxy.upload_bps = 4 * 1024 * 1024
         identifier = self.queue_large(path)
-        self.mid_upload(identifier)
+        middle = self.mid_upload(identifier)
+        upload_id = middle['checkpoint']['uploadId']
+        self.observe("portal stopped at", safe_job(middle))
         self.stop(self.portal)
-        job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}, "upload needs retry")
+        job = self.wait_job(identifier, lambda j: j['status'] == 'waiting', "upload waiting for connection")
         self.observe("upload outage", safe_job(job))
         self.assert_responsive()
+        self.until(lambda: all('finished' in e for e in self.proxy.snapshot()), "outage upload socket closed", 30)
+        before_parts = self.part_rows(upload_id)
+        marker = len(self.proxy.snapshot())
         self.portal_restart()
-        self.rpc(f"p._controller().command('resume', {identifier!r})")
+        self.wait_job(identifier, lambda j: j.get('serverProcessing'), "automatically resumed parts accepted")
+        after_parts = self.part_rows(upload_id)
+        sent = sum(e['request_bytes'] for e in self.proxy.snapshot()[marker:] if e['method'] == 'PUT')
+        assert_retained_parts(before_parts, after_parts, middle['total'], sent)
+        self.observe("outage resume parts", dict(before=before_parts, after=after_parts, resumed_bytes=sent, total=middle['total']))
+        self.worker_start()
         uploaded = self.finish_job(identifier)
-        self.scene_id = uploaded["result"]["id"]
+        self.scene_id = uploaded['result']['id']
         self.refresh()
-        # Unlink the synthetic project key so the panel presents a remote card.
-        self.rpc("new.unlink('stress-large')")
+        # Unlink the selected project so the panel presents a remote card.
+        self.rpc(f"new.unlink({self.asset_id!r})")
         self.refresh()
         before = self.value("sorted(p._asset_index_assets())")
         self.proxy.download_bps = 4 * 1024 * 1024
         download = self.pull(remote_only=True)
         self.wait_job(download, lambda j: 0 < j['completed'] < j['total'] * .7, "download in progress")
         self.stop(self.portal)
-        job = self.wait_job(download, lambda j: j['status'] in {'error', 'paused'}, "download needs retry")
+        job = self.wait_job(download, lambda j: j['status'] == 'waiting', "download waiting for connection")
         self.observe("download outage", safe_job(job))
         assert self.value("sorted(p._asset_index_assets())") == before, "Partial project registered"
         self.assert_responsive()
         self.portal_restart()
-        self.rpc(f"p._controller().command('resume', {download!r})")
         self.finish_job(download)
         self.wait_value("sorted(p._asset_index_assets())", "resumed download registration",
                         accept=lambda ids: set(before) < set(ids) and len(ids) == len(before) + 1)
+        self.assert_large_scene(uploaded)
 
     def assert_responsive(self):
         started = time.monotonic()
@@ -940,6 +983,14 @@ Scene.objects.bulk_create(rows)
             cards=[a['id'] for a in p._window_assets(p._filtered_assets())]))[-1]""")
 
     def bad_downloads(self):
+        locale = json.loads((Path(__file__).resolve().parents[1] /
+            "src/visualizer/gui/resources/locales/en.json").read_text(encoding="utf-8"))
+        expected_messages = {
+            # Older catalogs lack a dedicated incomplete-download translation.
+            "over_length": locale.get("asset_manager.gallery.error.download_incomplete",
+                                      "Gallery download was incomplete"),
+            "truncated": locale["asset_manager.gallery.error.download_damaged"],
+        }
         self.publish()
         self.rpc(f"new.unlink({self.asset_id!r})")
         self.refresh()
@@ -955,7 +1006,7 @@ Scene.objects.bulk_create(rows)
             job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}
                 or j.get('stagedImport', {}).get('state') == 'failed', "specific bad-download failure")
             message = job.get("stagedImport", {}).get("message") or job["message"]
-            assert any(word in message.lower() for word in ("incomplete", "invalid", "corrupt", "size", "truncat", "container", "checksum")), message
+            assert message == expected_messages[mode], message
             assert self.value("sorted(p._asset_index_assets())") == baseline, "Bad download registered a project"
             self.rpc("assert not list(new.root.rglob('.gallery-*'))")
             stage = job.get("stagedImport", {}).get("path")

@@ -507,8 +507,11 @@ def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run,
     run.jobs_now = jobs
     run.rpc = lambda code: calls.append(code)
     run.wait_job = lambda *a: None
-    run.finish_job = lambda _: calls.append('completed')
-    run.assert_scene_count = lambda n: calls.append(('scenes', n))
+    def finish(identifier):
+        calls.append('completed')
+        return dict(result=dict(id='scene'))
+    run.finish_job = finish
+    run.assert_large_scene = lambda job: calls.append(('scene', job['result']['id']))
     # Supply actual resumed bytes after the restart marker.
     def parts_after(_):
         run.proxy.snapshot = lambda: [dict(method='PUT', request_bytes=8, finished=1)]
@@ -522,8 +525,201 @@ def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run,
     assert calls.index('relaunch') < calls.index('panel') < calls.index('sign in')
     resume = next(c for c in calls if isinstance(c, str) and "command('resume'" in c)
     assert calls.index('sign in') < calls.index(resume) < calls.index('completed')
-    assert ('scenes', 1) in calls
+    assert ('scene', 'scene') in calls
     assert any(o['label'] == 'restored interrupted jobs' for o in run.observations)
+
+
+@pytest.mark.parametrize('supplied', [False, True])
+def test_large_fixture_is_saved_in_app_and_closed_before_card_publish(waiting_run, tmp_path, monkeypatch, supplied):
+    run = waiting_run
+    run.home = run.root = tmp_path
+    (tmp_path / 'projects').mkdir()
+    run.prefix = 'test-'
+    run.rng = SimpleNamespace(uniform=lambda *a: .1)
+    # One small batch suffices to exercise fixture generation; native Save As is
+    # simulated with a sparse file. This test does not validate native bytes.
+    monkeypatch.setattr(stress, 'range', lambda *a: range(1) if len(a) == 3 else range(*a), raising=False)
+    source = tmp_path / 'provided.licht'
+    if supplied:
+        with source.open('wb') as output:
+            output.truncate(25 * 1024 * 1024)
+        run.args.large_fixture = source
+    calls, nodes, assets, jobs = [], [], {}, []
+    current = None
+    def clear(**kwargs):
+        nonlocal current
+        current = None
+        nodes.clear()
+        calls.append('new project')
+    def opened(path, **kwargs):
+        nonlocal current
+        current = path
+        nodes.extend([SimpleNamespace(id=i, gaussian_count=10) for i in range(3)])
+        calls.append('open supplied')
+    def added(name, *arrays):
+        assert len(arrays) == 6
+        nodes.append(SimpleNamespace(id=0, gaussian_count=5_000_000))
+        calls.append('add splat')
+    def saved(path, wait):
+        nonlocal current
+        assert wait and nodes
+        current = path
+        with Path(path).open('wb') as output:
+            output.truncate(200_000_000)
+        calls.append('save as')
+        return True
+    def catalog():
+        assets['large-id'] = dict(id='large-id', path=str(tmp_path / 'projects/large.licht'))
+        calls.append('catalog')
+    scene = SimpleNamespace(add_splat=added, get_nodes=lambda kind: nodes,
+        is_node_effectively_visible=lambda node_id: node_id != 2)
+    data = SimpleNamespace(**{key + '_raw': object() for key in ('means', 'sh0', 'shN', 'scaling', 'rotation', 'opacity')})
+    lf = SimpleNamespace(new_project=clear, project_open=opened, project_save_as=saved,
+        project_has_path=lambda: current is not None, project_poll_write=lambda: dict(path=current),
+        ui=SimpleNamespace(get_import_state=lambda: dict(active=False)),
+        get_scene=lambda: scene, scene=SimpleNamespace(NodeType=SimpleNamespace(SPLAT='splat')),
+        io=SimpleNamespace(load=lambda path: SimpleNamespace(splat_data=data)))
+    class Panel:
+        _gallery_review = False
+        refresh_catalog = staticmethod(catalog)
+        def _asset_index_assets(self): return assets
+        def _select_asset_id(self, identifier):
+            assert identifier == 'large-id'
+            calls.append('select large')
+        def _gallery_command(self, command):
+            assert command == 'publish' and current is None
+            assert calls[-1] == ('select large' if not self._gallery_review else 'review')
+            if not self._gallery_review:
+                self._gallery_review = True
+                calls.append('review')
+            else:
+                assert self._gallery_upload_format == 'studio'
+                assert self._gallery_title == 'test-large' and self._gallery_visibility == 'private'
+                calls.append('publish')
+                jobs.append(dict(id='prepared-upload'))
+    scope = dict(lf=lf, p=Panel())  # No service queue API: bypassing the panel fails.
+    run.rpc = lambda code: exec(code, scope)
+    run.value = lambda expression: eval(expression, scope)
+    run.jobs_now = lambda: jobs
+    path = run.large_fixture()
+    assert current is None and path.parent == tmp_path / 'projects'
+    assert run.large_node_count == (2 if supplied else 1)
+    assert run.queue_large(path) == 'prepared-upload'
+    assert run.asset_id == 'large-id'
+    assert calls[-3:] == ['select large', 'review', 'publish']
+    assert ('open supplied' in calls) == supplied
+    assert ('save as' in calls) != supplied
+    if supplied:
+        assert source.exists() and source != path
+
+
+@pytest.mark.parametrize('fraction,eligible', [(.29, False), (.3, True), (.5, True), (.7, True), (.71, False)])
+def test_mid_upload_requires_real_large_upload_bytes(waiting_run, fraction, eligible):
+    job = dict(status='running', total=32 * 1024 * 1024, completed=fraction * 32 * 1024 * 1024,
+        checkpoint=dict(uploadId='upload'))
+    def wait(identifier, predicate, label):
+        assert bool(predicate(job)) == eligible
+        for patch in (dict(checkpoint={}), dict(serverProcessing=True), dict(status='waiting'),
+                      dict(total=16, completed=8)):
+            assert not predicate(dict(job, **patch))
+        return job
+    waiting_run.wait_job = wait
+    assert waiting_run.mid_upload('job') is job
+
+
+@pytest.mark.parametrize('failure', [None, 'nodes', 'title', 'id', 'missing', 'extra'])
+def test_large_scene_requires_expected_ready_portal_nodes(waiting_run, failure):
+    run = waiting_run
+    run.prefix, run.large_node_count = 'test-', 2
+    row = dict(id='scene', title='test-large', nodes=2)
+    if failure in {'nodes', 'title', 'id'}:
+        row[failure] = 1 if failure == 'nodes' else 'wrong'
+    def db(code, expression):
+        if code:
+            assert "pk='scene', ready=True, deleted_at__isnull=True" in code
+            assert "bundle_index.get('manifest', {}).get('nodes', [])" in expression
+            if failure == 'missing':
+                raise LookupError('Scene does not exist')
+            return row
+        return [row] * (2 if failure == 'extra' else 1)
+    run.db = db
+    if failure:
+        with pytest.raises((AssertionError, LookupError)):
+            run.assert_large_scene(dict(result=dict(id='scene')))
+    else:
+        run.assert_large_scene(dict(result=dict(id='scene')))
+        assert run.observations[-1]['value']['nodes'] == 2
+
+
+@pytest.mark.parametrize('sent', [8, 16])
+def test_outage_automatically_resumes_retained_parts_and_checks_publication(waiting_run, tmp_path, sent):
+    run = waiting_run
+    run.asset_id = 'large-id'
+    calls, events = [], []
+    run.proxy = SimpleNamespace(snapshot=lambda: list(events))
+    run.portal = object()
+    run.large_fixture = lambda: tmp_path / 'large.licht'
+    run.queue_large = lambda path: 'upload-job'
+    run.mid_upload = lambda identifier: dict(total=16, completed=8, checkpoint=dict(uploadId='upload'))
+    run.worker_stop = lambda: calls.append('worker stopped')
+    run.worker_start = lambda: calls.append('worker started')
+    run.stop = lambda proc: calls.append('portal stopped')
+    run.assert_responsive = lambda: calls.append('responsive')
+    run.portal_restart = lambda: calls.append('portal restarted')
+    run.part_rows = lambda identifier: [dict(number=1, etag='retained', size=8)]
+    def wait_job(identifier, predicate, label):
+        if 'waiting for connection' in label:
+            assert not predicate(dict(status='paused'))
+            job = dict(status='waiting')
+            assert predicate(job)
+            calls.append(identifier + ' waiting')
+        elif 'resumed parts' in label:
+            assert calls[-1] == 'portal restarted'
+            events.append(dict(method='PUT', request_bytes=sent, finished=1))
+            job = dict(serverProcessing=True)
+            assert predicate(job)
+            calls.append('parts accepted')
+        else:
+            assert label == 'download in progress'
+            job = dict(total=16, completed=4)
+            assert predicate(job)
+            calls.append('download in progress')
+        return job
+    run.wait_job = wait_job
+    def finished(identifier):
+        calls.append(identifier + ' completed')
+        return dict(result=dict(id='scene'))
+    run.finish_job = finished
+    def published(job):
+        run.scene_id = job['result']['id']
+        calls.append('published nodes checked')
+    run.assert_large_scene = published
+    run.refresh = lambda: None
+    run.rpc = calls.append
+    run.value = lambda expression: ['large-id']
+    def pull(remote_only):
+        assert remote_only and run.scene_id == 'scene'
+        return 'download-job'
+    run.pull = pull
+    def registered(expression, label, accept):
+        assert accept(['large-id', 'downloaded-id'])
+        assert not accept(['large-id'])
+        calls.append('registered')
+    run.wait_value = registered
+    if sent == 16:
+        with pytest.raises(AssertionError):
+            run.portal_down_mid_transfer()
+        assert 'worker started' not in calls
+    else:
+        run.portal_down_mid_transfer()
+        assert calls.index('parts accepted') < calls.index('worker started') < calls.index('published nodes checked')
+        assert "new.unlink('large-id')" in calls
+        assert not any("command('resume'" in call for call in calls)
+        assert calls.count('portal stopped') == calls.count('portal restarted') == 2
+        assert calls.index('download in progress') < calls.index('download-job waiting')
+        assert calls[-2:] == ['registered', 'published nodes checked']
+        evidence = next(row['value'] for row in run.observations if row['label'] == 'outage resume parts')
+        assert evidence['resumed_bytes'] < evidence['total']
 
 
 def test_second_launcher_has_shared_oracle_and_profile_but_owns_only_its_processes(waiting_run, tmp_path, monkeypatch):
@@ -767,6 +963,66 @@ def test_thumbnail_scenario_asserts_configured_cache_bound(waiting_run, tmp_path
     else:
         with pytest.raises(AssertionError):
             run.thumbnail_cache()
+
+
+@pytest.mark.parametrize('incomplete_translation', [None, 'The gallery download is incomplete.'])
+@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'declared_size', 'extra_text', 'registered', 'staging'])
+@pytest.mark.parametrize('failed_mode', ['over_length', 'truncated'])
+def test_bad_downloads_requires_localized_reason_and_cleanup(
+        waiting_run, tmp_path, monkeypatch, failure, failed_mode, incomplete_translation):
+    run = waiting_run
+    locale = json.loads((SCRIPTS.parent / 'src/visualizer/gui/resources/locales/en.json').read_text(encoding='utf-8'))
+    locale.pop('asset_manager.gallery.error.download_incomplete', None)
+    if incomplete_translation is not None:
+        locale['asset_manager.gallery.error.download_incomplete'] = incomplete_translation
+    monkeypatch.setattr(stress.json, 'loads', lambda text: locale)
+    expected = {
+        'over_length': incomplete_translation or 'Gallery download was incomplete',
+        'truncated': locale['asset_manager.gallery.error.download_damaged'],
+    }
+    run.asset_id, run.scene_id = 'asset', 'scene'
+    run.proxy = SimpleNamespace(inflate_download=0)
+    run.publish = run.refresh = lambda: None
+    calls = []
+    run.rpc = calls.append
+    run.db = lambda code: calls.append(code)
+    run.wait_value = lambda *a, **kw: None
+    current = None
+    stage = tmp_path / 'failed.licht'
+    def pull(remote_only):
+        nonlocal current
+        assert remote_only
+        current = 'over_length' if run.proxy.inflate_download else 'truncated'
+        return current
+    run.pull = pull
+    def value(expression):
+        assert expression == 'sorted(p._asset_index_assets())'
+        return ['asset', 'unexpected'] if failure == 'registered' and current == failed_mode else ['asset']
+    run.value = value
+    def wait_job(identifier, accept, label):
+        message = expected[identifier]
+        if identifier == failed_mode:
+            if failure == 'legacy': message = 'Invalid download checksum'
+            if failure == 'wrong_reason': message = expected['truncated' if identifier == 'over_length' else 'over_length']
+            if failure == 'declared_size': message = locale['asset_manager.gallery.error.download_size']
+            if failure == 'extra_text': message += ' Unexpected diagnostic'
+            if failure == 'staging': stage.write_bytes(b'leftover')
+        job = dict(id=identifier, status='error', message=message)
+        if identifier == 'truncated':
+            job.update(message='Download failed', stagedImport=dict(state='failed', message=message, path=str(stage)))
+        elif failure == 'staging':
+            job['stagedImport'] = dict(path=str(stage))
+        assert accept(job)
+        return job
+    run.wait_job = wait_job
+    if failure:
+        with pytest.raises(AssertionError):
+            run.bad_downloads()
+    else:
+        run.bad_downloads()
+        assert [row['label'] for row in run.observations] == ['over_length', 'truncated']
+        assert calls.count("assert not list(new.root.rglob('.gallery-*'))") == 2
+        assert "new.discard('over_length')" in calls and "new.discard('truncated')" in calls
 
 
 def test_constructor_failure_has_explicit_unavailable_diagnostics(tmp_path, monkeypatch):
