@@ -665,9 +665,21 @@ p._gallery_command('publish')
         return self.db("", f"list(UploadPart.objects.filter(upload_id={upload_id!r}).order_by('number').values('number', 'etag', 'size'))")
 
     def mid_upload(self, identifier):
-        return self.wait_job(identifier, lambda j: j['status'] == 'running'
-            and j.get('checkpoint', {}).get('uploadId') and j["total"] > 24 * 1024 * 1024
-            and .3 <= j["completed"] / j["total"] <= .7 and not j.get("serverProcessing"), "30–70% upload")
+        def uploading(j):
+            j = j or {}
+            # Preparation reports bytes through the same counters. They become
+            # upload bytes only after packaging resets completed/total.
+            if (j.get('status') != 'running' or j.get('kind') == 'download'
+                    or j.get('serverProcessing')
+                    or (j.get('preparation') and not j.get('packaged'))
+                    or j.get('message') == 'Preparing scene package'):
+                return False
+            checkpoint_id = (j.get('checkpoint') or {}).get('uploadId')
+            if not (checkpoint_id or (j.get('uploadId') and j.get('message') == 'Uploading')):
+                return False
+            total, completed = j.get('total') or 0, j.get('completed') or 0
+            return total > 24 * 1024 * 1024 and .3 <= completed / total <= .7
+        return self.wait_job(identifier, uploading, "30–70% upload")
 
     def kill_during_upload(self):
         path = self.large_fixture()
@@ -675,7 +687,7 @@ p._gallery_command('publish')
         self.proxy.upload_bps = 4 * 1024 * 1024
         identifier = self.queue_large(path)
         middle = self.mid_upload(identifier)
-        upload_id = middle["checkpoint"]["uploadId"]
+        upload_id = (middle.get('checkpoint') or {}).get('uploadId') or middle.get('uploadId')
         self.observe("killed at", safe_job(middle))
         original_home = self.home
         self.stop_app(crash=True)
@@ -708,7 +720,7 @@ p._gallery_command('publish')
         self.proxy.upload_bps = 4 * 1024 * 1024
         identifier = self.queue_large(path)
         middle = self.mid_upload(identifier)
-        upload_id = middle['checkpoint']['uploadId']
+        upload_id = (middle.get('checkpoint') or {}).get('uploadId') or middle.get('uploadId')
         self.observe("portal stopped at", safe_job(middle))
         self.stop(self.portal)
         job = self.wait_job(identifier, lambda j: j['status'] == 'waiting', "upload waiting for connection")

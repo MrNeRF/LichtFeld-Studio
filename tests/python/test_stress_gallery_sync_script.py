@@ -478,7 +478,8 @@ def test_intentional_kill_does_not_hide_a_relaunch_crash(waiting_run):
         run.until(lambda: True, 'relaunch')
 
 
-def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run, tmp_path):
+@pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
+def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run, tmp_path, id_source):
     run = waiting_run
     run.home = tmp_path / 'profile'
     run.proxy = SimpleNamespace(snapshot=lambda: [])
@@ -487,9 +488,14 @@ def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run,
     run.large_fixture = lambda: tmp_path / 'large.licht'
     run.queue_large = lambda _: 'job'
     middle = dict(id='job', total=16, completed=8, checkpoint=dict(uploadId='upload'))
+    if id_source == 'uploadId':
+        middle.update(checkpoint=None, uploadId='upload')
     run.mid_upload = lambda _: middle
     parts = [dict(number=1, etag='retained', size=8)]
-    run.part_rows = lambda _: parts
+    def part_rows(identifier):
+        assert identifier == 'upload'
+        return parts
+    run.part_rows = part_rows
     calls = []
     run.worker_stop = lambda: calls.append('worker stopped')
     run.worker_start = lambda: calls.append('worker started')
@@ -619,12 +625,44 @@ def test_mid_upload_requires_real_large_upload_bytes(waiting_run, fraction, elig
         checkpoint=dict(uploadId='upload'))
     def wait(identifier, predicate, label):
         assert bool(predicate(job)) == eligible
-        for patch in (dict(checkpoint={}), dict(serverProcessing=True), dict(status='waiting'),
-                      dict(total=16, completed=8)):
+        assert not predicate(None)
+        for patch in (dict(checkpoint={}), dict(checkpoint=None), dict(checkpoint=dict(uploadId=None)),
+                      dict(serverProcessing=True), dict(status='waiting'), dict(kind='download'),
+                      dict(preparation='staging', packaged=None), dict(preparation='staging', packaged=False),
+                      dict(message='Preparing scene package'), dict(total=None), dict(completed=None),
+                      dict(total=0), dict(total=16, completed=8)):
             assert not predicate(dict(job, **patch))
         return job
     waiting_run.wait_job = wait
     assert waiting_run.mid_upload('job') is job
+
+
+@pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
+def test_mid_upload_waits_through_native_preparation_until_45_percent(waiting_run, id_source):
+    preparation_total, upload_total = 340103744, 100 * 1024 * 1024
+    preparing = dict(id='job', kind='upload', status='running', preparation='staging', packaged=False,
+        completed=191889408, total=preparation_total, message='Preparing scene package',
+        checkpoint=None, uploadId=None, serverProcessing=None, stagedImport={})
+    uploading = dict(preparing, packaged=True, completed=0, total=upload_total, message='Uploading')
+    identified = dict(uploading, **({'checkpoint': dict(uploadId='upload')}
+                                  if id_source == 'checkpoint' else {'uploadId': 'upload'}))
+    middle = dict(identified, completed=upload_total * .45)
+    sequence = [preparing,
+                dict(preparing, completed=preparation_total * .45),
+                dict(preparing, message='Uploading'),  # Worker startup label, still unpackaged.
+                dict(preparing, checkpoint=dict(uploadId='upload')),  # Preparation still wins.
+                uploading, dict(uploading, completed=upload_total * .45),  # No upload ID yet.
+                identified, dict(identified, completed=upload_total * .29), middle]
+    observed = []
+    def jobs():
+        job = sequence[len(observed)]
+        observed.append(job)
+        return [job]
+    waiting_run.jobs_now = jobs
+    assert waiting_run.mid_upload('job') is middle
+    assert observed == sequence
+    assert middle['total'] == upload_total
+    assert waiting_run.last_wait['label'] == '30–70% upload'
 
 
 @pytest.mark.parametrize('failure', [None, 'nodes', 'title', 'id', 'missing', 'extra'])
@@ -652,7 +690,8 @@ def test_large_scene_requires_expected_ready_portal_nodes(waiting_run, failure):
 
 
 @pytest.mark.parametrize('sent', [8, 16])
-def test_outage_automatically_resumes_retained_parts_and_checks_publication(waiting_run, tmp_path, sent):
+@pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
+def test_outage_automatically_resumes_retained_parts_and_checks_publication(waiting_run, tmp_path, sent, id_source):
     run = waiting_run
     run.asset_id = 'large-id'
     calls, events = [], []
@@ -660,13 +699,19 @@ def test_outage_automatically_resumes_retained_parts_and_checks_publication(wait
     run.portal = object()
     run.large_fixture = lambda: tmp_path / 'large.licht'
     run.queue_large = lambda path: 'upload-job'
-    run.mid_upload = lambda identifier: dict(total=16, completed=8, checkpoint=dict(uploadId='upload'))
+    middle = dict(total=16, completed=8, checkpoint=dict(uploadId='upload'))
+    if id_source == 'uploadId':
+        middle.update(checkpoint=None, uploadId='upload')
+    run.mid_upload = lambda identifier: middle
     run.worker_stop = lambda: calls.append('worker stopped')
     run.worker_start = lambda: calls.append('worker started')
     run.stop = lambda proc: calls.append('portal stopped')
     run.assert_responsive = lambda: calls.append('responsive')
     run.portal_restart = lambda: calls.append('portal restarted')
-    run.part_rows = lambda identifier: [dict(number=1, etag='retained', size=8)]
+    def part_rows(identifier):
+        assert identifier == 'upload'
+        return [dict(number=1, etag='retained', size=8)]
+    run.part_rows = part_rows
     def wait_job(identifier, predicate, label):
         if 'waiting for connection' in label:
             assert not predicate(dict(status='paused'))
