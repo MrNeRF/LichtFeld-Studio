@@ -86,6 +86,16 @@ the refined camera frame without changing their cached source data.
 The evaluator remains full-image; tiled objectives and a 3DGUT camera-gradient
 path are not provided.
 
+Render outputs carry the effective pose separately from the imported camera.
+MRNF projection fallback and view-based seeding consume that pose, and cached
+seed images retain their matching pose across subsequent camera updates.
+
+Candidate acceptance currently measures improvement on one training image with
+the Gaussian model held fixed. It does not yet enforce a sparse SfM reprojection
+constraint or establish improvement on unseen views. An accepted update can
+therefore compensate for an immature Gaussian model or limited appearance
+capacity; acceptance alone is not evidence of better camera calibration.
+
 ## Bounded optimizer
 
 `BoundedPoseOptimizer` owns one camera's source/current pose and optimization

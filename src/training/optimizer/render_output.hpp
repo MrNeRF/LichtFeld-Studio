@@ -26,6 +26,10 @@ namespace lfs::training {
         lfs::core::Camera* camera = nullptr; // Current training camera, when available
         int width = 0;
         int height = 0;
+        // Optional immutable pose used for this render. Camera retains imported
+        // calibration; geometry consumers must use these when refinement is active.
+        lfs::core::Tensor pose_world_view_transform;
+        lfs::core::Tensor pose_cam_position;
     };
 
     enum class RenderMode {

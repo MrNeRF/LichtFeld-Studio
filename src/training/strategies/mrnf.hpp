@@ -269,6 +269,8 @@ namespace lfs::training {
         lfs::core::Tensor _cached_seed_target;
         lfs::core::Tensor _cached_seed_alpha;
         lfs::core::Tensor _cached_seed_depth;
+        lfs::core::Tensor _cached_seed_world_view_transform;
+        lfs::core::Tensor _cached_seed_cam_position;
         lfs::core::Camera* _cached_seed_camera = nullptr;
         int _cached_seed_width = 0;
         int _cached_seed_height = 0;

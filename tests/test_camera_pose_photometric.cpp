@@ -373,6 +373,22 @@ namespace {
         }
         const auto pose = exp_se3({0.03f, -0.02f, 0.04f, 0.01f, 0.02f, -0.01f});
         const auto first = gradient(pose, spatial_weights());
+        {
+            auto rendered = forward(pose);
+            const auto rendered_pose = rendered.first.pose_world_view_transform;
+            const auto rendered_center = rendered.first.pose_cam_position;
+            ASSERT_TRUE(rendered_pose.is_valid());
+            ASSERT_TRUE(rendered_center.is_valid());
+            const auto expected = pose_tensors(pose);
+            expect_bytes_equal(rendered_pose, expected.world_view_transform);
+            expect_bytes_equal(rendered_center, expected.cam_position);
+            rendered.second.release_forward_context();
+            // Geometry consumers may retain the pose with cached pixels across
+            // a later render of the same imported camera.
+            auto later = forward(identity_transform());
+            expect_bytes_equal(rendered_pose, expected.world_view_transform);
+            expect_bytes_equal(rendered_center, expected.cam_position);
+        }
         const auto second = gradient(pose, spatial_weights());
         for (int axis = 0; axis < 6; ++axis)
             EXPECT_NEAR(first[axis], second[axis], 1.0e-7);

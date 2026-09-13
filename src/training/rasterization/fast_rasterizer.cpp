@@ -652,6 +652,10 @@ namespace lfs::training {
         }
         render_output.width = width;
         render_output.height = height;
+        if (pose_override) {
+            render_output.pose_world_view_transform = pose_override->world_view_transform;
+            render_output.pose_cam_position = pose_override->cam_position;
+        }
 
         // Prepare context for backward
         ctx.image = image;

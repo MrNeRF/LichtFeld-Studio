@@ -918,6 +918,8 @@ namespace lfs::training {
             account_tensor("explore.cached_target", _cached_seed_target);
             account_tensor("explore.cached_alpha", _cached_seed_alpha);
             account_tensor("explore.cached_depth", _cached_seed_depth);
+            account_tensor("explore.cached_pose_transform", _cached_seed_world_view_transform);
+            account_tensor("explore.cached_pose_center", _cached_seed_cam_position);
 
             _strategy_required_peak_bytes =
                 std::max(_strategy_required_peak_bytes, strategy_required);
@@ -986,6 +988,10 @@ namespace lfs::training {
             _cached_seed_depth = Tensor();
         }
         _cached_seed_camera = render_output.camera;
+        // Retain the exact pose paired with the cached pixels, even if a later
+        // training visit accepts a different pose for the same Camera.
+        _cached_seed_world_view_transform = render_output.pose_world_view_transform;
+        _cached_seed_cam_position = render_output.pose_cam_position;
         _cached_seed_width = render_output.width > 0
                                  ? render_output.width
                                  : static_cast<int>(_cached_seed_image.shape()[_cached_seed_image.ndim() - 1]);
@@ -1058,7 +1064,9 @@ namespace lfs::training {
                 return;
             }
             const auto [fx, fy, cx, cy] = render_output.camera->get_intrinsics();
-            const float* w2c = render_output.camera->world_view_transform_ptr();
+            const float* w2c = render_output.pose_world_view_transform.is_valid()
+                                   ? render_output.pose_world_view_transform.ptr<float>()
+                                   : render_output.camera->world_view_transform_ptr();
             if (w2c == nullptr || !(fx > 0.0f) || !(fy > 0.0f)) {
                 return;
             }
@@ -3046,6 +3054,8 @@ namespace lfs::training {
         Tensor alpha = render_output.alpha;
         Tensor depth = render_output.depth;
         Camera* camera = render_output.camera;
+        Tensor pose_world_view_transform = render_output.pose_world_view_transform;
+        Tensor pose_cam_position = render_output.pose_cam_position;
         int width = render_output.width;
         int height = render_output.height;
 
@@ -3062,6 +3072,8 @@ namespace lfs::training {
                 alpha = _cached_seed_alpha;
                 depth = _cached_seed_depth;
                 camera = _cached_seed_camera;
+                pose_world_view_transform = _cached_seed_world_view_transform;
+                pose_cam_position = _cached_seed_cam_position;
                 width = _cached_seed_width;
                 height = _cached_seed_height;
             } else {
@@ -3173,8 +3185,10 @@ namespace lfs::training {
         const auto* a_ptr = alpha_cpu.ptr<float>();
         const auto* d_ptr = depth_cpu.ptr<float>();
 
-        auto pos_cpu = camera->cam_position().cpu().contiguous();
-        auto R_cpu = camera->R().cpu().contiguous();
+        auto pos_cpu = (pose_cam_position.is_valid() ? pose_cam_position : camera->cam_position()).cpu().contiguous();
+        auto R_cpu = pose_world_view_transform.is_valid()
+                         ? pose_world_view_transform.reshape({4, 4}).slice(0, 0, 3).slice(1, 0, 3).cpu().contiguous()
+                         : camera->R().cpu().contiguous();
         const float* cam_pos = pos_cpu.ptr<float>();
         const float* R = R_cpu.ptr<float>();
         const auto [fx, fy, cx, cy] = camera->get_intrinsics();
@@ -3688,6 +3702,8 @@ namespace lfs::training {
         std::swap(_cached_seed_target, source._cached_seed_target);
         std::swap(_cached_seed_alpha, source._cached_seed_alpha);
         std::swap(_cached_seed_depth, source._cached_seed_depth);
+        std::swap(_cached_seed_world_view_transform, source._cached_seed_world_view_transform);
+        std::swap(_cached_seed_cam_position, source._cached_seed_cam_position);
         std::swap(_cached_seed_camera, source._cached_seed_camera);
         std::swap(_cached_seed_width, source._cached_seed_width);
         std::swap(_cached_seed_height, source._cached_seed_height);
