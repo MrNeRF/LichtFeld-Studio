@@ -62,6 +62,28 @@ namespace lfs::core::internal {
             return last + 1;
         }
 
+        bool packed_byte_gather(const bool scatter, const DataType dtype) {
+            return !scatter &&
+                   (dtype == DataType::UInt8 || dtype == DataType::Bool);
+        }
+
+        void assert_packed_byte_alignment(const StorageRef storage) {
+            LFS_ASSERT_MSG(storage.meta != nullptr,
+                           "Vulkan packed byte gather requires a native storage descriptor");
+            LFS_ASSERT_MSG((storage.meta->gpu_descriptor.base_address & 3ull) == 0ull,
+                           "Vulkan packed byte gather requires a 4-byte aligned buffer device address");
+        }
+
+        // One invocation owns one aligned output word covering [output, output+count).
+        // Count is elements; UInt8/Bool are one byte each. Partial first/last words
+        // are included so unaligned byte_offset still maps onto 4-byte stores.
+        size_t packed_byte_gather_work(const StorageRef output, const size_t count) {
+            assert_packed_byte_alignment(output);
+            const uint64_t start = address(output);
+            const uint64_t last = start + static_cast<uint64_t>(count) - 1ull;
+            return static_cast<size_t>((last >> 2) - (start >> 2) + 1ull);
+        }
+
         void dispatch_strided(const StorageRef input, const StorageRef output,
                               const StridedLayout& layout, const bool scatter,
                               const DataType input_dtype,
@@ -82,6 +104,13 @@ namespace lfs::core::internal {
             const std::array constants{static_cast<uint32_t>(input_dtype),
                                        static_cast<uint32_t>(output_dtype),
                                        scatter ? 1u : 0u};
+            const bool packed = packed_byte_gather(scatter, input_dtype) &&
+                                packed_byte_gather(false, output_dtype);
+            size_t work = layout.element_count;
+            if (packed) {
+                assert_packed_byte_alignment(input);
+                work = packed_byte_gather_work(output, layout.element_count);
+            }
             const auto context = acquire_vulkan_context();
             const VulkanPipeline& pipeline = context->pipelines().specialized(
                 "strided_copy", sizeof(StridedPush), constants);
@@ -94,9 +123,7 @@ namespace lfs::core::internal {
                     vkCmdPushConstants(command, pipeline.layout,
                                        VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(push), &push);
-                    vkCmdDispatch(command,
-                                  dispatch_groups(*context, layout.element_count),
-                                  1, 1);
+                    vkCmdDispatch(command, dispatch_groups(*context, work), 1, 1);
                 });
         }
 

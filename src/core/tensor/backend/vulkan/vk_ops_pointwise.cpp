@@ -299,6 +299,18 @@ namespace lfs::core::internal {
             uint32_t padding;
         };
         static_assert(sizeof(ConvertPush) == 24);
+
+        // Byte outputs pack four converted values per aligned word. Dispatch
+        // the number of words covering [output, output+count), including a
+        // leading/trailing partial word when the byte range is unaligned.
+        size_t convert_work_items(const StorageRef& output, const size_t count) {
+            if (output.dtype != DataType::UInt8 && output.dtype != DataType::Bool) {
+                return count;
+            }
+            const uint64_t start = address(output);
+            const uint64_t last = start + static_cast<uint64_t>(count) - 1ull;
+            return static_cast<size_t>((last >> 2) - (start >> 2) + 1ull);
+        }
     } // namespace
 
     void VulkanBackendOps::unary(const PointwiseProgram& program,
@@ -522,6 +534,7 @@ namespace lfs::core::internal {
             .output_address = address(output),
             .count = checked_u32(count, "Vulkan conversion count exceeds uint32"),
         };
+        const size_t work = convert_work_items(output, count);
         const std::array reads{input};
         const std::array writes{output};
         context->recorders().record(
@@ -531,7 +544,7 @@ namespace lfs::core::internal {
                 vkCmdPushConstants(command, pipeline.layout,
                                    VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(push), &push);
-                vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
+                vkCmdDispatch(command, dispatch_groups(*context, work), 1, 1);
             });
     }
 

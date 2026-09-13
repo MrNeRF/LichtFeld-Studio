@@ -25,6 +25,8 @@ namespace lfs::core::internal {
         constexpr VkDeviceSize kInitialStagingSize = 64ull * kMib;
         constexpr VkDeviceSize kSlabLimit = 1ull * kMib;
         constexpr VkDeviceSize kDirectLimit = 16ull * kMib;
+        // loadByte/storeByte and packed convert/gather RMW an aligned uint32.
+        constexpr VkDeviceSize kByteWordBytes = 4;
         constexpr VkBufferUsageFlags kStorageUsage =
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -60,7 +62,24 @@ namespace lfs::core::internal {
             if (bytes < kDirectLimit) {
                 return std::bit_ceil(bytes);
             }
-            return bytes;
+            // Byte shaders RMW the aligned uint32 covering the last logical
+            // byte; the VkBuffer must include that word.
+            return align_up(bytes, kByteWordBytes);
+        }
+
+        [[noreturn]] void throw_storage_allocation_error(
+            const size_t bytes, const size_t alignment, const ExecContext& context,
+            const VkResult result) {
+            throw MemoryAllocationError(AllocationFailure{
+                .domain = MemoryDomain::VulkanDevice,
+                .requested_bytes = bytes,
+                .alignment = alignment,
+                .device = 0,
+                .stream = 0,
+                .label = context.allocation_label,
+                .operation = context.allocation_operation,
+                .native_error = static_cast<long long>(result),
+            });
         }
 
         bool storage_buffer_exportable(const VkPhysicalDevice physical) {
@@ -289,6 +308,14 @@ namespace lfs::core::internal {
         LFS_ASSERT_MSG(bytes > 0, "Vulkan allocation requires a non-zero byte count");
         LFS_ASSERT_MSG(alignment == 0 || (alignment & (alignment - 1)) == 0,
                        "Vulkan allocation alignment must be zero or a power of two");
+        // Rounding a near-max direct-range size up to a uint32 word can wrap
+        // VkDeviceSize; refuse before vmaCreateBuffer sees a truncated size.
+        if (bytes >= kDirectLimit &&
+            static_cast<VkDeviceSize>(bytes) >
+                std::numeric_limits<VkDeviceSize>::max() - (kByteWordBytes - 1)) {
+            throw_storage_allocation_error(
+                bytes, alignment, context, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        }
         const VkDeviceSize bucket_size = allocation_size(bytes);
         const bool direct = bucket_size >= kDirectLimit && !host_visible;
         std::unique_ptr<AllocationRecord> record;
@@ -362,16 +389,7 @@ namespace lfs::core::internal {
                 result == VK_ERROR_FRAGMENTED_POOL) {
                 // The same typed failure the CUDA services raise, so callers
                 // that retry or report on MemoryAllocationError see one contract.
-                throw MemoryAllocationError(AllocationFailure{
-                    .domain = MemoryDomain::VulkanDevice,
-                    .requested_bytes = bytes,
-                    .alignment = alignment,
-                    .device = 0,
-                    .stream = 0,
-                    .label = context.allocation_label,
-                    .operation = context.allocation_operation,
-                    .native_error = static_cast<long long>(result),
-                });
+                throw_storage_allocation_error(bytes, alignment, context, result);
             }
             vk_check(&context_, result, "vmaCreateBuffer(storage)");
             if (host_visible) {
