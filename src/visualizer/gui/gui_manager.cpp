@@ -6066,6 +6066,8 @@ namespace lfs::vis::gui {
             if (block_underlay_input)
                 menu_input = maskInputForBlockedUi(std::move(menu_input));
 
+            if (block_underlay_input && rml_menu_bar_.isOpen())
+                rml_menu_bar_.closeDropdown();
             const bool menu_was_open = rml_menu_bar_.isOpen();
             rml_menu_bar_.setUiHidden(ui_hidden_);
             rml_menu_bar_.processInput(menu_input);
@@ -6254,7 +6256,13 @@ namespace lfs::vis::gui {
         panel_input.screen_y = 0.0f;
         panel_input.screen_w = sdl_input.window_w;
         panel_input.screen_h = sdl_input.window_h;
-        PanelInputState raw_panel_input = panel_input;
+        // Top-level overlays must receive the original events. Menu capture only
+        // masks the panels underneath them, including a held menu-button release.
+        PanelInputState raw_panel_input = buildPanelInputFromSDL(sdl_input);
+        raw_panel_input.screen_x = 0.0f;
+        raw_panel_input.screen_y = 0.0f;
+        raw_panel_input.screen_w = sdl_input.window_w;
+        raw_panel_input.screen_h = sdl_input.window_h;
         if (block_underlay_input)
             panel_input = maskInputForBlockedUi(std::move(panel_input));
         if (!modal_overlay_open && global_context_menu_->isOpen())
