@@ -265,9 +265,17 @@ namespace lfs::core {
         Tensor _world_view_transform;
         Tensor _cam_position;
 
-        // Mask caching (processed mask stored on GPU)
+        // Mask caching (processed mask stored on GPU). Keyed on the processing
+        // arguments: a binarized 0.5 load must not poison a later SegmentAndIgnore
+        // keep-band load (or the reverse).
         Tensor _cached_mask;
         bool _mask_loaded = false;
+        int _cached_mask_resize_factor = 0;
+        int _cached_mask_max_width = 0;
+        bool _cached_mask_invert = false;
+        float _cached_mask_threshold = 0.5f;
+        bool _cached_mask_binarize = true;
+        bool _cached_mask_undistort_prepared = false;
         // Raw, pre-supplied in-memory mask (used by direct-scene plugins) —
         // takes precedence over _mask_path when set. Processed on first use.
         Tensor _in_memory_mask_raw;

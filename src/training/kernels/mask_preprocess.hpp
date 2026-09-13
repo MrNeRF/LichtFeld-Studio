@@ -11,8 +11,8 @@
 namespace lfs::training::kernels {
 
     /// SegmentAndIgnore band bounds for Float32 masks in [0,1], as returned by
-    /// the pipelined loader. UInt8 masks (including Camera::load_and_get_mask)
-    /// still carry 0..255 samples and are normalized by the fused kernels.
+    /// the pipelined loader and by Camera::load_and_get_mask(binarize=false).
+    /// UInt8 masks still carry 0..255 samples and are normalized by the fused kernels.
     ///
     ///   value > 250       → keep    (photometric weight 1, no opacity penalty)
     ///   128 ≤ value ≤ 250 → segment (opacity penalty, no photometric weight)
