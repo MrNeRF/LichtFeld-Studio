@@ -11,6 +11,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/core/services.hpp"
@@ -65,7 +66,6 @@ namespace {
 
     std::shared_ptr<lfs::core::PointCloud> make_test_point_cloud(const size_t count) {
         std::vector<float> means(count * 3, 0.0f);
-        std::vector<float> colors(count * 3, 0.5f);
         for (size_t i = 0; i < count; ++i) {
             means[i * 3 + 0] = static_cast<float>(i);
             means[i * 3 + 1] = static_cast<float>(i % 3);
@@ -73,7 +73,7 @@ namespace {
         }
         return std::make_shared<lfs::core::PointCloud>(
             lfs::core::Tensor::from_vector(means, {count, size_t{3}}, lfs::core::Device::CPU),
-            lfs::core::Tensor::from_vector(colors, {count, size_t{3}}, lfs::core::Device::CPU));
+            lfs::core::Tensor::full({count, size_t{3}}, 128.0f, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
     }
 
     std::shared_ptr<lfs::core::MeshData> make_test_mesh() {
@@ -434,7 +434,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, StopTrainingReturnsWhileWorkerWaitsForO
     params.init_path = (std::filesystem::temp_directory_path() /
                         "lichtfeld-missing-training-init.ply")
                            .string();
-    ASSERT_TRUE(trainer->setParams(params));
+    trainer->setParams(params);
     manager.setTrainer(std::move(trainer));
 
     ASSERT_TRUE(manager.startTraining());
@@ -485,7 +485,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, TrainerManagerFailureAndRepeatedStart) 
         params.init_path = (std::filesystem::temp_directory_path() /
                             "lichtfeld-missing-training-init.ply")
                                .string();
-        EXPECT_TRUE(trainer->setParams(params));
+        trainer->setParams(params);
         return trainer;
     };
 
@@ -518,4 +518,49 @@ TEST_F(TrainingSceneInitConcurrencyTest, TrainerManagerFailureAndRepeatedStart) 
     stop_owner.store(true, std::memory_order_release);
     owner.join();
     owner_queue.close();
+}
+
+TEST_F(TrainingSceneInitConcurrencyTest, StartTrainingWaitsForOwnerBeforeReplacingPointCloud) {
+    lfs::core::Scene scene;
+    ASSERT_TRUE(populate_init_scene(scene));
+    OwnerWorkQueue queue;
+    lfs::vis::TrainerManager manager;
+    manager.setScene(&scene);
+    bind_queue_poster(manager, queue);
+    struct CancelPending {
+        OwnerWorkQueue& queue;
+        ~CancelPending() { queue.close(); }
+    } cancel_pending{queue};
+
+    auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+    auto params = trainer->getParams();
+    params.optimization.enable_eval = false;
+    params.optimization.iterations = 1;
+    params.optimization.sh_degree = 0;
+    params.optimization.max_cap = 16;
+    params.optimization.random = false;
+    params.no_download = true;
+    params.dataset.output_path = std::filesystem::temp_directory_path() /
+                                 ("lfs-owner-install-" + lfs::core::generate_uuid_v4().to_string());
+    params.dataset.data_path = params.dataset.output_path;
+    std::filesystem::create_directories(params.dataset.output_path);
+    trainer->setParams(params);
+    manager.setTrainer(std::move(trainer));
+
+    ASSERT_TRUE(manager.startTraining());
+    ASSERT_TRUE(wait_until([&] { return queue.has_queued(); }));
+    ASSERT_TRUE(queue.pump_one()); // Owner captures the original graph.
+    ASSERT_TRUE(wait_until([&] { return queue.has_queued(); }));
+    EXPECT_TRUE(scene_has_type(scene, lfs::core::NodeType::POINTCLOUD));
+    EXPECT_EQ(scene.getTrainingModel(), nullptr);
+    ASSERT_TRUE(queue.pump_one()); // Actual initialization publishes its prepared model.
+    ASSERT_NE(scene.getTrainingModel(), nullptr);
+    EXPECT_EQ(scene.getTrainingModel()->size(), 8u);
+    EXPECT_FALSE(scene_has_type(scene, lfs::core::NodeType::POINTCLOUD));
+    manager.stopTraining();
+    ASSERT_TRUE(wait_until([&] {
+        while (queue.pump_one()) {}
+        return !manager.isCompletionPending();
+    }));
+    std::filesystem::remove_all(params.dataset.output_path);
 }
