@@ -34,6 +34,33 @@ namespace {
         return result;
     }
 
+    TEST(CameraPoseSessionTest, GeometricRejectionDoesNotRenderOrMoveAndExceptionsRollBack) {
+        PoseRefinementSession session(7, cameras(), config());
+        int renders = 0;
+        int checks = 0;
+        const auto result = session.visit(30, 10, 1, evaluate, [&](const Matrix4& pose) { ++renders; return loss(pose); }, {}, [&](const Matrix4&) { ++checks; return false; });
+        EXPECT_TRUE(result.scheduled);
+        EXPECT_GT(checks, 0);
+        EXPECT_EQ(renders, 0);
+        EXPECT_EQ(result.candidate_renders, 0);
+        EXPECT_EQ(result.accepted_steps, 0);
+        EXPECT_EQ(session.current_pose(30), identity_transform());
+        const auto saved = session.save_state();
+        PoseRefinementSession restored(8, cameras(), config());
+        EXPECT_NO_THROW(restored.restore_state(saved));
+        EXPECT_EQ(restored.current_pose(30), identity_transform());
+
+        PoseRefinementSession throwing(9, cameras(), config());
+        EXPECT_THROW((void)throwing.visit(30, 10, 1, evaluate, loss, {},
+                                          [](const Matrix4&) -> bool { throw std::runtime_error("Constraint failed"); }),
+                     std::runtime_error);
+        EXPECT_EQ(throwing.current_pose(30), identity_transform());
+        // The failed visit has not consumed cadence or changed optimizer state.
+        const auto retried = throwing.visit(30, 10, 1, evaluate, loss);
+        EXPECT_TRUE(retried.scheduled);
+        EXPECT_GT(retried.accepted_steps, 0);
+    }
+
     TEST(CameraPoseSessionTest, DeterministicAnchorsExcludeEvaluationAndSortByUid) {
         PoseRefinementSession session(7, cameras(), config());
         const auto snapshot = session.published_snapshot();

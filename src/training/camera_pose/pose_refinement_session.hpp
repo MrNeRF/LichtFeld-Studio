@@ -82,11 +82,14 @@ namespace lfs::training::camera_pose {
         PoseRefinementSession(std::uint64_t generation, std::vector<PoseCameraInput> cameras,
                               PoseSessionConfig config = {});
         [[nodiscard]] Matrix4 current_pose(int uid) const;
+        // Optional fixed-geometry predicate runs before candidate rendering.
+        // A false result rejects the proposal without consuming a render count.
         [[nodiscard]] PoseVisitResult visit(
             int uid, int iteration, std::uint64_t model_revision,
             const std::function<PoseImageEvaluation(const Matrix4&)>& evaluate,
             const std::function<double(const Matrix4&)>& candidate_loss,
-            std::stop_token stop = {});
+            std::stop_token stop = {},
+            const std::function<bool(const Matrix4&)>& candidate_allowed = {});
         void set_paused(bool paused);
         void reset();
         // Training-thread only, independent of throttled display publication.

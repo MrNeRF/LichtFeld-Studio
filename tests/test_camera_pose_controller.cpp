@@ -2,12 +2,122 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
+#include "training/camera_pose/sparse_reprojection_guard.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 #include <stdexcept>
 
 namespace {
     using namespace lfs::training::camera_pose;
+
+    constexpr ReprojectionCalibration calibration{800, 780, 800, 600, 1600, 1200};
+
+    std::vector<ReprojectionObservation> sparse_points() {
+        std::vector<ReprojectionObservation> points;
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 5; ++col) {
+                const double x = (col - 2) * 0.5;
+                const double y = (row - 1.5) * 0.5;
+                const double z = 3.0 + 0.2 * (row + col);
+                points.push_back({calibration.fx * x / z + calibration.cx,
+                                  calibration.fy * y / z + calibration.cy, x, y, z});
+            }
+        }
+        return points;
+    }
+
+    TEST(CameraPoseReprojectionTest, AccurateCalibrationRejectsPhotometricDrift) {
+        const auto source = identity_transform();
+        const SparseReprojectionGuard guard(source, calibration, sparse_points());
+        ASSERT_TRUE(guard.active());
+        EXPECT_TRUE(guard.allows(source));
+        EXPECT_FALSE(guard.allows(exp_se3({0.01f, 0, 0, 0, 0, 0})));
+        EXPECT_FALSE(guard.allows(exp_se3({0, 0, 0, 0, 0.002f, 0})));
+        BoundedPoseOptimizer optimizer(7, source, {});
+        const PoseEvaluation evaluation{7, 1, 0, 0.0004, {-0.04f, 0, 0, 0, 0, 0}};
+        const auto update = optimizer.step(evaluation, [&](const Matrix4& candidate) {
+            return guard.allows(candidate) ? 0.0 : std::numeric_limits<double>::infinity();
+        });
+        EXPECT_EQ(update.status, PoseStepStatus::Rejected);
+        EXPECT_EQ(optimizer.snapshot().current, source);
+    }
+
+    TEST(CameraPoseReprojectionTest, PermitsCorrectionButKeepsImmutableSourceCeiling) {
+        const auto source = exp_se3({0.04f, 0, 0, 0, 0, 0});
+        const SparseReprojectionGuard guard(source, calibration, sparse_points());
+        ASSERT_TRUE(guard.active());
+        EXPECT_TRUE(guard.allows(identity_transform()));
+        EXPECT_TRUE(guard.allows(exp_se3({0.02f, 0, 0, 0, 0, 0})));
+        EXPECT_FALSE(guard.allows(exp_se3({0.06f, 0, 0, 0, 0, 0})));
+        for (int i = 0; i < 100; ++i)
+            EXPECT_FALSE(guard.allows(exp_se3({0.041f, 0, 0, 0, 0, 0})));
+    }
+
+    TEST(CameraPoseReprojectionTest, ResizeAndWorldTranslationPreserveDecisions) {
+        const auto source = exp_se3({0.02f, 0, 0, 0, 0, 0});
+        auto points = sparse_points();
+        const SparseReprojectionGuard original(source, calibration, points);
+        auto reduced = calibration;
+        reduced.fx /= 8;
+        reduced.fy /= 8;
+        reduced.cx /= 8;
+        reduced.cy /= 8;
+        reduced.width /= 8;
+        reduced.height /= 8;
+        for (auto& point : points) {
+            point.u /= 8;
+            point.v /= 8;
+        }
+        const SparseReprojectionGuard resized(source, reduced, points);
+        ASSERT_TRUE(resized.active());
+        EXPECT_NEAR(original.source_error(), resized.source_error(), 1e-12);
+        for (const float shift : {0.0f, 0.01f, 0.03f}) {
+            const auto pose = exp_se3({shift, 0, 0, 0, 0, 0});
+            EXPECT_EQ(original.allows(pose), resized.allows(pose));
+        }
+        for (auto& point : points) {
+            point.x += 10;
+            point.y -= 3;
+            point.z += 8;
+        }
+        auto translated_source = source;
+        translated_source[3] -= 10;
+        translated_source[7] += 3;
+        translated_source[11] -= 8;
+        const SparseReprojectionGuard translated(translated_source, reduced, points);
+        ASSERT_TRUE(translated.active());
+        EXPECT_NEAR(translated.source_error(), original.source_error(), 1e-7);
+        auto corrected = identity_transform();
+        corrected[3] = -10;
+        corrected[7] = 3;
+        corrected[11] = -8;
+        EXPECT_TRUE(translated.allows(corrected));
+    }
+
+    TEST(CameraPoseReprojectionTest, FixedSupportCannotDisappearOrHideBehindOutliers) {
+        auto points = sparse_points();
+        points.push_back({100, 100, 0, 0, 3});  // Gross source mismatch.
+        points.push_back({800, 600, 0, 0, -3}); // Not visible in the source.
+        const SparseReprojectionGuard guard(identity_transform(), calibration, points);
+        ASSERT_TRUE(guard.active());
+        EXPECT_EQ(guard.observation_count(), 20u);
+        EXPECT_FALSE(guard.allows(exp_se3({0, 0, -4, 0, 0, 0})));
+        auto invalid = identity_transform();
+        invalid[3] = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_FALSE(guard.allows(invalid));
+        EXPECT_FALSE(guard.allows(exp_se3({0.02f, 0, 0, 0, 0, 0})));
+    }
+
+    TEST(CameraPoseReprojectionTest, MissingOrConcentratedEvidenceDoesNotClaimProtection) {
+        EXPECT_FALSE(SparseReprojectionGuard{}.active());
+        auto points = sparse_points();
+        points.resize(5);
+        EXPECT_FALSE(SparseReprojectionGuard(identity_transform(), calibration, points).active());
+        points.assign(20, ReprojectionObservation{800, 600, 0, 0, 3});
+        const SparseReprojectionGuard concentrated(identity_transform(), calibration, points);
+        EXPECT_FALSE(concentrated.active());
+        EXPECT_TRUE(concentrated.allows(exp_se3({0.01f, 0, 0, 0, 0, 0})));
+    }
 
     PoseEvaluation baseline(const BoundedPoseOptimizer& optimizer, double target = 0.02,
                             std::uint64_t model_revision = 1) {

@@ -4,6 +4,7 @@
 #include "losses/photometric_loss.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -16,6 +17,30 @@ namespace lfs::training::camera_pose {
         : camera_(camera), model_(model), optimizer_(optimizer), background_(background), objective_(std::move(objective)), background_image_(std::move(background_image)), mip_filter_(mip_filter) {
         if (!objective_)
             throw std::invalid_argument("Missing camera pose image objective");
+        reprojection_guard_ = make_sparse_reprojection_guard(camera);
+    }
+
+    SparseReprojectionGuard make_sparse_reprojection_guard(const Camera& camera) {
+        // SfM pixels currently remain in the imported projection after image
+        // undistortion. Do not compare them with the replacement pinhole K.
+        if (camera.camera_model_type() != CameraModelType::PINHOLE ||
+            camera.has_distortion() || camera.is_undistort_prepared() || camera.sfm_observations().empty())
+            return {};
+        const auto source_tensor = camera.world_view_transform().to(Device::CPU).contiguous();
+        if (source_tensor.dtype() != DataType::Float32 || source_tensor.numel() != 16)
+            return {};
+        Matrix4 source;
+        std::copy_n(source_tensor.ptr<float>(), source.size(), source.begin());
+        std::vector<ReprojectionObservation> observations;
+        observations.reserve(camera.sfm_observations().size());
+        for (const auto& point : camera.sfm_observations())
+            observations.push_back({point.u, point.v, point.x, point.y, point.z});
+        // Native calibration matches images_N-scaled SfM pixels and does not
+        // depend on lazy image loading, training resize or a tile offset.
+        return SparseReprojectionGuard(source,
+                                       {camera.focal_x(), camera.focal_y(), camera.center_x(), camera.center_y(),
+                                        camera.camera_width(), camera.camera_height()},
+                                       observations);
     }
 
     FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose) {
@@ -66,6 +91,8 @@ namespace lfs::training::camera_pose {
     }
 
     double FastGSPoseEvaluator::loss(const Matrix4& pose) {
+        if (!reprojection_guard_.allows(pose))
+            return std::numeric_limits<double>::infinity();
         auto rendered = forward(pose);
         // Context RAII releases forward scratch on success and exceptions.
         return objective_(rendered.first, false).loss;
@@ -73,7 +100,7 @@ namespace lfs::training::camera_pose {
 
     PoseVisitResult FastGSPoseEvaluator::visit(PoseRefinementSession& session, int iteration,
                                                std::uint64_t model_revision, std::stop_token stop) {
-        return session.visit(camera_.uid(), iteration, model_revision, [this](const Matrix4& pose) { return evaluate(pose); }, [this](const Matrix4& pose) { return loss(pose); }, stop);
+        return session.visit(camera_.uid(), iteration, model_revision, [this](const Matrix4& pose) { return evaluate(pose); }, [this](const Matrix4& pose) { return loss(pose); }, stop, [this](const Matrix4& pose) { return allows(pose); });
     }
 
     PoseObjective make_pose_photometric_objective(const Tensor& target, float lambda_dssim) {

@@ -4,18 +4,35 @@
 
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
+import re
 
 from check_camera_pose_gate import GRADIENT, RECOVERY, SUITE, TESTS, inspect_gate
 from check_camera_pose_gate import CONTROLLER_RECOVERY, CONTROLLER_SUITE, CONTROLLER_TESTS, inspect_controller_gate
 from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session_gate
 from check_camera_pose_gate import require_production_evaluator
 from check_camera_pose_gate import TRAINER_SUITE, TRAINER_TESTS, inspect_trainer_gate
+from check_camera_pose_gate import REPROJECTION_SUITE, REPROJECTION_TESTS
 from check_camera_pose_gate import VIEW_SUITE, VIEW_TESTS, inspect_view_gate
 from check_camera_pose_gate import ACTIVATION_SUITE, ACTIVATION_TESTS, inspect_activation_gate
 from check_camera_pose_gate import require_no_report_failures
 
 
 class ReportFailureTests(unittest.TestCase):
+    def test_gate_inventory_matches_native_sources(self):
+        tests_dir = Path(__file__).resolve().parents[1] / "tests"
+        source = "\n".join((tests_dir / name).read_text(encoding="utf-8") for name in (
+            "test_camera_pose_controller.cpp", "test_camera_pose_photometric.cpp", "test_camera_pose_session.cpp"))
+        found = {}
+        for suite, case in re.findall(r"\bTEST(?:_F)?\(\s*(\w+)\s*,\s*(\w+)\s*\)", source):
+            found.setdefault(suite, set()).add(case)
+        for suite, expected in ((SUITE, TESTS | {CONTROLLER_RECOVERY}),
+                                (CONTROLLER_SUITE, CONTROLLER_TESTS), (SESSION_SUITE, SESSION_TESTS),
+                                (TRAINER_SUITE, TRAINER_TESTS), (REPROJECTION_SUITE, REPROJECTION_TESTS),
+                                (VIEW_SUITE, VIEW_TESTS), (ACTIVATION_SUITE, ACTIVATION_TESTS)):
+            with self.subTest(suite=suite):
+                self.assertEqual(found.get(suite), expected)
+
     def test_accepts_passing_extra_suite(self):
         root = valid_report()
         suite = ET.SubElement(root, "testsuite", name="Other", failures="0", errors="0")
@@ -99,8 +116,8 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_29_tests(self):
-        self.assertEqual(inspect_session_gate(self.report())["tests"], 29)
+    def test_accepts_complete_session_report(self):
+        self.assertEqual(inspect_session_gate(self.report())["tests"], 31)
 
     def test_rejects_missing_session_and_missing_previous_gate(self):
         with self.assertRaises(ValueError):
@@ -132,7 +149,8 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
 class CameraPoseTrainerGateReportTests(unittest.TestCase):
     def report(self):
         root = valid_controller_report()
-        for suite_name, tests in ((SESSION_SUITE, SESSION_TESTS), (TRAINER_SUITE, TRAINER_TESTS)):
+        for suite_name, tests in ((SESSION_SUITE, SESSION_TESTS), (TRAINER_SUITE, TRAINER_TESTS),
+                                  (REPROJECTION_SUITE, REPROJECTION_TESTS)):
             suite = ET.SubElement(root, "testsuite", name=suite_name)
             for name in sorted(tests):
                 ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
@@ -140,8 +158,28 @@ class CameraPoseTrainerGateReportTests(unittest.TestCase):
         ET.SubElement(props, "property", name="production_evaluator", value="1")
         return root
 
-    def test_accepts_all_32_tests(self):
-        self.assertEqual(inspect_trainer_gate(self.report())["tests"], 32)
+    def test_accepts_complete_trainer_report(self):
+        result = inspect_trainer_gate(self.report())
+        self.assertEqual(result["tests"], 39)
+        self.assertTrue(result["sparse_reprojection_contracts"])
+
+    def test_requires_complete_sparse_reprojection_evidence(self):
+        for mutation in ("suite", "missing", "duplicate", "failure", "skipped", "notrun"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{REPROJECTION_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "suite":
+                root.remove(suite)
+            elif mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_trainer_gate(root)
 
     def test_rejects_incomplete_trainer_evidence(self):
         for mutation in ("suite", "missing", "duplicate", "unknown", "failure", "error", "skipped", "notrun"):
@@ -172,9 +210,9 @@ class CameraPoseViewGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_35_tests(self):
+    def test_accepts_complete_view_report(self):
         result = inspect_view_gate(self.report())
-        self.assertEqual(result["tests"], 35)
+        self.assertEqual(result["tests"], 42)
         self.assertTrue(result["view_pose_contracts"])
 
     def test_rejects_incomplete_view_evidence(self):
@@ -206,9 +244,9 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_39_tests(self):
+    def test_accepts_complete_activation_report(self):
         result = inspect_activation_gate(self.report())
-        self.assertEqual(result["tests"], 39)
+        self.assertEqual(result["tests"], 46)
         self.assertTrue(result["activation_contracts"])
 
     def test_rejects_missing_or_failed_activation(self):
@@ -233,7 +271,7 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
 class CameraPoseControllerGateReportTests(unittest.TestCase):
     def test_accepts_complete_controller_report(self):
         result = inspect_controller_gate(valid_controller_report())
-        self.assertEqual(result["tests"], 18)
+        self.assertEqual(result["tests"], 19)
         self.assertEqual(len(result["controller_trials"]), 3)
 
     def test_rejects_checkpoint_a_without_controller(self):
@@ -276,7 +314,7 @@ class CameraPoseControllerGateReportTests(unittest.TestCase):
 class CameraPoseGateReportTests(unittest.TestCase):
     def test_accepts_complete_success_and_reports_all_trials(self):
         result = inspect_gate(valid_report())
-        self.assertEqual(result["tests"], 9)
+        self.assertEqual(result["tests"], 10)
         self.assertEqual(len(result["trials"]), 3)
         self.assertIn("not certified", result["scope"])
 

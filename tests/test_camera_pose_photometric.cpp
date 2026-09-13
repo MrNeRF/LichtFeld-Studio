@@ -439,6 +439,43 @@ namespace {
         }
     }
 
+    TEST_F(CameraPosePhotometricTest, SparseGuardRejectsDriftBeforePhotometricRendering) {
+        std::vector<Camera::SfmObservation> observations;
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 5; ++col) {
+                const float x = (col - 2) * 0.4f;
+                const float y = (row - 1.5f) * 0.4f;
+                const float z = 3.0f + 0.1f * (row + col);
+                observations.push_back({55 * x / z + WIDTH / 2.0f, 55 * y / z + HEIGHT / 2.0f, x, y, z});
+            }
+        }
+        camera->set_sfm_observations(observations);
+        ASSERT_TRUE(make_sparse_reprojection_guard(*camera).active());
+        const auto source_before = camera->world_view_transform().clone();
+        const auto means_before = scene->means().clone();
+        int objective_calls = 0;
+        FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background,
+                                      [&](const RenderOutput&, bool) {
+                                          ++objective_calls;
+                                          return PoseObjectiveResult{0.1, {}, {}};
+                                      });
+        const auto drift = exp_se3({0.01f, 0, 0, 0, 0, 0});
+        EXPECT_FALSE(evaluator.allows(drift));
+        EXPECT_TRUE(std::isinf(evaluator.loss(drift)));
+        EXPECT_EQ(objective_calls, 0);
+        EXPECT_NEAR(evaluator.loss(identity_transform()), 0.1, 1e-12);
+        EXPECT_EQ(objective_calls, 1);
+        expect_bytes_equal(camera->world_view_transform(), source_before);
+        expect_bytes_equal(scene->means(), means_before);
+
+        camera->set_sfm_observations({});
+        EXPECT_FALSE(make_sparse_reprojection_guard(*camera).active());
+        FastGSPoseEvaluator without_sparse(*camera, *scene, *optimizer, background,
+                                           [](const RenderOutput&, bool) { return PoseObjectiveResult{0.2, {}, {}}; });
+        EXPECT_TRUE(without_sparse.allows(drift));
+        EXPECT_NEAR(without_sparse.loss(drift), 0.2, 1e-12);
+    }
+
     TEST_F(CameraPosePhotometricTest, TiledGradientMatchesFullImage) {
         const auto pose = identity_transform();
         const auto weights = spatial_weights();

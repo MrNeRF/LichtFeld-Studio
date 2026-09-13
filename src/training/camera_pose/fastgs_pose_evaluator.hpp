@@ -4,6 +4,7 @@
 
 #include "pose_refinement_session.hpp"
 #include "rasterization/fast_rasterizer.hpp"
+#include "sparse_reprojection_guard.hpp"
 #include <functional>
 
 namespace lfs::training::camera_pose {
@@ -30,6 +31,7 @@ namespace lfs::training::camera_pose {
                             PoseObjective objective, lfs::core::Tensor background_image = {}, bool mip_filter = false);
         [[nodiscard]] PoseImageEvaluation evaluate(const Matrix4& pose);
         [[nodiscard]] double loss(const Matrix4& pose);
+        [[nodiscard]] bool allows(const Matrix4& pose) const noexcept { return reprojection_guard_.allows(pose); }
         [[nodiscard]] PoseVisitResult visit(PoseRefinementSession& session, int iteration,
                                             std::uint64_t model_revision, std::stop_token stop = {});
 
@@ -42,6 +44,7 @@ namespace lfs::training::camera_pose {
         PoseObjective objective_;
         lfs::core::Tensor background_image_;
         bool mip_filter_ = false;
+        SparseReprojectionGuard reprojection_guard_;
     };
 
     // RGB MSE reference objective for the fixed-geometry quality gate.
@@ -50,4 +53,5 @@ namespace lfs::training::camera_pose {
     [[nodiscard]] PoseObjective make_pose_mse_objective(const lfs::core::Tensor& target);
     [[nodiscard]] PoseObjective make_pose_photometric_objective(const lfs::core::Tensor& target, float lambda_dssim);
     [[nodiscard]] FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose);
+    [[nodiscard]] SparseReprojectionGuard make_sparse_reprojection_guard(const lfs::core::Camera& camera);
 } // namespace lfs::training::camera_pose

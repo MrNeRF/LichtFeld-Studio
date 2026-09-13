@@ -90,11 +90,36 @@ Render outputs carry the effective pose separately from the imported camera.
 MRNF projection fallback and view-based seeding consume that pose, and cached
 seed images retain their matching pose across subsequent camera updates.
 
-Candidate acceptance currently measures improvement on one training image with
-the Gaussian model held fixed. It does not yet enforce a sparse SfM reprojection
-constraint or establish improvement on unseen views. An accepted update can
-therefore compensate for an immature Gaussian model or limited appearance
-capacity; acceptance alone is not evidence of better camera calibration.
+Candidate acceptance measures improvement on one training image with the
+Gaussian model held fixed. For pinhole cameras with usable sparse SfM
+observations, it additionally rejects proposals that increase source
+reprojection RMS. This shared constraint applies to MRNF, MCMC and IGS+.
+
+The sparse constraint selects a fixed set of source-visible observations,
+discarding source residuals above the larger of four times the median and four
+native pixels. At least 12 observations spanning 10% of both image dimensions
+must remain. Candidate scoring keeps this set fixed, rejects points moved behind
+the camera and compares image-size-normalized RMS with the immutable source
+value, allowing only float roundoff. The ceiling does not grow with successive
+updates. Native calibration and SfM coordinates are used together, independently
+of training image resize. Rejected geometric proposals do not render or increment
+candidate-render counters.
+
+The initialization log reports how many movable cameras have this constraint.
+Missing or insufficient observations retain photometric-only acceptance. The
+constraint is currently unavailable for distorted, undistorted or non-pinhole
+cameras: their stored SfM pixels must first be mapped consistently to the
+projection used for scoring. No additional backend or strategy is disabled.
+Restored poses are retained; new proposals use the source constraint reconstructed
+from the loaded dataset. A dataset without sparse observations cannot reconstruct
+that constraint and is reported as photometric-only.
+
+Sparse reprojection protects the imported geometric evidence; it does not
+establish improvement on unseen images. An accepted update can still compensate
+for limited appearance capacity or imperfections in the sparse model. Accurate
+source cameras may reject all proposed movement. Acceptance alone is not evidence
+of better camera calibration, and this is not joint bundle adjustment of cameras
+and sparse points.
 
 ## Bounded optimizer
 

@@ -103,7 +103,8 @@ namespace lfs::training::camera_pose {
 
     PoseVisitResult PoseRefinementSession::visit(int uid, int iteration, std::uint64_t model_revision,
                                                  const std::function<PoseImageEvaluation(const Matrix4&)>& evaluate,
-                                                 const std::function<double(const Matrix4&)>& candidate_loss, std::stop_token stop) {
+                                                 const std::function<double(const Matrix4&)>& candidate_loss, std::stop_token stop,
+                                                 const std::function<bool(const Matrix4&)>& candidate_allowed) {
         if (iteration < iteration_ || iteration > config_.total_iterations)
             throw std::invalid_argument("Camera pose iteration must be monotonic and within the training schedule");
         auto& entry = entries_.at(index_.at(uid));
@@ -151,6 +152,8 @@ namespace lfs::training::camera_pose {
             const auto update = working.step(baseline, [&](const Matrix4& candidate) {
                 if (stop.stop_requested())
                     return std::numeric_limits<double>::quiet_NaN();
+                if (candidate_allowed && !candidate_allowed(candidate))
+                    return std::numeric_limits<double>::infinity();
                 ++result.candidate_renders;
                 return candidate_loss(candidate);
             });

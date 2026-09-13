@@ -25,6 +25,7 @@ TESTS = frozenset({
     "OnAxisAnisotropicRollHasNonzeroGradient",
     "SHViewDirectionSurvivesGeometryCancellation",
     "CameraOnlyPreservesModelOptimizerAndSource",
+    "SparseGuardRejectsDriftBeforePhotometricRendering",
     "TiledGradientMatchesFullImage",
     "OptionalGradientPreservesJointGaussianUpdate",
     "RejectsInvalidContractsBeforeBackward",
@@ -158,6 +159,7 @@ def inspect_gate(root: ET.Element) -> dict:
 
 SESSION_SUITE = "CameraPoseSessionTest"
 SESSION_TESTS = {
+    "GeometricRejectionDoesNotRenderOrMoveAndExceptionsRollBack",
     "DeterministicAnchorsExcludeEvaluationAndSortByUid",
     "RejectsAmbiguousMembershipAndDegenerateGauge",
     "ExplicitAnchorsAndIndependentCameraCadence",
@@ -196,9 +198,33 @@ TRAINER_TESTS = {
     "UnsupportedTrainingCombinationsAreExplicit",
 }
 
+REPROJECTION_SUITE = "CameraPoseReprojectionTest"
+REPROJECTION_TESTS = {
+    "AccurateCalibrationRejectsPhotometricDrift",
+    "PermitsCorrectionButKeepsImmutableSourceCeiling",
+    "ResizeAndWorldTranslationPreserveDecisions",
+    "FixedSupportCannotDisappearOrHideBehindOutliers",
+    "MissingOrConcentratedEvidenceDoesNotClaimProtection",
+}
+
+
+def inspect_reprojection_gate(root: ET.Element) -> int:
+    suites = [node for node in root.iter("testsuite") if node.get("name") == REPROJECTION_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated sparse reprojection suite")
+    cases = suites[0].findall("testcase")
+    if len(cases) != len(REPROJECTION_TESTS) or {case.get("name") for case in cases} != REPROJECTION_TESTS:
+        raise ValueError("Wrong sparse reprojection test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Sparse reprojection test not successfully executed: {case.get('name')}")
+    return len(cases)
+
 
 def inspect_trainer_gate(root: ET.Element) -> dict:
     result = inspect_session_gate(root)
+    reprojection_tests = inspect_reprojection_gate(root)
     require_production_evaluator(root)
     suites = [node for node in root.iter("testsuite") if node.get("name") == TRAINER_SUITE]
     if len(suites) != 1:
@@ -211,8 +237,8 @@ def inspect_trainer_gate(root: ET.Element) -> dict:
         if (case.get("status") != "run" or case.get("result") != "completed"
                 or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
             raise ValueError(f"Trainer integration test not successfully executed: {case.get('name')}")
-    result.update(tests=result["tests"] + len(cases), production_evaluator=True,
-                  trainer_checkpoint_contracts=True)
+    result.update(tests=result["tests"] + len(cases) + reprojection_tests, production_evaluator=True,
+                  trainer_checkpoint_contracts=True, sparse_reprojection_contracts=True)
     return result
 
 

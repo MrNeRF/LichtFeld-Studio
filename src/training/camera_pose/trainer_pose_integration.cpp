@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "trainer_pose_integration.hpp"
 #include "core/logger.hpp"
+#include "fastgs_pose_evaluator.hpp"
 #include "trainer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -119,6 +120,20 @@ namespace lfs::training {
         if (!saved.is_null()) {
             session->restore_state(saved);
         }
+        size_t guarded = 0, movable = 0;
+        const auto snapshot = session->published_snapshot();
+        std::unordered_set<int> anchors;
+        for (const auto& pose : snapshot->cameras)
+            if (pose.state == PoseDisplayState::Anchor)
+                anchors.insert(pose.pose.uid);
+        for (const auto& camera : camera_pose_sources_) {
+            if (!training.contains(camera->uid()) || anchors.contains(camera->uid()))
+                continue;
+            ++movable;
+            guarded += make_sparse_reprojection_guard(*camera).active();
+        }
+        LOG_INFO("Camera pose SfM guard: {}/{} movable cameras protected by source reprojection; {} use photometric-only acceptance (missing, insufficient or unsupported sparse observations)",
+                 guarded, movable, movable - guarded);
         LOG_INFO("Camera pose refinement: {} cameras, warmup={}, freeze at={}, steps/visit={}, visits between updates={}, restored={}",
                  session->published_snapshot()->cameras.size(), config.warmup_iterations, static_cast<int>(std::floor(config.total_iterations * config.freeze_fraction)),
                  config.steps_per_visit, config.visits_between_updates, !saved.is_null());

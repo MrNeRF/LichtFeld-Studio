@@ -6589,7 +6589,7 @@ namespace lfs::training {
                                     pose_evaluator = std::make_unique<camera_pose::FastGSPoseEvaluator>(
                                         *cam, strategy_->get_model(), strategy_->get_optimizer(), bg, std::move(objective), bg_image, opt.mip_filter);
                                 }
-                                return pose_evaluator->evaluate(pose); }, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->loss(pose); }, stop_token);
+                                return pose_evaluator->evaluate(pose); }, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->loss(pose); }, stop_token, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->allows(pose); });
                         if (visit.cancelled)
                             return StepDisposition::Stop;
                         camera_pose_last_visit_iteration_ = iter;
