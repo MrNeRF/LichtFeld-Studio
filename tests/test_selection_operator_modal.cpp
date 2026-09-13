@@ -454,6 +454,7 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
     InputController controller(nullptr, viewport);
+    controller.initialize();
     controller.updateViewportBounds(0, 0, 100, 100);
     OperatorProperties props;
     props.set("mode", 2);
@@ -487,6 +488,7 @@ TEST_F(SelectionOperatorModalTest, CameraMotionClearsPassiveHoverWithoutChanging
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
     InputController controller(nullptr, viewport);
+    controller.initialize();
     controller.updateViewportBounds(0, 0, 100, 100);
     ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
     tool_context.updateViewportBounds(0, 0, 100, 100);
