@@ -158,6 +158,11 @@ class GalleryAssetMixin:
             storage_issue=self._gallery_state.get("storage_issue", False), phase=phase,
             cached_projection=asset.get("gallery") if "identity" not in self._gallery_state else None)
 
+    def _asset_with_poster(self, asset):
+        scene = self._gallery_scene(asset) or {}
+        poster = self._gallery_state.get("posters", {}).get(scene.get("id"), "")
+        return {**asset, "poster_path": poster, "prefer_poster": self._selected_folder_id in GALLERY_SCOPES}
+
     def _gallery_remote_assets(self):
         linked = {link["sceneId"] for identifier, link in self._gallery_state.get("links", {}).items()
                   if identifier in self._asset_index_assets()}
@@ -294,7 +299,7 @@ class GalleryAssetMixin:
             "gallery_notice": lambda: self._gallery_notice or self._gallery_state.get("message", ""),
             "gallery_format_hint": lambda: tr("format." + self._gallery_upload_format + "_hint"),
             "gallery_publish_label": self._gallery_publish_label,
-            "gallery_includes": lambda: tr("review.includes", saved=self.get_selected_asset_modified()),
+            "gallery_includes": self._gallery_review_includes,
             "gallery_published_summary": self._gallery_published_summary,
             "gallery_exchange_summary": lambda: " · ".join(filter(None, (self._gallery_published_summary(), self._gallery_checked_label()))),
             "gallery_selected_format": lambda: ((self._get_selected_asset() or {}).get("source_format") or "licht").upper(),
@@ -473,6 +478,13 @@ class GalleryAssetMixin:
     def _gallery_details(self):
         return {"title": self._gallery_title, "description": self._gallery_description, "visibility": self._gallery_visibility}
 
+    def _gallery_review_includes(self):
+        text = tr("review.includes", saved=self.get_selected_asset_modified())
+        if self._gallery_scene(self._get_selected_asset() or {}) and not self._gallery_publish_new:
+            text += (" The cover is kept. Review Story on portal after a substantial content change."
+                     if self._gallery_state.get("revisionDomains", 0) >= 1 else " The cover will be regenerated.")
+        return text
+
     def _gallery_published_summary(self):
         asset = self._get_selected_asset() or {}
         link = self._gallery_state.get("links", {}).get(asset.get("id"), {})
@@ -506,6 +518,25 @@ class GalleryAssetMixin:
             self._gallery_batch_waiting = bool(self._gallery_batch)
             self._gallery_review = False
             return
+        if callable(getattr(lf, "prepare_gallery_project", None)):
+            self._gallery_batch_waiting = bool(self._gallery_batch)
+            try:
+                controller.publish_asset(asset, pending["details"], pending["format"], update=action == "update",
+                                         publish_as_new=pending["publish_new"],
+                                         on_fallback=lambda: self._open_gallery_publish(pending))
+            except Exception:
+                self._gallery_batch_waiting = False
+                raise
+            self._gallery_review = False
+            return
+        self._open_gallery_publish(pending)
+
+    def _open_gallery_publish(self, pending):
+        controller = self._controller()
+        asset = pending["asset"]
+        # Resume the batch only once the fallback open/publish actually starts.
+        # A canceled discard/training prompt must not advance to another asset.
+        self._gallery_batch_waiting = False
         from .training_confirm import confirm_discard_work_then
         def open_selected(stop_training):
             if controller.service.identity() != pending["identity"]:

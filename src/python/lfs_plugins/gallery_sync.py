@@ -21,6 +21,13 @@ from .portal_gallery import PortalGalleryClient, GalleryTransferCanceled, Galler
 from . import gallery_bundle, gallery_preparation
 
 
+MAX_POSTER_BYTES = 64 * 1024 * 1024
+
+
+def domain_tokens(scene):
+    return {key: scene[key] for key in ("contentRevision", "metadataRevision") if scene.get(key)}
+
+
 MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 
 
@@ -32,7 +39,7 @@ def shared_fields(scene):
 
 def exchange_link(scene, commit_uuid=""):
     now = time.time()
-    return {"sceneId": scene["id"], "revision": scene["revision"],
+    return {"sceneId": scene["id"], "revision": scene["revision"], **domain_tokens(scene),
             "metadata": copy.deepcopy(scene), "sharedFields": shared_fields(scene),
             "commitUuid": commit_uuid, "exchangedAt": now, "checkedAt": now}
 JOURNAL_RECOVERY_MESSAGE = (
@@ -67,6 +74,13 @@ def _validate_journal(data):
     def optional_text(record, keys):
         require(all(key not in record or isinstance(record[key], str) for key in keys))
 
+    def guards(record):
+        require(not ("baseRevision" in record and "baseRevisions" in record))
+        if "baseRevisions" in record:
+            tokens = record["baseRevisions"]
+            require(isinstance(tokens, dict) and bool(tokens) and not tokens.keys() - {"content", "metadata"}
+                    and all(isinstance(value, str) and bool(value) for value in tokens.values()))
+
     require(isinstance(data, dict) and type(data.get("version")) is int and data["version"] in (1, 2)
         and isinstance(data.get("accounts"), dict))
     for bucket in data["accounts"].values():
@@ -75,7 +89,7 @@ def _validate_journal(data):
         for link in bucket["links"].values():
             require(isinstance(link, dict) and all(isinstance(link.get(key), str) for key in ("sceneId", "revision")))
             require(isinstance(link.get("metadata", {}), dict))
-            optional_text(link, ("commitUuid",))
+            optional_text(link, ("commitUuid", "contentRevision", "metadataRevision"))
             require(isinstance(link.get("sharedFields", {}), dict))
             for key in ("exchangedAt", "checkedAt"):
                 require(key not in link or (type(link[key]) in (float, int) and math.isfinite(link[key]) and link[key] >= 0))
@@ -96,10 +110,13 @@ def _validate_journal(data):
             require(all(type(job.get(key)) is int and 0 <= job[key] <= 2**63-1 for key in ("completed", "total")))
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId", "baseRevision"))
+            guards(job["metadata"])
             require(job.get("checkpoint") is None or isinstance(job["checkpoint"], dict))
             if job.get("checkpoint") is not None:
                 optional_text(job["checkpoint"], ("origin", "sha256", "idempotencyKey", "uploadId"))
                 require(all(key not in job["checkpoint"] or isinstance(job["checkpoint"][key], dict) for key in ("request", "rebase")))
+                for key in ("request", "rebase"):
+                    guards(job["checkpoint"].get(key, {}))
             for key in ("result", "localUpdate", "stagedImport", "linkOperation"):
                 require(key not in job or isinstance(job[key], dict))
             for key in ("localUpdate", "stagedImport", "linkOperation"):
@@ -163,6 +180,11 @@ class GallerySync:
         self._origin = None
         self._owner = None
         self._source_formats = []
+        self._revision_domains = 0
+        self._list_etag = None
+        self._checked_at = 0
+        self._poster_entries = {}
+        self._poster_identity = None
         self._refresh_ok = False
         self._relink_required = False
         self.scenes = []
@@ -259,6 +281,7 @@ class GallerySync:
 
     def state_key(self):
         snap = self.account.snapshot()
+        self._check_poster_account(snap)
         return self.version, self.busy, snap.signed_in, snap.email, snap.connected_since, self.account.base_url
 
     def identity(self):
@@ -279,6 +302,7 @@ class GallerySync:
     def snapshot(self):
         with self._lock:
             snap = self.account.snapshot()
+            self._check_poster_account(snap)
             same = bool(not self._journal_problem and not self._stale and snap.signed_in and snap.email and snap.connected_since and self._origin == self.account.base_url
                 and self._session == (snap.email, snap.connected_since))
             bucket = self._bucket() if same and self._owner else {"jobs": [], "links": {}}
@@ -291,6 +315,9 @@ class GallerySync:
                 "refresh_ok": self._refresh_ok,
                 "relink_required": self._relink_required if snap.signed_in else False,
                 "source_formats": self._source_formats if same else [],
+                "revisionDomains": self._revision_domains if same else 0,
+                "checkedAt": self._checked_at if same else 0,
+                "posters": {key: value["path"] for key, value in self._poster_entries.items()} if same else {},
                 "trackFetch": self._track_fetch if same else {},
                 "undoRestore": self._undo_restore if (snap.signed_in and self._session == (snap.email, snap.connected_since)
                     and self._origin == self.account.base_url) else {},
@@ -301,7 +328,9 @@ class GallerySync:
         snap = self.account.snapshot()
         if not snap.signed_in or not snap.email or not snap.connected_since or self._origin != self.account.base_url or self._session != (snap.email, snap.connected_since):
             raise ValueError("The account changed. Refresh the gallery before continuing.")
-        return PortalGalleryClient(self.account, expected_session=self._session)
+        client = PortalGalleryClient(self.account, expected_session=self._session, revision_domains=self._revision_domains)
+        client.scene_tokens = {s["id"]: copy.deepcopy(s) for s in self.scenes}
+        return client
 
     def _launch(self, action, *, reload_journal=False):
         with self._lock:
@@ -350,7 +379,11 @@ class GallerySync:
             capabilities = client._request("GET", "/me")
             if capabilities.get("gallerySyncVersion") != 1:
                 raise PortalProtocolError("This portal needs an update before LichtFeld Studio gallery sync is available.")
-            scenes = client.list_scenes()
+            with self._lock:
+                self._check_poster_account(snap)
+                same = self._session == session and self._origin == origin and self._owner == capabilities["id"]
+                etag = self._list_etag if same else None
+            scenes = client.list_scenes(etag=etag) if etag else client.list_scenes()
             with self._lock:
                 current = self.account.snapshot()
                 if not current.signed_in or (current.email, current.connected_since) != session or self.account.base_url != origin:
@@ -358,13 +391,85 @@ class GallerySync:
                 self._session, self._owner = session, capabilities["id"]
                 self._origin = origin
                 self._source_formats = capabilities.get("sourceFormats", [])
-                self.scenes = scenes
+                version = capabilities.get("revisionDomains", 0)
+                self._revision_domains = version if type(version) is int else 0
+                self._list_etag = getattr(client, "list_etag", None) or (etag if scenes is None else None)
+                self._checked_at = time.time()
+                if scenes is not None:
+                    self.scenes = scenes
+                for link in self._bucket()["links"].values():
+                    link["checkedAt"] = self._checked_at
                 self._refresh_ok = True
                 self._relink_required = False
                 self.message = "Gallery is up to date."
+            self._cache_posters(client, self.scenes, (origin, *session, True))
             # Refresh updates only the account-scoped listing cache. Migration
             # and recovered jobs are persisted by the next actual mutation.
         self._launch(action, reload_journal=True)
+
+    def _check_poster_account(self, snap):
+        identity = (self.account.base_url, snap.email, snap.connected_since, snap.signed_in)
+        with self._lock:
+            if identity != self._poster_identity or not snap.signed_in:
+                shutil.rmtree(self.root / "posters", ignore_errors=True)
+                self._poster_entries.clear()
+                self._poster_identity = identity
+                self._list_etag = None
+
+    def _cache_posters(self, client, scenes, identity):
+        """Worker-only authenticated cache; no signed URL or bearer is persisted."""
+        folder = self.root / "posters"
+        live = {scene["id"] for scene in scenes if scene.get("thumbnailUrl") and scene.get("status") == "ready"}
+        with self._lock:
+            for key in set(self._poster_entries) - live:
+                Path(self._poster_entries.pop(key)["path"]).unlink(missing_ok=True)
+        for scene in scenes:
+            if scene["id"] not in live or self._cancel.is_set():
+                continue
+            try:
+                scene_id = str(uuid.UUID(scene["id"]))
+                revision = scene.get("posterRevision", "")
+                if not isinstance(revision, str) or not revision or len(revision) > 128 or any(
+                        c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in revision):
+                    continue
+                with self._lock:
+                    entry = self._poster_entries.get(scene_id, {})
+                    old = Path(entry["path"]) if entry else None
+                    etag = entry.get("etag") if old and old.is_file() else None
+                status, tag, data = client.thumbnail(scene_id, etag=etag)
+                with self._lock:
+                    if self.identity() != identity:
+                        self._check_poster_account(self.account.snapshot())
+                        return
+                    if status == 304 and old and old.is_file():
+                        # LRU access must not change the image decoder's revision.
+                        os.utime(old, ns=(time.time_ns(), old.stat().st_mtime_ns))
+                        continue
+                    if status == 304:
+                        continue
+                    folder.mkdir(parents=True, exist_ok=True)
+                    # Invalidate the old texture source even if a server changes
+                    # bytes/ETag without changing the advertised poster token.
+                    for stale in folder.glob(scene_id + "-*.png"):
+                        stale.unlink(missing_ok=True)
+                    destination = folder / f"{scene_id}-{revision}.png"
+                    destination.write_bytes(data)
+                    self._poster_entries[scene_id] = {"path": str(destination), "etag": tag}
+                    files = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_atime_ns)
+                    total = sum(p.stat().st_size for p in files)
+                    for path in files:
+                        if total <= MAX_POSTER_BYTES:
+                            break
+                        total -= path.stat().st_size
+                        path.unlink(missing_ok=True)
+                    self._poster_entries = {key: value for key, value in self._poster_entries.items()
+                                            if Path(value["path"]).is_file()}
+            except (OSError, ValueError, PortalHTTPError, PortalProtocolError):
+                # A missing/malformed poster does not prevent scene synchronization.
+                with self._lock:
+                    entry = self._poster_entries.pop(scene["id"], None)
+                    if entry:
+                        Path(entry["path"]).unlink(missing_ok=True)
 
     def queue_prepared_upload(self, staging, metadata, project_id):
         staging = gallery_preparation.staging_path(self.root, staging)
@@ -485,6 +590,11 @@ class GallerySync:
             def checkpoint(value):
                 with self._lock:
                     job["checkpoint"] = value
+                    request = value.get("request", {})
+                    for key in ("baseRevision", "baseRevisions"):
+                        if key in request:
+                            job["metadata"].pop("baseRevisions" if key == "baseRevision" else "baseRevision", None)
+                            job["metadata"][key] = copy.deepcopy(request[key])
                 self._save()
 
             def progress(done, total):
@@ -565,8 +675,13 @@ class GallerySync:
                     self._save()
                     return
                 if job["metadata"].get("replaceSceneId") and job["metadata"].get("baseRevision") and not job["checkpoint"]:
-                    job["metadata"]["baseRevision"] = self._write_revision(client,
-                        job["metadata"]["replaceSceneId"], job["metadata"]["baseRevision"])
+                    scene_id = job["metadata"]["replaceSceneId"]
+                    revision = self._write_revision(client, scene_id, job["metadata"]["baseRevision"])
+                    if self._revision_domains >= 1:
+                        job["metadata"].pop("baseRevision")
+                        job["metadata"].update(client.guards(scene_id, revision, ("content", "metadata")))
+                    else:
+                        job["metadata"]["baseRevision"] = revision
                 result = client.upload(job["path"], job["metadata"], checkpoint=job["checkpoint"],
                     on_checkpoint=checkpoint, on_progress=progress, on_processing=processing, cancel=self._cancel)
                 scene = result["scene"]
@@ -576,7 +691,7 @@ class GallerySync:
                     bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
                     job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
                     self.scenes = [s for s in self.scenes if s["id"] != scene["id"]] + [scene]
-                    self.message = "Upload complete."
+                    self.message = "Upload complete. Review Story on portal after this content change." if job["metadata"].get("replaceSceneId") else "Upload complete."
                 self._save()
                 self._retire_export(job)
             except Exception as exc:
@@ -840,11 +955,15 @@ class GallerySync:
         with self._lock:
             details = {name: copy.deepcopy(scene[name]) for name in ("title", "description", "visibility", "viewerSettings")}
             if job["checkpoint"].get("uploadId"):
-                job["checkpoint"]["rebase"] = {"baseRevision": scene["revision"], "metadata": details}
+                job["checkpoint"]["rebase"] = {**({"baseRevisions": {name: scene[name + "Revision"] for name in ("content", "metadata")}}
+                    if self._revision_domains >= 1 else {"baseRevision": scene["revision"]}), "metadata": details}
             else:
                 # A create-time 409 reserved no upload and sent no parts. A reviewed
                 # revision needs a fresh request/key; the old one can only repeat 409.
-                job["metadata"].update(details, baseRevision=scene["revision"])
+                job["metadata"].pop("baseRevision", None)
+                job["metadata"].pop("baseRevisions", None)
+                job["metadata"].update(details, **({"baseRevisions": {name: scene[name + "Revision"] for name in ("content", "metadata")}}
+                    if self._revision_domains >= 1 else {"baseRevision": scene["revision"]}))
                 job["checkpoint"] = None
         self.resume(job_id)
 
@@ -1110,6 +1229,13 @@ class GallerySync:
         """Adopt cover/highlight-only revisions, keeping shared-field conflicts guarded."""
         link = next((link for link in self._bucket()["links"].values()
                      if link["sceneId"] == scene_id), None)
+        if self._revision_domains >= 1:
+            # A new broad revision can be an explicit conflict review. Otherwise
+            # keep the exchanged tokens rather than accepting unseen content.
+            reviewed = next((scene for scene in self.scenes if scene["id"] == scene_id
+                             and scene.get("revision") == revision), {})
+            baseline = reviewed if not link or revision != link.get("revision") else link
+            return {"revision": revision, **domain_tokens(baseline)}
         if not link or not link.get("sharedFields"):
             return revision
         current = client.scene(scene_id)
@@ -1127,7 +1253,11 @@ class GallerySync:
                 self.message = "Gallery details saved."
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
-                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene),
+                        # A metadata exchange does not exchange remote geometry.
+                        tokens = domain_tokens(scene)
+                        if link.get("contentRevision"):
+                            tokens["contentRevision"] = link["contentRevision"]
+                        link.update(revision=scene["revision"], **tokens, metadata=copy.deepcopy(scene),
                                     sharedFields=shared_fields(scene), exchangedAt=time.time(), checkedAt=time.time())
                         if commit_uuid:
                             link["commitUuid"] = commit_uuid
@@ -1144,13 +1274,17 @@ class GallerySync:
         bucket = self._bucket()
         self.message = "Sending the gallery camera track…"
         def action():
-            scene = client.update(scene_id, revision, **metadata)
+            scene = client.update(scene_id, self._write_revision(client, scene_id, revision) if self._revision_domains >= 1 else revision, **metadata)
             with self._lock:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
                 self.message = "Gallery camera track sent."
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
-                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene),
+                        # A metadata exchange does not exchange remote geometry.
+                        tokens = domain_tokens(scene)
+                        if link.get("contentRevision"):
+                            tokens["contentRevision"] = link["contentRevision"]
+                        link.update(revision=scene["revision"], **tokens, metadata=copy.deepcopy(scene),
                                     sharedFields=shared_fields(scene), exchangedAt=time.time(), checkedAt=time.time())
             self._save()
         self._launch(action)
@@ -1200,7 +1334,7 @@ class GallerySync:
         if any(j["metadata"].get("replaceSceneId") == scene_id and j["status"] not in ("completed", "canceled") for j in bucket["jobs"]):
             raise ValueError("Discard the unfinished replacement before removing this gallery item.")
         def action():
-            client.delete(scene_id, revision)
+            client.delete(scene_id, self._write_revision(client, scene_id, revision) if self._revision_domains >= 1 else revision)
             with self._lock:
                 self.scenes = [s for s in self.scenes if s["id"] != scene_id]
                 self.message = "Removed from gallery. Local projects are unchanged."

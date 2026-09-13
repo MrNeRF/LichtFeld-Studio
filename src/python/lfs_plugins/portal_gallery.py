@@ -8,6 +8,7 @@ progress and checkpoint callbacks let the panel publish state on the UI thread.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -45,19 +46,109 @@ def _fingerprint(path, cancel=None):
 
 
 class PortalGalleryClient:
-    def __init__(self, account, *, expected_session=None):
+    def __init__(self, account, *, expected_session=None, revision_domains=None):
         self.account = account
         self.expected_session = expected_session
+        self.revision_domains = revision_domains
+        self.list_etag = None
+        self.scene_tokens = {}
 
     def _request(self, method, path, body=None):
         kwargs = {"expected_session": self.expected_session} if self.expected_session is not None else {}
-        return self.account.request_json_authenticated(method, API + path, body, **kwargs)
+        result = self.account.request_json_authenticated(method, API + path, body, **kwargs)
+        if path == "/me":
+            version = result.get("revisionDomains", 0)
+            self.revision_domains = version if type(version) is int else 0
+        return result
 
-    def list_scenes(self):
+    def _response(self, path, *, etag=None, max_bytes=4 * 1024 * 1024):
+        return self.account.request_response_authenticated("GET", API + path,
+            headers={"If-None-Match": etag} if etag else {}, max_bytes=max_bytes,
+            expected_session=self.expected_session)
+
+    @staticmethod
+    def _etag(headers):
+        return next((v for k, v in headers.items() if k.lower() == "etag"), None)
+
+    def thumbnail(self, scene_id, *, etag=None, size=256):
+        if size not in (256, 512):
+            raise ValueError("Gallery thumbnail size must be 256 or 512")
+        status, headers, data = self._response(f"/splats/{_identifier(scene_id)}/thumbnail?size={size}", etag=etag)
+        tag = self._etag(headers)
+        if status != 304 and (not data.startswith(b"\x89PNG\r\n\x1a\n") or not tag or tag.startswith("W/")):
+            raise PortalProtocolError("Invalid gallery thumbnail")
+        return status, tag, data
+
+    def guards(self, scene_id, revision, domains):
+        if self.revision_domains is None:
+            self._request("GET", "/me")
+        if self.revision_domains < 1:
+            return {"baseRevision": revision.get("revision") if isinstance(revision, dict) else revision}
+        cached = self.scene_tokens.get(scene_id, {})
+        scene = revision if isinstance(revision, dict) else cached if cached.get("revision") == revision else {}
+        if not all(scene.get(name + "Revision") for name in domains):
+            # A legacy link has no domain baseline. Adopt tokens only for the exact
+            # broad revision the user reviewed; otherwise require another review.
+            current = self.scene(scene_id)
+            legacy = revision.get("revision") if isinstance(revision, dict) else revision
+            if current.get("revision") != legacy:
+                raise PortalHTTPError(409, "sync_conflict")
+            scene = current
+        tokens = {name: scene.get(name + "Revision") for name in domains}
+        if not all(isinstance(token, str) and token for token in tokens.values()):
+            raise PortalProtocolError("Missing gallery revision tokens")
+        return {"baseRevisions": tokens}
+
+    def _guarded_request(self, method, path, body):
+        try:
+            return self._request(method, path, body)
+        except PortalHTTPError as exc:
+            retry = self._retry_guards(exc, body)
+            if retry is None:
+                raise
+            # Deliberately outside the try: a second conflict is surfaced.
+            body.update(retry)
+            return self._request(method, path, body)
+
+    def _retry_guards(self, exc, body):
+        guards = body.get("baseRevisions")
+        detail = exc.detail or {}
+        changed, current = detail.get("changedDomains"), detail.get("currentRevisions")
+        if (exc.status != 409 or not guards or not isinstance(changed, list) or not changed
+                or any(name not in ("content", "metadata", "presentation") for name in changed)
+                or "content" in changed or set(changed).intersection(guards)
+                or not isinstance(current, dict)
+                or not all(isinstance(current.get(name), str) and current[name] for name in guards)):
+            return None
+        return {**body, "baseRevisions": {name: current[name] for name in guards}}
+
+    def list_scenes(self, etag=None):
+        try:
+            return self._list_pages(etag)
+        except PortalHTTPError as exc:
+            if exc.status != 400 or "gallery listing expired" not in exc.error.lower():
+                raise
+            return self._list_pages(None)
+
+    def _list_pages(self, etag):
         result, cursor, seen = [], None, set()
         while True:
             query = "?" + urllib.parse.urlencode({"cursor": cursor}) if cursor else ""
-            payload = self._request("GET", f"/splats{query}")
+            if callable(getattr(self.account, "request_response_authenticated", None)):
+                status, headers, raw = self._response(f"/splats{query}", etag=etag if not cursor else None,
+                                                       max_bytes=32 * 1024 * 1024)
+                if not cursor:
+                    self.list_etag = self._etag(headers)
+                    if status == 304:
+                        return None
+                try:
+                    payload = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    raise PortalProtocolError("Invalid gallery list") from None
+            else:
+                payload = self._request("GET", f"/splats{query}")
+            if not isinstance(payload, dict):
+                raise PortalProtocolError("Invalid gallery list")
             scenes = payload.get("scenes")
             if not isinstance(scenes, list):
                 raise PortalProtocolError("Invalid gallery list")
@@ -74,10 +165,14 @@ class PortalGalleryClient:
         return self._request("GET", f"/splats/{_identifier(scene_id)}")
 
     def update(self, scene_id, revision, **metadata):
-        return self._request("PATCH", f"/splats/{_identifier(scene_id)}", {**metadata, "baseRevision": revision})
+        view = metadata.get("viewerSettings", {})
+        domains = ("content", "metadata") if any(key in view for key in ("camera", "cameraPath", "environment")) else ("metadata",)
+        return self._guarded_request("PATCH", f"/splats/{_identifier(scene_id)}",
+                                     {**metadata, **self.guards(scene_id, revision, domains)})
 
     def delete(self, scene_id, revision):
-        return self._request("DELETE", f"/splats/{_identifier(scene_id)}", {"baseRevision": revision})
+        return self._guarded_request("DELETE", f"/splats/{_identifier(scene_id)}",
+                                     self.guards(scene_id, revision, ("content", "metadata")))
 
     def cancel_upload(self, upload_id):
         return self._request("POST", f"/splats/uploads/{_identifier(upload_id)}/cancel", {})
@@ -119,7 +214,9 @@ class PortalGalleryClient:
                         raise PortalProtocolError("Gallery download was incomplete")
                 output.flush()
                 os.fsync(output.fileno())
-            if self.scene(scene_id)["revision"] != scene["revision"]:
+            current = self.scene(scene_id)
+            fields = ("contentRevision", "metadataRevision") if all(scene.get(k) and current.get(k) for k in ("contentRevision", "metadataRevision")) else ("revision",)
+            if any(current[k] != scene[k] for k in fields):
                 raise ValueError("The gallery scene changed while downloading. Sync again.")
             os.replace(temporary, destination)
             return scene
@@ -143,7 +240,7 @@ class PortalGalleryClient:
             if _identifier(upload.get("id")) != upload_id:
                 raise PortalProtocolError("The portal returned a different upload.")
         if upload.get("status") == "conflict":
-            raise PortalHTTPError(409, "sync_conflict")
+            raise PortalHTTPError(409, "sync_conflict", detail=(upload.get("conflict") or {}).get("detail"))
         if upload.get("status") == "failed":
             if upload.get("processing", {}).get("retryable"):
                 raise ValueError("The portal could not finish checking this upload. Resume to retry.")
@@ -177,6 +274,14 @@ class PortalGalleryClient:
         if metadata.get("viewerSettings", {}).get("environment") and not capabilities.get("hdrBackgrounds"):
             raise PortalProtocolError("This portal needs an update before it can display HDR backgrounds.")
         identity = capabilities["id"]
+        metadata = dict(metadata)
+        if metadata.get("replaceSceneId"):
+            revision = metadata.pop("baseRevision", None)
+            supplied = metadata.pop("baseRevisions", None)
+            if self.revision_domains >= 1 and supplied:
+                metadata["baseRevisions"] = supplied
+            else:
+                metadata.update(self.guards(metadata["replaceSceneId"], revision, ("content", "metadata")))
         request = {**metadata, "sourceFormat": path.suffix.lower()[1:], "contentLength": size}
         if checkpoint is None:
             checkpoint = {"origin": self.account.base_url, "owner": identity, "sha256": fingerprint,
@@ -188,7 +293,9 @@ class PortalGalleryClient:
                     "origin": self.account.base_url, "owner": identity, "sha256": fingerprint, "request": request}.items()):
                 raise ValueError("The account, export or details changed. Start a new upload.")
         check_canceled()
-        upload = self._request("POST", "/splats/uploads", {**request, "idempotencyKey": checkpoint["idempotencyKey"]})
+        create = {**request, "idempotencyKey": checkpoint["idempotencyKey"]}
+        upload = self._guarded_request("POST", "/splats/uploads", create)
+        checkpoint["request"] = {key: value for key, value in create.items() if key != "idempotencyKey"}
         upload_id = _identifier(upload["id"])
         checkpoint["uploadId"] = upload_id
         on_checkpoint(dict(checkpoint))
@@ -196,14 +303,38 @@ class PortalGalleryClient:
             on_progress(size, size)
             return upload
         if checkpoint.get("rebase"):
-            upload = self._request("POST", f"/splats/uploads/{upload_id}/rebase", checkpoint["rebase"])
+            rebase = dict(checkpoint["rebase"])
+            revision, supplied = rebase.pop("baseRevision", None), rebase.pop("baseRevisions", None)
+            rebase.update({"baseRevisions": supplied} if self.revision_domains >= 1 and supplied else
+                          self.guards(metadata["replaceSceneId"], revision, ("content", "metadata")))
+            upload = self._guarded_request("POST", f"/splats/uploads/{upload_id}/rebase", rebase)
+            checkpoint["rebase"] = rebase
+            on_checkpoint(dict(checkpoint))
             if upload.get("status") == "completed":
                 on_progress(size, size)
                 return upload
         if upload.get("status") == "failed" and upload.get("processing", {}).get("retryable"):
             upload = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"parts": []})
+        def finish(result):
+            try:
+                return self._await_processing(result, upload_id, size, cancel, on_processing)
+            except PortalHTTPError as exc:
+                guards = checkpoint.get("rebase", checkpoint["request"])
+                retry = self._retry_guards(exc, guards)
+                if retry is None:
+                    raise
+                details = {key: metadata[key] for key in ("title", "description", "visibility", "viewerSettings") if key in metadata}
+                rebase = {"baseRevisions": retry["baseRevisions"], "metadata": guards.get("metadata", details)}
+                checkpoint["rebase"] = rebase
+                on_checkpoint(dict(checkpoint))
+                rebased = self._request("POST", f"/splats/uploads/{upload_id}/rebase", rebase)
+                if rebased.get("status") in ("created", "uploading"):
+                    rebased = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"parts": [
+                        {"partNumber": part["partNumber"], "etag": part["etag"]} for part in rebased.get("uploadedParts", [])]})
+                return self._await_processing(rebased, upload_id, size, cancel, on_processing)
+
         if upload.get("status") in ("processing", "conflict", "failed"):
-            return self._await_processing(upload, upload_id, size, cancel, on_processing)
+            return finish(upload)
         if upload.get("status") not in ("created", "uploading"):
             raise ValueError("This upload was canceled. Start a new upload.")
         part_size = upload.get("partSize")
@@ -242,6 +373,11 @@ class PortalGalleryClient:
         check_canceled()
         if path.stat().st_size != size or _fingerprint(path, cancel) != fingerprint:
             raise ValueError("The export changed during upload. Export again before retrying.")
-        result = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"parts": [
-            {"partNumber": n, "etag": parts[n]["etag"]} for n in range(1, part_count + 1)]})
-        return self._await_processing(result, upload_id, size, cancel, on_processing)
+        try:
+            result = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"parts": [
+                {"partNumber": n, "etag": parts[n]["etag"]} for n in range(1, part_count + 1)]})
+        except PortalHTTPError as exc:
+            if exc.status != 409:
+                raise
+            result = {"id": upload_id, "status": "conflict", "conflict": {"detail": exc.detail}}
+        return finish(result)

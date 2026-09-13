@@ -62,7 +62,11 @@ def localize_message(message):
         return text
     full_key = 'asset_manager.gallery.' + key
     translated = lf.ui.tr(full_key)
-    return text if translated == full_key else translated
+    if translated == full_key:
+        return text
+    if "review story on portal" in lower:
+        translated += " Review Story on portal after this content change."
+    return translated
 
 
 def report_poll_error(owner, exc, context):

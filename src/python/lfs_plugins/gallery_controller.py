@@ -39,6 +39,7 @@ class GalleryController:
         self._import_pending = None
         self._save_pending = None
         self._export_pending = None
+        self._project_export_fallback = None
         self._export_cancelled = False
         self._export_identity = None
         self._export_progress = 0
@@ -121,11 +122,16 @@ class GalleryController:
             self._dispatch(name, [job_id] if job_id else [])
         self._schedule_tick()
 
-    def publish_asset(self, asset, details, upload_format, *, update=False, publish_as_new=False):
+    def publish_asset(self, asset, details, upload_format, *, update=False, publish_as_new=False, on_fallback=None):
         self._check_identity()
         self._refresh_model()
         if self._panel_busy():
             raise ValueError(tr("error.busy"))
+        poll = lf.project_poll_write()
+        if not poll.get("path") or Path(poll["path"]).resolve() != Path(asset["path"]).resolve():
+            self._publish_closed_asset(asset, details, upload_format, update=update,
+                                       publish_as_new=publish_as_new, on_fallback=on_fallback)
+            return
         project, path = self._project_identity()
         if project != asset["id"] or Path(path).resolve() != Path(asset["path"]).resolve():
             raise ValueError(tr("error.project_changed"))
@@ -155,6 +161,79 @@ class GalleryController:
             self._action_publish()
             self._show_confirmation()
         self._schedule_tick()
+
+    def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, on_fallback):
+        """Prepare saved content without consulting the current scene or view."""
+        prepare = getattr(lf, "prepare_gallery_project", None)
+        if not callable(prepare):
+            if on_fallback:
+                on_fallback()
+                return
+            raise ValueError(tr("error.project_changed"))
+        if upload_format not in ("studio", "sog", "ssog", "spz"):
+            raise ValueError("Choose a supported upload format.")
+        if "licht" not in self._state.get("source_formats", []):
+            raise ValueError("Update the portal connection before publishing .licht files.")
+        project_id, path = asset["id"], asset["path"]
+        info = lf.io.inspect_project(path)
+        if str(info.project_uuid) != project_id:
+            raise ValueError(tr("error.project_changed"))
+        if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in self._state["jobs"]):
+            raise ValueError("This project already has an upload. Resume or discard it first.")
+        link = self._state["links"].get(project_id)
+        scene = next((s for s in self._state["scenes"] if link and s["id"] == link["sceneId"]), None) if update else None
+        if update and scene is None:
+            raise ValueError(tr("error.refresh"))
+        if update and asset_sync_state(asset, link, scene)["freshness"] in ("diverged", "remote", "unknown"):
+            # Review must resolve remote write guards before any replacement.
+            raise ValueError(tr("error.refresh"))
+        if link and not update and not publish_as_new:
+            raise ValueError("This project is linked to a gallery item. Select it to replace, or unlink before publishing a new item.")
+        self._title, self._description, self._visibility = (details[k] for k in ("title", "description", "visibility"))
+        metadata = self._details()
+        metadata["viewerSettings"] = {}  # Portal imports VIEW/SEQR from the prepared .licht.
+        metadata["_uploadFormat"] = upload_format
+        if publish_as_new:
+            metadata["_publishAsNew"] = True
+        if scene:
+            metadata.update(replaceSceneId=scene["id"], baseRevision=scene["revision"])
+        expected_commit = str(asset.get("commit_uuid") or getattr(info, "commit_uuid", ""))
+        identity = self.service.identity()
+        self._operation_project = project_id
+        self._last_canceled = False
+        self._reupload_reason = None
+        self.upload_format = upload_format
+
+        def start():
+            if self.service.identity() != identity:
+                return
+            if lf.ui.get_export_state().get("active"):
+                raise ValueError("Wait for the current export to finish before uploading.")
+            from .gallery_project_facts import saved_content_stamp
+            metadata["_contentStamp"] = saved_content_stamp(path)
+            export = self.service.root / (str(uuid.uuid4()) + ".scene")
+            self._export_cancelled = False
+            self._export_identity = identity
+            self._export_progress = 0
+            try:
+                prepare(path, str(export), "ply" if upload_format == "studio" else upload_format, expected_commit)
+            except Exception as exc:
+                if on_fallback and self._project_export_can_fallback(str(exc)):
+                    on_fallback()
+                    return
+                raise
+            self._project_export_fallback = (on_fallback, expected_commit)
+            self._export_pending = (export, metadata, project_id, time.monotonic())
+            self._schedule_phase_poll()
+
+        self._public_confirmation(scene, start, details=metadata, defer=True)
+        self._show_confirmation()
+        self._schedule_tick()
+
+    @staticmethod
+    def _project_export_can_fallback(error):
+        return error.startswith(("gallery_project_not_supported:", "gallery_project_commit_mismatch:",
+                                 "gallery_project_payload_unavailable:", "gallery_project_no_splats:"))
 
     def edit_scene(self, scene, details, *, on_started=None):
         """The one metadata editor path for local links and gallery-only items."""
@@ -320,7 +399,7 @@ class GalleryController:
             lf.ui.set_clipboard_text(scene["viewerUrl"])
         else:
             tab = "manage" if action == "copy" else action if action in ("story", "display", "manage") else "story"
-            lf.ui.open_url(url + "#tab-" + tab)
+            lf.ui.open_url(url + "?tab=" + tab)
 
     def pull_asset(self, asset, scene, destination=None, *, open_after=False):
         self._check_identity()
@@ -878,6 +957,7 @@ class GalleryController:
         if lf.ui.get_export_state().get("active"):
             raise ValueError("Wait for the current export to finish before uploading.")
         self._export_cancelled = False
+        self._project_export_fallback = None
         self._export_identity = identity
         self._export_progress = 0
         lf.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
@@ -909,6 +989,7 @@ class GalleryController:
         state = lf.ui.get_export_state()
         if not self._owns_export(state):
             self._export_pending = None
+            self._project_export_fallback = None
             self._remove_preparation(export)
             self._message = "The scene preparation status changed. Please prepare your upload again."
             self._refresh_model()
@@ -922,13 +1003,28 @@ class GalleryController:
             return
         outcome = state.get("outcome")
         if self._export_cancelled or outcome in ("failed", "cancelled"):
+            fallback = self._project_export_fallback
+            self._project_export_fallback = None
             self._export_pending = None
             self._remove_preparation(export)
-            self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else "Scene preparation failed. Check the export status and try again."
+            error = str(state.get("error", ""))
+            if (not self._export_cancelled and outcome == "failed" and fallback and fallback[0]
+                    and self._project_export_can_fallback(error)):
+                fallback[0]()
+            else:
+                self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else (error or "Scene preparation failed. Check the export status and try again.")
             self._refresh_model()
         elif outcome == "completed" and export.exists():
             self._export_pending = None
+            source = self._project_export_fallback
+            self._project_export_fallback = None
             try:
+                if source is not None:
+                    commit = str(state.get("commit_uuid", ""))
+                    if not commit or (source[1] and commit != source[1]):
+                        raise ValueError("The prepared project commit does not match the reviewed version.")
+                    metadata["_commitUuid"] = commit
+                    metadata["viewerSettings"] = gallery_preparation.publication_view_metadata(self.service.root, export)
                 self.service.queue_prepared_upload(export, metadata, project_id)
                 self._message = ""
             except Exception as exc:
@@ -939,6 +1035,7 @@ class GalleryController:
                     self._message = "The upload could not be queued. Temporary files were kept; open the recovery folder to review them."
             self._refresh_model()
         elif time.monotonic() - started > 60:
+            self._project_export_fallback = None
             self._export_pending = None
             self._remove_preparation(export)
             self._message = "Studio could not prepare the scene. Check the export status and try again."
@@ -1680,10 +1777,13 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     elif link and not project.get("exists", True):
         relationship = "local_missing"
     freshness = "unknown"
-    if link and link.get("commitUuid") and project.get("commit_uuid") and scene and link.get("sharedFields"):
+    if link and link.get("commitUuid") and project.get("commit_uuid") and scene and (link.get("sharedFields") or all(link.get(key) and scene.get(key) for key in ("contentRevision", "metadataRevision"))):
         from .gallery_sync import shared_fields
         local = project["commit_uuid"] != link["commitUuid"]
-        remote = shared_fields(scene) != link["sharedFields"]
+        domains = ("contentRevision", "metadataRevision")
+        remote = (any(scene[key] != link[key] for key in domains)
+                  if all(scene.get(key) and link.get(key) for key in domains)
+                  else shared_fields(scene) != link["sharedFields"])
         freshness = "diverged" if local and remote else "local" if local else "remote" if remote else "equal"
     scene_id = (link or scene or {}).get("sceneId", (scene or {}).get("id"))
     matching = [j for j in jobs if j.get("status") not in ("completed", "canceled") and

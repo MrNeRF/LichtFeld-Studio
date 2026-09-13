@@ -375,6 +375,12 @@ class PortalAccountService:
         """Make one bearer request with the shared single-refresh ladder."""
         return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
+    def request_response_authenticated(self, method, path, *, headers=None, max_bytes=4 * 1024 * 1024,
+                                       expected_session=None):
+        """Bounded bytes and headers, using the same account/session refresh ladder."""
+        return self._authenticated_request(method, path, expected_session=expected_session,
+            response_options={"headers": headers or {}, "max_bytes": max_bytes})
+
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
         if credentials is None:
@@ -678,6 +684,7 @@ class PortalAccountService:
         *,
         timeout: Optional[float] = None,
         expected_session: Optional[tuple[str, str]] = None,
+        response_options=None,
     ) -> dict[str, object]:
         credentials = self._current_credentials()
         if credentials is None:
@@ -693,6 +700,7 @@ class PortalAccountService:
                 credentials,
                 body,
                 timeout=timeout,
+                **({"response_options": response_options} if response_options is not None else {}),
             )
         except PortalHTTPError as exc:
             if exc.status == 403 and exc.error == "membership_required":
@@ -723,6 +731,7 @@ class PortalAccountService:
                 credentials,
                 body,
                 timeout=timeout,
+                **({"response_options": response_options} if response_options is not None else {}),
             )
         except PortalHTTPError as exc:
             if exc.status == 403 and exc.error == "membership_required":
@@ -739,14 +748,16 @@ class PortalAccountService:
         body: Optional[Mapping[str, object]] = None,
         *,
         timeout: Optional[float] = None,
+        response_options=None,
     ) -> dict[str, object]:
         self._assert_active_origin(credentials)
         return self._request_json(
             method,
             path,
             body,
-            {"Authorization": f"Bearer {credentials.access_token}"},
+            {**(response_options or {}).get("headers", {}), "Authorization": f"Bearer {credentials.access_token}"},
             timeout=timeout,
+            **({"response_options": response_options} if response_options is not None else {}),
         )
 
     def _request_json(
@@ -757,6 +768,7 @@ class PortalAccountService:
         headers: Optional[Mapping[str, str]] = None,
         *,
         timeout: Optional[float] = None,
+        response_options=None,
     ) -> dict[str, object]:
         import urllib.error
         import urllib.request
@@ -787,13 +799,20 @@ class PortalAccountService:
                     response_status = response.getcode()
                 status = int(response_status)
                 response_headers = getattr(response, "headers", None)
-                raw = response.read()
+                raw = response.read(response_options["max_bytes"] + 1) if response_options is not None else response.read()
+                if response_options is not None and len(raw) > response_options["max_bytes"]:
+                    raise PortalProtocolError("Portal response exceeds its size limit")
         except urllib.error.HTTPError as exc:
-            raw = exc.read()
+            if response_options is not None and exc.code == 304:
+                exc.close()
+                return 304, dict(exc.headers), b""
+            raw = exc.read(65536)
             retry_after = _retry_after_seconds(getattr(exc, "headers", None))
             error, detail = _error_response(raw)
             raise PortalHTTPError(int(exc.code), error, retry_after, detail) from None
 
+        if response_options is not None and (200 <= status < 300 or status == 304):
+            return status, dict(response_headers or {}), raw
         if status == 204:
             return {}
         if status < 200 or status >= 300:

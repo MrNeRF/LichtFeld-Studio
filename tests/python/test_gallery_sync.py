@@ -1055,3 +1055,142 @@ def test_A5_finished_upload_records_all_bytes_even_without_final_progress(tmp_pa
     saved = json.loads((tmp_path / 'sync.json').read_text())
     stored = next(bucket['jobs'][0] for bucket in saved['accounts'].values() if bucket['jobs'])
     assert stored['completed'] == stored['total'] == 137114
+
+
+def test_saved_project_preparation_journals_source_commit_before_upload(tmp_path, monkeypatch):
+    import uuid
+    service = connected(tmp_path, monkeypatch)
+    service._source_formats = ['licht']
+    staging = tmp_path / (str(uuid.uuid4()) + '.scene')
+    staging.mkdir()
+    (staging / 'project.licht').write_bytes(b'prepared file: packaging intentionally deferred')
+    monkeypatch.setattr(service, 'resume', lambda *_: None)
+    job_id = service.queue_prepared_upload(staging, {'title': 'Saved project', '_commitUuid': 'verified-source-commit',
+        '_uploadFormat': 'ssog', '_contentStamp': 'saved-content'}, 'source-project')
+    journal = json.loads((tmp_path / 'sync.json').read_text())
+    jobs = [job for bucket in journal['accounts'].values() for job in bucket['jobs']]
+    job = next(job for job in jobs if job['id'] == job_id)
+    assert job['project'] == 'source-project'
+    assert job['commitUuid'] == 'verified-source-commit'
+    assert job['uploadFormat'] == 'ssog' and job['contentStamp'] == 'saved-content'
+    assert job['preparation'] == str(staging)
+    assert '_commitUuid' not in job['metadata']
+
+
+def test_domain_exchange_tokens_survive_journal_reload(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = {"id": "scene", "revision": "legacy", "contentRevision": "content", "metadataRevision": "metadata", "title": "Title"}
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(scene, "commit")
+    service._save()
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    link = restarted.snapshot()["links"]["project"]
+    assert {key: link[key] for key in ("revision", "contentRevision", "metadataRevision")} == {
+        "revision": "legacy", "contentRevision": "content", "metadataRevision": "metadata"}
+
+
+def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = {"id": "scene", "revision": "legacy", "title": "Title"}
+    link = gallery_sync.exchange_link(scene, "commit")
+    service._bucket()["links"]["project"] = link
+    service.scenes = [scene]
+    old = link["checkedAt"]
+    service._list_etag = 'W/"cached"'
+    def listing(self, etag=None):
+        assert etag == 'W/"cached"'
+        self.list_etag = etag
+        return None
+    monkeypatch.setattr(Client, "list_scenes", listing)
+    monkeypatch.setattr(Client, "_request", lambda self, *args: {"id": "one", "gallerySyncVersion": 1, "revisionDomains": 1})
+    service.refresh()
+    finish(service)
+    snap = service.snapshot()
+    assert snap["revisionDomains"] == 1
+    assert snap["scenes"] == [scene]
+    assert snap["links"]["project"]["checkedAt"] >= old
+    assert snap["links"]["project"]["exchangedAt"] == link["exchangedAt"]
+    assert snap["checkedAt"] >= old
+    assert service._list_etag == 'W/"cached"'
+
+
+def _poster_scene():
+    import uuid
+    return {"id": str(uuid.uuid4()), "status": "ready", "posterRevision": "poster1", "thumbnailUrl": "https://portal.example/ignored"}
+
+
+def test_poster_cache_bound_eviction_etag_change_and_sign_out(tmp_path, monkeypatch):
+    from pathlib import Path
+    service = connected(tmp_path, monkeypatch)
+    assert gallery_sync.MAX_POSTER_BYTES == 64 * 1024 * 1024
+    monkeypatch.setattr(gallery_sync, "MAX_POSTER_BYTES", 20)
+    scenes = [_poster_scene() for _ in range(3)]
+    calls = []
+    def thumbnail(scene_id, *, etag=None):
+        calls.append((scene_id, etag))
+        return 200, '"first"', b"0123456789"
+    client = SimpleNamespace(thumbnail=thumbnail)
+    identity = service.identity()
+    service._cache_posters(client, scenes, identity)
+    posters = service.snapshot()["posters"]
+    assert len(posters) == 2 and scenes[0]["id"] not in posters
+    assert sum(path.stat().st_size for path in (tmp_path / "posters").glob("*.png")) == 20
+    selected = scenes[-1]
+    old_path = Path(posters[selected["id"]])
+    assert old_path.name == selected["id"] + "-poster1.png"
+    selected["posterRevision"] = "poster2"
+    def changed(scene_id, *, etag=None):
+        assert etag == '"first"'
+        return 200, '"changed"', b"new"
+    service._cache_posters(SimpleNamespace(thumbnail=changed), [selected], identity)
+    assert not old_path.exists()
+    new_path = Path(service.snapshot()["posters"][selected["id"]])
+    assert new_path.name.endswith("-poster2.png") and new_path.read_bytes() == b"new"
+    def unchanged(scene_id, *, etag=None):
+        assert etag == '"changed"'
+        return 304, etag, b""
+    revision_stamp = new_path.stat().st_mtime_ns
+    service._cache_posters(SimpleNamespace(thumbnail=unchanged), [selected], identity)
+    assert new_path.read_bytes() == b"new"
+    assert new_path.stat().st_mtime_ns == revision_stamp
+    monkeypatch.setattr(service.account, "snapshot", lambda: SimpleNamespace(signed_in=False, email="", connected_since=""))
+    assert service.snapshot()["posters"] == {}
+    assert not (tmp_path / "posters").exists()
+
+
+def test_poster_response_cannot_repopulate_after_account_switch(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = _poster_scene()
+    def thumbnail(*args, **kwargs):
+        service.account.email = "other@example.com"
+        return 200, '"poster"', b"private image"
+    service._cache_posters(SimpleNamespace(thumbnail=thumbnail), [scene], service.identity())
+    assert service.snapshot()["posters"] == {}
+    assert not (tmp_path / "posters").exists()
+
+
+def test_metadata_update_keeps_unexchanged_content_baseline(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    service._revision_domains = 1
+    scene = {"id": "scene", "revision": "old", "contentRevision": "original", "metadataRevision": "m1", "title": "Title"}
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(scene, "commit")
+    def update(self, scene_id, revision, **metadata):
+        assert revision["contentRevision"] == "original"
+        return {**scene, "revision": "new", "contentRevision": "remote-change", "metadataRevision": "m2", **metadata}
+    monkeypatch.setattr(Client, "update", update, raising=False)
+    service.edit("scene", "old", {"title": "Edited"})
+    finish(service)
+    link = service.snapshot()["links"]["project"]
+    assert link["contentRevision"] == "original" and link["metadataRevision"] == "m2"
+
+
+def test_explicitly_reviewed_revision_uses_current_domain_guards(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    service._revision_domains = 1
+    old = {"id": "scene", "revision": "old", "contentRevision": "c1", "metadataRevision": "m1"}
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(old)
+    service.scenes = [{**old, "revision": "reviewed", "contentRevision": "c2", "metadataRevision": "m2"}]
+    guards = service._write_revision(service._client(), "scene", "reviewed")
+    assert guards == {"revision": "reviewed", "contentRevision": "c2", "metadataRevision": "m2"}
+    assert service._write_revision(service._client(), "scene", "old")["contentRevision"] == "c1"

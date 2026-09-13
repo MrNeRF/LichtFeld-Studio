@@ -2117,3 +2117,134 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
     assert columns['name'] >= 64 and columns['gallery'] == 96
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
     assert '.asset-col-gallery { width: 96dp; min-width: 96dp; flex-shrink: 0; }' in (resources / 'asset_manager.rcss').read_text()
+
+
+def test_closed_project_publish_keeps_editor_and_review_values_for_fallback(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    local = _project()
+    panel._asset_index = _index(assets={local['id']: local})
+    panel._select_asset_id(local['id'])
+    published = []
+    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: 'account'),
+        upload_format='sog', publish_asset=lambda *a, **kw: published.append((a, kw)))
+    poll = {'path': '/different.licht'}
+    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
+    monkeypatch.setattr(panel_module.lf, 'prepare_gallery_project', lambda *a: None, raising=False)
+    panel._gallery_title = 'Reviewed title'
+    panel._gallery_description = 'Reviewed description'
+    panel._gallery_upload_format = 'ssog'
+    panel._begin_gallery_publish(local, 'publish')
+    assert panel_module.lf._test_state.opened == []
+    assert published[0][0][1]['title'] == 'Reviewed title'
+    assert published[0][0][2] == 'ssog'
+    panel._gallery_title = 'Later UI edit'
+    published[0][1]['on_fallback']()
+    assert panel_module.lf._test_state.opened == [(local['path'], True, False, True)]
+    poll['path'] = local['path']
+    panel._continue_gallery_publish()
+    assert published[1][0][1]['title'] == 'Reviewed title'
+    assert published[1][0][2] == 'ssog'
+
+
+def test_closed_publish_batch_waits_when_fallback_prompt_is_canceled(panel_module, monkeypatch):
+    from importlib import import_module
+    panel = panel_module.AssetManagerPanel()
+    local = _project()
+    panel._asset_index = _index(assets={local['id']: local})
+    panel._select_asset_id(local['id'])
+    panel._gallery_batch = [('next-project', 'publish')]
+    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: 'account'),
+        publish_asset=lambda *a, **kw: kw['on_fallback']())
+    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: {'path': '/different.licht'}, raising=False)
+    monkeypatch.setattr(panel_module.lf, 'prepare_gallery_project', lambda *a: None, raising=False)
+    monkeypatch.setattr(import_module('lfs_plugins.training_confirm'), 'confirm_discard_work_then', lambda *a: None)
+    panel._begin_gallery_publish(local, 'publish')
+    assert not panel._gallery_batch_waiting
+    assert panel_module.lf._test_state.opened == []
+
+
+def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
+    panel, local, remote = _gallery_fixture(panel_module)
+    poster = _write_png(tmp_path / "portal poster.png")
+    panel._gallery_state["posters"] = {"scene": str(poster), "remote-only": str(poster)}
+    panel._selected_folder_id = "__all__"
+    assert "kind=licht" in panel._format_asset_for_ui(local)["thumbnail_decorator"]
+    panel._selected_folder_id = panel_module.SCOPE_PUBLISHED
+    assert "kind=image" in panel._format_asset_for_ui(local)["thumbnail_decorator"]
+    row = panel._gallery_remote_assets()["remote:remote-only"]
+    card = panel._format_asset_for_ui(row)
+    assert "kind=image" in card["thumbnail_decorator"] and not card["shows_placeholder"]
+    source = panel._thumbnail_sources_by_asset[row["id"]]
+    panel._release_obsolete_thumbnail_sources()
+    assert panel._thumbnail_sources_by_asset[row["id"]] == source
+    panel._window_assets = lambda assets: []
+    panel._release_thumbnails_outside_window()
+    assert source in panel_module.lf._test_state.released_textures
+    assert panel._thumbnail_sources_by_asset == {}
+    panel._gallery_state["posters"] = {}
+    assert panel._format_asset_for_ui(row)["thumbnail_decorator"] == "none"
+
+
+@pytest.mark.parametrize("domain,expected", [("presentationRevision", "equal"), ("contentRevision", "remote"), ("metadataRevision", "remote")])
+def test_freshness_uses_domain_tokens_not_presentation(panel_module, domain, expected):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    panel, local, remote = _gallery_fixture(panel_module)
+    link = panel._gallery_state["links"][local["id"]]
+    link.update(contentRevision="c", metadataRevision="m")
+    remote.update(contentRevision="c", metadataRevision="m", presentationRevision="p")
+    remote[domain] = "changed"
+    remote["revision"] = "broad-change"
+    assert asset_sync_state(local, link, remote)["freshness"] == expected
+
+
+@pytest.mark.parametrize("domains,wording", [(0, "cover will be regenerated"), (1, "cover is kept")])
+def test_update_review_explains_cover_capability(panel_module, domains, wording):
+    panel, local, remote = _gallery_fixture(panel_module)
+    panel._select_asset_id(local["id"])
+    panel._gallery_state["revisionDomains"] = domains
+    text = panel._gallery_review_includes()
+    assert wording in text
+    assert ("Review Story on portal" in text) == bool(domains)
+
+
+@pytest.mark.parametrize("tab", ["story", "display", "manage"])
+def test_portal_deep_links_and_copy_share_link(panel_module, tab):
+    from lfs_plugins.gallery_controller import GalleryController
+    urls, copies = [], []
+    panel_module.lf.ui.open_url = urls.append
+    panel_module.lf.ui.set_clipboard_text = copies.append
+    controller = SimpleNamespace(service=SimpleNamespace(account=SimpleNamespace(base_url="https://portal.example")))
+    scene = {"id": str(uuid.uuid4()), "visibility": "public", "viewerUrl": "https://portal.example/share/public"}
+    GalleryController.open_portal(controller, scene, tab)
+    assert urls == [f'https://portal.example/gallery/scenes/{scene["id"]}/?tab={tab}']
+    GalleryController.open_portal(controller, scene, "copy")
+    assert copies == [scene["viewerUrl"]] and len(urls) == 1
+
+
+def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
+    panel, local, remote = _gallery_fixture(panel_module)
+    poster = _write_png(tmp_path / "poster.png")
+    panel._gallery_state["posters"] = {"remote-only": str(poster)}
+    panel._selected_folder_id = panel_module.SCOPE_PUBLISHED
+    panel._select_asset_id("remote:remote-only")
+    properties, elements = {}, {}
+    class Element:
+        def set_id(self, value):
+            elements[value] = self
+        def set_property(self, key, value):
+            properties[key] = value
+    header = SimpleNamespace(parent=lambda: SimpleNamespace(insert_before=lambda *args: Element()))
+    doc = SimpleNamespace(query_selector=lambda selector: header, get_element_by_id=elements.get)
+    assert panel._sync_info_thumbnail(doc)
+    assert properties["display"] == "block" and "kind=image" in properties["decorator"]
+    source = panel._info_thumbnail_source
+    panel._selected_asset_ids.clear()
+    assert panel._sync_info_thumbnail(doc)
+    assert properties["display"] == "none"
+    assert source in panel_module.lf._test_state.released_textures
+
+
+def test_story_reminder_survives_message_translation(panel_module):
+    from lfs_plugins.gallery_messages import localize_message
+    panel_module.lf.ui.tr = lambda key: "Upload complete."
+    assert "Review Story on portal" in localize_message("Upload complete. Review Story on portal after this content change.")

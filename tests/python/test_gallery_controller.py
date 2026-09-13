@@ -1602,3 +1602,144 @@ def test_A5_gallery_asset_borders_use_supported_longhands():
     assert not [(p.name, match.group()) for p in paths for match in unsupported.finditer(p.read_text())]
     assert 'border-bottom-width: 1dp;' in (resources / 'gallery_transfer_panel.rcss').read_text()
     assert 'border-bottom-color: @{border};' in (resources / 'gallery_transfer_panel.theme.rcss').read_text()
+
+
+@pytest.mark.parametrize('upload_format', ['studio', 'sog', 'ssog', 'spz'])
+def test_closed_project_prepares_saved_file_without_opening(gallery, monkeypatch, tmp_path, upload_format):
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    panel.service.root = tmp_path
+    state['source_formats'] = ['licht']
+    asset = {'id': 'project', 'path': str(tmp_path / 'saved.licht'), 'commit_uuid': 'reviewed-commit'}
+    monkeypatch.setattr(module.lf, 'project_poll_write', lambda: {'path': '/another.licht'}, raising=False)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *a: actions.append(a), raising=False)
+    for name in ('project_open', 'project_save', 'get_scene', 'get_camera', 'get_render_settings', 'prepare_gallery_scene'):
+        monkeypatch.setattr(module.lf, name, lambda *a, **kw: pytest.fail('Closed publication touched the live document'), raising=False)
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
+    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
+    details = {'title': 'Saved title', 'description': 'Reviewed description', 'visibility': 'private'}
+    panel.publish_asset(asset, details, upload_format)
+    export, metadata, project, _ = panel._export_pending
+    assert actions == [(asset['path'], str(export), 'ply' if upload_format == 'studio' else upload_format, 'reviewed-commit')]
+    assert metadata == dict(details, viewerSettings={}, _uploadFormat=upload_format, _contentStamp='')
+    assert project == 'project'
+
+
+@pytest.mark.parametrize('error,fallback', [
+    ('gallery_project_not_supported: old format', True),
+    ('gallery_project_payload_unavailable: External splat', True),
+    ('gallery_project_no_splats: no splats', True),
+    ('gallery_project_commit_mismatch: changed', True),
+    ('Disk full', False),
+])
+def test_closed_project_fallback_only_for_supported_native_errors(gallery, monkeypatch, tmp_path, error, fallback):
+    import uuid
+    panel, _, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    export = tmp_path / (str(uuid.uuid4()) + '.scene')
+    panel.service.root = tmp_path
+    panel._export_pending = (export, {}, 'project', 0)
+    panel._project_export_fallback = (lambda: actions.append('fallback'), 'commit')
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {
+        'active': False, 'outcome': 'failed', 'path': str(export), 'error': error}, raising=False)
+    panel._finish_export()
+    assert actions == (['fallback'] if fallback else [])
+    assert panel._project_export_fallback is None and panel._export_pending is None
+    if not fallback:
+        assert panel._message == error
+
+
+@pytest.mark.parametrize('cancel', ['user', 'account', 'native'])
+def test_closed_project_cancellation_never_opens_fallback(gallery, monkeypatch, tmp_path, cancel):
+    import uuid
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    export = tmp_path / (str(uuid.uuid4()) + '.scene')
+    panel.service.root = tmp_path
+    panel._export_pending = (export, {}, 'project', 0)
+    panel._project_export_fallback = (lambda: pytest.fail('Canceled publication must not open a project'), 'commit')
+    panel._export_cancelled = cancel == 'user'
+    panel._export_identity = ('old-account',) if cancel == 'account' else state['identity']
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {
+        'active': False, 'outcome': 'cancelled' if cancel == 'native' else 'failed', 'path': str(export),
+        'error': 'gallery_project_commit_mismatch: changed'}, raising=False)
+    panel._finish_export()
+    assert not actions
+    assert panel._export_pending is None
+
+
+@pytest.mark.parametrize('returned_commit,queued', [('reviewed', True), ('different', False), ('', False)])
+def test_closed_project_handoff_records_verified_native_commit(gallery, monkeypatch, tmp_path, returned_commit, queued):
+    import uuid
+    panel, _, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    export = tmp_path / (str(uuid.uuid4()) + '.scene')
+    export.mkdir()
+    panel.service.root = tmp_path
+    panel.service.queue_prepared_upload = lambda *a: actions.append(a)
+    panel.service._unlink_temporary = lambda p: p.rmdir() if p.is_dir() else p.unlink()
+    panel._export_pending = (export, {'title': 'Reviewed'}, 'project', 0)
+    panel._project_export_fallback = (None, 'reviewed')
+    monkeypatch.setattr(module.gallery_preparation, 'publication_view_metadata', lambda *a: {})
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {
+        'active': False, 'outcome': 'completed', 'path': str(export), 'commit_uuid': returned_commit}, raising=False)
+    panel._finish_export()
+    assert bool(actions) == queued
+    if queued:
+        assert actions[0][1]['_commitUuid'] == 'reviewed'
+        assert actions[0][1]['viewerSettings'] == {}
+    assert panel._export_pending is None and panel._project_export_fallback is None
+
+
+def test_closed_project_update_keeps_reviewed_replacement_guard(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    panel.service.root = tmp_path
+    state['source_formats'] = ['licht']
+    state['links'] = {'project': {'sceneId': 'scene'}}
+    state['scenes'] = [dict(id='scene', revision='reviewed-revision', visibility='private')]
+    monkeypatch.setattr(module, 'asset_sync_state', lambda *a: {'freshness': 'local'})
+    monkeypatch.setattr(module.lf, 'project_poll_write', lambda: {'path': '/another.licht'}, raising=False)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *a: actions.append(a), raising=False)
+    monkeypatch.setattr(module.lf, 'project_open', lambda *a, **kw: pytest.fail('Update opened a document'), raising=False)
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
+    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
+    panel.publish_asset({'id': 'project', 'path': '/saved.licht', 'commit_uuid': 'commit'},
+                        {'title': 'Update', 'description': '', 'visibility': 'private'}, 'sog', update=True)
+    assert panel._export_pending[1]['replaceSceneId'] == 'scene'
+    assert panel._export_pending[1]['baseRevision'] == 'reviewed-revision'
+    assert actions[0][0] == '/saved.licht'
+
+
+@pytest.mark.parametrize('kind', [b'SPLT', b'CKPT'])
+def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path, gallery, kind):
+    """Index evidence must change for payload-only saves, before later native validation."""
+    from lfs_plugins.gallery_project_facts import saved_content_stamp
+    from lfs_plugins.portable_project import _crc
+    from test_portable_project import FIXTURES
+    original = bytearray((FIXTURES / 'portable-sog.licht').read_bytes())
+    head = next(offset for offset in (4096, 8192) if original[offset:offset+8] == b'LFSHEAD\0')
+    commit = struct.unpack_from('<Q', original, head + 80)[0]
+    index, size = struct.unpack_from('<QQ', original, commit + 136)
+    count = struct.unpack_from('<Q', original, index + 16)[0]
+    row = next(index+64+i*96 for i in range(count) if original[index+64+i*96:index+68+i*96] == b'DSRC')
+    original[row:row+4] = kind
+    path = tmp_path / 'index-evidence.licht'
+
+    def stamp(data):
+        crc = _crc(data[index:index+size])
+        struct.pack_into('<II', data, commit+160, crc, crc)
+        crc = _crc(data[commit:commit+252])
+        struct.pack_into('<I', data, commit+252, crc)
+        struct.pack_into('<I', data, head+104, crc)
+        struct.pack_into('<I', data, head+4092, _crc(data[head:head+4092]))
+        path.write_bytes(data)
+        return saved_content_stamp(path)
+
+    before = stamp(original)
+    assert before
+    changed = bytearray(original)
+    changed[row+72] ^= 1  # A new payload checksum, with unchanged SCNG and VIEW.
+    assert stamp(changed) != before

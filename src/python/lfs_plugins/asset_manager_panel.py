@@ -156,6 +156,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._project_write_was_running = False
         self._last_project_write_path = ""
         self._thumbnail_sources_by_asset: Dict[str, str] = {}
+        self._info_thumbnail_source = ""
         self._last_default_folder_path = ""
         self._init_gallery()
 
@@ -576,6 +577,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     @staticmethod
     def _thumbnail_decorator(asset: Dict[str, Any]) -> str:
+        poster = asset.get("poster_path")
+        if poster and (asset.get("prefer_poster") or not ((asset.get("has_preview") and asset.get("exists")) or asset.get("fallback_preview_path"))):
+            return AssetManagerPanel._thumbnail_decorator({"fallback_preview_path": poster})
         if asset.get("has_preview") and asset.get("exists"):
             path = quote(str(asset.get("path") or ""), safe=_RML_PATH_SAFE_CHARS)
             revision_value = asset.get("commit_uuid") or "-".join(
@@ -602,10 +606,34 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             f"preview://kind=image&thumb=256&rev={revision}&path={encoded}"
         )
 
+    def _sync_info_thumbnail(self, doc):
+        query = getattr(doc, "query_selector", None)
+        header = query(".asset-info-header") if callable(query) else None
+        if header is None:
+            return False
+        element = doc.get_element_by_id("asset-info-thumbnail")
+        asset = self._get_selected_asset() or {}
+        decorator = self._thumbnail_decorator(self._asset_with_poster(asset)) if asset else "none"
+        source = self._thumbnail_source_from_decorator(decorator)
+        if element is None:
+            element = header.parent().insert_before("div", header)
+            element.set_id("asset-info-thumbnail")
+            element.set_property("width", "100%")
+            element.set_property("height", "160dp")
+        changed = source != self._info_thumbnail_source
+        if changed:
+            release = getattr(lf.ui, "release_rml_texture", None)
+            if self._info_thumbnail_source and callable(release):
+                release(self._info_thumbnail_source)
+            self._info_thumbnail_source = source
+            element.set_property("decorator", decorator)
+        element.set_property("display", "block" if source else "none")
+        return changed
+
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         folder_name = self._folder_name(asset.get("folder_id"))
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
-        thumbnail_decorator = self._thumbnail_decorator(asset)
+        thumbnail_decorator = self._thumbnail_decorator(self._asset_with_poster(asset))
         thumbnail_source = self._thumbnail_source_from_decorator(thumbnail_decorator)
         previous_source = self._thumbnail_sources_by_asset.get(asset_id, "")
         if previous_source and previous_source != thumbnail_source:
@@ -638,6 +666,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _release_obsolete_thumbnail_sources(self) -> None:
         ids = getattr(self._asset_index, "iter_project_ids", None)
         live_ids = set(ids() if callable(ids) else self._asset_index_assets())
+        live_ids.update(self._gallery_remote_assets())
         stale_ids = set(self._thumbnail_sources_by_asset).difference(live_ids)
         release_texture = getattr(lf.ui, "release_rml_texture", None)
         for asset_id in stale_ids:
@@ -2166,6 +2195,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_update(self, doc):
         changed = self._sync_panel_layout(doc)
+        changed = self._sync_info_thumbnail(doc) or changed
         if self._sync_panel_space_state():
             self._dirty_fields("is_floating")
             changed = True
@@ -2241,6 +2271,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             for source in self._thumbnail_sources_by_asset.values():
                 release_texture(source)
         self._thumbnail_sources_by_asset.clear()
+        if self._info_thumbnail_source:
+            if callable(release_texture):
+                release_texture(self._info_thumbnail_source)
+            self._info_thumbnail_source = ""
         self._unsubscribe_reactive_state()
         try:
             doc.remove_data_model("asset_manager")
