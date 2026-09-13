@@ -681,4 +681,213 @@ namespace {
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
     }
 
+    Tensor cpu_bytes(const std::vector<uint8_t>& values, const TensorShape& shape,
+                     const DataType dtype = DataType::UInt8) {
+        std::vector<uint8_t> copy = values;
+        return Tensor::from_blob(copy.data(), shape, Device::CPU, dtype).clone();
+    }
+
+    std::vector<uint8_t> sequential_bytes(const size_t count, const uint8_t seed = 0) {
+        std::vector<uint8_t> values(count);
+        for (size_t i = 0; i < count; ++i) {
+            values[i] = static_cast<uint8_t>((i * 37 + 11 + seed) & 0xff);
+        }
+        return values;
+    }
+
+    std::vector<uint8_t> hwc_from_chw(const std::vector<uint8_t>& chw, const size_t channels,
+                                      const size_t height, const size_t width) {
+        std::vector<uint8_t> hwc(chw.size());
+        const size_t plane = height * width;
+        for (size_t y = 0; y < height; ++y) {
+            for (size_t x = 0; x < width; ++x) {
+                for (size_t c = 0; c < channels; ++c) {
+                    hwc[(y * width + x) * channels + c] = chw[c * plane + y * width + x];
+                }
+            }
+        }
+        return hwc;
+    }
+
+    std::vector<uint8_t> guarded_payload(const std::vector<uint8_t>& payload,
+                                         const size_t prefix, const size_t suffix) {
+        std::vector<uint8_t> expected(prefix + payload.size() + suffix, 0xA5);
+        std::copy(payload.begin(), payload.end(), expected.begin() + static_cast<ptrdiff_t>(prefix));
+        return expected;
+    }
+
+    std::vector<uint8_t> gather_into_guarded(const Tensor& gpu_input, const size_t prefix,
+                                             const size_t suffix) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const size_t count = gpu_input.numel();
+        Tensor dest = cpu_bytes(std::vector<uint8_t>(prefix + count + suffix, 0xA5),
+                                {prefix + count + suffix})
+                          .to(Device::GPU);
+        internal::StorageRef out =
+            internal::offset_storage_ref(internal::storage_ref(dest), prefix);
+        out.dtype = gpu_input.dtype();
+        internal::backend_ops(GpuBackend::Vulkan)
+            .strided_copy(internal::storage_ref(gpu_input), out,
+                          internal::strided_layout(gpu_input), {});
+        return dest.cpu().to_vector_uint8();
+    }
+
+    void expect_bytes(const Tensor& actual, const std::vector<uint8_t>& expected,
+                      const std::string_view label) {
+        const Tensor cpu = actual.cpu();
+        ASSERT_EQ(cpu.bytes(), expected.size()) << label;
+        ASSERT_NE(cpu.data_ptr(), nullptr) << label;
+        EXPECT_EQ(std::memcmp(cpu.data_ptr(), expected.data(), expected.size()), 0) << label;
+        EXPECT_EQ(cpu.to_vector_uint8(), expected) << label;
+    }
+
+    TEST_F(TensorVulkanRuntime, PackedByteGatherMatchesDirectCpuLayoutForOddChannelPermutes) {
+        // Catches a packed gather that round-trips GPU logical order but writes the
+        // wrong contiguous HWC/NCHW byte layout, or that mishandles C=1/3/4 tails.
+        constexpr std::array channels{size_t{1}, size_t{3}, size_t{4}};
+        constexpr std::array heights{size_t{1}, size_t{2}, size_t{5}, size_t{17}};
+        constexpr std::array widths{size_t{1}, size_t{3}, size_t{7}, size_t{19}};
+        constexpr std::array dtypes{DataType::UInt8, DataType::Bool};
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        for (const DataType dtype : dtypes) {
+            for (const size_t c : channels) {
+                for (const size_t h : heights) {
+                    for (const size_t w : widths) {
+                        SCOPED_TRACE(static_cast<int>(dtype));
+                        SCOPED_TRACE(c);
+                        SCOPED_TRACE(h);
+                        SCOPED_TRACE(w);
+                        const auto chw = sequential_bytes(c * h * w);
+                        const Tensor cpu = cpu_bytes(chw, {c, h, w}, dtype);
+                        const std::vector<uint8_t> expected = hwc_from_chw(chw, c, h, w);
+                        const Tensor cpu_hwc = cpu.permute({1, 2, 0}).contiguous();
+                        ASSERT_EQ(std::memcmp(cpu_hwc.data_ptr(), expected.data(), expected.size()),
+                                  0);
+                        const Tensor gpu_hwc =
+                            cpu.to(Device::GPU).permute({1, 2, 0}).contiguous();
+                        EXPECT_TRUE(gpu_hwc.is_contiguous());
+                        expect_bytes(gpu_hwc, expected, "chw->hwc");
+                    }
+                }
+            }
+        }
+
+        const auto nchw = sequential_bytes(2 * 3 * 5 * 7, 3);
+        const Tensor cpu_nchw = cpu_bytes(nchw, {2, 3, 5, 7});
+        const Tensor cpu_nhwc = cpu_nchw.permute({0, 2, 3, 1}).contiguous();
+        expect_bytes(cpu_nchw.to(Device::GPU).permute({0, 2, 3, 1}).contiguous(),
+                     cpu_nhwc.to_vector_uint8(), "nchw->nhwc");
+    }
+
+    TEST_F(TensorVulkanRuntime, PackedByteGatherPreservesNeighborSentinelsAndUnalignedOffsets) {
+        // Catches a full-word store that clobbers prefix/suffix bytes, a tail that
+        // drops the last 1-3 elements, or an unaligned view offset that rounds the
+        // device address the wrong way.
+        constexpr std::array counts{size_t{1}, size_t{2}, size_t{3}, size_t{4},
+                                    size_t{5}, size_t{7}, size_t{8}, size_t{15}};
+        constexpr size_t kGuard = 8;
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        for (const size_t count : counts) {
+            const auto values = sequential_bytes(count);
+            const Tensor cpu = cpu_bytes(values, {1, count}).transpose(0, 1);
+            const std::vector<uint8_t> payload = cpu.contiguous().to_vector_uint8();
+            EXPECT_EQ(payload, values);
+            const Tensor gpu =
+                cpu_bytes(values, {1, count}).to(Device::GPU).transpose(0, 1);
+            for (size_t align = 0; align < 4; ++align) {
+                SCOPED_TRACE(count);
+                SCOPED_TRACE(align);
+                const size_t prefix = kGuard + align;
+                EXPECT_EQ(gather_into_guarded(gpu, prefix, kGuard),
+                          guarded_payload(payload, prefix, kGuard));
+            }
+        }
+
+        const std::vector<uint8_t> bool_raw{0, 1, 2, 127, 255, 0, 3, 8};
+        const Tensor cpu_bool = cpu_bytes(bool_raw, {2, 4}, DataType::Bool).transpose(0, 1);
+        const std::vector<uint8_t> bool_payload = cpu_bool.contiguous().to_vector_uint8();
+        EXPECT_EQ(bool_payload, (std::vector<uint8_t>{0, 255, 1, 0, 2, 3, 127, 8}));
+        const Tensor gpu_bool =
+            cpu_bytes(bool_raw, {2, 4}, DataType::Bool).to(Device::GPU).transpose(0, 1);
+        for (size_t align = 0; align < 4; ++align) {
+            SCOPED_TRACE(align);
+            EXPECT_EQ(gather_into_guarded(gpu_bool, kGuard + align, kGuard),
+                      guarded_payload(bool_payload, kGuard + align, kGuard));
+        }
+
+        for (size_t input_align = 0; input_align < 4; ++input_align) {
+            SCOPED_TRACE(input_align);
+            const auto payload = sequential_bytes(3 * 5 * 7, 9);
+            std::vector<uint8_t> padded(input_align + payload.size(), 0x3C);
+            std::copy(payload.begin(), payload.end(), padded.begin() + static_cast<ptrdiff_t>(input_align));
+            const Tensor input =
+                cpu_bytes(padded, {padded.size()})
+                    .to(Device::GPU)
+                    .slice(0, input_align, input_align + payload.size())
+                    .reshape({3, 5, 7})
+                    .permute({1, 2, 0});
+            const std::vector<uint8_t> expected = hwc_from_chw(payload, 3, 5, 7);
+            expect_bytes(input.contiguous(), expected, "unaligned input");
+            const size_t out_prefix = kGuard + input_align;
+            Tensor dest =
+                cpu_bytes(std::vector<uint8_t>(out_prefix + expected.size() + kGuard, 0xA5),
+                          {out_prefix + expected.size() + kGuard})
+                    .to(Device::GPU);
+            internal::StorageRef out =
+                internal::offset_storage_ref(internal::storage_ref(dest), out_prefix);
+            internal::backend_ops(GpuBackend::Vulkan)
+                .strided_copy(internal::storage_ref(input), out,
+                              internal::strided_layout(input), {});
+            EXPECT_EQ(dest.cpu().to_vector_uint8(),
+                      guarded_payload(expected, out_prefix, kGuard));
+        }
+    }
+
+    TEST_F(TensorVulkanRuntime, PackedByteGatherCoversRanksStridesEmptyAndLeavesScatterSafe) {
+        // Catches a packed path that only handles rank-3 image permutes, skips
+        // zero-element work, or accidentally takes word ownership on scatter.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor cpu_rank2 = cpu_bytes(sequential_bytes(12), {3, 4});
+        expect_bytes(cpu_rank2.to(Device::GPU).transpose(0, 1).contiguous(),
+                     cpu_rank2.transpose(0, 1).contiguous().to_vector_uint8(), "rank2");
+
+        const Tensor cpu_rank5 = cpu_bytes(sequential_bytes(16), {1, 1, 1, 4, 2});
+        expect_bytes(cpu_rank5.to(Device::GPU).transpose(3, 4).contiguous(),
+                     cpu_rank5.transpose(3, 4).contiguous().to_vector_uint8(), "rank5");
+
+        const Tensor cpu_volume = cpu_bytes(sequential_bytes(3 * 6 * 5), {3, 6, 5});
+        const Tensor cpu_sliced = cpu_volume.slice(1, 1, 5).permute({1, 2, 0});
+        expect_bytes(cpu_volume.to(Device::GPU).slice(1, 1, 5).permute({1, 2, 0}).contiguous(),
+                     cpu_sliced.contiguous().to_vector_uint8(), "sliced strides");
+
+        const Tensor cpu_row = cpu_bytes(std::vector<uint8_t>{7}, {1});
+        const Tensor expanded = cpu_row.to(Device::GPU).expand({9});
+        EXPECT_FALSE(expanded.is_contiguous());
+        expect_bytes(expanded.contiguous(), cpu_row.expand({9}).contiguous().to_vector_uint8(),
+                     "expand");
+
+        const auto large = sequential_bytes(3 * 41 * 33);
+        const Tensor cpu_large = cpu_bytes(large, {3, 41, 33});
+        expect_bytes(cpu_large.to(Device::GPU).permute({1, 2, 0}).contiguous(),
+                     hwc_from_chw(large, 3, 41, 33), "large chw");
+
+        const Tensor empty = Tensor::empty({2, 0, 3}, Device::GPU, DataType::UInt8)
+                                 .permute({1, 2, 0});
+        EXPECT_EQ(empty.contiguous().numel(), 0u);
+        EXPECT_EQ(Tensor::empty({0}, Device::GPU, DataType::UInt8).contiguous().numel(), 0u);
+
+        Tensor destination = Tensor::zeros({2, 3}, Device::GPU, DataType::UInt8);
+        destination.transpose(0, 1).copy_from(
+            cpu_bytes(std::vector<uint8_t>{7, 8, 9, 10, 11, 12}, {3, 2}).to(Device::GPU));
+        expect_bytes(destination, std::vector<uint8_t>{7, 9, 11, 8, 10, 12}, "scatter");
+
+        Tensor rank5_destination =
+            Tensor::zeros({1, 1, 1, 4, 2}, Device::GPU, DataType::UInt8);
+        rank5_destination.transpose(3, 4).copy_from(
+            cpu_bytes(std::vector<uint8_t>{8, 7, 6, 5, 4, 3, 2, 1}, {1, 1, 1, 2, 4})
+                .to(Device::GPU));
+        expect_bytes(rank5_destination,
+                     std::vector<uint8_t>{8, 4, 7, 3, 6, 2, 5, 1}, "rank5 scatter");
+    }
+
 } // namespace

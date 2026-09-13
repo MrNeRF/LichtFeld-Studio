@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -30,6 +31,36 @@ namespace {
 
     Tensor upload_float(const std::vector<float>& values, const TensorShape& shape) {
         return upload_vulkan(Tensor::from_vector(values, shape, Device::CPU));
+    }
+
+    Tensor cpu_bytes(const std::vector<uint8_t>& values, const DataType dtype) {
+        std::vector<uint8_t> copy = values;
+        return Tensor::from_blob(copy.data(), {copy.size()}, Device::CPU, dtype).clone();
+    }
+
+    std::vector<uint8_t> guarded_payload(const std::vector<uint8_t>& payload,
+                                         const size_t prefix, const size_t suffix) {
+        std::vector<uint8_t> expected(prefix + payload.size() + suffix, 0xA5);
+        std::copy(payload.begin(), payload.end(), expected.begin() + prefix);
+        return expected;
+    }
+
+    std::vector<uint8_t> convert_into_guarded(const Tensor& cpu_input,
+                                              const DataType output_dtype,
+                                              const size_t prefix,
+                                              const size_t suffix) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const size_t count = cpu_input.numel();
+        const size_t total = prefix + count + suffix;
+        const Tensor input = cpu_input.to(Device::GPU);
+        Tensor dest = cpu_bytes(std::vector<uint8_t>(total, 0xA5), DataType::UInt8)
+                          .to(Device::GPU);
+        internal::StorageRef out =
+            internal::offset_storage_ref(internal::storage_ref(dest), prefix);
+        out.dtype = output_dtype;
+        internal::backend_ops(GpuBackend::Vulkan)
+            .convert_type(internal::storage_ref(input), out, count, {});
+        return dest.cpu().to_vector_uint8();
     }
 
     void expect_close(const Tensor& actual, const Tensor& expected,
@@ -411,5 +442,144 @@ namespace {
         EXPECT_EQ(padded.shape(), TensorShape({4, 6}));
         EXPECT_EQ(padded.slice(0, 1, 3).slice(1, 2, 5).to_vector(),
                   base.to_vector());
+    }
+
+    TEST_F(TensorVulkanPointwise, ConversionPackedByteOutputPreservesGuardsAtEveryAlignment) {
+        std::vector<float> values(16);
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i] = static_cast<float>(static_cast<int>(i) * 17 - 40);
+        }
+        const Tensor cpu = Tensor::from_vector(values, {values.size()}, Device::CPU);
+        constexpr std::array counts{size_t{1}, size_t{2}, size_t{3}, size_t{4},
+                                    size_t{5}, size_t{7}, size_t{8}, size_t{15}};
+        constexpr size_t kGuard = 8;
+        for (const size_t count : counts) {
+            const Tensor cpu_slice = cpu.slice(0, 0, count).contiguous();
+            const std::vector<uint8_t> payload =
+                cpu_slice.to(DataType::UInt8).to_vector_uint8();
+            for (size_t align = 0; align < 4; ++align) {
+                SCOPED_TRACE(count);
+                SCOPED_TRACE(align);
+                const size_t prefix = kGuard + align;
+                const std::vector<uint8_t> actual =
+                    convert_into_guarded(cpu_slice, DataType::UInt8, prefix, kGuard);
+                EXPECT_EQ(actual, guarded_payload(payload, prefix, kGuard));
+            }
+        }
+
+        std::vector<float> large(4099);
+        for (size_t i = 0; i < large.size(); ++i) {
+            large[i] = static_cast<float>(static_cast<int>(i % 511) - 200);
+        }
+        const Tensor cpu_large = Tensor::from_vector(large, {large.size()}, Device::CPU);
+        const std::vector<uint8_t> large_payload =
+            cpu_large.to(DataType::UInt8).to_vector_uint8();
+        for (size_t align = 0; align < 4; ++align) {
+            SCOPED_TRACE(align);
+            const size_t prefix = kGuard + align;
+            EXPECT_EQ(convert_into_guarded(cpu_large, DataType::UInt8, prefix, kGuard),
+                      guarded_payload(large_payload, prefix, kGuard));
+        }
+    }
+
+    TEST_F(TensorVulkanPointwise, ConversionPackedByteOutputMatchesDtypeReferenceAndUnalignedInput) {
+        const std::vector<float> float_values{
+            0.0f, 1.9f, -1.9f, 255.9f, 256.0f, -256.0f, 257.0f, -257.0f,
+            511.0f, -0.1f, 127.0f, 128.0f,
+            std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),
+            std::numeric_limits<float>::quiet_NaN(),
+            std::numeric_limits<float>::denorm_min()};
+        const Tensor cpu_f32 =
+            Tensor::from_vector(float_values, {float_values.size()}, Device::CPU);
+        const std::vector<uint8_t> f32_payload =
+            cpu_f32.to(DataType::UInt8).to_vector_uint8();
+        EXPECT_EQ(upload_vulkan(cpu_f32).to(DataType::UInt8).to_vector_uint8(), f32_payload);
+        EXPECT_EQ(convert_into_guarded(cpu_f32, DataType::UInt8, 9, 8),
+                  guarded_payload(f32_payload, 9, 8));
+
+        const Tensor cpu_f16 = cpu_f32.to(DataType::Float16);
+        const std::vector<uint8_t> f16_payload =
+            cpu_f16.to(DataType::UInt8).to_vector_uint8();
+        EXPECT_EQ(upload_vulkan(cpu_f16).to(DataType::UInt8).to_vector_uint8(), f16_payload);
+        EXPECT_EQ(convert_into_guarded(cpu_f16, DataType::UInt8, 1, 8),
+                  guarded_payload(f16_payload, 1, 8));
+
+        const Tensor cpu_i32 = Tensor::from_vector(
+            std::vector<int>{-1, 0, 1, 255, 256, 257, -256, 511, -257},
+            {9}, Device::CPU);
+        const std::vector<uint8_t> i32_payload =
+            cpu_i32.to(DataType::UInt8).to_vector_uint8();
+        EXPECT_EQ(i32_payload, (std::vector<uint8_t>{255, 0, 1, 255, 0, 1, 0, 255, 255}));
+        EXPECT_EQ(upload_vulkan(cpu_i32).to(DataType::UInt8).to_vector_uint8(), i32_payload);
+        EXPECT_EQ(convert_into_guarded(cpu_i32, DataType::UInt8, 2, 8),
+                  guarded_payload(i32_payload, 2, 8));
+
+        const std::vector<int64_t> i64_values{
+            0, -1, 256, 511, std::numeric_limits<int64_t>::min(),
+            std::numeric_limits<int64_t>::max(), 0x100000001LL};
+        const Tensor cpu_i64 =
+            Tensor::from_blob(const_cast<int64_t*>(i64_values.data()),
+                              {i64_values.size()}, Device::CPU, DataType::Int64)
+                .clone();
+        const std::vector<uint8_t> i64_payload =
+            cpu_i64.to(DataType::UInt8).to_vector_uint8();
+        EXPECT_EQ(upload_vulkan(cpu_i64).to(DataType::UInt8).to_vector_uint8(), i64_payload);
+        EXPECT_EQ(convert_into_guarded(cpu_i64, DataType::UInt8, 3, 8),
+                  guarded_payload(i64_payload, 3, 8));
+
+        const std::vector<uint8_t> raw{0, 1, 2, 127, 255, 0, 3, 8};
+        const Tensor cpu_u8 = cpu_bytes(raw, DataType::UInt8);
+        const std::vector<uint8_t> bool_payload =
+            cpu_u8.to(DataType::Bool).to_vector_uint8();
+        EXPECT_EQ(bool_payload, (std::vector<uint8_t>{0, 1, 1, 1, 1, 0, 1, 1}));
+        EXPECT_EQ(upload_vulkan(cpu_u8).to(DataType::Bool).to_vector_uint8(), bool_payload);
+        EXPECT_EQ(convert_into_guarded(cpu_u8, DataType::Bool, 1, 8),
+                  guarded_payload(bool_payload, 1, 8));
+
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        for (size_t input_align = 0; input_align < 4; ++input_align) {
+            SCOPED_TRACE(input_align);
+            std::vector<uint8_t> padded(4 + raw.size(), 0x3C);
+            std::copy(raw.begin(), raw.end(), padded.begin() + input_align);
+            Tensor input = cpu_bytes(padded, DataType::UInt8).to(Device::GPU);
+            const size_t out_prefix = 8 + input_align;
+            constexpr size_t suffix = 8;
+            Tensor dest =
+                cpu_bytes(std::vector<uint8_t>(out_prefix + raw.size() + suffix, 0xA5),
+                          DataType::UInt8)
+                    .to(Device::GPU);
+            internal::StorageRef in = internal::offset_storage_ref(
+                internal::storage_ref(input), input_align);
+            internal::StorageRef out = internal::offset_storage_ref(
+                internal::storage_ref(dest), out_prefix);
+            out.dtype = DataType::Bool;
+            internal::backend_ops(GpuBackend::Vulkan)
+                .convert_type(in, out, raw.size(), {});
+            EXPECT_EQ(dest.cpu().to_vector_uint8(),
+                      guarded_payload(bool_payload, out_prefix, suffix));
+        }
+    }
+
+    TEST_F(TensorVulkanPointwise, ConversionPackedByteOutputInPlaceNormalizesWithoutClobber) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const std::vector<uint8_t> host{0xA5, 0xA5, 0, 2, 255, 1, 0, 7, 0xA5, 0xA5};
+        Tensor tensor = cpu_bytes(host, DataType::UInt8).to(Device::GPU);
+        internal::StorageRef region =
+            internal::offset_storage_ref(internal::storage_ref(tensor), 2);
+        internal::StorageRef as_bool = region;
+        as_bool.dtype = DataType::Bool;
+        internal::backend_ops(GpuBackend::Vulkan)
+            .convert_type(region, as_bool, 6, {});
+        EXPECT_EQ(tensor.cpu().to_vector_uint8(),
+                  (std::vector<uint8_t>{0xA5, 0xA5, 0, 1, 1, 1, 0, 1, 0xA5, 0xA5}));
+
+        Tensor bool_tensor = cpu_bytes(host, DataType::Bool).to(Device::GPU);
+        internal::StorageRef bool_region =
+            internal::offset_storage_ref(internal::storage_ref(bool_tensor), 2);
+        internal::backend_ops(GpuBackend::Vulkan)
+            .convert_type(bool_region, bool_region, 6, {});
+        EXPECT_EQ(bool_tensor.cpu().to_vector_uint8(),
+                  (std::vector<uint8_t>{0xA5, 0xA5, 0, 1, 1, 1, 0, 1, 0xA5, 0xA5}));
     }
 } // namespace
