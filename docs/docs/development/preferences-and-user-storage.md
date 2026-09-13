@@ -255,3 +255,31 @@ keeps every live configuration control disabled.
 Explicit operations such as exporting a keymap remain separate from automatic
 persistence and can stay available in safe mode. The status bar identifies
 safe mode for the lifetime of the process.
+
+## Gallery
+
+Preferences → General → Gallery stores the default upload format (SOG), public
+visibility confirmation (on), poster cache limit (64 MiB), and hidden refresh
+interval (5 minutes). These device-local values live in the Asset Manager storage
+folder's `gallery/preferences.json`; they are not saved into `.licht` projects or
+account credentials. The per-publish format selector updates the same default.
+Visible gallery observers retain the existing 30-second refresh interval.
+
+## Key Bindings
+
+With the Asset Manager focused, outside its text inputs:
+
+| Shortcut | Action |
+| --- | --- |
+| Enter | Open the selected local project |
+| Ctrl+Enter | Run the selected card's primary gallery action |
+| Ctrl+Shift+C | Copy the public share link; open portal sharing controls for a private scene |
+| F5 | Refresh the active local or gallery scope |
+
+The Python adapter uses `ASSET_GALLERY_PRIMARY`, `ASSET_GALLERY_COPY_LINK`, and
+`ASSET_REFRESH` from the native keymap when available, including rebindings and
+explicitly cleared bindings. Older native modules use the scoped defaults, with
+existing native collisions taking precedence. Preferences → Input → Key Bindings
+shows the defaults and exposes the native action rows when those actions exist.
+The native action registrations and the viewport MIME handoff still require the
+orchestrator's integration; see `laneF_report.md` in the galleryam run directory.

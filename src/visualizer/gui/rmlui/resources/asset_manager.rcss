@@ -519,7 +519,7 @@
 
 .asset-card.is-draggable,
 .asset-list-row.is-draggable {
-    drag: drag;
+    drag: drag-drop;
     cursor: grab;
 }
 
@@ -873,7 +873,7 @@
 /* Local folders yield to the always-visible Gallery scopes. */
 #asset-sidebar-local-scroll { min-height: 0; overflow-y: auto; flex: 0 1 auto; }
 #asset-sidebar-local-content { flex-shrink: 0; }
-#asset-sidebar-gallery { flex-shrink: 0; }
+#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }
 .asset-sidebar-inner { overflow: hidden; }
 #asset-sidebar .asset-filter-row { box-sizing: border-box; min-height: 24dp; line-height: 16dp; flex-shrink: 0; }
 #asset-sidebar-gallery .asset-filter-row { height: 24dp; }
@@ -882,3 +882,9 @@
 .gallery-checked { box-sizing: border-box; height: 20dp; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #sidebar-resize-handle, #bottom-panel-resize-handle { box-sizing: border-box; }
 #sidebar-resize-handle { cursor: default; }
+
+/* Inline gallery approval and nonmodal completion actions. */
+.gallery-connect { padding: 6dp; }
+.gallery-user-code { font-family: "JetBrains Mono"; font-size: 24dp; margin-bottom: 8dp; }
+.gallery-completion { display: flex; align-items: center; flex-wrap: wrap; gap: 6dp; padding: 6dp; }
+.gallery-empty { padding: 8dp; }

@@ -523,6 +523,11 @@ class KeymapBindingsSection:
                 rows, tr("input_settings.section.sequencer"),
                 self.BINDING_SECTIONS["sequencer_global"], mode)
 
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            from .gallery_shortcuts import SHORTCUTS
+            actions = [getattr(lf.keymap.Action, name) for name, *_ in SHORTCUTS if hasattr(lf.keymap.Action, name)]
+            if actions:
+                self._append_binding_section(rows, tr("preferences.gallery.shortcuts"), actions, mode)
         self._handle.update_record_list("binding_rows", rows)
 
     def _binding_row_record(self, action, mode):

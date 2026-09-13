@@ -1123,8 +1123,9 @@ def _poster_scene():
 def test_poster_cache_bound_eviction_etag_change_and_sign_out(tmp_path, monkeypatch):
     from pathlib import Path
     service = connected(tmp_path, monkeypatch)
-    assert gallery_sync.MAX_POSTER_BYTES == 64 * 1024 * 1024
-    monkeypatch.setattr(gallery_sync, "MAX_POSTER_BYTES", 20)
+    from lfs_plugins import gallery_preferences
+    assert gallery_preferences.read_preferences(tmp_path)["posterCacheMiB"] == 64
+    monkeypatch.setattr(gallery_preferences, "read_preferences", lambda root: {"posterCacheMiB": 20 / (1024 * 1024)})
     scenes = [_poster_scene() for _ in range(3)]
     calls = []
     def thumbnail(scene_id, *, etag=None):

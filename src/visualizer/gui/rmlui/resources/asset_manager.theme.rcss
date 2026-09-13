@@ -181,6 +181,7 @@
     background-color: @{lighten(surface_bright,0.06)};
 }
 
+.asset-filter-row.is-drag-over,
 .asset-filter-row.is-active {
     background-color: @{alpha(primary,0.20)};
 }

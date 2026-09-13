@@ -67,11 +67,22 @@
 
           </div></div>
           <div class="asset-sidebar-section" id="asset-sidebar-gallery">
-            <div class="asset-sidebar-title gallery-sidebar-heading">
+            <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-data-tooltip="gallery_quota">
               <span>{{g_sidebar_title}}</span>
               <span class="text-muted gallery-account-label" data-if="gallery_signed_in">{{gallery_account}}</span>
-              <button class="btn btn--secondary" data-if="!gallery_signed_in" data-event-click="gallery_account">{{g_sidebar_sign_in}}</button>
+
               <button class="btn btn--secondary gallery-refresh" data-event-click="gallery_refresh" data-tooltip="asset_manager.gallery.sidebar.refresh">↻</button>
+            </div>
+            <div class="gallery-connect" data-if="!gallery_signed_in">
+              <button class="btn btn--secondary" data-if="!gallery_linking" data-event-click="gallery_connect">{{gallery_connect_label}}</button>
+              <div data-if="gallery_linking">
+                <div class="gallery-user-code">{{gallery_user_code}}</div>
+                <button class="btn btn--secondary" data-event-click="gallery_connect_copy">@tr:asset_manager.gallery.connect.copy</button>
+                <button class="btn btn--secondary" data-event-click="gallery_connect_browser">@tr:asset_manager.gallery.connect.browser</button>
+                <p>{{gallery_waiting}}</p>
+                <button class="btn btn--secondary" data-event-click="gallery_connect_cancel">@tr:asset_manager.gallery.action.cancel</button>
+              </div>
+              <p>{{gallery_connect_error}}</p>
             </div>
             <div class="text-muted gallery-checked">{{gallery_checked}}</div>
             <div class="asset-filter-row" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__"><span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span></div>
@@ -96,9 +107,21 @@
             </div>
 
             <div class="asset-gallery-header-actions">
+              <button class="btn btn--secondary" data-if="gallery_update_all_visible" data-attr-disabled="!gallery_update_all_enabled" data-event-click="gallery_update_all">{{gallery_update_all_label}}</button>
               <span class="asset-gallery-scan-status" data-if="has_scan_status">{{scan_status}}</span>
               <button class="asset-button asset-button--icon asset-view-button asset-refresh-button" data-class-is-stop="scan_active" data-event-click="refresh_catalog" data-attr-data-tooltip="refresh_action_tooltip"><img data-if="!scan_active" src="../icon/sequencer/rotate-cw.png" /><span class="asset-button-text" data-if="scan_active">{{stop_scan_label}}</span></button>
             </div>
+          </div>
+          <div class="gallery-completion" data-if="gallery_has_toast">
+            <span>{{gallery_toast}}</span>
+            <button class="btn btn--secondary" data-if="gallery_toast_portal" data-event-click="gallery_toast_portal">{{g_action_open}}</button>
+            <button class="btn btn--secondary" data-if="gallery_toast_portal" data-event-click="gallery_toast_copy">{{g_action_copy}}</button>
+            <button class="btn btn--secondary" data-if="gallery_toast_open" data-event-click="gallery_toast_open">{{g_action_open_local}}</button>
+          </div>
+          <div class="gallery-empty" data-if="gallery_empty">@tr:asset_manager.gallery.empty.published</div>
+          <div class="gallery-empty" data-if="gallery_local_empty">
+            <button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:asset_manager.action.add_folder</button>
+            <span data-if="gallery_empty_pull">@tr:asset_manager.gallery.empty.pull</span>
           </div>
           <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
         </div>
@@ -109,7 +132,7 @@
                 <div class="asset-virtual-spacer asset-card-top-spacer" data-style-height="asset_gallery_top_spacer_height"></div>
                 <div class="asset-card-grid-window">
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
-                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-class-gallery-remote="asset.remote_only" data-style-decorator="asset.thumbnail_decorator">
                         <span class="gallery-badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-data-tooltip="asset.gallery_label"><img data-attr-src="asset.gallery_icon"/></span>
                         <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
@@ -147,7 +170,7 @@
                 <div class="asset-virtual-spacer asset-list-top-spacer" data-style-height="asset_list_top_spacer_height"></div>
                 <div class="asset-list-window">
                   <div data-for="asset : assets">
-                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <span class="asset-col asset-col-name">
                         <span class="asset-list-primary">{{asset.display_name}}</span><span class="asset-list-secondary text-muted">{{asset.gallery_label}}</span>
                       </span>
@@ -259,7 +282,7 @@
                     <button class="btn btn--secondary" data-event-click="gallery_more">{{g_action_more}}</button>
                     <div class="gallery-actions" data-if="gallery_more"><button class="btn btn--error" data-if="!gallery_remote" data-event-click="gallery_unlink">{{g_action_unlink}}</button><button class="btn btn--error" data-if="gallery_has_portal" data-event-click="gallery_remove">{{g_action_remove}}</button></div>
                   </div>
-                  <p class="status-info">{{gallery_notice}}</p><button class="btn btn--secondary" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button><button class="btn btn--secondary" data-if="gallery_has_pulled_project" data-event-click="gallery_open_local">{{g_action_open_local}}</button><button class="btn btn--secondary" data-if="gallery_has_undo" data-event-click="gallery_undo">{{g_action_undo}}</button>
+                  <p class="text-muted">{{gallery_quota}}</p><p class="status-warning" data-if="gallery_review">{{gallery_quota_warning}}</p><p class="status-info">{{gallery_notice}}</p><button class="btn btn--secondary" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button><button class="btn btn--secondary" data-if="gallery_has_pulled_project" data-event-click="gallery_open_local">{{g_action_open_local}}</button><button class="btn btn--secondary" data-if="gallery_has_undo" data-event-click="gallery_undo">{{g_action_undo}}</button>
                 </div>
                 <button class="btn btn--primary" data-if="gallery_collapsed_publish" data-event-click="gallery_primary">{{g_action_publish}}</button>
               </div>

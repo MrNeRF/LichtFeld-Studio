@@ -21,7 +21,6 @@ from .portal_gallery import PortalGalleryClient, GalleryTransferCanceled, Galler
 from . import gallery_bundle, gallery_preparation
 
 
-MAX_POSTER_BYTES = 64 * 1024 * 1024
 
 
 def domain_tokens(scene):
@@ -180,6 +179,9 @@ class GallerySync:
         self._origin = None
         self._owner = None
         self._source_formats = []
+        self._quota_bytes = None
+        self._used_bytes = None
+        self._completion = None
         self._revision_domains = 0
         self._list_etag = None
         self._checked_at = 0
@@ -315,6 +317,10 @@ class GallerySync:
                 "refresh_ok": self._refresh_ok,
                 "relink_required": self._relink_required if snap.signed_in else False,
                 "source_formats": self._source_formats if same else [],
+                "owner": self._owner if same else None,
+                "quotaBytes": self._quota_bytes if same else None,
+                "usedBytes": self._used_bytes if same else None,
+                "completion": self._completion if same else None,
                 "revisionDomains": self._revision_domains if same else 0,
                 "checkedAt": self._checked_at if same else 0,
                 "posters": {key: value["path"] for key, value in self._poster_entries.items()} if same else {},
@@ -390,7 +396,10 @@ class GallerySync:
                     raise ValueError("The account changed. Refresh the gallery before continuing.")
                 self._session, self._owner = session, capabilities["id"]
                 self._origin = origin
+                self._completion = None if not same else self._completion
                 self._source_formats = capabilities.get("sourceFormats", [])
+                self._quota_bytes = capabilities.get("quotaBytes")
+                self._used_bytes = capabilities.get("usedBytes")
                 version = capabilities.get("revisionDomains", 0)
                 self._revision_domains = version if type(version) is int else 0
                 self._list_etag = getattr(client, "list_etag", None) or (etag if scenes is None else None)
@@ -416,11 +425,28 @@ class GallerySync:
                 self._poster_identity = identity
                 self._list_etag = None
 
+    def _trim_poster_cache(self, limit):
+        files = sorted((self.root / "posters").glob("*.png"), key=lambda p: p.stat().st_atime_ns)
+        total = sum(p.stat().st_size for p in files)
+        for path in files:
+            if total <= limit:
+                break
+            total -= path.stat().st_size
+            path.unlink(missing_ok=True)
+        self._poster_entries = {key: value for key, value in self._poster_entries.items()
+                                if Path(value["path"]).is_file()}
+
     def _cache_posters(self, client, scenes, identity):
         """Worker-only authenticated cache; no signed URL or bearer is persisted."""
+        from .gallery_preferences import read_preferences
+        cache_limit = read_preferences(self.root)["posterCacheMiB"] * 1024 * 1024
         folder = self.root / "posters"
         live = {scene["id"] for scene in scenes if scene.get("thumbnailUrl") and scene.get("status") == "ready"}
         with self._lock:
+            try:
+                self._trim_poster_cache(cache_limit)
+            except OSError:
+                pass  # Poster I/O must not fail a successful scene listing.
             for key in set(self._poster_entries) - live:
                 Path(self._poster_entries.pop(key)["path"]).unlink(missing_ok=True)
         for scene in scenes:
@@ -455,15 +481,7 @@ class GallerySync:
                     destination = folder / f"{scene_id}-{revision}.png"
                     destination.write_bytes(data)
                     self._poster_entries[scene_id] = {"path": str(destination), "etag": tag}
-                    files = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_atime_ns)
-                    total = sum(p.stat().st_size for p in files)
-                    for path in files:
-                        if total <= MAX_POSTER_BYTES:
-                            break
-                        total -= path.stat().st_size
-                        path.unlink(missing_ok=True)
-                    self._poster_entries = {key: value for key, value in self._poster_entries.items()
-                                            if Path(value["path"]).is_file()}
+                    self._trim_poster_cache(cache_limit)
             except (OSError, ValueError, PortalHTTPError, PortalProtocolError):
                 # A missing/malformed poster does not prevent scene synchronization.
                 with self._lock:
@@ -686,6 +704,7 @@ class GallerySync:
                     on_checkpoint=checkpoint, on_progress=progress, on_processing=processing, cancel=self._cancel)
                 scene = result["scene"]
                 with self._lock:
+                    self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
                     bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
                     bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
                     bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
@@ -1251,6 +1270,7 @@ class GallerySync:
             with self._lock:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
                 self.message = "Gallery details saved."
+                self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
                         # A metadata exchange does not exchange remote geometry.
@@ -1329,6 +1349,7 @@ class GallerySync:
         return identifier
 
     def remove(self, scene_id, revision):
+        title = next((s.get("title", "") for s in self.scenes if s["id"] == scene_id), "")
         client = self._client()
         bucket = self._bucket()
         if any(j["metadata"].get("replaceSceneId") == scene_id and j["status"] not in ("completed", "canceled") for j in bucket["jobs"]):
@@ -1338,6 +1359,7 @@ class GallerySync:
             with self._lock:
                 self.scenes = [s for s in self.scenes if s["id"] != scene_id]
                 self.message = "Removed from gallery. Local projects are unchanged."
+                self._completion = {"id": str(uuid.uuid4()), "kind": "remove", "title": title}
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
                         link["remoteDeleted"] = True

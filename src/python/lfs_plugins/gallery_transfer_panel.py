@@ -41,6 +41,10 @@ def transfer_rows(snapshot, history_limit=30):
             "bytes": "", "phase": tr("phase." + snapshot["phase"]), "reason": "",
             "progress": snapshot.get("preparationProgress", 0), "can_pause": False,
             "can_resume": False, "can_cancel": True})
+    if snapshot.get("batchQueued"):
+        pending.insert(0, {"id": "batch-queue", "title": tr("batch", count=snapshot["batchQueued"]),
+            "direction": "↑", "bytes": "", "phase": tr("phase.queued"), "reason": "", "progress": 0,
+            "can_pause": False, "can_resume": False, "can_cancel": False})
     return pending + list(reversed(history))[:history_limit]
 
 

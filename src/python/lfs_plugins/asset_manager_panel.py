@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import threading
@@ -152,6 +153,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._ui_poll_timer: Optional[threading.Timer] = None
         self._catalog_load_failed = False
         self._drag_payload_token: Optional[int] = None
+        self._gallery_drag = None
+        self._gallery_drop_element = None
         self._last_project_write_generation: Optional[int] = None
         self._project_write_was_running = False
         self._last_project_write_path = ""
@@ -1722,11 +1725,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _bind_dom_event_listeners(self, doc) -> None:
         shell = doc.get_element_by_id("asset-shell")
         if shell:
+            shell.add_event_listener("keydown", self._on_gallery_shortcut)
             shell.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             shell.add_event_listener("click", self._on_asset_manager_click)
             shell.add_event_listener("dblclick", self._on_asset_manager_double_click)
             shell.add_event_listener("dragstart", self._on_asset_drag_start)
             shell.add_event_listener("dragend", self._on_asset_drag_end)
+            shell.add_event_listener("dragover", self._on_gallery_drag_over)
+            shell.add_event_listener("dragout", self._on_gallery_drag_out)
+            shell.add_event_listener("dragdrop", self._on_gallery_drop)
         scroll = doc.get_element_by_id("asset-gallery-scroll")
         if scroll:
             scroll.add_event_listener("scroll", self._on_asset_scroll)
@@ -1839,6 +1846,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset_id = element.get_attribute("data-asset-id", "")
         if not asset_id or not self._asset_index:
             return
+        remote = self._asset_dict(asset_id) or {}
+        if remote.get("remote_only"):
+            self._begin_remote_gallery_drag(remote, event)
+            return
         verify_asset = getattr(self._asset_index, "verify_asset", None)
         project = verify_asset(asset_id) if callable(verify_asset) else None
         if callable(verify_asset) and project is None:
@@ -1865,6 +1876,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._get_asset_display_name(asset),
         )
         self._drag_payload_token = int(token)
+        self._gallery_drag = (asset_id, self._gallery_state.get("identity"))
         self._selected_asset_ids = {asset_id}
         self._selection_cursor_id = asset_id
         self._update_selection_type()
@@ -1872,7 +1884,62 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_selection()
         self._stop_event(event)
 
+    def _begin_remote_gallery_drag(self, asset, event):
+        from .asset_gallery_ui import GALLERY_DRAG_PAYLOAD_TYPE
+        payload = self._gallery_drag_payload(asset)
+        if payload is None:
+            return
+        if self._drag_payload_token is not None:
+            lf.ui.cancel_drag_payload(self._drag_payload_token)
+        self._drag_payload_token = int(lf.ui.begin_drag_payload(
+            GALLERY_DRAG_PAYLOAD_TYPE, json.dumps(payload), self._get_asset_display_name(asset)))
+        self._gallery_drag = (asset["id"], self._gallery_state.get("identity"))
+        self._select_asset_id(asset["id"])
+        self._stop_event(event)
+
+    def _gallery_drop_target(self, event):
+        if not self._gallery_drag or self._gallery_drag[1] != self._gallery_state.get("identity"):
+            return None
+        element = rml_widgets.find_ancestor_with_attribute(event.target(), "data-folder-id", event.current_target())
+        if element is None:
+            return None
+        asset = self._asset_dict(self._gallery_drag[0]) or {}
+        folder = element.get_attribute("data-folder-id", "")
+        if (not asset.get("remote_only") and folder == SCOPE_PUBLISHED
+                or asset.get("remote_only") and folder in self._asset_index_folders()):
+            return element
+        return None
+
+    def _on_gallery_drag_over(self, event):
+        element = self._gallery_drop_target(event)
+        if element is not self._gallery_drop_element:
+            self._on_gallery_drag_out(event)
+            self._gallery_drop_element = element
+            if element:
+                element.set_class("is-drag-over", True)
+
+    def _on_gallery_drag_out(self, event):
+        if self._gallery_drop_element:
+            self._gallery_drop_element.set_class("is-drag-over", False)
+            self._gallery_drop_element = None
+
+    def _on_gallery_drop(self, event):
+        element = self._gallery_drop_target(event)
+        if element is None:
+            return
+        identifier, identity = self._gallery_drag
+        folder = element.get_attribute("data-folder-id", "")
+        self._on_gallery_drag_out(event)
+        token, self._drag_payload_token = self._drag_payload_token, None
+        self._gallery_drag = None
+        if token is not None:
+            lf.ui.cancel_drag_payload(token)
+        self._gallery_drop_asset(identifier, folder, identity)
+        self._stop_event(event)
+
     def _on_asset_drag_end(self, event) -> None:
+        self._on_gallery_drag_out(event)
+        self._gallery_drag = None
         token = self._drag_payload_token
         self._drag_payload_token = None
         end_drag = getattr(lf.ui, "end_drag_payload", None)
@@ -1968,7 +2035,37 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_selection()
         return True
 
+    def _on_gallery_shortcut(self, event):
+        if self._input_capture_active():
+            return False
+        target = event.target()
+        tag = getattr(target, "tag_name", "")
+        if callable(tag):
+            tag = tag()
+        if tag in ("input", "textarea", "select"):
+            return False
+        from .gallery_shortcuts import shortcut_command
+        try:
+            key = int(event.get_parameter("key_identifier", "0"))
+        except (TypeError, ValueError):
+            return False
+        command = shortcut_command(getattr(lf, "keymap", None), key,
+            **{name: event.get_bool_parameter(name + "_key", False) for name in ("ctrl", "shift", "alt", "meta")})
+        if command == "refresh_scope":
+            if self._selected_folder_id in GALLERY_SCOPES:
+                self._gallery_command("refresh")
+            else:
+                self.refresh_catalog()
+        elif command:
+            self._gallery_command(command)
+        else:
+            return False
+        self._stop_event(event)
+        return True
+
     def _on_asset_results_keydown(self, event) -> None:
+        if self._on_gallery_shortcut(event):
+            return
         try:
             key = int(event.get_parameter("key_identifier", "0"))
         except (TypeError, ValueError):
@@ -1977,6 +2074,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._stop_event(event)
             return
         if key == KI_RETURN:
+            if any(event.get_bool_parameter(name + "_key", False) for name in ("ctrl", "shift", "alt", "meta")):
+                return
             asset_id = self._selection_cursor_id or self.get_selected_asset_id()
             visible_ids = {
                 str(asset.get("id") or asset.get("project_uuid") or "")
@@ -2240,6 +2339,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         timer.start()
 
     def on_unmount(self, doc):
+        if self._gallery_toast_timer:
+            self._gallery_toast_timer.cancel()
+            self._gallery_toast_timer = None
         if self._gallery_undo_timer:
             self._gallery_undo_timer.cancel()
             self._gallery_undo_timer = None

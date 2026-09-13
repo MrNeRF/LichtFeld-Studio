@@ -8,7 +8,6 @@ import time
 import re
 import threading
 import copy
-import json
 from pathlib import Path
 
 import lichtfeld as lf
@@ -76,6 +75,11 @@ class GalleryController:
         self._last_canceled = False
         self._publish_as_new = False
         self._closed = False
+        self._update_queue = []
+        self._batch_rows = []
+        self._batch_retries = {}
+        self._batch_approval = None
+        self._batch_current = None
 
     def close(self):
         """Release timers/subscribers when the plugin runtime shuts down."""
@@ -85,26 +89,119 @@ class GalleryController:
             self._timer = None
         self._subscribers.clear()
 
+    def preferences(self):
+        from .gallery_preferences import read_preferences
+        return read_preferences(getattr(self.service, "root", None))
+
     @property
     def upload_format(self):
-        try:
-            value = json.loads((self.service.root / "preferences.json").read_text())["uploadFormat"]
-            return value if value in ("studio", "sog", "ssog", "spz") else "sog"
-        except (OSError, ValueError, KeyError, AttributeError):
-            return "sog"
+        return self.preferences()["uploadFormat"]
 
     @upload_format.setter
     def upload_format(self, value):
-        if value not in ("studio", "sog", "ssog", "spz"):
-            raise ValueError("Unsupported upload format")
-        path = self.service.root / "preferences.json"
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"uploadFormat": value}))
-        temporary.replace(path)
+        from .gallery_preferences import set_preference
+        set_preference("uploadFormat", value, self.service.root)
         self._upload_format = value
 
+    def update_all(self, assets):
+        """Queue a reviewed account-bound batch; each item reuses publish validation."""
+        self._check_identity()
+        if self._panel_busy() or self._update_queue:
+            raise ValueError(tr("error.busy"))
+        state = self.service.snapshot()
+        identity = self.service.identity()
+        entries = []
+        public = {}
+        for asset in assets:
+            link = state["links"].get(asset["id"])
+            scene = next((s for s in state["scenes"] if link and s["id"] == link["sceneId"]), None)
+            facts = asset_sync_state(asset, link, scene, state["jobs"])
+            if facts["action"] != "update" or facts["freshness"] != "local":
+                continue
+            entries.append({"asset": copy.deepcopy(asset), "scene": copy.deepcopy(scene),
+                            "identity": identity, "format": self.upload_format})
+            if scene.get("visibility") == "public":
+                public[scene["id"]] = scene.get("revision")
+        def start():
+            if self.service.identity() != identity:
+                return
+            self._batch_approval = (identity, public)
+            self._update_queue = entries
+            self._advance_update_all()
+            self._schedule_tick()
+        if public:
+            self.confirm_action("confirm.update_all", "\n".join(e["scene"].get("title", "") for e in entries
+                if e["scene"]["id"] in public), start)
+        else:
+            start()
+
+    def _advance_update_all(self):
+        if self._panel_busy() or self._open_continuation:
+            return
+        if self._batch_current:
+            entry, previous_message = self._batch_current
+            self._batch_current = None
+            if entry["identity"] == self.service.identity():
+                state = self.service.snapshot()
+                has_job = any(j.get("project") == entry["asset"]["id"] and j["id"] not in entry.get("job_ids", ()) for j in state["jobs"])
+                completed = state.get("completion") and state["completion"].get("id") != entry.get("completion_id")
+                if not has_job and not completed and self._message and self._message != previous_message:
+                    self._record_batch_failure(entry, self._message)
+            if self._last_canceled:
+                self._update_queue = []
+        if not self._update_queue:
+            self._batch_approval = None
+            return
+        entry = self._update_queue.pop(0)
+        if entry["identity"] != self.service.identity():
+            self._update_queue = []
+            self._batch_approval = None
+            self._batch_rows = []
+            return
+        asset, scene = entry["asset"], entry["scene"]
+        try:
+            state = self.service.snapshot()
+            current = next((s for s in state["scenes"] if s["id"] == scene["id"]), None)
+            if not current or current.get("revision") != scene.get("revision"):
+                raise ValueError(tr("error.refresh"))
+            entry["job_ids"] = {j["id"] for j in state["jobs"]}
+            entry["completion_id"] = (state.get("completion") or {}).get("id")
+            self._batch_current = (entry, self._message)
+            self.publish_asset(asset, {k: scene.get(k, "") for k in ("title", "description", "visibility")},
+                               entry["format"], update=True)
+        except Exception as exc:
+            self._batch_current = None
+            self._record_batch_failure(entry, str(exc))
+
+    def _record_batch_failure(self, entry, message):
+        from .gallery_messages import localize_message
+        identifier = "batch:" + str(uuid.uuid4())
+        self._batch_retries[identifier] = entry
+        self._batch_rows.append({"id": identifier, "project": entry["asset"]["id"],
+            "status": "error", "kind": "upload", "metadata": {"title": entry["scene"].get("title", "")},
+            "message": localize_message(message), "batchFailure": True})
+
     def command(self, name, job_id=None):
+        if job_id and job_id.startswith("batch:"):
+            if name in ("cancel", "resume"):
+                entry = self._batch_retries.get(job_id)
+                if name == "resume" and entry:
+                    self._check_identity()
+                    if entry["identity"] != self.service.identity():
+                        return
+                    if self._panel_busy() or self._update_queue:
+                        raise ValueError(tr("error.busy"))
+                    # Retry enters the normal confirmation/validation path again.
+                    self.publish_asset(entry["asset"], {k: entry["scene"].get(k, "") for k in
+                        ("title", "description", "visibility")}, entry["format"], update=True)
+                    self._batch_current = (entry, self._message)
+                self._batch_rows = [row for row in self._batch_rows if row["id"] != job_id]
+                self._batch_retries.pop(job_id, None)
+                self._schedule_tick()
+            return
         if name == "pause":
+            self._update_queue = []
+            self._batch_approval = None
             self._action_pause()
         elif name == "cancel":
             if self.service.busy:
@@ -264,7 +361,7 @@ class GalleryController:
         scene = scene or {}
         was_public = scene.get("visibility") == "public"
         visibility = details.get("visibility", scene.get("visibility", "private"))
-        if visibility == "public":
+        if visibility == "public" and self.preferences()["askBeforePublic"] and not self._batch_public_approved(scene, details):
             key = "confirm.public_update" if was_public else "confirm.public"
             title = details.get("title", scene.get("title", ""))
             self._confirm = (tr(key, title=title), action, tr("action.update" if was_public else "action.submit"))
@@ -272,6 +369,13 @@ class GalleryController:
                 self._show_confirmation()
         else:
             action()
+
+    def _batch_public_approved(self, scene, details):
+        approval = getattr(self, "_batch_approval", None)
+        return bool(approval and approval[0] == self.service.identity()
+                    and approval[1].get(scene.get("id")) == scene.get("revision")
+                    and scene.get("visibility") == "public"
+                    and details.get("visibility", "public") == "public")
 
     def resolve_asset(self, asset, details):
         """Review each differing shared group before accepting a new write guard."""
@@ -462,18 +566,29 @@ class GalleryController:
         def unsubscribe():
             self._subscribers.pop(callback, None)
             if not any(self._subscribers.values()) and not self.offline:
-                self._next_refresh = time.monotonic() + 300
+                self._next_refresh = time.monotonic() + self.preferences()["refreshMinutes"] * 60
         return unsubscribe
 
     def snapshot(self):
         from .gallery_messages import localize_message
         state = self.service.snapshot()
+        state["jobs"] = list(state.get("jobs", [])) + copy.deepcopy(self._batch_rows)
+        state["batchQueued"] = len(self._update_queue)
         for job in state.get("jobs", []):
             job["message"] = localize_message(job.get("message", ""))
         return dict(state, checkedAt=self.checked_at, offline=self.offline,
                     message=localize_message(self._message or state.get("message", "")),
-                    phase=self.phase(), preparationProgress=self._export_progress,
+                    accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
                     undoPull=copy.deepcopy(self._undo_pull), pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
+
+    def _account_flow(self):
+        account = getattr(self.service, "account", None)
+        if account is None:
+            return {}
+        snap = account.snapshot()
+        return {key: getattr(snap, key, default) for key, default in (
+            ("linking", False), ("user_code", ""), ("verification_uri_complete", ""),
+            ("countdown_seconds", 0), ("error", ""))}
 
     def undo_pull(self):
         pending = self._undo_pull
@@ -562,7 +677,7 @@ class GalleryController:
             else:
                 self.checked_at = time.time()
                 self._backoff = 5.0
-                self._next_refresh = now + (30 if any(self._subscribers.values()) else 300)
+                self._next_refresh = now + (30 if any(self._subscribers.values()) else self.preferences()["refreshMinutes"] * 60)
         if now >= self._next_refresh and not self._refresh_pending and not self.service.busy:
             if self.service.snapshot().get("signed_in"):
                 self.refresh()
@@ -591,6 +706,7 @@ class GalleryController:
                     self._finish_pulls()
                 except Exception as exc:
                     self._message = friendly_error(exc)
+        self._advance_update_all()
         snapshot = self.snapshot()
         if snapshot != self._last_snapshot and now - self._last_notification >= 0.1:
             self._last_snapshot = copy.deepcopy(snapshot)
@@ -682,6 +798,11 @@ class GalleryController:
         self._identity = identity
         self._reupload_reason = None
         self._pulled_project = None
+        self._update_queue = []
+        self._batch_rows = []
+        self._batch_retries = {}
+        self._batch_approval = None
+        self._batch_current = None
         self._pull_requests.clear()
         self._cancel_requests.clear()
         self._resume_queue.clear()

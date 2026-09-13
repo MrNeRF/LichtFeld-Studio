@@ -2077,7 +2077,7 @@ def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
         '__gallery__', '__gallery_attention__', '__gallery_transfers__'}
     rcss = (resources / 'asset_manager.rcss').read_text()
     assert '#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto;' in rcss
-    assert '#asset-sidebar-gallery { flex-shrink: 0; }' in rcss
+    assert '#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }' in rcss
 
 
 @pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (1024, '1.0 KB'),

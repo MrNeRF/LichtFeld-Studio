@@ -58,6 +58,7 @@ class PreferencesPanel(Panel):
     EXPANDABLE_SECTIONS = (
         "language",
         "project_location",
+        "gallery",
         "appearance",
         "scene_rendering",
         "navigation",
@@ -110,6 +111,11 @@ class PreferencesPanel(Panel):
         if model is None:
             return
 
+        from .gallery_preferences import DEFAULTS, read_preferences
+        for key in DEFAULTS:
+            model.bind("gallery_" + key, lambda k=key: read_preferences()[k],
+                       lambda value, k=key: self._set_gallery_preference(k, value))
+        model.bind_func("gallery_preferences_error", lambda: getattr(self, "_gallery_preferences_error", ""))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
@@ -1100,6 +1106,18 @@ class PreferencesPanel(Panel):
             return
         lf.ui.set_panel_enabled(self.id, False)
 
+    def _set_gallery_preference(self, key, value):
+        from .gallery_preferences import set_preference
+        try:
+            if key == "askBeforePublic":
+                value = self._coerce_bool(value)
+            set_preference(key, value)
+            self._gallery_preferences_error = ""
+        except (ValueError, OSError):
+            self._gallery_preferences_error = lf.ui.tr("preferences.gallery.invalid")
+        if self._handle:
+            self._handle.dirty_all()
+
     def _set_section(self, section):
         if self._section == section:
             return
@@ -1201,6 +1219,9 @@ class PreferencesPanel(Panel):
     def _reset_section(self, section=None):
         section = section or self._section
         if section == "general":
+            from .gallery_preferences import DEFAULTS, set_preference
+            for key, value in DEFAULTS.items():
+                set_preference(key, value)
             lf.ui.set_language("en")
             lf.ui.clear_project_location()
             setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
