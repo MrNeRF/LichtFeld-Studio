@@ -2261,9 +2261,12 @@ namespace lfs::vis {
             const std::string error_message = typed.user_message().empty()
                                                   ? std::string(typed.detail())
                                                   : std::string(typed.user_message());
-            LOG_ERROR("Training initialization failed: {}", error_message);
-            last_error_ = error_message;
-            last_training_error_.set(typed);
+            const bool user_stopped = stop_token.stop_requested();
+            if (!user_stopped) {
+                LOG_ERROR("Training initialization failed: {}", error_message);
+                last_error_ = error_message;
+                last_training_error_.set(typed);
+            }
 
             // The initialization helper rolls back all scene changes before
             // this existing completion/error path is made observable. Keep
@@ -2276,17 +2279,17 @@ namespace lfs::vis {
                     .iteration = 0,
                     .final_loss = 0.0f,
                     .elapsed_seconds = 0.0f,
-                    .success = false,
-                    .user_stopped = false,
+                    .success = user_stopped,
+                    .user_stopped = user_stopped,
                     .resource_exhausted = false,
-                    .reason = FinishReason::Error,
-                    .error = error_message,
-                    .typed_error = typed};
+                    .reason = user_stopped ? FinishReason::UserStopped : FinishReason::Error,
+                    .error = user_stopped ? std::string{} : error_message,
+                    .typed_error = user_stopped ? std::nullopt : std::optional{typed}};
             }
             {
                 std::lock_guard lock(initialization_mutex_);
                 initialization_complete_ = true;
-                initialization_error_ = typed;
+                initialization_error_ = user_stopped ? std::nullopt : std::optional{typed};
             }
             initialization_cv_.notify_all();
             release_training_thread_local_cuda_caches();

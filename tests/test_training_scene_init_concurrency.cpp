@@ -452,6 +452,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, StopTrainingReturnsWhileWorkerWaitsForO
     ASSERT_TRUE(wait_until([&] {
         return manager.getState() == lfs::vis::TrainingState::Finished;
     }));
+    EXPECT_TRUE(manager.getLastError().empty());
     EXPECT_EQ(scene.getNodeCount(), node_count);
     EXPECT_TRUE(scene_has_type(scene, lfs::core::NodeType::POINTCLOUD));
 }
