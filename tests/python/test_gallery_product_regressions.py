@@ -508,6 +508,135 @@ def test_waiting_probes_backoff_then_resumes_without_controller(tmp_path, monkey
     assert service._connection_timer is None
 
 
+@pytest.mark.parametrize('pinned', [False, True], ids=['restart', 'range'])
+@pytest.mark.parametrize('failure', ['socket', 'eof', 'incomplete_read'])
+@pytest.mark.parametrize('pause', [False, True], ids=['automatic', 'user_pause'])
+def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_clock, pinned, failure, pause):
+    import hashlib
+    import io
+    import json
+    from http.client import IncompleteRead
+    from pathlib import Path
+    from test_gallery_sync import connected, finish, gallery_sync
+    from lfs_plugins import portal_gallery, portal_retry
+    from lfs_plugins.gallery_controller import asset_sync_state
+    from lfs_plugins.gallery_transfer_panel import transfer_rows
+
+    service = connected(tmp_path, monkeypatch)
+    data, prefix = b'ply\ncomplete-download', b'ply\n'
+    remote = scene(sourceFormat='ply', contentLength=len(data))
+    remote['id'] = '28d8880e-96d2-46a0-9226-bb62976392b2'
+    reachable, requests, probes, messages, progress = [True], [], [], [], []
+    headers = {'ETag': '"pinned-v1"', 'Accept-Ranges': 'bytes'} if pinned else {}
+
+    class Interrupted(io.BytesIO):
+        status = 200
+
+        def read(self, size=-1):
+            if not self.tell():
+                reachable[0] = False
+                return super().read(len(prefix))
+            if failure == 'socket':
+                raise ConnectionResetError('Portal stopped mid-stream')
+            if failure == 'incomplete_read':
+                raise IncompleteRead(b'', len(data) - len(prefix))
+            return b''
+
+    class Recovered(io.BytesIO):
+        def read(self, size=-1):
+            job = service.snapshot()['jobs'][0]
+            messages.append(job['message'])
+            progress.append(job['completed'])
+            return super().read(size)
+
+    def opened(request, **kwargs):
+        requests.append(request)
+        assert kwargs['no_redirect'] and request.get_header('Authorization') is None
+        if len(requests) == 1:
+            response = Interrupted(data)
+            response.headers = headers
+            return response
+        if not reachable[0]:
+            raise ConnectionRefusedError('Portal offline')
+        offset = len(prefix) if pinned else 0
+        assert request.get_header('Range') == (f'bytes={offset}-' if pinned else None)
+        assert request.get_header('If-range') == ('"pinned-v1"' if pinned else None)
+        response = Recovered(data[offset:])
+        response.status = 206 if pinned else 200
+        response.headers = dict(headers)
+        if pinned:
+            response.headers['Content-Range'] = f'bytes {offset}-{len(data)-1}/{len(data)}'
+        return response
+
+    def request(client, method, path, *args):
+        if path == '/me':
+            probes.append(reachable[0])
+            if not reachable[0]:
+                raise ConnectionRefusedError('Portal offline')
+            return {'id': 'one', 'gallerySyncVersion': 1}
+        assert reachable[0]
+        if path.endswith('/download'):
+            return {'scene': remote, 'url': 'https://portal.example/storage'}
+        return remote
+
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_request', request)
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    # Exercise the real bounded retry loop without wall-clock backoff sleeps.
+    monkeypatch.setattr(portal_gallery, 'retry_call', lambda operation, **kwargs:
+                        portal_retry.retry_call(operation, sleep=lambda _: None, **kwargs))
+    monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
+    service.download(remote)
+    finish(service)
+    job = service.snapshot()['jobs'][0]
+    assert job['status'] == 'waiting', (job['message'], len(requests), probes)
+    assert job['message'] == 'Waiting for connection…'
+    assert job['completed'] == len(prefix) and len(requests) == 4
+    destination = Path(job['path'])
+    partial = destination.with_name('.' + destination.name + '.part')
+    assert not destination.exists()
+    assert partial.exists() == pinned
+    if pinned:
+        assert partial.read_bytes() == prefix
+    row = transfer_rows(service.snapshot())[0]
+    assert row['phase'].endswith('waiting') or row['phase'] == 'Waiting for connection…'
+    assert row['can_pause'] and row['can_resume']
+    assert asset_sync_state({}, None, remote, [job])['state'] == 'waiting'
+    persisted = json.loads((tmp_path / 'sync.json').read_text())
+    assert 'storage' not in json.dumps(persisted)  # No signed URL in the journal.
+    timer = connection_clock[1][-1]
+    assert timer.delay == 5
+    timer.fire()
+    finish(service)
+    assert service._job(job['id'])['status'] == 'waiting'
+    assert connection_clock[1][-1].delay == 10 and len(requests) == 4
+    if pause:
+        timer = connection_clock[1][-1]
+        service.pause(job['id'])
+        finish(service)
+        assert timer.canceled
+        assert service._job(job['id'])['status'] == 'paused'
+        assert 'retryAt' not in service._job(job['id'])
+    reachable[0] = True
+    if pause:
+        service._retry_connection()
+        assert not service.busy and service._connection_timer is None
+        assert len(requests) == 4
+        service.resume(job['id'])
+    else:
+        connection_clock[1][-1].fire()
+    finish(service)
+    job = service._job(job['id'])
+    assert job['status'] == 'completed', job['message']
+    assert destination.read_bytes() == data and not partial.exists()
+    assert job['sha256'] == hashlib.sha256(data).hexdigest()
+    assert job['completed'] == len(data) and len(requests) == 5
+    assert probes == ([False] if pause else [False, True])
+    assert service._connection_timer is None
+    if not pinned:
+        assert 'Restarting from zero' in messages[0]
+        assert progress[0] == 0
+
+
 @pytest.mark.parametrize('restart', [False, True])
 def test_explicit_pause_never_auto_resumes_after_outage(tmp_path, monkeypatch, connection_clock, restart):
     from test_gallery_sync import connected, finish, Client, gallery_sync

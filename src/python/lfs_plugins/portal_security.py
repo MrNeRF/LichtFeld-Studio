@@ -75,3 +75,35 @@ def checked_portal_url(account, value):
     except ValueError:
         import lichtfeld as lf
         raise ValueError(lf.ui.tr('asset_manager.gallery.error.unsafe_url')) from None
+
+
+def storage_url(base_url, value, allowed_hosts=None):
+    """Validate credential-free transfers; an absent allowlist permits any HTTPS host.
+
+    HTTP is only available on the configured local portal's own origin. Explicit
+    host[:port] allowlists are exact matches, and empty/malformed lists deny all.
+    Navigation must continue to use portal_url instead.
+    """
+    from urllib.parse import urljoin, urlsplit
+    try:
+        if not isinstance(value, str) or not value or any(ord(c) <= 32 or ord(c) == 127 for c in value) or '\\' in value:
+            raise ValueError
+        parsed = urlsplit(urljoin(base_url + '/', value))
+        # Reuse the strict URL syntax checks, allowing only this HTTPS authority
+        # in addition to the portal origin. This never changes navigation policy.
+        result = portal_url(base_url, value, [parsed.netloc])
+        if allowed_hosts is not None:
+            if not isinstance(allowed_hosts, (list, tuple)):
+                raise ValueError
+            authority = (parsed.hostname.lower(), parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80))
+            permitted = set()
+            for host in allowed_hosts:
+                if not isinstance(host, str) or not host or any(c in host for c in '/?#@\\'):
+                    raise ValueError
+                candidate = urlsplit(portal_url('https://' + host, 'https://' + host))
+                permitted.add((candidate.hostname, candidate.port if candidate.port is not None else 443))
+            if authority not in permitted:
+                raise ValueError
+        return result
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('Unsafe portal URL') from None

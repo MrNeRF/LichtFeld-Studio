@@ -8,7 +8,9 @@ progress and checkpoint callbacks let the panel publish state on the UI thread.
 from __future__ import annotations
 
 import hashlib
+from http.client import IncompleteRead
 import json
+import logging
 import os
 import tempfile
 import shutil
@@ -121,7 +123,8 @@ class PortalGalleryClient:
         self.list_etag = None
         self.scene_tokens = {}
         self.max_file_bytes = None
-        self.portal_owned_hosts = ()
+        self.storage_hosts = None
+        self._logged_storage_hosts = set()
         self.processing_deadline = None
         self.user_agent = "LichtFeld-Studio/" + getattr(account, "_client_version", _default_client_version())
 
@@ -132,7 +135,9 @@ class PortalGalleryClient:
             version = result.get("revisionDomains", 0)
             self.revision_domains = version if type(version) is int else 0
             self.max_file_bytes = result.get("maxFileBytes", DEFAULT_MAX_FILE_BYTES)
-            self.portal_owned_hosts = result.get("portalOwnedHosts", ())
+            # Prefer the storage-specific contract; retain the older advertised
+            # host list when present. Omission means unrestricted HTTPS storage.
+            self.storage_hosts = result.get("storageHosts", result.get("portalOwnedHosts"))
         return result
 
     def _response(self, path, *, etag=None, max_bytes=4 * 1024 * 1024):
@@ -252,11 +257,17 @@ class PortalGalleryClient:
         return self._request("POST", f"/splats/uploads/{_identifier(upload_id)}/cancel", {})
 
     def _storage_url(self, url):
-        from .portal_security import portal_url
+        from .portal_security import storage_url
         try:
-            return portal_url(self.account.base_url, url, self.portal_owned_hosts)
+            result = storage_url(self.account.base_url, url, self.storage_hosts)
         except ValueError:
             raise PortalProtocolError("Unsafe portal URL") from None
+        host = urllib.parse.urlsplit(result).netloc
+        if host not in self._logged_storage_hosts:
+            self._logged_storage_hosts.add(host)
+            # Presigned paths/queries contain secrets; log only the authority.
+            logging.getLogger(__name__).debug("Portal storage transfer host: %s", host)
+        return result
 
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
                  checkpoint=None, on_checkpoint=lambda value: None, on_message=lambda message: None,
@@ -317,7 +328,11 @@ class PortalGalleryClient:
                     elif not offset and status != 200:
                         raise PortalProtocolError('Unexpected gallery download response')
                     keep_partial = bool(pinned)
-                    saved = {'scene': identity, 'representationId': current_tag} if pinned else {}
+                    # Retain the attempted scene even without a pin so a later
+                    # service retry can explain why it must restart from zero.
+                    saved = {'scene': identity}
+                    if pinned:
+                        saved['representationId'] = current_tag
                     on_checkpoint(dict(saved))
                     digest = hashlib.sha256()
                     if offset:
@@ -326,6 +341,8 @@ class PortalGalleryClient:
                                 digest.update(chunk)
                     completed = offset
                     if not offset:
+                        if checkpoint or partial.exists():
+                            on_progress(0, total)
                         if partial.exists():
                             on_message('The portal does not provide a matching pinned representation. Restarting from zero.')
                         partial.unlink(missing_ok=True)
@@ -339,7 +356,12 @@ class PortalGalleryClient:
                             while True:
                                 if cancel.is_set():
                                     raise GalleryTransferCanceled('Download paused')
-                                chunk = response.read(min(1024 * 1024, total - completed + 1))
+                                try:
+                                    chunk = response.read(min(1024 * 1024, total - completed + 1))
+                                except IncompleteRead as exc:
+                                    # Chunked HTTP can raise instead of returning
+                                    # EOF when the portal disappears mid-response.
+                                    raise ConnectionError('Gallery download connection was interrupted') from exc
                                 if not chunk:
                                     break
                                 completed += len(chunk)
@@ -349,7 +371,9 @@ class PortalGalleryClient:
                                 digest.update(chunk)
                                 on_progress(completed, total)
                             if completed != total:
-                                raise PortalProtocolError('Gallery download was incomplete')
+                                # A short response is a dropped transfer, eligible
+                                # for the same retry/waiting policy as uploads.
+                                raise ConnectionError('Gallery download was incomplete')
                         finally:
                             output.flush()
                             os.fsync(output.fileno())

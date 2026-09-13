@@ -75,8 +75,8 @@ def test_X4_account_panel_browser_and_copy_validate_again(panel_module, monkeypa
     assert errors == ['unsafe_portal_url']
 
 
-@pytest.mark.parametrize('url', BAD_URLS)
-def test_X4_download_refuses_foreign_host_before_io(tmp_path, monkeypatch, url):
+@pytest.mark.parametrize('url', [BAD_URLS[i] for i in (1, 2, 6, 7, 8)] + ['http://foreign.example/file'])
+def test_X4_download_refuses_unsafe_transport_before_io(tmp_path, monkeypatch, url):
     client, scene = _download_client(4)
     original = client.account.request_json_authenticated
     client.account.request_json_authenticated = lambda method, path, body=None: (
@@ -87,11 +87,12 @@ def test_X4_download_refuses_foreign_host_before_io(tmp_path, monkeypatch, url):
     assert not list(tmp_path.iterdir())
 
 
-def test_X4_me_explicit_owned_host_allows_download(tmp_path, monkeypatch):
+@pytest.mark.parametrize('host_field', ['portalOwnedHosts', 'storageHosts'])
+def test_X4_me_explicit_owned_host_allows_download(tmp_path, monkeypatch, host_field):
     client, scene = _download_client(4)
     def request(method, path, body=None):
         if path.endswith('/me'):
-            return {'maxFileBytes': 4, 'portalOwnedHosts': ['cdn.portal.example']}
+            return {'maxFileBytes': 4, host_field: ['cdn.portal.example']}
         if path.endswith('/download'):
             return {'url': 'https://cdn.portal.example/file', 'scene': scene}
         return scene
@@ -104,8 +105,115 @@ def test_X4_me_explicit_owned_host_allows_download(tmp_path, monkeypatch):
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
     client.download(scene['id'], tmp_path/'file.ply')
     assert calls == ['https://cdn.portal.example/file']
+    for url in ['http://cdn.portal.example/file', 'https://other.example/file', 'https://cdn.portal.example.evil/file']:
+        with pytest.raises(portal_account.PortalProtocolError):
+            client._storage_url(url)
     with pytest.raises(ValueError):
-        portal_security.portal_url('https://portal.example', 'http://cdn.portal.example/file', client.portal_owned_hosts)
+        portal_security.portal_url('https://portal.example', 'https://cdn.portal.example/file')
+
+
+def test_P4_r2_download_is_credential_free_and_logs_only_host(tmp_path, monkeypatch, caplog):
+    client, scene = _download_client(4)
+    original = client.account.request_json_authenticated
+    url = 'https://bucket.r2.cloudflarestorage.com/private/file?X-Amz-Signature=secret&credential=private'
+    client.account.request_json_authenticated = lambda method, path, body=None: (
+        {'url': url, 'scene': scene} if path.endswith('/download') else original(method, path, body))
+    calls = []
+    def opened(request, **kwargs):
+        calls.append(request.full_url)
+        assert request.get_method() == 'GET'
+        assert request.get_header('Authorization') is None
+        assert request.get_header('Cookie') is None
+        assert kwargs == {'timeout': 120, 'no_redirect': True}
+        return _response(b'data')
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    with caplog.at_level('DEBUG', logger=portal_gallery.__name__):
+        client.download(scene['id'], tmp_path/'file.ply')
+        client._storage_url(url)
+    assert calls == [url]
+    assert (tmp_path/'file.ply').read_bytes() == b'data'
+    assert caplog.text.count('bucket.r2.cloudflarestorage.com') == 1
+    assert all(secret not in caplog.text for secret in ('X-Amz', 'secret', 'private', 'credential'))
+
+
+@pytest.mark.parametrize('allowed', [[], 'bucket.r2.cloudflarestorage.com', ['*.r2.cloudflarestorage.com'],
+                                      ['bucket.r2.cloudflarestorage.com/path']])
+def test_P4_explicit_empty_or_invalid_storage_allowlist_denies(allowed):
+    with pytest.raises(ValueError):
+        portal_security.storage_url('https://portal.example', 'https://bucket.r2.cloudflarestorage.com/file', allowed)
+
+
+def test_P4_http_storage_only_on_configured_local_portal():
+    url = 'http://127.0.0.1:45678/file?signature=local'
+    assert portal_security.storage_url('http://127.0.0.1:45678', url) == url
+    for base in ('https://portal.example', 'http://127.0.0.1:45679'):
+        with pytest.raises(ValueError):
+            portal_security.storage_url(base, url)
+
+
+def test_P4_retry_persisted_unsafe_url_upload_sends_r2_part_without_credentials(tmp_path, monkeypatch):
+    from test_gallery_sync import connected, finish
+    service = connected(tmp_path, monkeypatch)
+    upload_id, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
+    url = 'https://bucket.r2.cloudflarestorage.com/object?X-Amz-Signature=private'
+    export = tmp_path/'scene.ply'
+    export.write_bytes(b'x' * 131904)
+    calls, puts = [], []
+    upload = {'id': upload_id, 'status': 'uploading', 'partSize': 131904, 'uploadedParts': []}
+    scene = {'id': scene_id, 'revision': 'new', 'title': 'Example'}
+    def request(method, path, body=None, **kwargs):
+        calls.append((method, path, body))
+        if path.endswith('/me'):
+            return {'id': service.account.owner, 'gallerySyncVersion': 1}
+        if path.endswith('/uploads') or path.endswith('/' + upload_id):
+            return upload
+        if path.endswith('/part-upload-urls'):
+            return {'urls': [{'partNumber': 1, 'url': url}]}
+        assert path.endswith('/complete')
+        assert body['parts'] == [{'partNumber': 1, 'etag': 'part-etag'}]
+        return {'id': upload_id, 'status': 'completed', 'scene': scene}
+    service.account.request_json_authenticated = request
+    monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, 'list_scenes', lambda self, **kw: [])
+    fixed_policy = portal_gallery.PortalGalleryClient._storage_url
+    def old_policy(self, value):
+        try:
+            return portal_security.portal_url(self.account.base_url, value)
+        except ValueError:
+            raise portal_account.PortalProtocolError('Unsafe portal URL') from None
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_storage_url', old_policy)
+    def opened(request, **kwargs):
+        puts.append(request.full_url)
+        assert request.get_method() == 'PUT'
+        assert request.data == export.read_bytes()
+        assert request.get_header('Authorization') is None
+        assert request.get_header('Cookie') is None
+        assert kwargs == {'timeout': 120, 'no_redirect': True}
+        return _response(b'', headers={'ETag': 'part-etag'})
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    job_id = service.queue_upload(export, {'title': 'Example'}, 'project')
+    finish(service)
+    failed = service.snapshot()['jobs'][0]
+    assert (failed['status'], failed['message'], failed['completed'], failed['total']) == (
+        'error', 'Unsafe portal URL', 0, 131904)
+    assert puts == []
+    checkpoint = failed['checkpoint']
+    assert checkpoint['uploadId'] == upload_id
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_storage_url', fixed_policy)
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    assert restarted.snapshot()['jobs'][0]['status'] == 'error'
+    restarted.resume(job_id)
+    finish(restarted)
+    completed = restarted.snapshot()['jobs'][0]
+    assert (completed['status'], completed['completed'], completed['total']) == ('completed', 131904, 131904)
+    assert puts == [url]
+    assert restarted.snapshot()['links']['project']['sceneId'] == scene_id
+    creates = [body for method, path, body in calls if path.endswith('/uploads')]
+    assert len(creates) == 2
+    assert all(body['idempotencyKey'] == checkpoint['idempotencyKey'] for body in creates)
+    assert ('GET', '/api/gallery/v1/splats/uploads/' + upload_id, None) in calls
 
 
 def test_X4_thumbnail_builds_endpoint_from_origin_not_json(gallery, monkeypatch):
