@@ -555,6 +555,7 @@ namespace lfs::vis {
                 state.outcome = tasks.getExportOutcome();
                 state.path = core::path_to_utf8(tasks.getExportPath());
                 state.error = tasks.getExportError();
+                state.commit_uuid = tasks.getExportCommitUuid();
                 const auto fmt = tasks.getExportFormat();
                 state.format = fmt == core::ExportFormat::PLY                                                                                                                                              ? "PLY"
                                : (fmt == core::ExportFormat::GALLERY_SCENE || fmt == core::ExportFormat::GALLERY_SOG || fmt == core::ExportFormat::GALLERY_SSOG || fmt == core::ExportFormat::GALLERY_SPZ) ? ".licht"

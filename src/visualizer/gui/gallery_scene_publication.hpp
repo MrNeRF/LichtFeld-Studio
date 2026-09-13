@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,6 +29,10 @@ namespace lfs::vis::gui {
         core::Scene::SplatSnapshot snapshot;
         std::string name;
         std::optional<GalleryEncodedAsset> encoded;
+        // An isolated document can supply tensors lazily on the export worker.
+        // Empty for the live path, which already owns a SplatSnapshot.
+        std::function<std::shared_ptr<core::SplatData>()> load_payload;
+        bool metadata_known = true;
     };
 
     struct GalleryScenePublishRequest {
@@ -41,7 +46,22 @@ namespace lfs::vis::gui {
         float published_playback_speed = 1.0f;
         std::filesystem::path environment_source;
         bool created_directory = false;
+        bool materialized_payload = false;
     };
+
+    struct GalleryProjectExportRequest {
+        std::filesystem::path source_path;
+        std::filesystem::path destination;
+        core::ExportFormat payload_format = core::ExportFormat::GALLERY_SOG;
+        std::string expected_commit_uuid;
+    };
+
+    // Worker-only: owns a read-only document independently of the editor.
+    LFS_VIS_API void prepareGalleryProjectPublication(
+        const GalleryProjectExportRequest& source, GalleryScenePublishRequest& publication,
+        std::string& commit_uuid, const std::function<bool()>& canceled = {});
+    LFS_VIS_API void verifyGalleryProjectCommit(
+        const std::filesystem::path& source_path, const std::string& commit_uuid);
 
     [[nodiscard]] inline bool isGalleryPublicationFormat(const core::ExportFormat format) noexcept {
         switch (format) {

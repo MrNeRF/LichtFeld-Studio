@@ -175,3 +175,17 @@ def unpack_project(root, source, destination, *, progress=None):
         for path in outputs: path.unlink(missing_ok=True)
         destination.rmdir()
         raise
+
+
+def publication_view_metadata(root, value):
+    """The native file owns VIEW/SEQR; only mirror HDR for the packaging guard."""
+    from .portable_project import ProjectFile
+    path = staging_path(root, value)
+    staging_files(root, path)
+    with (path / "project.licht").open("rb") as source:
+        project = ProjectFile(source)
+        if "environment" not in project.manifest:
+            return {}
+        render = project.chapters[b"VIEW"]["render_settings"]
+        return {"environment": {"exposure": render["environment_exposure"],
+                                "rotation": render["environment_rotation_degrees"]}}

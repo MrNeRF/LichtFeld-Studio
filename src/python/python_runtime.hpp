@@ -415,6 +415,7 @@ namespace lfs::python {
 
     // Overlay state callbacks for Python overlay panels
     struct OverlayExportState {
+        std::string commit_uuid;
         bool active = false;
         float progress = 0.0f;
         std::string stage;

@@ -1910,6 +1910,31 @@ NB_MODULE(lichtfeld, m) {
         "The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.");
 
     m.def(
+        "prepare_gallery_project",
+        [](const std::string& source_path, const std::string& destination,
+           const std::string& payload_format, const std::string& expected_commit_uuid) {
+            using lfs::core::ExportFormat;
+            const auto format = (payload_format == "ply" || payload_format == "studio") ? ExportFormat::GALLERY_SCENE
+                                : payload_format == "sog"                               ? ExportFormat::GALLERY_SOG
+                                : payload_format == "ssog"                              ? ExportFormat::GALLERY_SSOG
+                                : payload_format == "spz"                               ? ExportFormat::GALLERY_SPZ
+                                                                                        : throw std::invalid_argument("Choose Studio, SOG, SSOG or SPZ compression.");
+            if (!expected_commit_uuid.empty() && !lfs::core::Uuid::from_string(expected_commit_uuid))
+                throw std::invalid_argument("Invalid expected project commit UUID.");
+            lfs::core::events::cmd::PrepareGalleryProject command{
+                .source_path = python_utf8_path(source_path),
+                .destination = python_utf8_path(destination),
+                .payload_format = format,
+                .expected_commit_uuid = expected_commit_uuid};
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_project", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("source_path"), nb::arg("destination"), nb::arg("payload_format") = "sog",
+        nb::arg("expected_commit_uuid") = "",
+        "Prepare a saved .licht project on the managed export worker without opening it in the editor. "
+        "Destination must be a fresh staging directory. Poll ui.get_export_state() for progress, errors and commit_uuid.");
+
+    m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,

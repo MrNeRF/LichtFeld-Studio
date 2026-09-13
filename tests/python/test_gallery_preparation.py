@@ -407,3 +407,15 @@ def test_staging_accepts_spz_sidecar_payload(tmp_path):
     nodes, total = gallery_preparation.read_staging(tmp_path, directory)
     assert nodes[0]["path"].name == "0.spz"
     assert total == len(payload)
+
+
+def test_saved_publication_metadata_uses_embedded_hdr_without_live_view(tmp_path):
+    import shutil
+    import uuid
+    from pathlib import Path
+    from lfs_plugins import gallery_preparation
+    staging = tmp_path / (str(uuid.uuid4()) + '.scene')
+    staging.mkdir()
+    shutil.copyfile(Path(__file__).parents[1] / 'data' / 'portable-sog.licht', staging / 'project.licht')
+    result = gallery_preparation.publication_view_metadata(tmp_path, staging)
+    assert result == {'environment': {'exposure': -1.25, 'rotation': 123.0}}

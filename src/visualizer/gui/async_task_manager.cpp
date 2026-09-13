@@ -1248,6 +1248,11 @@ namespace lfs::vis::gui {
 
         state::SceneCleared::when([this](const auto&) { ++gallery_scene_epoch_; });
 
+        cmd::PrepareGalleryProject::when([this](const auto& command) {
+            startGalleryProjectExport({command.source_path, command.destination,
+                                       command.payload_format, command.expected_commit_uuid});
+        });
+
         cmd::LoadGalleryScene::when([this](const auto& command) {
             std::vector<std::string> names;
             for (size_t i = 0; i < command.paths.size(); ++i)
@@ -1555,6 +1560,7 @@ namespace lfs::vis::gui {
         }
         {
             const std::lock_guard lock(export_state_.mutex);
+            export_state_.commit_uuid.clear();
             export_state_.format = ExportFormat::COLMAP;
             export_state_.path = path;
         }
@@ -1692,17 +1698,32 @@ namespace lfs::vis::gui {
             publishExportFailureState(format, path, e.what());
             return;
         }
+        startGalleryPublicationExport(std::move(publication));
+    }
+
+    void AsyncTaskManager::startGalleryProjectExport(const GalleryProjectExportRequest& request) {
+        GalleryScenePublishRequest publication;
+        publication.path = request.destination;
+        publication.format = request.payload_format;
+        startGalleryPublicationExport(std::move(publication), request);
+    }
+
+    void AsyncTaskManager::startGalleryPublicationExport(GalleryScenePublishRequest publication,
+                                                         std::optional<GalleryProjectExportRequest> source) {
+        const auto path = publication.path;
+        const auto format = publication.format;
         if (!beginJob(export_state_.job, JobType::Export, "Preparing scene for upload"))
             return;
         {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = format;
             export_state_.path = path;
+            export_state_.commit_uuid.clear();
         }
         publishExportState();
         const auto job = export_state_.job;
         try {
-            export_state_.thread.emplace([this, job, path, publication = std::move(publication)](std::stop_token stop) mutable {
+            export_state_.thread.emplace([this, job, path, source = std::move(source), publication = std::move(publication)](std::stop_token stop) mutable {
                 jobs_.work(job);
                 const auto canceled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
                 bool owns_directory = false;
@@ -1716,13 +1737,20 @@ namespace lfs::vis::gui {
                     wakeMainThreadForAsyncWork();
                     return true;
                 };
+                std::string commit_uuid;
                 try {
+                    if (source) {
+                        report(0.0f, "Reading saved project");
+                        prepareGalleryProjectPublication(*source, publication, commit_uuid, canceled);
+                    }
                     writeGalleryScenePublication(publication, report, canceled);
                     owns_directory = publication.created_directory;
                 } catch (const std::exception& e) {
                     // LFS-CENSUS-OK(empty-catch): report the captured error through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = e.what();
+                    if (source && error == "There are no visible splats to upload.")
+                        error = "gallery_project_no_splats: " + error;
                 } catch (...) {
                     // LFS-CENSUS-OK(empty-catch): report an unknown failure through the job after cleanup.
                     owns_directory = publication.created_directory;
@@ -1730,10 +1758,22 @@ namespace lfs::vis::gui {
                 }
                 // Settle extraction kernels before releasing owned GPU storage,
                 // including cancellation and partial-allocation failures.
-                if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess && error.empty())
-                    error = "Could not finish preparing the scene on the graphics device.";
+                if (!source || publication.materialized_payload) {
+                    if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess && error.empty())
+                        error = "Could not finish preparing the scene on the graphics device.";
+                }
                 publication.nodes.clear();
                 cancelled = canceled();
+                if (source && !cancelled && error.empty()) {
+                    try {
+                        verifyGalleryProjectCommit(source->source_path, commit_uuid);
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.commit_uuid = commit_uuid;
+                    } catch (const std::exception& e) {
+                        // LFS-CENSUS-OK(empty-catch): refuse a changed saved source and remove its staging directory.
+                        error = e.what();
+                    }
+                }
                 if (cancelled || !error.empty()) {
                     if (owns_directory) {
                         std::error_code ignored;
@@ -1780,6 +1820,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = format;
             export_state_.path = path;
+            export_state_.commit_uuid.clear();
         }
         publishExportState();
 
@@ -2094,6 +2135,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = format;
             export_state_.path = path;
+            export_state_.commit_uuid.clear();
         }
         jobs_.failed(
             export_state_.job, std::move(error));

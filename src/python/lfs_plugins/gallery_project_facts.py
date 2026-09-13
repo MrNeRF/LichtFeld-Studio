@@ -51,7 +51,7 @@ def saved_content_stamp(path):
             records=[]
             for i in range(count):
                 row=index[64+i*96:160+i*96]
-                if row[:4] in (b'SCNG',b'REFS',b'DSRC',b'SELM'):
+                if row[:4] in (b'SCNG',b'REFS',b'DSRC',b'SPLT',b'CKPT',b'SELM'):
                     # Include decoded payload and native chunk-header checksums;
                     # ignore index/chapter generation and file layout offsets.
                     records.append(row[:32]+row[48:64]+row[72:80])

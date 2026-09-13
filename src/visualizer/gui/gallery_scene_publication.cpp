@@ -8,8 +8,10 @@
 #include "core/provenance.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
+#include "io/loader.hpp"
 #include "io/selection_chapter.hpp"
 #include "rendering/environment_image.hpp"
+#include "rendering/rendering_types.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,9 +19,11 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <glm/gtc/type_ptr.hpp>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace lfs::vis::gui {
@@ -135,6 +139,208 @@ namespace lfs::vis::gui {
         return GalleryEncodedAsset{.source_kind = binding.source_kind, .bytes = std::move(*owned)};
     }
 
+    void verifyGalleryProjectCommit(const std::filesystem::path& source_path, const std::string& commit_uuid) {
+        const auto reader = io::project::ProjectReader::open(source_path);
+        if (!reader || reader->commit().commit_uuid.to_string() != commit_uuid)
+            throw std::runtime_error("gallery_project_commit_mismatch: The saved project changed. Open it and review before publishing.");
+    }
+
+    void prepareGalleryProjectPublication(const GalleryProjectExportRequest& source,
+                                          GalleryScenePublishRequest& publication,
+                                          std::string& commit_uuid,
+                                          const std::function<bool()>& canceled) {
+        namespace pj = io::project;
+        throwIfCanceled(canceled, "Scene preparation canceled.");
+        if (!isGalleryPublicationFormat(source.payload_format))
+            throw std::invalid_argument("Unsupported gallery payload format.");
+        // Check identity before decoding any payloads. ProjectDocument::open does
+        // not acquire an editor session or write to the source document.
+        const auto reader = pj::ProjectReader::open(source.source_path);
+        if (!reader)
+            throw std::runtime_error("gallery_project_not_supported: " + std::string(reader.error().user_message()));
+        commit_uuid = reader->commit().commit_uuid.to_string();
+        if (!source.expected_commit_uuid.empty() && source.expected_commit_uuid != commit_uuid)
+            throw std::runtime_error("gallery_project_commit_mismatch: The saved project changed. Open it and review before publishing.");
+        auto opened = pj::ProjectDocument::open(source.source_path, {.defer_geometry_payloads = true});
+        if (!opened) {
+            // Full document validation may reject a missing binding before the
+            // traversal below. Preserve a specific fallback reason for it.
+            if (const auto* graph = reader->find(pj::FOURCC_SCNG, reader->superblock().project_uuid)) {
+                const auto bytes = reader->read_chunk(*graph);
+                if (bytes) {
+                    const auto chapter = pj::SceneGraphChapter::from_bytes(*bytes);
+                    if (chapter) {
+                        const auto nodes = chapter->nodes();
+                        if (nodes) {
+                            for (const auto& node : *nodes) {
+                                if (node.type != "splat")
+                                    continue;
+                                const auto& payload = node.payload;
+                                const bool available = payload && !payload->reference_uuid &&
+                                                       ((payload->fourcc == "DSRC" && reader->find(pj::FOURCC_DSRC, payload->instance_uuid)) ||
+                                                        (payload->fourcc == "SPLT" && reader->find(pj::FOURCC_SPLT, payload->instance_uuid)) ||
+                                                        (payload->fourcc == "CKPT" && reader->find(pj::FOURCC_CKPT, payload->instance_uuid)));
+                                if (!available)
+                                    throw std::runtime_error("gallery_project_payload_unavailable: Splat '" + node.name +
+                                                             "' has an external or missing payload.");
+                            }
+                        }
+                    }
+                }
+            }
+            throw std::runtime_error("gallery_project_not_supported: " + std::string(opened.error().user_message()));
+        }
+        std::shared_ptr<const pj::ProjectDocument> document = std::make_shared<pj::ProjectDocument>(std::move(*opened));
+        if (!document->source_commit_uuid() || document->source_commit_uuid()->to_string() != commit_uuid)
+            throw std::runtime_error("gallery_project_commit_mismatch: The saved project changed while opening.");
+        const auto records = document->scene_graph().nodes();
+        if (!records)
+            throw std::runtime_error("gallery_project_not_supported: " + std::string(records.error().user_message()));
+        publication.path = source.destination;
+        publication.format = source.payload_format;
+        std::unordered_map<core::Uuid, const pj::SceneNodeRecord*> by_id;
+        for (const auto& record : *records)
+            by_id.emplace(record.uuid, &record);
+        for (const auto& record : *records) {
+            throwIfCanceled(canceled, "Scene preparation canceled.");
+            if (record.type != "splat")
+                continue;
+            auto world = glm::make_mat4(record.local_transform.data());
+            bool visible = record.visible;
+            auto parent = record.parent_uuid;
+            size_t depth = 0;
+            while (parent) {
+                const auto it = by_id.find(*parent);
+                if (it == by_id.end() || ++depth > records->size())
+                    throw std::runtime_error("gallery_project_not_supported: Invalid scene hierarchy.");
+                visible = visible && it->second->visible;
+                world = glm::make_mat4(it->second->local_transform.data()) * world;
+                parent = it->second->parent_uuid;
+            }
+            if (!visible)
+                continue;
+            const auto unsupported = [&] {
+                return std::runtime_error("gallery_project_payload_unavailable: Splat '" + record.name +
+                                          "' has an external, missing, or unsupported payload. Open the project to publish it.");
+            };
+            if (!record.payload || record.payload->reference_uuid)
+                throw unsupported();
+            const auto binding = *record.payload;
+            const bool dsrc = binding.fourcc == "DSRC";
+            if ((dsrc && (binding.instance_uuid != record.uuid || !isEncodedSplatKind(binding.source_kind) ||
+                          !document->find_dataset_source(binding.instance_uuid))) ||
+                (binding.fourcc == "SPLT" && !document->source_reader()->find(pj::FOURCC_SPLT, binding.instance_uuid)) ||
+                (binding.fourcc == "CKPT" && !document->find_checkpoint(binding.instance_uuid)) ||
+                (binding.fourcc != "DSRC" && binding.fourcc != "SPLT" && binding.fourcc != "CKPT"))
+                throw unsupported();
+            GalleryScenePublishNode node;
+            node.name = record.name;
+            node.snapshot.world_transform = world;
+            node.metadata_known = false;
+            const auto element = document->scene_graph().dom().array_find("nodes", record.uuid.to_string());
+            if (element) {
+                const auto metadata = element->get_json("publication");
+                if (dsrc && metadata && metadata->is_object() && metadata->contains("count") && metadata->contains("sh_degree") &&
+                    metadata->at("count").is_number_integer() && metadata->at("sh_degree").is_number_integer()) {
+                    const auto count = metadata->at("count").get<int64_t>();
+                    const auto degree = metadata->at("sh_degree").get<int64_t>();
+                    if (count > 0 && degree >= 0 && degree <= 3) {
+                        node.snapshot.row_count = static_cast<size_t>(count);
+                        node.snapshot.active_sh_degree = static_cast<int>(degree);
+                        node.metadata_known = !record.payload_diverged;
+                    }
+                }
+            }
+            if (dsrc && galleryEncodedAssetReusable(source.payload_format, binding.source_kind, record.payload_diverged)) {
+                auto retained = document->find_dataset_source(binding.instance_uuid)->share();
+                if (!retained)
+                    throw std::runtime_error(std::string(retained.error().user_message()));
+                node.encoded = GalleryEncodedAsset{binding.source_kind, std::move(*retained)};
+            }
+            node.load_payload = [document, binding, canceled]() -> std::shared_ptr<core::SplatData> {
+                throwIfCanceled(canceled, "Scene preparation canceled.");
+                if (binding.fourcc == "SPLT") {
+                    const auto* chunk = document->source_reader()->find(pj::FOURCC_SPLT, binding.instance_uuid);
+                    auto bytes = document->source_reader()->read_chunk(*chunk,
+                                                                       [&](size_t, size_t) { throwIfCanceled(canceled, "Scene preparation canceled."); });
+                    if (!bytes)
+                        throw std::runtime_error(std::string(bytes.error().user_message()));
+                    auto payload = pj::SplatChapterPayload::from_lfsp(std::move(*bytes));
+                    if (!payload)
+                        throw std::runtime_error(std::string(payload.error().user_message()));
+                    auto data = payload->hydrate();
+                    if (!data)
+                        throw std::runtime_error(std::string(data.error().user_message()));
+                    return std::shared_ptr<core::SplatData>(std::move(*data));
+                }
+                if (binding.fourcc == "CKPT") {
+                    std::shared_ptr<core::SplatData> data;
+                    const auto result = document->find_checkpoint(binding.instance_uuid)->visit_materialized([&](std::istream& stream, const uint64_t bytes) -> lfs::Result<void> {
+                        auto loaded = core::load_checkpoint_splat_data(stream, bytes);
+                        if (!loaded)
+                            throw std::runtime_error(loaded.error());
+                        data = std::make_shared<core::SplatData>(std::move(*loaded));
+                        return {};
+                    });
+                    if (!result)
+                        throw std::runtime_error(std::string(result.error().user_message()));
+                    return data;
+                }
+                const auto path = document->materialize_embedded_asset(binding.instance_uuid, binding.source_kind);
+                if (!path)
+                    throw std::runtime_error(std::string(path.error().user_message()));
+                auto loader = io::Loader::create();
+                io::LoadOptions options;
+                options.cancel_requested = canceled;
+                auto loaded = loader->load(*path, options);
+                if (!loaded)
+                    throw std::runtime_error(loaded.error().message);
+                auto* data = std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
+                if (!data || !*data)
+                    throw std::runtime_error("gallery_project_payload_unavailable: Embedded asset is not splat data.");
+                return std::move(*data);
+            };
+            publication.nodes.push_back(std::move(node));
+        }
+        if (publication.nodes.empty())
+            throw std::runtime_error("gallery_project_no_splats: There are no visible splats to upload.");
+        publication.published_render = document->view().dom().get_json("render_settings").value_or(project::SessionJson::object());
+        const auto cameras = document->view().dom().get_json("panel_cameras");
+        if (cameras && cameras->is_array()) {
+            for (const auto& camera : *cameras)
+                if (camera.value("panel", "") == "primary")
+                    publication.published_camera = camera;
+        }
+        publication.published_timeline = document->sequencer().dom().get_json("timeline").value_or(project::SessionJson());
+        publication.published_loop_mode = document->sequencer().dom().get<std::string>("loop_mode").value_or("once");
+        publication.published_playback_speed = document->sequencer().dom().get<float>("playback_speed").value_or(1.0f);
+        const auto settings = project::renderSettingsFromProjectJson(publication.published_render);
+        if (!settings)
+            throw std::runtime_error("gallery_project_not_supported: " + std::string(settings.error().user_message()));
+        if (settings->environment_mode == EnvironmentBackgroundMode::Equirectangular) {
+            const auto ref = document->view().dom().get<std::string>("render_settings.environment_reference_uuid");
+            const auto references = document->references().records();
+            bool found = false;
+            if (ref && references) {
+                for (const auto& reference : *references) {
+                    if (reference.uuid.to_string() != *ref || reference.kind != "environment_map")
+                        continue;
+                    if (!document->find_dataset_source(reference.uuid))
+                        break;
+                    auto path = document->materialize_embedded_asset(reference.uuid, "lfsenv");
+                    if (!path)
+                        throw std::runtime_error(std::string(path.error().user_message()));
+                    publication.environment_source = *path;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                throw std::runtime_error("gallery_project_payload_unavailable: The HDR background is external or missing. Open the project to publish it.");
+        }
+        verifyGalleryProjectCommit(source.source_path, commit_uuid);
+    }
+
     void copyLazyChunkToFile(const lfs::io::project::LazyChunkValue& source,
                              const std::filesystem::path& destination,
                              const std::function<bool()>& canceled) {
@@ -214,6 +420,32 @@ namespace lfs::vis::gui {
                                   "Preparing scene for upload"))
                 throw std::runtime_error("Scene preparation canceled.");
             auto& published = request.nodes[i];
+            // Metadata-only DSRC snapshots never need tensors. Decode one node
+            // at a time when its metadata is absent or its encoding must change.
+            std::shared_ptr<core::SplatData> loaded_payload;
+            const auto materialize = [&] {
+                request.materialized_payload = true;
+                if (published.load_payload) {
+                    if (!loaded_payload)
+                        loaded_payload = published.load_payload();
+                    if (!loaded_payload)
+                        throw std::runtime_error("Embedded asset is not splat data.");
+                    published.snapshot.row_count = loaded_payload->size();
+                    if (published.metadata_known)
+                        loaded_payload->set_active_sh_degree(published.snapshot.active_sh_degree);
+                    else
+                        published.snapshot.active_sh_degree = loaded_payload->get_active_sh_degree();
+                    return loaded_payload;
+                }
+                return published.snapshot.materialize();
+            };
+            if (!published.metadata_known) {
+                const auto data = materialize();
+                // Soft deletions belong to the payload and cannot be copied as
+                // an unchanged encoded asset.
+                if (data->has_deleted_mask())
+                    published.encoded.reset();
+            }
             std::optional<std::string> reused_kind;
             if (published.encoded) {
                 reused_kind = published.encoded->source_kind;
@@ -230,7 +462,7 @@ namespace lfs::vis::gui {
                 copyLazyChunkToFile(published.encoded->bytes,
                                     request.path / (std::to_string(nodes.size()) + "." + extension), canceled);
             } else {
-                auto data = published.snapshot.materialize();
+                auto data = materialize();
                 if (data->visible_count() == 0)
                     continue;
                 published_count = data->visible_count();

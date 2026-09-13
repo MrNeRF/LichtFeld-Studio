@@ -11,6 +11,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_simplify.hpp"
+#include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include <atomic>
@@ -83,6 +84,11 @@ namespace lfs::vis {
                 std::lock_guard lock(export_state_.mutex);
                 return export_state_.format;
             }
+            [[nodiscard]] std::string getExportCommitUuid() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.commit_uuid;
+            }
+            void startGalleryProjectExport(const GalleryProjectExportRequest& request);
             void cancelExport();
 
             // Import
@@ -227,6 +233,8 @@ namespace lfs::vis {
                                   lfs::core::ProvenanceStamp provenance,
                                   int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
             void startColmapExport(const std::filesystem::path& path);
+            void startGalleryPublicationExport(GalleryScenePublishRequest publication,
+                                               std::optional<GalleryProjectExportRequest> source = std::nullopt);
             void startGallerySceneExport(const std::filesystem::path& path, core::ExportFormat format);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
@@ -296,6 +304,7 @@ namespace lfs::vis {
             JobRegistry& jobs_;
 
             struct ExportState {
+                std::string commit_uuid;
                 JobHandle job;
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
                 std::filesystem::path path;

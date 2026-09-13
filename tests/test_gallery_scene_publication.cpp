@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <filesystem>
@@ -446,4 +447,211 @@ TEST(GalleryScenePublicationTest, GallerySpzWritesGenuineV4WhenEncodingFromSplat
     const auto nodes = require_result(document->scene_graph().nodes());
     EXPECT_EQ(nodes.front().payload->source_kind, "spz");
     EXPECT_EQ(nodes.front().payload->fourcc, "DSRC");
+}
+
+namespace {
+    using lfs::vis::gui::GalleryProjectExportRequest;
+    using lfs::vis::gui::prepareGalleryProjectPublication;
+    using lfs::vis::gui::verifyGalleryProjectCommit;
+
+    std::filesystem::path portable_fixture(const std::string& kind) {
+        return std::filesystem::path(__FILE__).parent_path() / "data" / ("portable-" + kind + ".licht");
+    }
+
+    // Deliberately invalid bindings cannot pass ProjectDocument::save validation.
+    // Rewrite SCNG through the container writer and prove every other live row
+    // unchanged, as in the project document's malformed-fixture helpers.
+    void append_unavailable_payload_graph(const std::filesystem::path& path, const ProjectDocument& document) {
+        namespace pj = lfs::io::project;
+        const auto reader = require_result(pj::ProjectReader::open(path));
+        auto writer = require_result(pj::ProjectWriter::append(path));
+        require_status(writer.plan_commit());
+        const auto bytes = document.scene_graph().to_bytes();
+        require_status(writer.preflight(bytes.size()));
+        const pj::ChunkKey graph_key{pj::FOURCC_SCNG, document.project_uuid()};
+        require_status(writer.write_chunk(graph_key, bytes));
+        constexpr std::uint64_t unchanged_epoch = 1;
+        for (const auto& row : reader.chunks()) {
+            if (!row.is_live() || row.key == graph_key)
+                continue;
+            const auto proof = require_result(reader.make_clean_proof(row, unchanged_epoch));
+            require_status(writer.reuse_if_clean(proof, unchanged_epoch));
+        }
+        require_status(writer.commit());
+    }
+} // namespace
+
+TEST(GalleryProjectExportTest, EncodedPortableAssetsAndSessionAreRetainedWithoutTensors) {
+    TemporaryDirectory temporary;
+    for (const auto& [kind, format] : std::vector<std::pair<std::string, ExportFormat>>{
+             {"sog", ExportFormat::GALLERY_SOG},
+             {"ssog", ExportFormat::GALLERY_SSOG},
+             {"ply", ExportFormat::GALLERY_SCENE}}) {
+        const auto path = portable_fixture(kind);
+        ASSERT_TRUE(std::filesystem::is_regular_file(path)) << path;
+        const auto original = read_file_bytes(path);
+        auto source = require_result(ProjectDocument::open(path));
+        const auto records = require_result(source.scene_graph().nodes());
+        GalleryScenePublishRequest publication;
+        std::string commit;
+        prepareGalleryProjectPublication({path, temporary.path / (kind + ".scene"), format, ""}, publication, commit);
+        ASSERT_EQ(publication.nodes.size(), 1u);
+        EXPECT_EQ(commit, source.source_commit_uuid()->to_string());
+        ASSERT_TRUE(publication.nodes[0].encoded.has_value());
+        EXPECT_FALSE(publication.nodes[0].snapshot.data);
+        // Prove writer does not invoke the document decoder for a reusable asset.
+        publication.nodes[0].load_payload = []() -> std::shared_ptr<SplatData> {
+            throw std::runtime_error("Unexpected tensor hydration on encoded copy path");
+        };
+        EXPECT_EQ(publication.published_render, *source.view().dom().get_json("render_settings"));
+        EXPECT_EQ(publication.published_timeline, *source.sequencer().dom().get_json("timeline"));
+        ASSERT_FALSE(publication.environment_source.empty());
+        writeGalleryScenePublication(publication, {}, {});
+        verifyGalleryProjectCommit(path, commit);
+        EXPECT_FALSE(publication.materialized_payload);
+        const auto published = read_published_node(publication.path);
+        EXPECT_EQ(published.source_kind, kind);
+        EXPECT_EQ(published.dsrc, read_lazy_bytes(*source.find_dataset_source(records[0].uuid)));
+        EXPECT_EQ(read_file_bytes(publication.path / ("0." + kind)), published.dsrc);
+        EXPECT_EQ(read_file_bytes(path), original);
+    }
+}
+
+TEST(GalleryProjectExportTest, MultiNodeAncestorVisibilityAndWorldTransforms) {
+    TemporaryDirectory temporary;
+    const auto path = temporary.path / "multi.licht";
+    std::filesystem::copy_file(portable_fixture("multi"), path);
+    auto source = require_result(ProjectDocument::open(path));
+    auto records = require_result(source.scene_graph().nodes());
+    ASSERT_EQ(records.size(), 2u);
+    // Upserting existing nodes preserves their array positions. Remove the
+    // fixture records so the group is inserted before its child, as SCNG requires.
+    for (const auto& record : records)
+        ASSERT_TRUE(require_result(source.edit_scene_graph().remove_node(record.uuid)));
+    const auto parent_transform = glm::translate(glm::mat4(1.0f), glm::vec3(7, 2, -3)) *
+                                  glm::rotate(glm::mat4(1.0f), 0.5f, glm::vec3(0, 1, 0));
+    lfs::io::project::SceneNodeRecord parent{.uuid = fixed_uuid(80), .type = "group", .name = "parent"};
+    std::copy_n(&parent_transform[0][0], 16, parent.local_transform.begin());
+    require_status(source.edit_scene_graph().upsert_node(parent));
+    const auto child_transform = glm::scale(glm::mat4(1.0f), glm::vec3(2, 3, 4));
+    records[0].parent_uuid = parent.uuid;
+    std::copy_n(&child_transform[0][0], 16, records[0].local_transform.begin());
+    require_status(source.edit_scene_graph().upsert_node(records[0]));
+    records[1].child_order = 1;
+    require_status(source.edit_scene_graph().upsert_node(records[1]));
+    (void)require_result(source.save(path));
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    prepareGalleryProjectPublication({path, temporary.path / "multi.scene", ExportFormat::GALLERY_SCENE, ""}, publication, commit);
+    ASSERT_EQ(publication.nodes.size(), 2u);
+    const auto expected = parent_transform * child_transform;
+    const auto found = std::find_if(publication.nodes.begin(), publication.nodes.end(),
+                                    [&](const auto& node) { return node.name == records[0].name; });
+    ASSERT_NE(found, publication.nodes.end());
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            EXPECT_FLOAT_EQ(found->snapshot.world_transform[column][row], expected[column][row]);
+    parent.visible = false;
+    require_status(source.edit_scene_graph().upsert_node(parent));
+    (void)require_result(source.save(path));
+    GalleryScenePublishRequest hidden;
+    prepareGalleryProjectPublication({path, temporary.path / "hidden.scene", ExportFormat::GALLERY_SCENE, ""}, hidden, commit);
+    ASSERT_EQ(hidden.nodes.size(), 1u);
+    EXPECT_EQ(hidden.nodes.front().name, records[1].name);
+    records[1].visible = false;
+    require_status(source.edit_scene_graph().upsert_node(records[1]));
+    (void)require_result(source.save(path));
+    GalleryScenePublishRequest empty;
+    try {
+        prepareGalleryProjectPublication({path, temporary.path / "empty.scene", ExportFormat::GALLERY_SCENE, ""}, empty, commit);
+        FAIL() << "An empty publication must be rejected";
+    } catch (const std::runtime_error& error) {
+        EXPECT_TRUE(std::string(error.what()).starts_with("gallery_project_no_splats:"));
+    }
+}
+
+TEST(GalleryProjectExportTest, SavedSpzV4IsByteIdentical) {
+    TemporaryDirectory temporary;
+    auto original = base_request(temporary.path / "source.scene", ExportFormat::GALLERY_SPZ);
+    original.nodes.push_back({.snapshot = cpu_snapshot(), .name = "SPZ fixture"});
+    writeGalleryScenePublication(original, {}, {});
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    prepareGalleryProjectPublication({original.path / "project.licht", temporary.path / "copy.scene",
+                                      ExportFormat::GALLERY_SPZ, ""},
+                                     publication, commit);
+    ASSERT_TRUE(publication.nodes.front().encoded.has_value());
+    publication.nodes.front().load_payload = []() -> std::shared_ptr<SplatData> {
+        throw std::runtime_error("SPZ copy must not hydrate");
+    };
+    writeGalleryScenePublication(publication, {}, {});
+    EXPECT_EQ(read_file_bytes(original.path / "0.spz"), read_file_bytes(publication.path / "0.spz"));
+    EXPECT_FALSE(publication.materialized_payload);
+}
+
+TEST(GalleryProjectExportTest, PlyPayloadReencodesToRequestedSog) {
+    TemporaryDirectory temporary;
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    prepareGalleryProjectPublication({portable_fixture("ply"), temporary.path / "converted.scene",
+                                      ExportFormat::GALLERY_SOG, ""},
+                                     publication, commit);
+    ASSERT_EQ(publication.nodes.size(), 1u);
+    EXPECT_FALSE(publication.nodes.front().encoded.has_value());
+    ASSERT_TRUE(publication.nodes.front().load_payload);
+    writeGalleryScenePublication(publication, {}, {});
+    EXPECT_TRUE(publication.materialized_payload);
+    EXPECT_EQ(read_published_node(publication.path).source_kind, "sog");
+    EXPECT_FALSE(std::filesystem::exists(publication.path / "0.ply"));
+}
+
+TEST(GalleryProjectExportTest, CommitMismatchRefusesBeforeStagingAndDetectsLaterSave) {
+    TemporaryDirectory temporary;
+    const auto path = temporary.path / "source.licht";
+    std::filesystem::copy_file(portable_fixture("sog"), path);
+    GalleryScenePublishRequest publication;
+    std::string commit;
+    const auto destination = temporary.path / "refused.scene";
+    try {
+        prepareGalleryProjectPublication({path, destination, ExportFormat::GALLERY_SOG, fixed_uuid(90).to_string()}, publication, commit);
+        FAIL() << "Stale reviewed commit must be refused";
+    } catch (const std::runtime_error& error) {
+        EXPECT_TRUE(std::string(error.what()).starts_with("gallery_project_commit_mismatch:"));
+    }
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    publication = {};
+    prepareGalleryProjectPublication({path, destination, ExportFormat::GALLERY_SOG, ""}, publication, commit);
+    auto source = require_result(ProjectDocument::open(path));
+    auto node = require_result(source.scene_graph().nodes()).front();
+    node.name = "Saved after publication review";
+    require_status(source.edit_scene_graph().upsert_node(node));
+    const auto saved = require_result(source.save(path));
+    EXPECT_NE(saved.commit_uuid.to_string(), commit);
+    EXPECT_THROW(verifyGalleryProjectCommit(path, commit), std::runtime_error);
+}
+
+TEST(GalleryProjectExportTest, MissingAndExternalPayloadsGiveSpecificFallbackError) {
+    TemporaryDirectory temporary;
+    for (const bool external : {false, true}) {
+        const auto path = temporary.path / (external ? "external.licht" : "missing.licht");
+        std::filesystem::copy_file(portable_fixture("sog"), path);
+        auto source = require_result(ProjectDocument::open(path));
+        auto node = require_result(source.scene_graph().nodes()).front();
+        node.payload->instance_uuid = fixed_uuid(91);
+        if (external) {
+            node.payload->fourcc = "REFS";
+            node.payload->reference_uuid = fixed_uuid(91);
+        }
+        require_status(source.edit_scene_graph().upsert_node(node));
+        append_unavailable_payload_graph(path, source);
+        GalleryScenePublishRequest publication;
+        std::string commit;
+        try {
+            prepareGalleryProjectPublication({path, temporary.path / "refused.scene", ExportFormat::GALLERY_SOG, ""}, publication, commit);
+            FAIL() << "Unavailable payload must be refused";
+        } catch (const std::runtime_error& error) {
+            EXPECT_TRUE(std::string(error.what()).starts_with("gallery_project_payload_unavailable:")) << error.what();
+        }
+        EXPECT_FALSE(std::filesystem::exists(temporary.path / "refused.scene"));
+    }
 }
