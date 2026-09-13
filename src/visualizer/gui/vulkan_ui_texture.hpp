@@ -73,7 +73,7 @@ namespace lfs::vis::gui {
         void reset();
 
     private:
-        friend void setVulkanUiTextureContext(VulkanContext* context);
+        friend LFS_VIS_API void setVulkanUiTextureContext(VulkanContext* context);
         struct Impl;
         static std::size_t serviceOrphanedImpls(bool wait);
         static void orphanImpl(Impl* impl);
