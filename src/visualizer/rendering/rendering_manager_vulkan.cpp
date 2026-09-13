@@ -2696,8 +2696,14 @@ namespace lfs::vis {
                const float end,
                const bool normalize_x_to_panel) {
                 const glm::ivec2 valid = panel.size;
+                // Readback tensors are tightly sized. Only the external image
+                // retains the renderer's allocation padding; cached frames may
+                // display the tensor through the staging-upload fallback.
                 const glm::ivec2 alloc =
-                    panel.alloc_size.x > 0 && panel.alloc_size.y > 0 ? panel.alloc_size : valid;
+                    panel.external_image_view != VK_NULL_HANDLE &&
+                            panel.alloc_size.x > 0 && panel.alloc_size.y > 0
+                        ? panel.alloc_size
+                        : valid;
                 return VulkanSplitViewPanel{
                     .image = panel.image,
                     .start_position = start,
