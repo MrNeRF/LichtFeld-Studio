@@ -139,6 +139,9 @@ namespace lfs::vis {
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
+        [[nodiscard]] bool isCameraNavigating() const {
+            return camera_is_moving_ || isContinuousInputActive();
+        }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
         [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }

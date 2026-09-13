@@ -734,7 +734,10 @@ namespace lfs::vis {
             return;
         }
 
-        if (action == input::ACTION_PRESS) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
+        if (!selection_pointer_blocked && action == input::ACTION_PRESS) {
             const auto mouse_btn = static_cast<input::MouseButton>(button);
             const auto tool_mode = getCurrentToolMode();
             auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
@@ -747,7 +750,8 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
+        if (!selection_pointer_blocked &&
+            dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
             return;
         }
 
@@ -1311,7 +1315,11 @@ namespace lfs::vis {
             over_gui = isPointerOverBlockingUi(x, y);
             over_gui_hover = isPointerOverUiHover(x, y);
         }
-        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)) || isCameraNavigating());
+        if (!selection_pointer_blocked &&
+            dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
             return;
         }
