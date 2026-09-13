@@ -3,9 +3,40 @@
 """Regression checks for camera frustums under training image downscaling."""
 
 from pathlib import Path
+import json
+import re
+from string import Formatter
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_scene_graph_focus_uses_supported_rmlui_tab_index():
+    source = (PROJECT_ROOT / "src/visualizer/gui/rmlui/elements/scene_graph_element.cpp").read_text(encoding="utf-8")
+    focus = source.split("void SceneGraphElement::focusTree()", 1)[1].split("void SceneGraphElement::beginRename", 1)[0]
+    assert 'SetProperty("tab-index", "auto")' in focus
+    assert 'SetProperty("tab-index", "0")' not in source
+
+
+def test_camera_pose_translations_cover_states_reasons_and_public_backend_name():
+    sources = "\n".join((PROJECT_ROOT / path).read_text(encoding="utf-8") for path in (
+        "src/core/parameters.cpp", "src/python/lfs/py_params.cpp",
+        "src/python/lfs_plugins/training_panel.py", "src/visualizer/scene/camera_pose_view.hpp",
+    ))
+    keys = set(re.findall(r'training\.(pose\.[a-z_]+)', sources))
+    keys.update("pose." + state for state in (
+        "waiting", "ready", "updated", "rejected", "anchor", "evaluation",
+        "frozen", "corrected", "unchanged", "not_refined",
+    ))
+    for path in (PROJECT_ROOT / "src/visualizer/gui/resources/locales").glob("*.json"):
+        training = json.loads(path.read_text(encoding="utf-8"))["training"]
+        for key in keys:
+            assert training.get(key), (path.name, key)
+            assert "fastgs" not in training[key].lower(), (path.name, key)
+        assert "3DGS" in training["pose.backend"]
+        assert "FastGS" not in training["tooltip.refine_camera_poses"]
+        fields = [field for _, field, _, _ in Formatter().parse(training["pose.tooltip"]) if field is not None]
+        assert sorted(fields) == ["0", "1", "2", "3", "4"], path.name
 
 
 def _read(rel_path: str) -> str:
@@ -85,7 +116,7 @@ def test_current_pose_is_wired_to_pick_focus_selection_and_scene_graph():
         assert "activeCameraPoses()" in source
         assert "cameraWorldToCamera(" in source
     graph = _read("src/visualizer/gui/rmlui/elements/scene_graph_element.cpp")
-    assert "cameraPoseDisplacementLabel(pose)" in graph
+    assert "cameraPoseTooltip(*pose, *poses)" in graph
     assert "row.camera_pose_label.empty() || renaming" in graph
     assert 'setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color)' in graph
 
@@ -94,7 +125,7 @@ def test_pose_markers_keep_numbers_in_tooltip_and_survive_cache_reuse():
     graph = _read("src/visualizer/gui/rmlui/elements/scene_graph_element.cpp")
     assert 'setCachedInnerRml(slot.pose_badge, std::string(pose_indicator.symbol))' in graph
     assert 'pose_badge->SetProperty("width", "12dp")' in graph
-    assert 'row.camera_pose_state, row.camera_pose_label' in graph
+    assert 'setCachedAttribute(slot.pose_badge, "title", row.camera_pose_label)' in graph
     gui = _read("src/visualizer/gui/gui_manager.cpp")
     marker = gui.index("const auto indicator = cameraPoseIndicator(")
     reuse = gui.index("if (!geometry_changed && !loss_changed && !atlas_changed && cache.valid)")

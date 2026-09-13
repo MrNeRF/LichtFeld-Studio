@@ -321,6 +321,9 @@ namespace lfs::training {
         [[nodiscard]] lfs::Status
         setParams(
             const lfs::core::param::TrainingParameters& params);
+        // Read-only preflight; never installs parameters or transitions a run.
+        [[nodiscard]] std::string parameterUpdateError(
+            const lfs::core::param::TrainingParameters& params) const;
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -736,6 +739,8 @@ namespace lfs::training {
         // Hot-loop reads use params_ without locking. Active updates therefore
         // coalesce here and are installed only by the worker at safe boundaries.
         mutable std::mutex params_mutex_;
+        [[nodiscard]] std::string cameraPoseUpdateErrorLocked(
+            const lfs::core::param::TrainingParameters& params) const;
         lfs::core::param::TrainingParameters params_;
         std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;

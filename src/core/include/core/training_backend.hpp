@@ -51,6 +51,7 @@ namespace lfs::core::param {
         TrainingFeatureSupport bilateral_grid = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport ppisp = TrainingFeatureSupport::Unsupported;
         TrainingFeatureSupport sparsity = TrainingFeatureSupport::Unsupported;
+        TrainingFeatureSupport camera_pose_refinement = TrainingFeatureSupport::Unsupported;
     };
 
     struct TrainingBackendDescriptor {
@@ -87,6 +88,7 @@ namespace lfs::core::param {
                 .bilateral_grid = TrainingFeatureSupport::Supported,
                 .ppisp = TrainingFeatureSupport::Supported,
                 .sparsity = TrainingFeatureSupport::Supported,
+                .camera_pose_refinement = TrainingFeatureSupport::Supported,
             },
         },
         TrainingBackendDescriptor{
@@ -112,6 +114,7 @@ namespace lfs::core::param {
                 .bilateral_grid = TrainingFeatureSupport::Supported,
                 .ppisp = TrainingFeatureSupport::Supported,
                 .sparsity = TrainingFeatureSupport::Supported,
+                .camera_pose_refinement = TrainingFeatureSupport::Unsupported,
             },
         },
     };

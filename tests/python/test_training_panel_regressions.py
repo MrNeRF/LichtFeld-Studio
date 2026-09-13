@@ -1246,6 +1246,80 @@ def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
     assert disabled("gut_disabled") is True
 
 
+def test_pose_controls_prevent_new_conflicts_and_keep_existing_values_correctable(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, refine_camera_poses=True, gut=False,
+                             strategy="mcmc", mip_filter=False, use_depth_loss=False,
+                             use_normal_loss=False, mask_mode=SimpleNamespace(value=0))
+    model = _ModelStub()
+    panel._bind_disabled(model, lambda: params)
+    for prop in ("ppisp", "use_bilateral_grid", "use_exposure_correction", "enable_sparsity"):
+        getter = model.bindings["pose_disabled_" + prop][0]
+        assert getter()
+        setattr(params, prop, True)
+        assert not getter()
+        setattr(params, prop, False)
+    for key in ("gut_disabled", "gut_mip_filter_disabled", "gut_depth_supervision_disabled",
+                "gut_normal_supervision_disabled", "pose_disabled_mask_mode"):
+        assert model.bindings[key][0]()
+    params.mask_mode.value = 2
+    assert not model.bindings["pose_disabled_mask_mode"][0]()
+    params.refine_camera_poses = False
+    assert not model.bindings["gut_mip_filter_disabled"][0]()
+    assert not model.bindings["pose_disabled_ppisp"][0]()
+
+
+def test_pose_activation_binding_tracks_native_block_reason(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, camera_pose_edit_block_reason="")
+    model = _ModelStub()
+    panel._bind_disabled(model, lambda: params)
+    disabled = model.bindings["camera_pose_disabled"][0]
+    reason = model.bindings["camera_pose_reason"][0]
+    assert not disabled()
+    assert reason() == ""
+    for key in ("training.pose.mip", "training.pose.new_session"):
+        params.camera_pose_edit_block_reason = key
+        assert disabled()
+        assert reason() == key
+    params.camera_pose_edit_block_reason = ""
+    assert not disabled()
+    del params.camera_pose_edit_block_reason
+    assert disabled()
+    assert reason() == "training.pose.update_build"
+
+
+def test_pose_activation_has_own_section_and_presence_based_disabled_binding(training_panel_module):
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/training.rml").read_text(encoding="utf-8")
+    assert "camera_pose" not in training_panel_module.SECTIONS
+    assert rml.index('id="hdr-sparsity"') < rml.index('{{pv_header_camera_pose}}') < rml.index('id="hdr-optimization"')
+    section = rml[rml.index('<div class="training-subsection-title" data-if="pv_section_camera_pose_visible"'):rml.index('<!-- Optimization subsection -->')]
+    assert "toggle_section('camera_pose')" not in section
+    assert 'id="sec-camera-pose"' not in section
+    assert "{{pv_header_camera_pose}}" in section
+    assert 'data-for="row : pv_camera_pose_activation_rows"' in section
+    # RmlUi treats disabled as presence-only: attr writes even a false value,
+    # whereas attrif removes the attribute when the condition becomes false.
+    assert 'data-attr-disabled=' not in section
+    assert 'data-attrif-disabled="camera_pose_disabled || adv_disabled"' in section
+
+
+def test_pose_conflict_start_uses_localized_message_without_starting(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, validate=lambda: "native diagnostic",
+                             camera_pose_conflict="training.pose.mip")
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    messages = []
+    monkeypatch.setattr(training_panel_module.lf.ui, "message_dialog",
+                        lambda title, message, **kwargs: messages.append(message), raising=False)
+    starts = []
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: starts.append(True))
+    panel._start_after_consent()
+    assert messages == ["training.pose.mip"]
+    assert not starts
+
+
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
     training_panel_module, monkeypatch
 ):

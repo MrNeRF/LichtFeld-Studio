@@ -1258,7 +1258,7 @@ namespace lfs::vis::gui {
                 next_color = color_it->second;
 
             const auto* pose = findCameraPose(poses.get(), snapshot.camera_uid);
-            const auto pose_label = cameraPoseDisplacementLabel(pose);
+            const auto pose_label = pose ? cameraPoseTooltip(*pose, *poses) : std::string{};
             const std::string pose_state = pose ? std::string(cameraPoseVisualState(*pose, *poses)) : std::string{};
             if (snapshot.camera_loss_icon_color == next_color && snapshot.camera_pose_label == pose_label &&
                 snapshot.camera_pose_state == pose_state)
@@ -1538,9 +1538,7 @@ namespace lfs::vis::gui {
         const auto pose_indicator = cameraPoseIndicator(row.camera_pose_state);
         setCachedInnerRml(slot.pose_badge, std::string(pose_indicator.symbol));
         setCachedProperty(slot.pose_badge, "color", std::format("#{:06X}", pose_indicator.rgb));
-        setCachedAttribute(slot.pose_badge, "title", row.camera_pose_label.empty() ? std::string{} :
-            std::format("Camera pose: {}\n{} (scene units / degrees)\nOptimizer state, not reconstruction quality.",
-                        row.camera_pose_state, row.camera_pose_label));
+        setCachedAttribute(slot.pose_badge, "title", row.camera_pose_label);
         setCachedProperty(slot.pose_badge, "display", row.camera_pose_label.empty() || renaming ? "none" : "block");
         if (renaming) {
             if (rename_buffer_.empty())
@@ -1719,7 +1717,7 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::focusTree() {
         if (rename_node_id_ == core::NULL_NODE) {
-            SetProperty("tab-index", "0");
+            SetProperty("tab-index", "auto");
             Focus();
         }
     }

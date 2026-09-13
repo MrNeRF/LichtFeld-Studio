@@ -2289,6 +2289,19 @@ class OptimizationParams:
     def mip_filter(self, arg: bool, /) -> None: ...
 
     @property
+    def refine_camera_poses(self) -> bool:
+        """Refine camera poses during training"""
+
+    @refine_camera_poses.setter
+    def refine_camera_poses(self, arg: bool, /) -> None: ...
+
+    @property
+    def camera_pose_conflict(self) -> str: ...
+
+    @property
+    def camera_pose_edit_block_reason(self) -> str: ...
+
+    @property
     def ppisp(self) -> bool:
         """Enable per-pixel image signal processing"""
 

@@ -269,7 +269,7 @@
     </div>
     <div class="section-content" id="sec-appearance">
       <div data-class-disabled-overlay="live_disabled">
-        <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows"
+        <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows" data-class-disabled-overlay="pose_disabled_use_exposure_correction"
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
@@ -285,7 +285,7 @@
     </div>
     <div class="section-content" id="sec-masking">
       <div data-class-disabled-overlay="live_disabled">
-        <div class="setting-row" data-for="row : pv_basic_live_start_rows"
+        <div class="setting-row" data-for="row : pv_basic_live_start_rows" data-class-disabled-overlay="pose_disabled_mask_mode"
           data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
@@ -468,7 +468,7 @@
 </div></div></div>
     <div class="training-subsection-title" data-if="pv_section_ppisp_visible || pv_section_bilateral_visible || pv_section_exposure_visible">@tr:training.section.exposure_appearance</div>
     <div data-if="pv_section_ppisp_visible" data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_basic_ppisp_toggle_rows"
+      <div class="setting-row" data-for="row : pv_basic_ppisp_toggle_rows" data-class-disabled-overlay="pose_disabled_ppisp"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
@@ -548,7 +548,7 @@
 
 </div></div></div>
     <div data-if="pv_section_bilateral_visible" data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_basic_bilateral_toggle_rows"
+      <div class="setting-row" data-for="row : pv_basic_bilateral_toggle_rows" data-class-disabled-overlay="pose_disabled_use_bilateral_grid"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
@@ -666,7 +666,7 @@
       </div></div>
     </div>
     <div data-if="pv_section_sparsity_visible" data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
+      <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows" data-class-disabled-overlay="pose_disabled_enable_sparsity"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
@@ -698,6 +698,20 @@
           </div>
         </div></div>
       </div>
+    </div>
+
+    <div class="training-subsection-title" data-if="pv_section_camera_pose_visible">{{pv_header_camera_pose}}</div>
+    <div data-if="pv_section_camera_pose_visible">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row" data-for="row : pv_camera_pose_activation_rows"
+               data-class-disabled-overlay="camera_pose_disabled" data-attr-title="camera_pose_reason"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked" data-attrif-disabled="camera_pose_disabled || adv_disabled"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="text-muted" data-if="camera_pose_disabled">{{camera_pose_reason}}</div>
+        </div>
     </div>
 
     <!-- Optimization subsection -->

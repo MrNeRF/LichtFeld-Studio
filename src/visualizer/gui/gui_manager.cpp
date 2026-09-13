@@ -2992,7 +2992,7 @@ namespace lfs::vis::gui {
                             line(r, 0, 0, r);
                             line(0, r, -r, 0);
                             line(-r, 0, 0, -r);
-                            if (pose->state == training::camera_pose::PoseDisplayState::Updated) {
+                            if (indicator.symbol == "+") {
                                 line(-r * 0.5f, 0, r * 0.5f, 0);
                                 line(0, -r * 0.5f, 0, r * 0.5f);
                             }

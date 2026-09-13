@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "training/camera_pose/pose_refinement_session.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/services.hpp"
@@ -23,6 +24,9 @@ namespace lfs::vis {
 
     // A separate palette for optimizer activity, not reconstruction quality.
     inline CameraPoseIndicator cameraPoseIndicator(std::string_view state) {
+        if (state == "corrected") return {0x45D6B0, "+", CameraPoseMarker::Diamond};
+        if (state == "unchanged") return {0x65C9F2, "o", CameraPoseMarker::Diamond};
+        if (state == "not_refined") return {0x939BAA, ".", CameraPoseMarker::Diamond};
         if (state == "updated") return {0x45D6B0, "+", CameraPoseMarker::Diamond};
         if (state == "rejected") return {0xFFB454, "!", CameraPoseMarker::Cross};
         if (state == "ready") return {0x65C9F2, "o", CameraPoseMarker::Diamond};
@@ -37,9 +41,12 @@ namespace lfs::vis {
         const training::camera_pose::PoseCameraDisplay& pose,
         const training::camera_pose::PoseSessionSnapshot& snapshot) {
         using training::camera_pose::PoseDisplayState;
-        if (snapshot.paused && pose.state != PoseDisplayState::Anchor &&
-            pose.state != PoseDisplayState::Evaluation && pose.state != PoseDisplayState::Frozen)
-            return "paused";
+        if (pose.state != PoseDisplayState::Anchor && pose.state != PoseDisplayState::Evaluation &&
+            (snapshot.refinement_finished || snapshot.paused || pose.state == PoseDisplayState::Frozen)) {
+            if (pose.pose.center_displacement > 0 || pose.pose.rotation_displacement > 0)
+                return "corrected";
+            return pose.eligible_visits ? "unchanged" : "not_refined";
+        }
         return training::camera_pose::pose_display_state_name(pose.state);
     }
 
@@ -77,6 +84,15 @@ namespace lfs::vis {
             return {};
         return std::format("\u0394 {:.3g} / {:.2f}\u00b0", pose->pose.center_displacement,
                            pose->pose.rotation_displacement * 57.29577951308232);
+    }
+
+    inline std::string cameraPoseTooltip(const training::camera_pose::PoseCameraDisplay& pose,
+                                        const training::camera_pose::PoseSessionSnapshot& snapshot) {
+        const auto phase_key = snapshot.refinement_finished ? "training.pose.finished" : snapshot.paused ? "training.pose.paused" : "training.pose.active";
+        const std::string phase = LOC(phase_key);
+        const std::string state = LOC(std::format("training.pose.{}", cameraPoseVisualState(pose, snapshot)));
+        return LOCF("training.pose.tooltip", state, phase, cameraPoseDisplacementLabel(&pose),
+                           pose.pose.accepted_steps, pose.pose.rejected_steps);
     }
 
     // Current poses already live on the host. Unrefined cameras retain the

@@ -55,6 +55,7 @@ namespace lfs::training::camera_pose {
         std::uint64_t sequence = 0;
         int iteration = 0;
         bool paused = false;
+        bool refinement_finished = false;
         std::vector<PoseCameraDisplay> cameras; // UID-sorted, immutable once published.
     };
 

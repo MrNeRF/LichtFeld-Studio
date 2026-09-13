@@ -38,8 +38,10 @@ scene scale.
 Activation requires Trainer reinitialization; changing the option on an initialized
 Trainer is rejected. Saved pose state restores automatically, including its own
 schedule, even when the launch flag is absent. The command-line option does not
-discard saved poses or override the checkpoint's pose schedule. A dedicated
-Training-panel control is not yet connected.
+discard saved poses or override the checkpoint's pose schedule. The Training
+panel exposes the toggle in Advanced, in the Camera pose refinement section
+after the optional training features. Unsupported configurations display a
+localized explanation; activation must be chosen before Trainer initialization.
 
 ## Pose representation
 
@@ -246,11 +248,15 @@ Both surfaces share this activity palette:
 | Rejected | Amber | `!` | Cross |
 | Anchor | Blue | `A` | Square |
 | Evaluation | Light gray | `E` | Square |
-| Frozen | Violet | `=` | Square |
-| Paused | Yellow | `=` | Two bars |
+| Final pose changed | Teal | `+` | Diamond with cross |
+| Final pose unchanged | Cyan | `o` | Diamond |
+| Not refined | Gray | `.` | Diamond |
 
-Pause overrides activity only for movable, non-frozen cameras. Fixed references,
-evaluation cameras and frozen poses retain their own categories. Indicators
+Pause and the final pose-freeze phase show net outcomes for movable cameras,
+instead of replacing all markers with one phase symbol. The localized tooltip
+reports the phase separately, with accepted and rejected proposal counts.
+A rejected proposal preserves the last accepted pose. Fixed references and
+evaluation cameras retain their own categories. Indicators
 disappear when there is no matching pose session. Existing reconstruction-loss
 colors, selection highlighting and thumbnail tints retain their meanings.
 Neither pose distance nor optimizer state is a confidence or quality score.
@@ -261,6 +267,25 @@ describe imported poses; corrected poses are restored through the matching
 training checkpoint, not by overwriting sources.
 
 ## Scope and limitations
+
+The activation control is in Training > Advanced and uses the shared property
+registry and backend capability map. Configure it before training initializes;
+changing activation afterward requires a new session. Unsupported combinations
+disable activation with a localized explanation. The public backend name is 3DGS;
+FastGS identifies its internal evaluator implementation.
+
+Start and Resume preflight validate the pending parameters against the initialized
+Trainer before changing lifecycle state. Pose activation, membership, cadence and
+durable-state changes require reinitialization. Active cropbox ROI supervision
+is rejected during preflight; the iteration-time guard remains in place for later
+scene edits. Rejections use the existing command-rejection path, not a training
+completion event. MCP Start waits for initialization and returns its failure;
+MCP Resume propagates preflight rejection without reporting success.
+
+The panel prevents enabling conflicting options while pose refinement is selected,
+but leaves already-selected options correctable. Native validation remains
+authoritative for scripts and pending parameter changes; a pending edit is not
+proof that an active Trainer accepted it.
 
 Rigid six-degree-of-freedom refinement cannot recover missing scene coverage or
 correct motion blur and rolling-shutter distortion. Narrow image coverage alone

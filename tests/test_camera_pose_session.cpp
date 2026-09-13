@@ -94,13 +94,15 @@ namespace {
         EXPECT_FALSE(session.visit(30, 9, 1, {}, {}).scheduled);
         session.set_paused(true);
         EXPECT_FALSE(session.visit(30, 10, 1, {}, {}).scheduled);
-        EXPECT_EQ(session.published_snapshot()->cameras[2].state, PoseDisplayState::Frozen);
+        EXPECT_TRUE(session.published_snapshot()->paused);
+        EXPECT_FALSE(session.published_snapshot()->refinement_finished);
         session.set_paused(false);
         EXPECT_TRUE(session.visit(30, 10, 1, evaluate, loss).scheduled);
         const auto before = session.current_pose(30);
         EXPECT_FALSE(session.visit(30, 80, 2, {}, {}).scheduled);
         session.publish(true);
         EXPECT_EQ(session.published_snapshot()->cameras[2].state, PoseDisplayState::Frozen);
+        EXPECT_TRUE(session.published_snapshot()->refinement_finished);
         EXPECT_EQ(session.current_pose(30), before);
         EXPECT_THROW((void)session.visit(30, 79, 2, {}, {}), std::invalid_argument);
     }

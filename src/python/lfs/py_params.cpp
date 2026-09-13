@@ -194,6 +194,7 @@ namespace lfs::python {
             add("bilateral_grid", capabilities.bilateral_grid);
             add("ppisp", capabilities.ppisp);
             add("sparsity", capabilities.sparsity);
+            add("camera_pose_refinement", capabilities.camera_pose_refinement);
             return result;
         }
 
@@ -1115,6 +1116,21 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.mip_filter = v; }); },
                 "Enable mip filtering (anti-aliasing)")
+            .def_prop_rw(
+                "refine_camera_poses",
+                [](PyOptimizationParams& self) { return self.params().refine_camera_poses; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.refine_camera_poses = v; }); },
+                "Refine camera poses during training")
+            .def_prop_ro("camera_pose_conflict", [](PyOptimizationParams& self) {
+                return self.params().refine_camera_poses ? self.params().camera_pose_incompatibility(true) : std::string{};
+            })
+            .def_prop_ro("camera_pose_edit_block_reason", [](PyOptimizationParams& self) {
+                const auto* tm = get_trainer_manager();
+                const auto* trainer = tm ? tm->getTrainer() : nullptr;
+                if (trainer && trainer->isInitialized())
+                    return std::string("training.pose.new_session");
+                return self.params().refine_camera_poses ? std::string{} : self.params().camera_pose_incompatibility(true);
+            })
             .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },

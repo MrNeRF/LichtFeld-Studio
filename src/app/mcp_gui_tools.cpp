@@ -2516,7 +2516,9 @@ namespace lfs::app {
                     if (result) {
                         if (auto initialized = viewer_impl->getTrainerManager()->waitForInitialization();
                             !initialized) {
-                            result = std::unexpected(lfs::format_for_developer(initialized.error()));
+                            const auto& error = initialized.error();
+                            result = std::unexpected(std::string(
+                                error.user_message().empty() ? error.detail() : error.user_message()));
                         }
                     }
                     return result;

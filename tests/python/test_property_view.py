@@ -417,6 +417,7 @@ EXPECTED_CHECKBOX_ROWS = {
     "gut": ("training_params.gut", "training.tooltip.gut"),
     "undistort": ("training_params.undistort", "training.tooltip.undistort"),
     "mip_filter": ("training_params.mip_filter", "training.tooltip.mip_filter"),
+    "refine_camera_poses": ("training_params.refine_camera_poses", "training.tooltip.refine_camera_poses"),
     "ppisp": ("training_params.ppisp", "training.tooltip.ppisp"),
     "ppisp_exposure_from_exif": (
         "training_params.ppisp_exposure_from_exif",
@@ -534,13 +535,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 61
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 61
+    assert len(property_view.MIGRATED_PROP_IDS) == 62
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 62
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 84  # Backend alone has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 85  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -1068,7 +1069,8 @@ def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
     assert panel._collapsed == {"losses"}
 
 
-@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "normal")])
+@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "normal"),
+                                           ("refine_camera_poses", "camera_pose")])
 def test_search_opens_advanced_and_restores_collapsed_sections(monkeypatch, prop_id, section):
     from lfs_plugins import training_panel
 

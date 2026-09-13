@@ -812,6 +812,18 @@ namespace lfs::python {
         ASSERT_NE(manager.getTrainer(), nullptr);
         EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
                   installed_params.optimization.to_json());
+        parameter_manager.modifyActiveParams([](auto& pending) {
+            pending.gut = false;
+            pending.use_depth_loss = false;
+            pending.refine_camera_poses = true;
+            pending.mip_filter = true;
+        });
+        EXPECT_FALSE(manager.preflightStartParameters());
+        EXPECT_FALSE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(manager.getLastError().find("Camera pose"), std::string::npos);
+        EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
+                  installed_params.optimization.to_json());
     }
 
     TEST(TrainerConstructionTest, ResumeRejectsInvalidPendingParamsWithoutLeavingPaused) {
@@ -840,6 +852,43 @@ namespace lfs::python {
         EXPECT_FALSE(manager.isCompletionPending());
         EXPECT_NE(manager.getLastError().find("Mip Filter"), std::string::npos);
         EXPECT_TRUE(manager.waitForInitialization());
+        pending.gut = false;
+        pending.refine_camera_poses = true;
+        const auto pose_resume = manager.resumeTraining();
+        ASSERT_FALSE(pose_resume);
+        EXPECT_NE(pose_resume.error().user_message().find("Camera pose"), std::string::npos);
+        EXPECT_TRUE(manager.isPaused());
+        EXPECT_FALSE(manager.isCompletionPending());
+    }
+
+    TEST(TrainerConstructionTest, CameraPoseActivationResumePreflightKeepsInitializedSessionPaused) {
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); lfs::event::EventBridge::instance().clear_all(); }
+            ~ServicesScope() { lfs::vis::services().clear(); lfs::event::EventBridge::instance().clear_all(); }
+        } services_scope;
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        scene.addSplat("Model", make_construction_splat());
+        scene.setTrainingModelNode("Model");
+        auto trainer = std::make_unique<training::Trainer>(scene);
+        auto params = make_construction_params(false, std::filesystem::temp_directory_path() / "lfs_pose_resume_preflight");
+        std::filesystem::create_directories(params.dataset.output_path);
+        ASSERT_TRUE(trainer->initialize(params));
+        ASSERT_TRUE(trainer->isInitialized());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainerFromCheckpoint(std::move(trainer), 1);
+        ASSERT_TRUE(manager.isPaused());
+        manager.getEditableOptParams().refine_camera_poses = true;
+        // The configuration itself is valid; only the live-session contract rejects it.
+        ASSERT_TRUE(manager.getEditableOptParams().validate().empty());
+        const auto resumed = manager.resumeTraining();
+        ASSERT_FALSE(resumed);
+        EXPECT_NE(resumed.error().user_message().find("reinitialization"), std::string::npos);
+        EXPECT_TRUE(manager.isPaused());
+        EXPECT_FALSE(manager.isCompletionPending());
+        EXPECT_FALSE(manager.getTrainer()->getParams().optimization.refine_camera_poses);
     }
 
     TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {

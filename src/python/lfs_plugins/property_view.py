@@ -82,6 +82,7 @@ BOOL_PROPS = (
     "gut",
     "undistort",
     "mip_filter",
+    "refine_camera_poses",
     "ppisp",
     "ppisp_exposure_from_exif",
     "ppisp_use_controller",
@@ -139,10 +140,12 @@ BASIC_RUNS = (
     _run(
         "basic_bilateral_toggle",
         "use_bilateral_grid",
+        disabled_condition_id="pose_disabled_use_bilateral_grid",
     ),
     _run(
         "basic_live_start",
         "mask_mode",
+        disabled_condition_id="pose_disabled_mask_mode",
     ),
     _run(
         "basic_depth_weight",
@@ -179,12 +182,13 @@ BASIC_RUNS = (
         "mask_opacity_penalty_power",
         visibility_condition_id="dep_mask_segment",
     ),
-    _run("basic_sparsity_toggle", "enable_sparsity"),
+    _run("basic_sparsity_toggle", "enable_sparsity", disabled_condition_id="pose_disabled_enable_sparsity"),
     _run("basic_undistort", "undistort"),
     _run("basic_mip_filter", "mip_filter", disabled_condition_id="gut_mip_filter_disabled"),
     _run(
         "basic_ppisp_toggle",
         "ppisp",
+        disabled_condition_id="pose_disabled_ppisp",
     ),
     _run(
         "ppisp_exif",
@@ -296,7 +300,7 @@ METHOD_RUNS = _basic_runs("basic_struct")
 CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
 MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
 BACKGROUND_RUNS = _basic_runs("basic_background", "bg_mode")
-EXPOSURE_ACTIVATION_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),)
+EXPOSURE_ACTIVATION_RUNS = (_run("basic_exposure_correction", "use_exposure_correction", disabled_condition_id="pose_disabled_use_exposure_correction"),)
 APPEARANCE_RUNS = _basic_runs(
     "ppisp_exif", "ppisp_freeze",
     "ppisp_controller", "ppisp_controller_tail",
@@ -322,6 +326,9 @@ SECTIONS = (
     SectionSpec("evaluation", "training_params.enable_eval", EVALUATION_RUNS),
     SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
     SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
+    SectionSpec("camera_pose", "training.section.camera_pose", (
+        _run("camera_pose_activation", "refine_camera_poses", disabled_condition_id="camera_pose_disabled"),
+    )),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
@@ -343,7 +350,7 @@ SEARCH_SECTION_RUN_IDS.update(
     refinement=tuple(run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"),
     exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
 )
-ADVANCED_SECTIONS = ("depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random_init", "sparsity", "optimization", "losses", "init", "save_steps", "advanced_registry")
+ADVANCED_SECTIONS = ("depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random_init", "sparsity", "camera_pose", "optimization", "losses", "init", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)

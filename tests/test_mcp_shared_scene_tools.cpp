@@ -128,6 +128,33 @@ TEST(McpSharedSceneToolsTest, LoadDatasetHonorsExplicitOutputPathAndCanonicalStr
     EXPECT_EQ(result["strategy"].get<std::string>(), std::string(lfs::core::param::kStrategyIGSPlus));
 }
 
+TEST(McpSharedSceneToolsTest, CameraPoseStartRejectionNeverReportsSuccess) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend fake;
+    auto backend = fake.backend();
+    lfs::core::param::OptimizationParameters params;
+    params.refine_camera_poses = true;
+    params.mip_filter = true;
+    const auto expected_error = params.validate();
+    ASSERT_FALSE(expected_error.empty());
+    backend.start_training = [&]() -> std::expected<void, std::string> {
+        if (auto error = params.validate(); !error.empty())
+            return std::unexpected(error);
+        return {};
+    };
+    lfs::mcp::register_shared_scene_tools(backend);
+    const auto rejected = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
+    ASSERT_TRUE(rejected.contains("error"));
+    ASSERT_TRUE(rejected.at("error").is_object());
+    EXPECT_EQ(rejected.at("error").at("message").get<std::string>(), expected_error);
+    EXPECT_EQ(rejected.at("error_message").get<std::string>(), expected_error);
+    EXPECT_FALSE(rejected.value("success", false));
+    params.mip_filter = false;
+    const auto accepted = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
+    EXPECT_TRUE(accepted.at("success").get<bool>());
+    EXPECT_FALSE(accepted.contains("error"));
+}
+
 TEST(McpSharedSceneToolsTest, LoadDatasetAppliesMrnfDefaultsWhenStrategyOmitted) {
     ScopedSharedSceneToolRegistration cleanup;
     FakeSharedSceneBackend backend;

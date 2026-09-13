@@ -3685,6 +3685,39 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
+    std::string Trainer::cameraPoseUpdateErrorLocked(
+        const lfs::core::param::TrainingParameters& params) const {
+        const auto& effective = pending_params_ ? *pending_params_ : params_;
+        if (initialized_.load() && params.optimization.refine_camera_poses != effective.optimization.refine_camera_poses)
+            return "Camera pose activation requires Trainer reinitialization";
+        if (camera_pose_session_.load(std::memory_order_acquire)) {
+            if (auto error = camera_pose::trainer_pose_incompatibility(params.optimization); !error.empty())
+                return error;
+            if (params.optimization.resolved_total_iterations() != effective.optimization.resolved_total_iterations() ||
+                params.optimization.enable_eval != effective.optimization.enable_eval ||
+                params.dataset.data_path != effective.dataset.data_path || params.dataset.test_every != effective.dataset.test_every ||
+                params.disabled_camera_uids != effective.disabled_camera_uids ||
+                params.camera_pose_state_json != effective.camera_pose_state_json)
+                return "Camera pose membership, schedule and durable state require explicit reinitialization";
+        }
+        return {};
+    }
+
+    std::string Trainer::parameterUpdateError(
+        const lfs::core::param::TrainingParameters& params) const {
+        if (auto error = params.validate(); !error.empty())
+            return error;
+        {
+            std::lock_guard lock(params_mutex_);
+            if (auto error = cameraPoseUpdateErrorLocked(params); !error.empty())
+                return error;
+        }
+        if ((params.optimization.refine_camera_poses || camera_pose_session_.load(std::memory_order_acquire)) &&
+            scene_ && resolve_training_cropbox_loss_geom(*scene_, params.optimization.cropbox_loss_weight))
+            return "Camera pose refinement does not yet compose cropbox ROI loss";
+        return {};
+    }
+
     lfs::Status
     Trainer::setParams(
         const lfs::core::param::TrainingParameters& params) {
@@ -3697,21 +3730,8 @@ namespace lfs::training {
         bool bg_image_path_changed = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
-            const auto& effective = pending_params_ ? *pending_params_ : params_;
-            if (initialized_.load() && params.optimization.refine_camera_poses != effective.optimization.refine_camera_poses)
-                return lfs::Status::failure(training_parameter_update_error(
-                    "Camera pose activation requires Trainer reinitialization", LFS_SOURCE_SITE_CURRENT()));
-            if (camera_pose_session_.load(std::memory_order_acquire)) {
-                auto error = camera_pose::trainer_pose_incompatibility(params.optimization);
-                if (error.empty() && (params.optimization.resolved_total_iterations() != effective.optimization.resolved_total_iterations() ||
-                                      params.optimization.enable_eval != effective.optimization.enable_eval ||
-                                      params.dataset.data_path != effective.dataset.data_path || params.dataset.test_every != effective.dataset.test_every ||
-                                      params.disabled_camera_uids != effective.disabled_camera_uids ||
-                                      params.camera_pose_state_json != effective.camera_pose_state_json))
-                    error = "Camera pose membership, schedule and durable state require explicit reinitialization";
-                if (!error.empty())
-                    return lfs::Status::failure(training_parameter_update_error(error, LFS_SOURCE_SITE_CURRENT()));
-            }
+            if (auto error = cameraPoseUpdateErrorLocked(params); !error.empty())
+                return lfs::Status::failure(training_parameter_update_error(error, LFS_SOURCE_SITE_CURRENT()));
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
                 return {};

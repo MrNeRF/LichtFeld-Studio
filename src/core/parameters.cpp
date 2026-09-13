@@ -424,21 +424,21 @@ namespace lfs::core {
                 descriptor.fallback_backend_name);
         }
 
-        std::string OptimizationParameters::camera_pose_incompatibility() const {
-            if (raster_backend() != RasterBackendId::ThreeDGS)
-                return "Camera pose refinement requires FastGS";
+        std::string OptimizationParameters::camera_pose_incompatibility(bool localization_key) const {
+            if (is_training_feature_unsupported(training_backend_descriptor(raster_backend()).capabilities.camera_pose_refinement))
+                return localization_key ? "training.pose.backend" : "Camera pose refinement requires 3DGS";
             if (mip_filter)
-                return "Camera pose refinement does not yet support Mip Filter";
+                return localization_key ? "training.pose.mip" : "Camera pose refinement does not yet support Mip Filter";
             if (use_depth_loss || use_normal_loss)
-                return "Camera pose refinement currently requires RGB-only supervision";
+                return localization_key ? "training.pose.rgb" : "Camera pose refinement currently requires RGB-only supervision";
             if (mask_mode != MaskMode::None)
-                return "Camera pose refinement does not yet compose mask losses";
+                return localization_key ? "training.pose.mask" : "Camera pose refinement does not yet compose mask losses";
             if (ppisp_active() || ppisp_use_controller || bilateral_grid_active())
-                return "Camera pose refinement does not yet compose appearance correction";
+                return localization_key ? "training.pose.appearance" : "Camera pose refinement does not yet compose appearance correction";
             if (enable_sparsity)
-                return "Camera pose refinement is not yet integrated with sparsification";
+                return localization_key ? "training.pose.sparsity" : "Camera pose refinement is not yet integrated with sparsification";
             if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1)
-                return "Camera pose refinement requires an SSIM weight in [0,1]";
+                return localization_key ? "training.pose.ssim" : "Camera pose refinement requires an SSIM weight in [0,1]";
             return {};
         }
 

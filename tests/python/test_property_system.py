@@ -38,6 +38,7 @@ class TestOptimizationParams:
                 "bilateral_grid": "supported",
                 "ppisp": "supported",
                 "sparsity": "supported",
+                "camera_pose_refinement": "unsupported",
             }
             params.gut = False
             assert params.raster_backend == "3dgs"

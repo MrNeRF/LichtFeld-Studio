@@ -1080,7 +1080,7 @@ namespace lfs::vis {
         // Parameter validation is deliberately synchronous: callers get an
         // immediate rejection without starting a worker or touching the scene.
         auto start_params = pendingParamsCandidate();
-        if (auto error = start_params.validate(); !error.empty()) {
+        if (auto error = trainer_->parameterUpdateError(start_params); !error.empty()) {
             static_cast<void>(
                 rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument));
             return false;
@@ -1114,7 +1114,7 @@ namespace lfs::vis {
             return lfs::Status::failure(training_initialization_error(
                 "No trainer available"));
         }
-        auto error = pendingParamsCandidate().validate();
+        auto error = trainer_->parameterUpdateError(pendingParamsCandidate());
         if (!error.empty()) {
             return lfs::Status::failure(
                 rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument));

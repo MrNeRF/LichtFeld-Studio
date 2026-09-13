@@ -197,6 +197,7 @@ namespace lfs::training::camera_pose {
         snapshot->sequence = sequence;
         snapshot->iteration = iteration;
         snapshot->paused = paused;
+        snapshot->refinement_finished = iteration >= static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction));
         snapshot->cameras.reserve(entries.size());
         for (const auto& entry : entries) {
             auto state = entry.state;
@@ -204,7 +205,7 @@ namespace lfs::training::camera_pose {
                 state = PoseDisplayState::Anchor;
             else if (entry.role == PoseRole::Evaluation)
                 state = PoseDisplayState::Evaluation;
-            else if (paused || iteration >= static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction)))
+            else if (snapshot->refinement_finished)
                 state = PoseDisplayState::Frozen;
             else if (iteration < config_.warmup_iterations)
                 state = PoseDisplayState::Waiting;

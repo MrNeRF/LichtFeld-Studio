@@ -110,6 +110,7 @@ STRATEGY_LABEL_KEYS = {
 }
 
 BACKEND_CONFLICT_FEATURE_LABEL_KEYS = {
+    "camera_pose_refinement": "training_params.refine_camera_poses",
     "igs_plus": "training.options.strategy.igs_plus",
     "mip_filter": "training_params.mip_filter",
     "depth_supervision": "training_params.use_depth_loss",
@@ -574,6 +575,10 @@ class TrainingPanel(Panel):
         backend = next((item for item in lf.training_backends() if item["id"] == name), None)
         if backend is None:
             return
+        if (getattr(params, "refine_camera_poses", False)
+                and backend.get("capabilities", {}).get("camera_pose_refinement") == "unsupported"):
+            lf.ui.message_dialog(tr("status.error"), tr("training.pose.backend"), style="error")
+            return
         params.set("raster_backend", name)
         settings = lf.get_render_settings()
         if settings:
@@ -584,6 +589,20 @@ class TrainingPanel(Panel):
     def _validation_error():
         params = lf.optimization_params()
         return params.validate() if params and params.has_params() else ""
+
+    @staticmethod
+    def _pose_option_disabled(params, prop):
+        # Prevent new conflicts, but keep already-selected settings correctable.
+        if params is None or not getattr(params, "refine_camera_poses", False):
+            return False
+        if prop == "mask_mode":
+            mode = getattr(params, prop, 0)
+            return getattr(mode, "value", mode) == 0
+        return prop in (
+            "mip_filter", "use_depth_loss", "use_normal_loss", "ppisp",
+            "ppisp_use_controller", "use_exposure_correction",
+            "use_bilateral_grid", "enable_sparsity",
+        ) and not bool(getattr(params, prop, False))
 
     def _start_error(self):
         # Next-run settings must not gate Resume of an initialized/stored trainer.
@@ -606,6 +625,7 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return ""
         labels = {
+            "camera_pose_refinement": tr("training_params.refine_camera_poses"),
             "igs_plus": "IGS+",
             "undistort": tr("training_params.undistort"),
             "mip_filter": tr("training_params.mip_filter"),
@@ -613,6 +633,7 @@ class TrainingPanel(Panel):
             "normal_supervision": tr("training_params.use_normal_loss"),
         }
         selected = {
+            "camera_pose_refinement": getattr(params, "refine_camera_poses", False),
             "igs_plus": getattr(params, "strategy", "").lower() in ("igs+", "igs_plus"),
             "undistort": getattr(params, "undistort", False),
             "mip_filter": getattr(params, "mip_filter", False),
@@ -899,6 +920,15 @@ class TrainingPanel(Panel):
         model.bind_string_list("save_steps_list")
 
     def _bind_disabled(self, model, p):
+        def _camera_pose_reason():
+            params = p()
+            if params is None or not params.has_params():
+                return tr("training.pose.load_dataset")
+            key = getattr(params, "camera_pose_edit_block_reason", "training.pose.update_build")
+            return tr(key) if key else ""
+
+        model.bind_func("camera_pose_disabled", lambda: bool(_camera_pose_reason()))
+        model.bind_func("camera_pose_reason", _camera_pose_reason)
         def _params_edit_locked():
             return not (
                 RuntimeState.trainer_state.value == "ready"
@@ -921,9 +951,13 @@ class TrainingPanel(Panel):
             params = _params()
             return bool(
                 params is not None
-                and params.gut
+                and (params.gut or self._pose_option_disabled(params, prop))
                 and not bool(getattr(params, prop, False))
             )
+
+        for prop in ("ppisp", "use_bilateral_grid", "use_exposure_correction", "enable_sparsity", "mask_mode"):
+            model.bind_func("pose_disabled_" + prop,
+                            lambda pr=prop: self._pose_option_disabled(_params(), pr))
 
         def _gut_enable_disabled():
             params = _params()
@@ -934,6 +968,7 @@ class TrainingPanel(Panel):
                 or params.mip_filter
                 or params.use_depth_loss
                 or params.use_normal_loss
+                or getattr(params, "refine_camera_poses", False)
             )
 
         model.bind_func("gut_disabled", _gut_enable_disabled)
@@ -1606,7 +1641,10 @@ class TrainingPanel(Panel):
         if params and params.has_params():
             backend_controls = tuple(
                 getattr(params, name, None)
-                for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss")
+                for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss",
+                             "refine_camera_poses", "camera_pose_edit_block_reason", "camera_pose_conflict",
+                             "mask_mode", "ppisp", "ppisp_use_controller", "use_bilateral_grid",
+                             "use_exposure_correction", "enable_sparsity")
             )
             backend_changed = backend_controls != getattr(self, "_last_backend_controls", None)
             numeric_changed = False
@@ -2085,6 +2123,8 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
         try:
+            if getattr(params, "refine_camera_poses", False) and int(val_str) != 0:
+                return False
             params.mask_mode = lf.MaskMode(int(val_str))
         except (ValueError, TypeError):
             return False
@@ -2399,6 +2439,13 @@ class TrainingPanel(Panel):
         if len(args) < 2:
             return
         prop = str(args[0])
+        params = lf.optimization_params()
+        if self._pose_option_disabled(params, prop):
+            return
+        if prop == "refine_camera_poses":
+            params = lf.optimization_params()
+            if params is None or getattr(params, "camera_pose_edit_block_reason", "unavailable"):
+                return
         binding = self._pv_binding_by_prop.get(prop)
         if binding is not None:
             if binding.set_value(prop, args[1]) is False:
@@ -2756,6 +2803,10 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = self._validation_error()
         if error:
+            pose_conflict = getattr(params, "camera_pose_conflict", "")
+            if pose_conflict:
+                lf.ui.message_dialog(tr("status.error"), tr(pose_conflict), style="error")
+                return
             raw_context = getattr(params, "backend_conflict_context", {})
             context = raw_context if isinstance(raw_context, dict) else {}
             conflict = str(

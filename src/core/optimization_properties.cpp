@@ -635,6 +635,8 @@ namespace lfs::core::param {
             .bool_prop(&OptimizationParameters::refine_camera_poses,
                        "refine_camera_poses", "Camera Pose Refinement", d.refine_camera_poses,
                        "Refine camera extrinsics during raw RGB FastGS training; configure before initialization")
+            .locale("training_params.refine_camera_poses")
+            .tooltip("training.tooltip.refine_camera_poses")
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,
