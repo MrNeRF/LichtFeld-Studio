@@ -285,6 +285,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
@@ -418,6 +419,7 @@ namespace lfs::vis {
             float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
             bool orthographic = false;
             float ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
+            std::optional<SplitViewPanelId> panel;
         };
         // Renders a fresh expected-depth preview for precise picking on sparse or low-opacity splats.
         float renderExpectedDepthAtPixel(const ExpectedDepthSampleRequest& request);

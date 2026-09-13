@@ -291,58 +291,58 @@ namespace lfs::training {
             return {};
         }
 
-        lfs::Result<void> installGaussianInitAsTrainingModel(
+        TrainingModelGraphInstall makeGraphInstall(const TrainingModelGraphCapture& context,
+                                                   std::unique_ptr<lfs::core::SplatData> model) {
+            TrainingModelGraphInstall install;
+            install.model = std::move(model);
+            install.parent_id = context.parent_id;
+            install.point_cloud_node_id = context.point_cloud_node_id;
+            install.node_transform = context.node_transform;
+            install.has_preserved_cropbox = context.has_preserved_cropbox;
+            install.preserved_cropbox_data = context.preserved_cropbox_data;
+            install.preserved_cropbox_transform = context.preserved_cropbox_transform;
+            return install;
+        }
+
+        std::expected<TrainingModelGraphInstall, std::string> loadGaussianInitModel(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::Scene& scene,
-            const std::filesystem::path& init_file) {
+            const std::filesystem::path& init_file,
+            const TrainingModelGraphCapture* graph_capture) {
             auto loader = lfs::io::Loader::create();
             auto init_result = loader->load(init_file);
             if (!init_result) {
-                return lfs::Status::failure(initFileError(std::format("Failed to load '{}': {}",
-                                                                      lfs::core::path_to_utf8(init_file),
-                                                                      init_result.error().format())));
+                return std::unexpected(std::string(initFileError(std::format(
+                                                                     "Failed to load '{}': {}",
+                                                                     lfs::core::path_to_utf8(init_file),
+                                                                     init_result.error().format()))
+                                                       .user_message()));
             }
 
             auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
             if (!splat_ptr || !*splat_ptr) {
-                return lfs::Status::failure(initFileError(std::format("'{}': invalid SplatData",
-                                                                      lfs::core::path_to_utf8(init_file))));
+                return std::unexpected(std::string(initFileError(std::format(
+                                                                     "'{}': invalid SplatData",
+                                                                     lfs::core::path_to_utf8(init_file)))
+                                                       .user_message()));
             }
 
             auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
-            recomputeInitSplatSceneScale(*model, scene.getSceneCenter(), init_file);
+            const lfs::core::Tensor scene_center =
+                graph_capture
+                    ? graph_capture->scene_center
+                    : scene.getSceneCenter();
+            recomputeInitSplatSceneScale(*model, scene_center, init_file);
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                      model->size(),
                      lfs::core::path_to_utf8(init_file.filename()),
                      model->get_max_sh_degree());
 
-            lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
-            lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
-            glm::mat4 node_transform{1.0f};
-            for (const auto* node : scene.getNodes()) {
-                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
-                    point_cloud_node_id = node->id;
-                    parent_id = node->parent_id;
-                    node_transform = node->transform();
-                    break;
-                }
-            }
-            if (point_cloud_node_id != lfs::core::NULL_NODE) {
-                if (const auto* pc_node = scene.getNodeById(point_cloud_node_id)) {
-                    scene.removeNode(pc_node->name, false);
-                }
-            }
-
-            const auto model_id = scene.addSplat("Model", std::move(model), parent_id);
-            if (model_id == lfs::core::NULL_NODE) {
-                return lfs::Status::failure(initFileError("Failed to add loaded training model to scene"));
-            }
-            if (node_transform != glm::mat4{1.0f}) {
-                scene.setNodeTransform(model_id, node_transform);
-            }
-            scene.setTrainingModelNode(model_id);
-            return {};
+            TrainingModelGraphCapture context =
+                graph_capture ? *graph_capture : captureTrainingModelGraph(scene);
+            context.has_preserved_cropbox = false;
+            return makeGraphInstall(context, std::move(model));
         }
 
         std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
@@ -857,24 +857,90 @@ namespace lfs::training {
                           load_result->data);
     }
 
-    std::expected<void, std::string> initializeTrainingModel(
+    TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene) {
+        TrainingModelGraphCapture context;
+        context.training_model = scene.getTrainingModel();
+        context.scene_center = scene.getSceneCenter();
+        for (const auto* node : scene.getNodes()) {
+            if (!node || node->type != lfs::core::NodeType::POINTCLOUD || !node->point_cloud) {
+                continue;
+            }
+            context.point_cloud_node_id = node->id;
+            context.parent_id = node->parent_id;
+            context.node_transform = node->transform();
+            context.point_cloud = *node->point_cloud;
+            break;
+        }
+        if (context.point_cloud_node_id == lfs::core::NULL_NODE) {
+            return context;
+        }
+
+        const lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(context.point_cloud_node_id);
+        if (cropbox_id == lfs::core::NULL_NODE) {
+            return context;
+        }
+        const auto* cropbox_node = scene.getNodeById(cropbox_id);
+        if (!cropbox_node || !cropbox_node->cropbox) {
+            return context;
+        }
+        context.preserved_cropbox_data = *cropbox_node->cropbox;
+        context.preserved_cropbox_transform =
+            cropbox_node->parent_id == context.point_cloud_node_id
+                ? cropbox_node->transform()
+                : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
+                      scene.getWorldTransform(cropbox_id);
+        context.has_preserved_cropbox = true;
+        return context;
+    }
+
+    std::expected<std::optional<TrainingModelGraphInstall>, std::string> prepareTrainingModel(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene,
-        lfs::core::SplatTensorAllocator tensor_allocator) {
+        lfs::core::SplatTensorAllocator tensor_allocator,
+        const TrainingModelGraphCapture* graph_capture) {
 
-        if (!scene.getTrainingModel()) {
+        const auto finalize_new_model = [&](lfs::core::SplatData& model)
+            -> std::expected<void, std::string> {
+            applyTrainingSHDegree(model, params.optimization.sh_degree);
+            if (auto result = appendAddedSplats(params, model); !result) {
+                return result;
+            }
+            if (auto result = migrateTrainingModelToAllocator(params, model, tensor_allocator); !result) {
+                return result;
+            }
+            return {};
+        };
+
+        const bool has_training_model =
+            graph_capture ? graph_capture->training_model != nullptr : scene.getTrainingModel() != nullptr;
+        if (!has_training_model) {
             if (const auto init_file = gaussianSplatInitPath(params)) {
-                if (auto installed = installGaussianInitAsTrainingModel(params, scene, *init_file);
-                    !installed) {
-                    return std::unexpected(std::string(installed.error().user_message()));
+                auto loaded = loadGaussianInitModel(params, scene, *init_file, graph_capture);
+                if (!loaded) {
+                    return std::unexpected(std::move(loaded.error()));
                 }
+                if (auto result = appendAddedSplats(params, *loaded->model); !result) {
+                    return std::unexpected(std::move(result.error()));
+                }
+                const int max_cap = params.optimization.max_cap;
+                if (max_cap > 0 && loaded->model->size() > max_cap) {
+                    LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
+                             max_cap, loaded->model->size(), max_cap);
+                    lfs::core::random_choose(*loaded->model, max_cap);
+                }
+                if (auto result = migrateTrainingModelToAllocator(
+                        params, *loaded->model, tensor_allocator);
+                    !result) {
+                    return std::unexpected(std::move(result.error()));
+                }
+                return std::optional<TrainingModelGraphInstall>{std::move(*loaded)};
             }
         }
 
-        if (auto* model = scene.getTrainingModel()) {
+        if (auto* model = graph_capture ? graph_capture->training_model : scene.getTrainingModel()) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
             if (auto result = appendAddedSplats(params, *model); !result) {
-                return result;
+                return std::unexpected(std::move(result.error()));
             }
 
             const int max_cap = params.optimization.max_cap;
@@ -885,59 +951,29 @@ namespace lfs::training {
             }
 
             if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
-                return result;
+                return std::unexpected(std::move(result.error()));
             }
-            scene.syncTrainingModelTopology(static_cast<size_t>(model->size()));
-            scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
-            return {};
+            if (!graph_capture) {
+                scene.syncTrainingModelTopology(static_cast<size_t>(model->size()));
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+            }
+            return std::optional<TrainingModelGraphInstall>{};
         }
 
-        lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
-        lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
-        const lfs::core::PointCloud* point_cloud = nullptr;
-        glm::mat4 node_transform{1.0f};
-        lfs::core::CropBoxData preserved_cropbox_data;
-        glm::mat4 preserved_cropbox_transform{1.0f};
-        bool has_preserved_cropbox = false;
-
-        for (const auto* node : scene.getNodes()) {
-            if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
-                point_cloud_node_id = node->id;
-                parent_id = node->parent_id;
-                node_transform = node->transform();
-                point_cloud = node->point_cloud.get();
-                break;
-            }
-        }
-
+        const TrainingModelGraphCapture owned_capture =
+            graph_capture ? TrainingModelGraphCapture{} : captureTrainingModelGraph(scene);
+        const TrainingModelGraphCapture& context = graph_capture ? *graph_capture : owned_capture;
+        const lfs::core::PointCloud* point_cloud =
+            context.point_cloud ? &*context.point_cloud : nullptr;
         lfs::core::PointCloud point_cloud_to_use;
         const int max_cap = params.optimization.max_cap;
 
         if (point_cloud && point_cloud->size() > 0) {
-            const lfs::core::CropBoxData* cropbox_data = nullptr;
-            lfs::core::NodeId cropbox_id = lfs::core::NULL_NODE;
-
-            if (point_cloud_node_id != lfs::core::NULL_NODE) {
-                cropbox_id = scene.getCropBoxForSplat(point_cloud_node_id);
-                if (cropbox_id != lfs::core::NULL_NODE) {
-                    cropbox_data = scene.getCropBoxData(cropbox_id);
-                    if (const auto* cropbox_node = scene.getNodeById(cropbox_id);
-                        cropbox_node && cropbox_node->cropbox) {
-                        preserved_cropbox_data = *cropbox_node->cropbox;
-                        preserved_cropbox_transform =
-                            cropbox_node->parent_id == point_cloud_node_id
-                                ? cropbox_node->transform()
-                                : glm::inverse(scene.getWorldTransform(point_cloud_node_id)) *
-                                      scene.getWorldTransform(cropbox_id);
-                        has_preserved_cropbox = true;
-                    }
-                }
-            }
+            const lfs::core::CropBoxData* cropbox_data =
+                context.has_preserved_cropbox ? &context.preserved_cropbox_data : nullptr;
 
             if (cropbox_data && cropbox_data->enabled) {
-                const glm::mat4 pointcloud_to_cropbox =
-                    has_preserved_cropbox ? glm::inverse(preserved_cropbox_transform)
-                                          : glm::inverse(scene.getWorldTransform(cropbox_id));
+                const glm::mat4 pointcloud_to_cropbox = glm::inverse(context.preserved_cropbox_transform);
                 const auto& means = point_cloud->means;
                 const auto& colors = point_cloud->colors;
                 const size_t num_points = point_cloud->size();
@@ -1009,7 +1045,7 @@ namespace lfs::training {
             randomChoosePointCloud(point_cloud_to_use, max_cap);
         }
 
-        lfs::core::Tensor scene_center = scene.getSceneCenter();
+        lfs::core::Tensor scene_center = context.scene_center;
         if (!scene_center.is_valid() || scene_center.numel() == 0) {
             LOG_WARN("No scene center from loader, computing from point cloud");
             if (point_cloud_to_use.size() > 0) {
@@ -1036,19 +1072,9 @@ namespace lfs::training {
             lfs::core::random_choose(*splat_result, max_cap);
         }
 
-        if (point_cloud_node_id != lfs::core::NULL_NODE) {
-            if (const auto* pc_node = scene.getNodeById(point_cloud_node_id)) {
-                scene.removeNode(pc_node->name, false);
-            }
-        }
-
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
-        applyTrainingSHDegree(*model, params.optimization.sh_degree);
-        if (auto result = appendAddedSplats(params, *model); !result) {
-            return result;
-        }
-        if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
-            return result;
+        if (auto result = finalize_new_model(*model); !result) {
+            return std::unexpected(std::move(result.error()));
         }
         if (params.init_path.has_value() && !params.init_path->empty()) {
             LOG_INFO("Init {} gaussians from {} (sh={})",
@@ -1058,23 +1084,54 @@ namespace lfs::training {
         } else {
             LOG_INFO("Created training model with {} gaussians", model->size());
         }
-        const lfs::core::NodeId model_id = scene.addSplat("Model", std::move(model), parent_id);
-        if (model_id == lfs::core::NULL_NODE) {
-            return std::unexpected("Failed to add training model to scene");
+        return std::optional<TrainingModelGraphInstall>{
+            makeGraphInstall(context, std::move(model))};
+    }
+
+    std::expected<void, std::string> installTrainingModel(
+        lfs::core::Scene& scene,
+        TrainingModelGraphInstall&& install) {
+        if (!install.model) {
+            return std::unexpected("Training model install is missing splat data");
         }
-        if (node_transform != glm::mat4{1.0f}) {
-            scene.setNodeTransform(model_id, node_transform);
-        }
-        scene.setTrainingModelNode(model_id);
-        if (has_preserved_cropbox && model_id != lfs::core::NULL_NODE) {
-            const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
-            if (model_cropbox_id != lfs::core::NULL_NODE) {
-                scene.setCropBoxData(model_cropbox_id, preserved_cropbox_data);
-                scene.setNodeTransform(model_cropbox_id, preserved_cropbox_transform);
+
+        if (install.point_cloud_node_id != lfs::core::NULL_NODE) {
+            if (const auto* pc_node = scene.getNodeById(install.point_cloud_node_id)) {
+                scene.removeNode(pc_node->name, false);
             }
         }
 
+        const lfs::core::NodeId model_id =
+            scene.addSplat("Model", std::move(install.model), install.parent_id);
+        if (model_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to add training model to scene");
+        }
+        if (install.node_transform != glm::mat4{1.0f}) {
+            scene.setNodeTransform(model_id, install.node_transform);
+        }
+        scene.setTrainingModelNode(model_id);
+        if (install.has_preserved_cropbox) {
+            const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
+            if (model_cropbox_id != lfs::core::NULL_NODE) {
+                scene.setCropBoxData(model_cropbox_id, install.preserved_cropbox_data);
+                scene.setNodeTransform(model_cropbox_id, install.preserved_cropbox_transform);
+            }
+        }
         return {};
+    }
+
+    std::expected<void, std::string> initializeTrainingModel(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
+        auto prepared = prepareTrainingModel(params, scene, std::move(tensor_allocator));
+        if (!prepared) {
+            return std::unexpected(std::move(prepared.error()));
+        }
+        if (!*prepared) {
+            return {};
+        }
+        return installTrainingModel(scene, std::move(**prepared));
     }
 
     std::expected<void, std::string> validateDatasetPath(

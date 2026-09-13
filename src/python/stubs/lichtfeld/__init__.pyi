@@ -282,8 +282,11 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
-def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False, overwrite: bool = False) -> bool:
     """Create and bind a new .licht project at path"""
+
+def project_create_pending() -> bool:
+    """Whether a stop-then-create is queued and has not bound yet"""
 
 def project_embed_dataset() -> None:
     """Embed the active project's external dataset verbatim"""
@@ -404,7 +407,7 @@ def load_gallery_scene(nodes: list, name: str, hidden: bool = False) -> None:
 
 def prepare_gallery_scene(path: str, payload_format: str = 'ply') -> None:
     """
-    Publish visible splats and appearance into a fresh native .licht file. The selected PLY, SOG or SSOG data and HDR assets are embedded; training and editor state are excluded.
+    Publish visible splats and appearance into a fresh native .licht file. The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.
     """
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:

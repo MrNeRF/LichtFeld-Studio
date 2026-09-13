@@ -3808,7 +3808,8 @@ namespace lfs::python {
                                             path_to_utf8(
                                                 event.path),
                                         event.keep_asset_manager_open,
-                                        lfs::core::path_to_utf8(event.create_path));
+                                        lfs::core::path_to_utf8(event.create_path),
+                                        event.allow_existing_destination_replacement);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3883,7 +3884,8 @@ namespace lfs::python {
                                                 event.path),
                                         event.discard_changes,
                                         event.keep_asset_manager_open,
-                                        lfs::core::path_to_utf8(event.create_path));
+                                        lfs::core::path_to_utf8(event.create_path),
+                                        event.allow_existing_destination_replacement);
                                 } catch (
                                     const std::
                                         exception& error) {

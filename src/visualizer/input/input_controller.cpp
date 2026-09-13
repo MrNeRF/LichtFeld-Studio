@@ -734,7 +734,10 @@ namespace lfs::vis {
             return;
         }
 
-        if (action == input::ACTION_PRESS) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
+        if (!selection_pointer_blocked && action == input::ACTION_PRESS) {
             const auto mouse_btn = static_cast<input::MouseButton>(button);
             const auto tool_mode = getCurrentToolMode();
             auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
@@ -747,7 +750,8 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
+        if (!selection_pointer_blocked &&
+            dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
             return;
         }
 
@@ -992,49 +996,8 @@ namespace lfs::vis {
                 const glm::vec3 new_pivot = unprojectScreenPoint(x, y, current_distance);
                 const glm::vec3 forward = lfs::rendering::cameraForward(target_viewport.camera.R);
 
-                glm::vec3 camera_offset(0.0f);
-
-                // In comparison split modes, offset camera so the pivot lands in the active panel center.
-                if (auto* const rendering = services().renderingOrNull();
-                    rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
-                    if (const auto divider_x = rendering->getSplitDividerScreenX(
-                            {viewport_bounds_.x, viewport_bounds_.y},
-                            {viewport_bounds_.width, viewport_bounds_.height})) {
-                        const float local_x = static_cast<float>(x) - viewport_bounds_.x;
-                        const float viewport_width = viewport_bounds_.width;
-                        const float viewport_height = viewport_bounds_.height;
-                        if (viewport_width <= 0.0f || viewport_height <= 0.0f) {
-                            break;
-                        }
-                        const float split_x = *divider_x - viewport_bounds_.x;
-
-                        // Determine which panel was clicked and its center
-                        float panel_center_x;
-                        if (local_x < split_x) {
-                            panel_center_x = split_x * 0.5f;
-                        } else {
-                            panel_center_x = split_x + (viewport_width - split_x) * 0.5f;
-                        }
-
-                        // Offset from viewport center to panel center (in pixels)
-                        const float viewport_center_x = viewport_width / 2.0f;
-                        const float dx = panel_center_x - viewport_center_x;
-
-                        // Convert screen offset to camera offset
-                        const float fov_y = glm::radians(services().renderingOrNull()->getFovDegrees());
-                        const float aspect = viewport_width / viewport_height;
-                        const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
-                        const float fx = viewport_width / (2.0f * std::tan(fov_x / 2.0f));
-
-                        // Shift camera opposite to desired screen shift
-                        const float shift = -dx * current_distance / fx;
-                        const glm::vec3 right = lfs::rendering::cameraRight(target_viewport.camera.R);
-                        camera_offset = right * shift;
-                    }
-                }
-
                 target_viewport.camera.setPivot(new_pivot);
-                target_viewport.camera.startGlide(new_pivot - forward * current_distance + camera_offset);
+                target_viewport.camera.startGlide(new_pivot - forward * current_distance);
                 onCameraMovementStart();
                 publishCameraMove(&target_viewport);
                 break;
@@ -1352,7 +1315,11 @@ namespace lfs::vis {
             over_gui = isPointerOverBlockingUi(x, y);
             over_gui_hover = isPointerOverUiHover(x, y);
         }
-        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
+        if (!selection_pointer_blocked &&
+            dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
             return;
         }
@@ -3292,6 +3259,7 @@ namespace lfs::vis {
                     .focal_length_mm = focal_length_mm,
                     .orthographic = render_settings.orthographic,
                     .ortho_scale = ortho_scale,
+                    .panel = interaction->panel,
                 });
         }
         if (depth <= 0.0f) {

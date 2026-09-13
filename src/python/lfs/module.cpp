@@ -1164,22 +1164,43 @@ NB_MODULE(lichtfeld, m) {
         "project_create",
         [](const std::string& path,
            const bool discard_changes,
-           const bool stop_training) {
+           const bool stop_training,
+           const bool overwrite) {
             nb::gil_scoped_release release;
             const auto project_path = python_utf8_path(path);
+            auto* const viewer = lfs::python::get_visualizer();
+            bool created = false;
             emit_project_cmd_marshaled(
                 "python.project_create",
-                [project_path, discard_changes, stop_training] {
+                [project_path, discard_changes, stop_training,
+                 overwrite, viewer, &created] {
                     lfs::core::events::cmd::ProjectCreate{
                         .path = project_path,
                         .discard_changes = discard_changes,
-                        .stop_training = stop_training}
+                        .stop_training = stop_training,
+                        .allow_existing_destination_replacement =
+                            overwrite}
                         .emit();
+                    created = !viewer || viewer->consumeProjectCreateSucceeded();
                 });
+            return created;
         },
         nb::arg("path"), nb::arg("discard_changes") = false,
         nb::arg("stop_training") = false,
+        nb::arg("overwrite") = false,
         "Create and bind a new .licht project at path");
+    m.def(
+        "project_create_pending",
+        []() {
+            nb::gil_scoped_release release;
+            bool pending = false;
+            emit_project_cmd_marshaled("python.project_create_pending", [&pending] {
+                const auto* const viewer = lfs::python::get_visualizer();
+                pending = viewer && viewer->projectCreatePending();
+            });
+            return pending;
+        },
+        "Whether a stop-then-create is queued and has not bound yet");
     m.def(
         "project_embed_dataset",
         []() {

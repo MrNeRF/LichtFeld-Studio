@@ -15,7 +15,14 @@
 
 namespace lfs::vis {
 
-    // Snapshot of scene state for rendering
+    // Snapshot of scene state for rendering.
+    // metadata_only skips combined-model concatenation and per-gaussian
+    // transform/selection aggregates. Overlay and comparison paths use it so a
+    // split view cannot hide a second full-scene GPU copy behind GUI work.
+    struct SceneRenderStateOptions {
+        bool metadata_only = false;
+    };
+
     struct SceneRenderState {
         const lfs::core::SplatData* combined_model = nullptr;
         const lfs::core::PointCloud* point_cloud = nullptr;             // For pre-training point cloud rendering

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/sh_value_quant.hpp"
+#include "core/environment.hpp"
 
 #include <atomic>
 
@@ -25,6 +26,6 @@ namespace lfs::core::sh_value_quant {
         const int o = override_flag().load(std::memory_order_relaxed);
         if (o >= 0)
             return o != 0;
-        return true; // production default: always ON
+        return environment::flag("LFS_SH_VALUE_QUANT", true);
     }
 } // namespace lfs::core::sh_value_quant

@@ -512,6 +512,48 @@ namespace lfs::io::project {
 
     } // namespace
 
+    lfs::Result<void> preflight_first_save_destination(
+        const std::filesystem::path& path,
+        const bool allow_existing_destination_replacement) {
+        std::error_code error;
+        const bool exists = std::filesystem::exists(path, error);
+        if (error) {
+            return fail<void>(
+                lfs::ErrorCode::PermissionDenied,
+                "The destination project could not be inspected.",
+                std::format("filesystem::exists failed: {}", error.message()),
+                "project.path");
+        }
+        if (!exists) {
+            return {};
+        }
+        if (!allow_existing_destination_replacement) {
+            return fail<void>(
+                lfs::ErrorCode::AlreadyExists,
+                "The destination project already exists.",
+                "P3 first-save assembly refuses implicit replacement",
+                "project.path");
+        }
+        auto existing = ProjectReader::open(path);
+        if (!existing) {
+            return lfs::Status::failure(std::move(existing).error());
+        }
+        const WriteCompatibility compatibility =
+            existing->write_compatibility();
+        if (!compatibility.safe) {
+            return fail<void>(
+                lfs::ErrorCode::Unsupported,
+                "This project is read-only in the current LichtFeld version.",
+                std::format(
+                    "replacement refused before writing project bytes: {}",
+                    compatibility.reasons.empty()
+                        ? std::string{"unknown writer incompatibility"}
+                        : compatibility.reasons.front()),
+                "commit.write_compatibility");
+        }
+        return {};
+    }
+
     struct LazyChunkValue::Impl {
         std::shared_ptr<ProjectReader> reader;
         std::optional<ChunkInfo> source;
@@ -2665,6 +2707,7 @@ namespace lfs::io::project {
                                          std::filesystem::perm_options::replace);
             return destination;
         } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): return the failure as a typed embedded-asset error after cleanup.
             std::error_code ignored;
             if (!temporary.empty())
                 std::filesystem::remove(temporary, ignored);
@@ -3515,22 +3558,12 @@ namespace lfs::io::project {
                     "base explicit commit UUID",
                     "autosave.base_commit_uuid");
             }
-        } else if (!impl_->source_path &&
-                   !options.allow_existing_destination_replacement) {
-            std::error_code error;
-            if (std::filesystem::exists(*normalized, error)) {
-                return fail<ProjectDocumentSaveReport>(
-                    lfs::ErrorCode::AlreadyExists,
-                    "The destination project already exists.",
-                    "P3 first-save assembly refuses implicit replacement",
-                    "project.path");
-            }
-            if (error) {
-                return fail<ProjectDocumentSaveReport>(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The destination project could not be inspected.",
-                    std::format("filesystem::exists failed: {}", error.message()),
-                    "project.path");
+        } else if (!impl_->source_path) {
+            if (auto preflight = preflight_first_save_destination(
+                    *normalized,
+                    options.allow_existing_destination_replacement);
+                !preflight) {
+                return std::move(preflight).error();
             }
         }
 

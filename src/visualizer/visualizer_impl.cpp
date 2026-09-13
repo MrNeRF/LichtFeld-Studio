@@ -1006,7 +1006,13 @@ namespace lfs::vis {
             if (!scene_manager_) {
                 return nullptr;
             }
-            if (!hasRenderableGaussians(scene_manager_->getModelForRendering())) {
+            const bool ply_comparison =
+                rendering_manager_ && rendering_manager_->isPLYComparisonActive();
+            // Idle viewport-render polling must not concatenate a combined model
+            // just to decide whether screen positions exist. Selection tools still
+            // go through SelectionService.
+            if (!ply_comparison &&
+                !hasRenderableGaussians(scene_manager_->getModelForRendering())) {
                 return nullptr;
             }
             if (const auto* tm = scene_manager_->getTrainerManager()) {
@@ -1423,12 +1429,15 @@ namespace lfs::vis {
         cmd::ProjectCreate::when(
             [this](const auto& command) {
                 pending_project_dataset_embed_ = false;
-                handleCreateProject(
+                last_project_create_succeeded_ = false;
+                const auto created = handleCreateProject(
                     command.path,
                     command.discard_changes
                         ? ProjectSwitchDisposition::DiscardChanges
                         : ProjectSwitchDisposition::RequireClean,
-                    command.stop_training);
+                    command.stop_training,
+                    command.allow_existing_destination_replacement);
+                last_project_create_succeeded_ = created.has_value();
             });
 
         cmd::SwitchToEditMode::when(
@@ -1578,7 +1587,8 @@ namespace lfs::vis {
                 LOG_INFO(
                     "Dataset embed command received (importing={})",
                     importing);
-                if (importing) {
+                if (importing || pending_training_action_ == PendingTrainingAction::CreateProject ||
+                    pending_training_action_ == PendingTrainingAction::LoadDataset) {
                     pending_project_dataset_embed_ = true;
                     LOG_INFO(
                         "Dataset embedding deferred until dataset load completes");
@@ -3150,14 +3160,21 @@ namespace lfs::vis {
 
     bool VisualizerImpl::deferLoadFileForTraining(
         const lfs::core::events::cmd::LoadFile& cmd) {
-        if (!cmd.stop_training) {
-            return false;
-        }
         if (pending_training_action_ ==
                 PendingTrainingAction::CloseSave ||
             pending_training_action_ ==
                 PendingTrainingAction::CloseDiscard) {
             return true;
+        }
+        if (pending_training_action_ ==
+            PendingTrainingAction::CreateProject) {
+            auto queued = cmd;
+            queued.stop_training = false;
+            pending_load_files_.push_back(std::move(queued));
+            return true;
+        }
+        if (!cmd.stop_training) {
+            return false;
         }
         const bool already_queued =
             pending_training_action_ ==
@@ -3377,18 +3394,46 @@ namespace lfs::vis {
         }
     }
 
-    void VisualizerImpl::handleCreateProject(
+    lfs::Result<void> VisualizerImpl::handleCreateProject(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition,
-        const bool stop_training) {
+        const bool stop_training,
+        const bool allow_existing_destination_replacement) {
         if (pending_training_action_ ==
                 PendingTrainingAction::CloseSave ||
             pending_training_action_ ==
                 PendingTrainingAction::CloseDiscard) {
-            return;
+            return visualizerFailure<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The current project is still being saved.",
+                "Project creation waits for the close save to finish",
+                "project.save");
         }
         if (!project_lifecycle_) {
-            return;
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        if (auto destination =
+                project_lifecycle_->preflightCreateDestination(
+                    path, allow_existing_destination_replacement);
+            !destination) {
+            LOG_ERROR(
+                "Create Project destination preflight failed: {}",
+                lfs::format_for_developer(destination.error()));
+            if (destination.error().code() !=
+                lfs::ErrorCode::AlreadyExists) {
+                lfs::Error contextual = destination.error();
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = std::move(contextual).with_context(gui::error_op::kNewProject, LFS_SOURCE_SITE_CURRENT()),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+            }
+            return destination;
         }
         if (auto preflight = project_lifecycle_->preflightSwitch(
                 disposition, stop_training);
@@ -3397,9 +3442,11 @@ namespace lfs::vis {
                 lfs::core::events::cmd::ShowProjectSwitchConfirmation{
                     .new_project = true,
                     .path = {},
-                    .create_path = path}
+                    .create_path = path,
+                    .allow_existing_destination_replacement =
+                        allow_existing_destination_replacement}
                     .emit();
-                return;
+                return preflight;
             }
             if (!stop_training &&
                 isTrainingProjectSwitchError(preflight.error()) &&
@@ -3411,9 +3458,11 @@ namespace lfs::vis {
                     .discard_changes =
                         disposition ==
                         ProjectSwitchDisposition::DiscardChanges,
-                    .create_path = path}
+                    .create_path = path,
+                    .allow_existing_destination_replacement =
+                        allow_existing_destination_replacement}
                     .emit();
-                return;
+                return preflight;
             }
             LOG_ERROR(
                 "Create Project preflight failed: {}",
@@ -3425,7 +3474,7 @@ namespace lfs::vis {
                 .actions = {},
                 .operation_id = lfs::OperationId::generate(),
             });
-            return;
+            return preflight;
         }
         if (gui_manager_) {
             gui_manager_->asyncTasks().cancelImport();
@@ -3437,24 +3486,38 @@ namespace lfs::vis {
             pending_training_action_ =
                 PendingTrainingAction::CreateProject;
             pending_create_project_path_ = path;
+            pending_create_allow_existing_destination_replacement_ =
+                allow_existing_destination_replacement;
             pending_new_project_disposition_ = disposition;
             requestStopThenPendingAction();
-            return;
+            return visualizerFailure<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project could not be created yet.",
+                "Project creation waits for training to stop",
+                "project.create_pending");
         }
         pending_training_action_ = PendingTrainingAction::None;
         pending_create_project_path_.clear();
-        performCreateProject(path, disposition);
+        pending_create_allow_existing_destination_replacement_ = false;
+        return performCreateProject(
+            path, disposition, allow_existing_destination_replacement);
     }
 
-    void VisualizerImpl::performCreateProject(
+    lfs::Result<void> VisualizerImpl::performCreateProject(
         const std::filesystem::path& path,
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool allow_existing_destination_replacement) {
         keep_asset_manager_open_after_restore_ = false;
         if (!project_lifecycle_) {
-            return;
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
         }
         if (auto created = project_lifecycle_->createProjectAt(
-                path, disposition);
+                path, disposition,
+                allow_existing_destination_replacement);
             !created) {
             LOG_ERROR(
                 "Create Project failed: {}",
@@ -3466,7 +3529,9 @@ namespace lfs::vis {
                 .actions = {},
                 .operation_id = lfs::OperationId::generate(),
             });
+            return created;
         }
+        return {};
     }
 
     void VisualizerImpl::handleOpenProject(
@@ -3609,6 +3674,7 @@ namespace lfs::vis {
             ProjectSwitchDisposition::RequireClean;
         pending_open_keep_asset_manager_open_ = false;
         pending_create_project_path_.clear();
+        pending_create_allow_existing_destination_replacement_ = false;
         pending_load_files_.clear();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
@@ -3940,7 +4006,8 @@ namespace lfs::vis {
     lfs::Result<void>
     VisualizerImpl::projectCreateAt(
         const std::filesystem::path& path,
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool allow_existing_destination_replacement) {
         if (!project_lifecycle_) {
             return visualizerFailure<void>(
                 lfs::ErrorCode::Unavailable,
@@ -3949,7 +4016,8 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->createProjectAt(
-            path, disposition);
+            path, disposition,
+            allow_existing_destination_replacement);
     }
 
     lfs::Result<void>
@@ -4180,6 +4248,15 @@ namespace lfs::vis {
         return project_save_started_.exchange(false);
     }
 
+    bool VisualizerImpl::consumeProjectCreateSucceeded() {
+        return std::exchange(last_project_create_succeeded_, false);
+    }
+
+    bool VisualizerImpl::projectCreatePending() const {
+        return pending_training_action_ ==
+               PendingTrainingAction::CreateProject;
+    }
+
     void VisualizerImpl::projectWaitWrite() {
         if (!project_lifecycle_) {
             return;
@@ -4404,8 +4481,22 @@ namespace lfs::vis {
             const auto disposition = std::exchange(
                 pending_new_project_disposition_,
                 ProjectSwitchDisposition::RequireClean);
+            const bool allow_existing = std::exchange(
+                pending_create_allow_existing_destination_replacement_,
+                false);
             if (!path.empty()) {
-                performCreateProject(path, disposition);
+                const auto created = performCreateProject(
+                    path, disposition, allow_existing);
+                if (!created) {
+                    pending_load_files_.clear();
+                    pending_project_dataset_embed_ = false;
+                    break;
+                }
+                if (!pending_load_files_.empty()) {
+                    pending_training_action_ =
+                        PendingTrainingAction::LoadDataset;
+                    schedulePendingTrainingAction();
+                }
             }
             break;
         }

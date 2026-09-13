@@ -14,6 +14,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include <algorithm>
@@ -564,82 +565,8 @@ namespace lfs::training {
     lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
                                                        lfs::core::Tensor& gt_image,
                                                        const bool alpha_as_mask) const {
-        if (cam->has_mask()) {
-            bool is_segment_and_ignore = _params.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
-            auto m = cam->load_and_get_mask(
-                _params.dataset.resize_factor,
-                _params.dataset.max_width,
-                _params.optimization.invert_masks,
-                _params.optimization.mask_threshold,
-                !is_segment_and_ignore);
-            if (is_segment_and_ignore) {
-                m = m.gt(250).to(lfs::core::DataType::UInt8).contiguous();
-            }
-            return m;
-        }
-
-        if (!alpha_as_mask)
-            return {};
-
-        // Re-load from disk because the dataloader strips alpha to produce RGB gt_image.
-        // We need the original alpha channel as the mask, with undistortion applied consistently.
-        auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-            cam->image_path(), _params.dataset.resize_factor, _params.dataset.max_width);
-
-        if (!img_data || channels != 4) {
-            if (img_data)
-                lfs::core::free_image(img_data);
-            return {};
-        }
-
-        const auto H = static_cast<size_t>(height);
-        const auto W = static_cast<size_t>(width);
-
-        auto cpu_tensor = lfs::core::Tensor::from_blob(
-            img_data, lfs::core::TensorShape({H, W, 4}),
-            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-        lfs::core::free_image(img_data);
-
-        auto rgb = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-        auto mask = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-            gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-            H, W, nullptr);
-        gpu_uint8 = lfs::core::Tensor();
-
-        if (_params.optimization.invert_masks)
-            lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
-        if (_params.optimization.mask_threshold > 0)
-            lfs::io::cuda::launch_mask_threshold(
-                mask.ptr<float>(), H, W, _params.optimization.mask_threshold, nullptr);
-
-        if (cam->is_undistort_prepared()) {
-            const auto scaled = lfs::core::scale_undistort_params(
-                cam->undistort_params(),
-                static_cast<int>(W), static_cast<int>(H));
-            auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-            rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
-            auto rgb_uint8 = lfs::core::Tensor::empty(
-                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                rgb_float.ptr<float>(),
-                rgb_uint8.ptr<uint8_t>(),
-                rgb_float.shape()[1],
-                rgb_float.shape()[2],
-                rgb_float.shape()[0],
-                nullptr);
-            rgb = std::move(rgb_uint8);
-            mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-        }
-
-        gt_image = std::move(rgb);
-        return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+        return lfs::training::load_eval_mask(
+            cam, gt_image, alpha_as_mask, metrics_mask_config_from(_params));
     }
 
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,

@@ -108,7 +108,8 @@ namespace lfs::vis {
         projectCreateAt(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
-                ProjectSwitchDisposition::RequireClean) override;
+                ProjectSwitchDisposition::RequireClean,
+            bool allow_existing_destination_replacement = false) override;
         lfs::Result<void> projectSaveAsExplicit(
             const std::filesystem::path& path,
             bool regenerate_preview = true);
@@ -147,6 +148,8 @@ namespace lfs::vis {
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
         bool consumeProjectSaveStarted() override;
+        bool consumeProjectCreateSucceeded() override;
+        bool projectCreatePending() const override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -272,15 +275,21 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
         friend class VisualizerImplResetTest_CreateProjectAtWritesBindsAndRegistersMru_Test;
         friend class VisualizerImplResetTest_CreateProjectAtRefusesExistingDestination_Test;
+        friend class VisualizerImplResetTest_CreateProjectAtOverwriteReplacesExistingAtomically_Test;
+        friend class VisualizerImplResetTest_CreateProjectAtOverwriteLeavesUnreadableFileAndScene_Test;
+        friend class VisualizerImplResetTest_ProjectCreateEventWithoutOverwritePreservesOpenScene_Test;
         friend class VisualizerImplResetTest_CreateProjectAtRejectsScratchAndUnpublishedPaths_Test;
         friend class VisualizerImplResetTest_CreateProjectRequireCleanFailsOnDirtySession_Test;
         friend class VisualizerImplResetTest_TrainingStartAutoCreateSuffixesOnCollision_Test;
         friend class VisualizerImplResetTest_DatasetLoadIntoBlankCreatedProjectKeepsBinding_Test;
         friend class VisualizerImplResetTest_ProjectCreateOnDirtyEmitsCreatePath_Test;
+        friend class VisualizerImplResetTest_ProjectCreateOnDirtyForwardsOverwriteAuthorization_Test;
         friend class VisualizerImplResetTest_StartupScansLegacyWorkingTmpDirectory_Test;
         friend class VisualizerImplResetTest_StartupPruneNeverTouchesProjectLocation_Test;
         friend class VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
         friend class VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
+        friend class VisualizerImplResetTest_ProjectCreateStopTrainingDefersWithoutBinding_Test;
+        friend class VisualizerImplResetTest_DeferredCreateLateCollisionDropsQueuedLoads_Test;
         friend class VisualizerImplResetTest_RecoveredScratchSaveStillRefusesAndStaysOutOfMru_Test;
         friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionRetainsCheckpointHistory_Test;
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
@@ -488,13 +497,17 @@ namespace lfs::vis {
             bool stop_training = false);
         void performNewProject(
             ProjectSwitchDisposition disposition);
-        void handleCreateProject(
+        [[nodiscard]] lfs::Result<void>
+        handleCreateProject(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition,
-            bool stop_training = false);
-        void performCreateProject(
+            bool stop_training = false,
+            bool allow_existing_destination_replacement = false);
+        [[nodiscard]] lfs::Result<void>
+        performCreateProject(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            bool allow_existing_destination_replacement = false);
         void handleOpenProject(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition,
@@ -655,6 +668,9 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean;
         std::filesystem::path pending_open_path_;
         std::filesystem::path pending_create_project_path_;
+        bool pending_create_allow_existing_destination_replacement_ =
+            false;
+        bool last_project_create_succeeded_ = false;
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;

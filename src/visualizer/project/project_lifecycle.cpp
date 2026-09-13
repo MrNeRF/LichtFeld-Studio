@@ -8247,8 +8247,36 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
+    ProjectLifecycle::preflightCreateDestination(
+        const std::filesystem::path& path,
+        const bool allow_existing_destination_replacement) {
+        auto normalized = normalizedProjectPath(path);
+        if (!normalized) {
+            return lfs::Status::failure(
+                std::move(normalized).error());
+        }
+        if (isScratchPath(*normalized)) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "A project cannot be created in scratch storage.",
+                "the requested destination is reserved for crash recovery",
+                "project.path");
+        }
+        if (auto preflight =
+                lfs::io::project::preflight_first_save_destination(
+                    *normalized,
+                    allow_existing_destination_replacement);
+            !preflight) {
+            return lfs::Status::failure(
+                std::move(preflight).error());
+        }
+        return {};
+    }
+
+    lfs::Result<void>
     ProjectLifecycle::bindUntitledSessionToMaster(
-        const std::filesystem::path& destination) {
+        const std::filesystem::path& destination,
+        const bool allow_existing_destination_replacement) {
         if (auto waited =
                 waitOutBackgroundAutosaveForExplicitSave();
             !waited) {
@@ -8274,7 +8302,8 @@ namespace lfs::vis::project {
         options.index_compression =
             lfs::io::project::IndexCompression::Zstd;
         options.disk_reserve_bytes = 64ull * 1024 * 1024;
-        options.allow_existing_destination_replacement = false;
+        options.allow_existing_destination_replacement =
+            allow_existing_destination_replacement;
         options.leave_unbound = false;
         auto started = startDocumentWrite(
             ProjectWritePurpose::SaveAs,
@@ -8302,18 +8331,17 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::createProjectAt(
         const std::filesystem::path& path,
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool allow_existing_destination_replacement) {
+        if (auto preflight = preflightCreateDestination(
+                path, allow_existing_destination_replacement);
+            !preflight) {
+            return preflight;
+        }
         auto normalized = normalizedProjectPath(path);
         if (!normalized) {
             return lfs::Status::failure(
                 std::move(normalized).error());
-        }
-        if (isScratchPath(*normalized)) {
-            return fail<void>(
-                lfs::ErrorCode::InvalidArgument,
-                "A project cannot be created in scratch storage.",
-                "the requested destination is reserved for crash recovery",
-                "project.path");
         }
         if (auto created = newProject(disposition); !created) {
             return created;
@@ -8328,7 +8356,8 @@ namespace lfs::vis::project {
                 create_error.message(),
                 "project.path");
         }
-        return bindUntitledSessionToMaster(*normalized);
+        return bindUntitledSessionToMaster(
+            *normalized, allow_existing_destination_replacement);
     }
 
     bool ProjectLifecycle::hasSourcePath() const {

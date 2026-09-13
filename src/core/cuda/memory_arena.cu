@@ -2296,9 +2296,12 @@ namespace lfs::core {
     }
 
     void GlobalArenaManager::clear_external_backing(const void* device_ptr) {
-        std::lock_guard<std::mutex> lock(init_mutex_);
-        if (arena_) {
-            arena_->clear_external_backing(device_ptr);
+        // Clearing waits for active frames to finish. Their owners may need
+        // get_arena() to release those frames, so never hold init_mutex_ across
+        // that wait. As with install/grow, arena lifetime is owned by the
+        // runtime and shutdown must happen after its users have stopped.
+        if (auto* arena = try_get_arena()) {
+            arena->clear_external_backing(device_ptr);
         }
     }
 

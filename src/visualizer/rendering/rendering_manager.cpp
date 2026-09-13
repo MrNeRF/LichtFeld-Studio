@@ -652,6 +652,11 @@ namespace lfs::vis {
         return split_view_service_.isGTComparisonActive(settings_);
     }
 
+    bool RenderingManager::isPLYComparisonActive() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return splitViewUsesPLYComparison(settings_.split_view_mode);
+    }
+
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return settings_.gt_comparison_mode;

@@ -128,6 +128,7 @@ namespace lfs::vis::gui {
                           const std::vector<std::string>& idnames);
         void reloadResources();
         void processInput(const PanelInputState& input);
+        void closeDropdown();
         void setViewportRightEdge(float x) { viewport_right_edge_ = x; }
         void setUiHidden(bool hidden);
         void suspend();
@@ -144,7 +145,6 @@ namespace lfs::vis::gui {
         void rebuildLabels();
         void syncActiveLabelState();
         void openDropdown(int index);
-        void closeDropdown();
         void rebuildDropdownDOM();
         void sizeOpenDropdowns();
         void setOpenSubmenu(int root_index, int child_index);

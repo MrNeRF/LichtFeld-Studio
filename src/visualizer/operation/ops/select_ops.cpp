@@ -30,7 +30,7 @@ namespace lfs::vis::op {
     }
 
     bool SelectAll::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectNone::execute(SceneManager& scene,
@@ -74,7 +74,7 @@ namespace lfs::vis::op {
     }
 
     bool SelectInvert::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectGrow::execute(SceneManager& scene,
@@ -159,7 +159,7 @@ namespace lfs::vis::op {
     }
 
     bool SelectByOpacity::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectByScale::execute(SceneManager& scene,
@@ -180,7 +180,7 @@ namespace lfs::vis::op {
     }
 
     bool SelectByScale::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
 } // namespace lfs::vis::op

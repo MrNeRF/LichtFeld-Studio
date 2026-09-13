@@ -1688,6 +1688,7 @@ namespace lfs::vis::gui {
             publication.published_camera = project::panelCameraProjectStateToJson(
                 "primary", project::capturePanelCameraProjectState(viewer_->getViewport(), fallback_ortho_scale));
         } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): publish the preparation failure to the export UI.
             publishExportFailureState(format, path, e.what());
             return;
         }
@@ -1719,9 +1720,11 @@ namespace lfs::vis::gui {
                     writeGalleryScenePublication(publication, report, canceled);
                     owns_directory = publication.created_directory;
                 } catch (const std::exception& e) {
+                    // LFS-CENSUS-OK(empty-catch): report the captured error through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = e.what();
                 } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): report an unknown failure through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = "Scene preparation failed.";
                 }
@@ -1745,6 +1748,7 @@ namespace lfs::vis::gui {
                 wakeMainThreadForAsyncWork();
             });
         } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): mark the job failed and publish its error to the export UI.
             jobs_.failed(job, e.what(), "Scene preparation failed");
             publishExportState();
         }

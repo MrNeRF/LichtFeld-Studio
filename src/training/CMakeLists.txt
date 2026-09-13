@@ -104,6 +104,7 @@ set(TRAINING_NEW_SOURCES
     components/ppisp_file.cpp
     components/sparsity_optimizer.cpp
     control/command_api.cpp
+    metrics/eval_mask.cpp
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp

@@ -50,6 +50,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
+#include "metrics/eval_mask.hpp"
 #include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
@@ -62,6 +63,7 @@
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/kernels/mask_preprocess.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
@@ -540,131 +542,16 @@ namespace lfs::training {
             return params;
         }
 
-        [[nodiscard]] lfs::core::Tensor normalize_mask_tensor(lfs::core::Tensor mask) {
-            if (!mask.is_valid()) {
-                return {};
-            }
-
-            if (mask.device() != lfs::core::Device::CUDA) {
-                mask = mask.to(lfs::core::Device::CUDA);
-            }
-
-            if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
-                const auto r = mask.slice(0, 0, 1).squeeze(0);
-                const auto g = mask.slice(0, 1, 2).squeeze(0);
-                const auto b = mask.slice(0, 2, 3).squeeze(0);
-                mask = ((r + g + b) / 3.0f).contiguous();
-            } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
-                mask = mask.squeeze(0).contiguous();
-            }
-
-            return mask;
-        }
-
-        std::expected<lfs::core::Tensor, std::string> load_external_mask_for_metrics(
-            const lfs::core::Camera& camera,
-            const Trainer::GTLoadConfigSnapshot& gt_config,
-            const lfs::core::param::OptimizationParameters& opt_params,
-            lfs::io::PipelinedImageLoader& image_loader) {
-            try {
-                auto mask = image_loader.load_image_immediate(
-                    camera.mask_path(),
-                    make_metrics_load_params(gt_config, camera, false, false));
-                mask = normalize_mask_tensor(std::move(mask));
-                if (!mask.is_valid()) {
-                    return std::unexpected("failed to decode mask");
-                }
-
-                const size_t H = mask.shape()[0];
-                const size_t W = mask.shape()[1];
-                float* const mask_ptr = mask.ptr<float>();
-                if (opt_params.invert_masks) {
-                    lfs::io::cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
-                }
-                if (opt_params.mask_threshold > 0.0f) {
-                    lfs::io::cuda::launch_mask_threshold(mask_ptr, H, W, opt_params.mask_threshold, nullptr);
-                }
-
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
-                        camera.undistort_params(),
-                        static_cast<int>(W),
-                        static_cast<int>(H));
-                    mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-                }
-
-                return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
-            } catch (const std::exception& e) {
-                return std::unexpected(e.what());
-            }
-        }
-
-        std::expected<LoadedCameraMetricsInputs, std::string> load_alpha_masked_metrics_inputs(
-            const lfs::core::Camera& camera,
+        [[nodiscard]] MetricsMaskLoadConfig make_metrics_mask_config(
             const Trainer::GTLoadConfigSnapshot& gt_config,
             const lfs::core::param::OptimizationParameters& opt_params) {
-            try {
-                auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                    camera.image_path(), gt_config.resize_factor, gt_config.max_width);
-
-                if (!img_data || channels != 4) {
-                    if (img_data) {
-                        lfs::core::free_image(img_data);
-                    }
-                    return std::unexpected("failed to decode RGBA image");
-                }
-
-                const auto H = static_cast<size_t>(height);
-                const auto W = static_cast<size_t>(width);
-
-                auto cpu_tensor = lfs::core::Tensor::from_blob(
-                    img_data, lfs::core::TensorShape({H, W, 4}),
-                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                lfs::core::free_image(img_data);
-
-                auto rgb = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({3, H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                auto mask = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(), H, W, nullptr);
-
-                if (opt_params.invert_masks) {
-                    lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
-                }
-                if (opt_params.mask_threshold > 0.0f) {
-                    lfs::io::cuda::launch_mask_threshold(mask.ptr<float>(), H, W, opt_params.mask_threshold, nullptr);
-                }
-
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
-                        camera.undistort_params(),
-                        static_cast<int>(W),
-                        static_cast<int>(H));
-                    auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
-                    auto rgb_uint8 = lfs::core::Tensor::empty(
-                        rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                    lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                        rgb_float.ptr<float>(),
-                        rgb_uint8.ptr<uint8_t>(),
-                        rgb_float.shape()[1],
-                        rgb_float.shape()[2],
-                        rgb_float.shape()[0],
-                        nullptr);
-                    rgb = std::move(rgb_uint8);
-                    mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-                }
-
-                mask = mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
-                return LoadedCameraMetricsInputs{.gt_image = std::move(rgb), .mask = std::move(mask)};
-            } catch (const std::exception& e) {
-                return std::unexpected(e.what());
-            }
+            return {
+                .resize_factor = gt_config.resize_factor,
+                .max_width = gt_config.max_width,
+                .invert_masks = opt_params.invert_masks,
+                .mask_threshold = opt_params.mask_threshold,
+                .mask_mode = opt_params.mask_mode,
+            };
         }
 
         std::expected<LoadedCameraMetricsInputs, std::string> load_camera_metrics_inputs(
@@ -685,12 +572,20 @@ namespace lfs::training {
                 mask_mode == lfs::core::param::MaskMode::Ignore ||
                 mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
+            const auto mask_config = make_metrics_mask_config(gt_config, opt_params);
+
             // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
             // (some datasets ship RGBA images with a degenerate constant alpha alongside
             // real per-pixel masks in masks/, and we must not let the alpha channel mask
             // them out).
             if (use_masking && !camera.has_mask() && opt_params.use_alpha_as_mask && camera.has_alpha()) {
-                return load_alpha_masked_metrics_inputs(camera, gt_config, opt_params);
+                auto loaded = load_alpha_masked_metrics_inputs(camera, mask_config);
+                if (!loaded) {
+                    return std::unexpected(loaded.error());
+                }
+                return LoadedCameraMetricsInputs{
+                    .gt_image = std::move(loaded->gt_image),
+                    .mask = std::move(loaded->mask)};
             }
 
             LoadedCameraMetricsInputs inputs;
@@ -708,7 +603,7 @@ namespace lfs::training {
             }
 
             if (use_masking && camera.has_mask()) {
-                auto mask = load_external_mask_for_metrics(camera, gt_config, opt_params, *loader);
+                auto mask = load_external_mask_for_metrics(camera, mask_config);
                 if (!mask) {
                     return std::unexpected(mask.error());
                 }
@@ -1264,7 +1159,6 @@ namespace lfs::training {
         current_iteration_ = 0;
         current_loss_ = 0.0f;
         train_dataset_size_ = 0;
-        total_cameras_count_ = 0;
         setCameraLossHeatmap(nullptr);
 
         LOG_DEBUG("Trainer cleanup complete");
@@ -1324,11 +1218,19 @@ namespace lfs::training {
                     1, get_total_iterations() - params_.optimization.exposure_correction_grid_start_iter);
             }
 
-            // BilateralGrid is indexed with cam->uid() in the training loop. Those UIDs stay
-            // in the original camera space even when train/val splits are enabled, so the grid
-            // must be sized for the full camera set rather than only the training subset.
+            // Training and checkpoint state use the original camera UID as the slot.
+            // Disabled, missing-image and evaluation cameras must not shrink that space.
+            int camera_slots = 0;
+            for (const auto& camera : scene_->getAllCameras()) {
+                const int uid = camera->uid();
+                if (uid < 0 || uid == std::numeric_limits<int>::max()) {
+                    return std::unexpected(std::format(
+                        "Invalid camera UID {} for bilateral grid", uid));
+                }
+                camera_slots = std::max(camera_slots, uid + 1);
+            }
             bilateral_grid_ = std::make_unique<BilateralGrid>(
-                static_cast<int>(total_cameras_count_),
+                camera_slots,
                 params_.optimization.bilateral_grid_X,
                 params_.optimization.bilateral_grid_Y,
                 params_.optimization.bilateral_grid_W,
@@ -1340,7 +1242,7 @@ namespace lfs::training {
                      params_.optimization.bilateral_grid_X,
                      params_.optimization.bilateral_grid_Y,
                      params_.optimization.bilateral_grid_W,
-                     total_cameras_count_,
+                     camera_slots,
                      train_dataset_size_);
 
             return {};
@@ -2879,7 +2781,7 @@ namespace lfs::training {
             dataset_config.max_width = params.dataset.max_width;
             dataset_config.test_every = params.dataset.test_every;
 
-            // Get source cameras from Scene nodes or base_dataset_
+            // Get enabled cameras with images from the scene
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
             std::vector<std::shared_ptr<lfs::core::Camera>> train_cameras;
             std::vector<std::shared_ptr<lfs::core::Camera>> val_cameras;
@@ -2931,20 +2833,9 @@ namespace lfs::training {
                     }
                     assert(train_cameras.size() + val_cameras.size() == source_cameras.size());
                 }
-            } else if (base_dataset_) {
-                source_cameras = base_dataset_->get_cameras();
-                std::erase_if(source_cameras, [](const auto& camera) {
-                    return !camera || !camera->has_image();
-                });
-                if (source_cameras.empty()) {
-                    return std::unexpected(
-                        "Dataset has no cameras with image files available for training");
-                }
             } else {
                 return std::unexpected("No camera source available");
             }
-
-            total_cameras_count_ = source_cameras.size();
 
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());
@@ -2952,24 +2843,10 @@ namespace lfs::training {
 
             // Handle dataset split based on evaluation flag
             if (params.optimization.enable_eval) {
-                if (scene_) {
-                    train_dataset_ = std::make_shared<CameraDataset>(
-                        train_cameras, dataset_config, CameraDataset::Split::ALL);
-                    val_dataset_ = std::make_shared<CameraDataset>(
-                        val_cameras, dataset_config, CameraDataset::Split::ALL);
-                } else {
-                    // Create train/val split
-                    train_dataset_ = std::make_shared<CameraDataset>(
-                        source_cameras, dataset_config, CameraDataset::Split::TRAIN,
-                        provided_splits_ ? std::make_optional(std::get<0>(*provided_splits_)) : std::nullopt);
-                    val_dataset_ = std::make_shared<CameraDataset>(
-                        source_cameras, dataset_config, CameraDataset::Split::VAL,
-                        provided_splits_ ? std::make_optional(std::get<1>(*provided_splits_)) : std::nullopt);
-
-                    LOG_INFO("Created train/val split: {} train, {} val images",
-                             train_dataset_->size(),
-                             val_dataset_->size());
-                }
+                train_dataset_ = std::make_shared<CameraDataset>(
+                    train_cameras, dataset_config, CameraDataset::Split::ALL);
+                val_dataset_ = std::make_shared<CameraDataset>(
+                    val_cameras, dataset_config, CameraDataset::Split::ALL);
                 if (train_dataset_->size() == 0) {
                     return std::unexpected("Evaluation split leaves no training images. Increase Test Every or disable evaluation.");
                 }
@@ -3596,7 +3473,6 @@ namespace lfs::training {
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
-        base_dataset_.reset();
         train_dataset_.reset();
         val_dataset_.reset();
         setCameraLossHeatmap(nullptr);
@@ -7487,7 +7363,15 @@ namespace lfs::training {
 
                             if (use_mask &&
                                 params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
-                                const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                                // The pipelined loader returns normalized Float32 masks;
+                                // Camera masks retain their raw UInt8 band levels.
+                                const float keep_min =
+                                    (mask_tile.dtype() == lfs::core::DataType::UInt8 ||
+                                     mask_tile.dtype() == lfs::core::DataType::Bool)
+                                        ? 250.0f
+                                        : lfs::training::kernels::kMaskKeepMin;
+                                const auto mask_for_error =
+                                    mask_tile.gt(keep_min).to(lfs::core::DataType::Float32);
                                 tile_error_map.mul_(mask_for_error);
                             }
 

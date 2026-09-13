@@ -3456,7 +3456,7 @@ namespace lfs::vis {
         return nullptr;
     }
 
-    SceneRenderState SceneManager::buildRenderState() const {
+    SceneRenderState SceneManager::buildRenderState(const SceneRenderStateOptions options) const {
         if (selection_service_) {
             selection_service_->pollPendingSelectionCounts();
         }
@@ -3466,9 +3466,11 @@ namespace lfs::vis {
         const auto selection_generation = static_cast<std::uint64_t>(selection_.generation());
         const auto gaussian_selection_generation = scene_.selectionGeneration();
         const auto local_scene_generation = scene_.renderGeneration();
-        const auto* current_model = content_type_ == ContentType::Dataset
-                                        ? scene_.getTrainingModel()
-                                        : scene_.getCombinedModel();
+        const auto* current_model = options.metadata_only
+                                        ? nullptr
+                                        : (content_type_ == ContentType::Dataset
+                                               ? scene_.getTrainingModel()
+                                               : scene_.getCombinedModel());
         // PointCloud tensors are public and can be edited in place without a Scene mutation
         // notification. Keep the small node scan, but do not reuse a state that owns a merged
         // point cloud unless those tensors acquire an explicit generation in the future.
@@ -3476,7 +3478,8 @@ namespace lfs::vis {
         const auto node_active_sh_degrees = content_type_ == ContentType::SplatFiles
                                                 ? scene_.getVisibleNodeActiveShDegrees()
                                                 : std::vector<int>{};
-        const bool point_cloud_fallback = !hasRenderableGaussians(current_model) &&
+        const bool point_cloud_fallback = !options.metadata_only &&
+                                          !hasRenderableGaussians(current_model) &&
                                           !visible_point_cloud_nodes.empty();
         if (!point_cloud_fallback && cached_render_state_ &&
             cached_render_scene_generation_ == scene_generation &&
@@ -3485,17 +3488,19 @@ namespace lfs::vis {
             cached_render_scene_generation_local_ == local_scene_generation &&
             cached_render_model_ == current_model &&
             cached_render_content_type_ == content_type_ &&
+            cached_render_metadata_only_ == options.metadata_only &&
             cached_render_state_->node_active_sh_degrees == node_active_sh_degrees)
             return *cached_render_state_;
 
         SceneRenderState state;
         state.node_active_sh_degrees = node_active_sh_degrees;
 
-        // Get combined model or point cloud
+        // Get combined model or point cloud. Comparison and GUI overlays pass
+        // metadata_only so this snapshot cannot start a combined-model worker.
         bool hidden_dataset_training_model = false;
-        if (content_type_ == ContentType::SplatFiles) {
+        if (!options.metadata_only && content_type_ == ContentType::SplatFiles) {
             state.combined_model = scene_.getCombinedModel();
-        } else if (content_type_ == ContentType::Dataset) {
+        } else if (!options.metadata_only && content_type_ == ContentType::Dataset) {
             state.combined_model = scene_.getTrainingModel();
             hidden_dataset_training_model =
                 state.combined_model != nullptr &&
@@ -3504,7 +3509,7 @@ namespace lfs::vis {
 
         // Fall back to the visible point cloud whenever the active splat model is absent or empty.
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
-        if (!hasRenderableGaussians(state.combined_model)) {
+        if (!options.metadata_only && !hasRenderableGaussians(state.combined_model)) {
             if (visible_point_cloud_nodes.size() > 1) {
                 state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
                 state.point_cloud = state.owned_point_cloud.get();
@@ -3542,7 +3547,9 @@ namespace lfs::vis {
             for (auto& transform : state.model_transforms) {
                 transform = rendering::dataWorldTransformToVisualizerWorld(transform);
             }
-            state.transform_indices = scene_.getTransformIndices();
+            if (!options.metadata_only) {
+                state.transform_indices = scene_.getTransformIndices();
+            }
 
             // Get node visibility mask (for consolidated models)
             state.node_visibility_mask = scene_.getNodeVisibilityMask();
@@ -3559,8 +3566,9 @@ namespace lfs::vis {
         }
 
         // Renderers consume masks in visible-model order. Scene selection state remains full-scene
-        // so hidden-node selections survive visibility toggles.
-        if (!hidden_dataset_training_model) {
+        // so hidden-node selections survive visibility toggles. metadata_only must not
+        // gather the combined-visible selection tensor.
+        if (!options.metadata_only && !hidden_dataset_training_model) {
             state.selection_mask = scene_.getVisibleSelectionMask();
         }
         const size_t render_splat_count = state.combined_model
@@ -3573,8 +3581,9 @@ namespace lfs::vis {
         // Authoritative non-empty selection (Scene::has_selection_ / hasSelection()).
         // Mask pointer validity alone is not enough: a size-matched all-zero tensor
         // must not report has_selection (see uploadOverlayBindings gate).
-        state.has_selection = scene_.hasSelection() && state.selection_mask &&
-                              state.selection_mask->is_valid();
+        state.has_selection = scene_.hasSelection() &&
+                              (options.metadata_only ||
+                               (state.selection_mask && state.selection_mask->is_valid()));
 
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getRenderableCropBoxes();
@@ -3622,6 +3631,7 @@ namespace lfs::vis {
         cached_render_scene_generation_local_ = local_scene_generation;
         cached_render_model_ = current_model;
         cached_render_content_type_ = content_type_;
+        cached_render_metadata_only_ = options.metadata_only;
         return *cached_render_state_;
     }
 

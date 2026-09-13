@@ -276,7 +276,8 @@ namespace {
         }
         lfs::Result<void> projectCreateAt(
             const std::filesystem::path&,
-            lfs::vis::ProjectSwitchDisposition) override {
+            lfs::vis::ProjectSwitchDisposition,
+            bool = false) override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
@@ -475,15 +476,19 @@ protected:
         const bool done = pumpUntil(
             queue_mutex, queue,
             [&] {
+                // The trainer pointer is installed before its paused/finished
+                // presentation. Wait for the restore worker to publish completion.
+                const auto session =
+                    viewer.projectTrainingSessionState();
+                if (session.restoring) {
+                    return false;
+                }
                 if (viewer.getTrainerManager() &&
                     viewer.getTrainerManager()
                         ->hasTrainer()) {
                     return true;
                 }
-                const auto session =
-                    viewer.projectTrainingSessionState();
-                return !session.restoring &&
-                       !session.error.empty();
+                return !session.error.empty();
             },
             timeout);
         return done && viewer.getTrainerManager() &&
@@ -5639,8 +5644,7 @@ namespace lfs::vis {
         }
         const auto first_path = makeSplatFixture("bicycle_ref");
         const auto second_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+            makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(first_path));
         ASSERT_TRUE(std::filesystem::exists(second_path));
 
@@ -6007,8 +6011,7 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+            makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =
@@ -6086,8 +6089,7 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+            makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =
@@ -8278,11 +8280,11 @@ namespace lfs::vis {
             }));
 
         EXPECT_EQ(viewer.getTrainerManager()->getStateMachine().getFinishReason(),
-                  lfs::vis::FinishReason::Error);
+                  lfs::vis::FinishReason::UserStopped);
         EXPECT_TRUE(viewer.getTrainerManager()->canReset());
 
         // The completion handler queues the requested reset after publishing
-        // Finished(Error); drain that request and verify a fresh Ready trainer.
+        // Finished(UserStopped); drain that request and verify a fresh Ready trainer.
         lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
         EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Ready);
         EXPECT_NE(viewer.getTrainerManager()->getTrainer(), nullptr);
@@ -11330,17 +11332,110 @@ namespace lfs::vis {
            CreateProjectAtRefusesExistingDestination) {
         const auto path = temporary_.path / "existing.licht";
         write_empty_project(path);
+        auto existing = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(existing);
+        const auto original_uuid =
+            existing->superblock().project_uuid;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(viewer.getScene().addGroup("keep-me"),
+                  lfs::core::NULL_NODE);
+
+        auto created = viewer.projectCreateAt(path);
+        ASSERT_FALSE(created);
+        EXPECT_EQ(created.error().code(), lfs::ErrorCode::AlreadyExists);
+        EXPECT_FALSE(viewer.projectHasPath().value());
+        EXPECT_NE(viewer.getScene().getNode("keep-me"), nullptr);
+        EXPECT_TRUE(std::filesystem::is_regular_file(path));
+        auto after = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(after);
+        EXPECT_EQ(after->superblock().project_uuid, original_uuid);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CreateProjectAtOverwriteReplacesExistingAtomically) {
+        const auto path = temporary_.path / "replace.licht";
+        write_empty_project(path);
+        auto existing = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(existing);
+        const auto original_uuid =
+            existing->superblock().project_uuid;
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
                 nullptr, viewer.getViewport());
 
-        auto created = viewer.projectCreateAt(path);
+        auto created = viewer.projectCreateAt(
+            path, ProjectSwitchDisposition::DiscardChanges, true);
+        ASSERT_TRUE(created)
+            << lfs::format_for_developer(created.error());
+        EXPECT_TRUE(viewer.projectHasPath().value());
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        ASSERT_TRUE(info->path);
+        EXPECT_EQ(info->path->lexically_normal(), path.lexically_normal());
+        auto replaced = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(replaced);
+        EXPECT_NE(replaced->superblock().project_uuid, original_uuid);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CreateProjectAtOverwriteLeavesUnreadableFileAndScene) {
+        const auto path = temporary_.path / "garbage.licht";
+        {
+            std::ofstream stream(path, std::ios::binary);
+            ASSERT_TRUE(stream);
+            stream << "not-a-project";
+        }
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(viewer.getScene().addGroup("keep-me"),
+                  lfs::core::NULL_NODE);
+
+        auto created = viewer.projectCreateAt(
+            path, ProjectSwitchDisposition::DiscardChanges, true);
         ASSERT_FALSE(created);
-        EXPECT_EQ(created.error().code(), lfs::ErrorCode::AlreadyExists);
+        EXPECT_NE(viewer.getScene().getNode("keep-me"), nullptr);
         EXPECT_FALSE(viewer.projectHasPath().value());
-        EXPECT_TRUE(std::filesystem::is_regular_file(path));
+        std::ifstream stream(path, std::ios::binary);
+        ASSERT_TRUE(stream);
+        const std::string remaining(
+            (std::istreambuf_iterator<char>(stream)),
+            std::istreambuf_iterator<char>());
+        EXPECT_EQ(remaining, "not-a-project");
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectCreateEventWithoutOverwritePreservesOpenScene) {
+        const auto path = temporary_.path / "event-existing.licht";
+        write_empty_project(path);
+        auto existing = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(existing);
+        const auto original_uuid =
+            existing->superblock().project_uuid;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(viewer.getScene().addGroup("keep-me"),
+                  lfs::core::NULL_NODE);
+
+        lfs::core::events::cmd::ProjectCreate{.path = path}.emit();
+        EXPECT_NE(viewer.getScene().getNode("keep-me"), nullptr);
+        EXPECT_FALSE(viewer.projectHasPath().value());
+        auto after = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(after);
+        EXPECT_EQ(after->superblock().project_uuid, original_uuid);
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
+        EXPECT_FALSE(viewer.projectCreatePending());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -11456,6 +11551,43 @@ namespace lfs::vis {
         EXPECT_TRUE(prompted);
         EXPECT_EQ(create_path.lexically_normal(), path.lexically_normal());
         EXPECT_FALSE(std::filesystem::exists(path));
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
+        EXPECT_FALSE(viewer.projectCreatePending());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectCreateOnDirtyForwardsOverwriteAuthorization) {
+        const auto path = temporary_.path / "dirty-overwrite.licht";
+        write_empty_project(path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_NE(viewer.getScene().addGroup("dirty"),
+                  lfs::core::NULL_NODE);
+        bool prompted = false;
+        bool overwrite = false;
+        std::filesystem::path create_path;
+        lfs::core::events::cmd::ShowProjectSwitchConfirmation::when(
+            [&](const auto& event) {
+                prompted = true;
+                create_path = event.create_path;
+                overwrite = event.allow_existing_destination_replacement;
+            });
+        lfs::core::events::cmd::ProjectCreate{
+            .path = path,
+            .allow_existing_destination_replacement = true}
+            .emit();
+        EXPECT_TRUE(prompted);
+        EXPECT_EQ(create_path.lexically_normal(), path.lexically_normal());
+        EXPECT_TRUE(overwrite);
+        EXPECT_NE(viewer.getScene().getNode("dirty"), nullptr);
+        auto still_existing =
+            lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(still_existing);
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
+        EXPECT_FALSE(viewer.projectCreatePending());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -11474,6 +11606,7 @@ namespace lfs::vis {
                 prompted = true;
                 create_path = event.create_path;
                 EXPECT_TRUE(event.new_project);
+                EXPECT_FALSE(event.allow_existing_destination_replacement);
             });
         lfs::core::events::cmd::ProjectCreate{.path = path}.emit();
         EXPECT_TRUE(prompted);
@@ -11483,6 +11616,94 @@ namespace lfs::vis {
             VisualizerImpl::PendingTrainingAction::None);
         EXPECT_TRUE(viewer.pending_create_project_path_.empty());
         EXPECT_TRUE(viewer.getTrainerManager()->isTrainingActive());
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
+        EXPECT_FALSE(viewer.projectCreatePending());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectCreateStopTrainingDefersWithoutBinding) {
+        const auto path = temporary_.path / "deferred-create.licht";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_TRUE(arm_running_trainer(viewer));
+        ASSERT_NE(viewer.getScene().addGroup("keep-me"),
+                  lfs::core::NULL_NODE);
+
+        lfs::core::events::cmd::ProjectCreate{
+            .path = path,
+            .discard_changes = true,
+            .stop_training = true}
+            .emit();
+        EXPECT_EQ(
+            viewer.pending_training_action_,
+            VisualizerImpl::PendingTrainingAction::CreateProject);
+        EXPECT_EQ(
+            viewer.pending_create_project_path_.lexically_normal(),
+            path.lexically_normal());
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
+        EXPECT_TRUE(viewer.projectCreatePending());
+        EXPECT_NE(viewer.getScene().getNode("keep-me"), nullptr);
+        EXPECT_FALSE(std::filesystem::exists(path));
+        EXPECT_FALSE(viewer.projectHasPath().value());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DeferredCreateLateCollisionDropsQueuedLoads) {
+        const auto path = temporary_.path / "deferred-collision.licht";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_TRUE(arm_running_trainer(viewer));
+        ASSERT_NE(viewer.getScene().addGroup("keep-me"),
+                  lfs::core::NULL_NODE);
+
+        lfs::core::events::cmd::ProjectCreate{
+            .path = path,
+            .discard_changes = true,
+            .stop_training = true}
+            .emit();
+        ASSERT_TRUE(viewer.projectCreatePending());
+
+        const auto dataset_path = temporary_.path / "queued-dataset";
+        lfs::core::events::cmd::LoadFile{
+            .path = dataset_path,
+            .is_dataset = true,
+            .stop_training = true,
+            .discard_changes = true}
+            .emit();
+        EXPECT_EQ(
+            viewer.pending_training_action_,
+            VisualizerImpl::PendingTrainingAction::CreateProject);
+        ASSERT_EQ(viewer.pending_load_files_.size(), 1u);
+        EXPECT_EQ(viewer.pending_load_files_.front().path, dataset_path);
+
+        lfs::core::events::cmd::ProjectEmbedDataset{}.emit();
+        EXPECT_TRUE(viewer.pending_project_dataset_embed_);
+
+        write_empty_project(path);
+        auto existing = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(existing);
+        const auto original_uuid =
+            existing->superblock().project_uuid;
+
+        viewer.performPendingTrainingAction();
+        EXPECT_FALSE(viewer.projectCreatePending());
+        EXPECT_TRUE(viewer.pending_load_files_.empty());
+        EXPECT_FALSE(viewer.pending_project_dataset_embed_);
+        EXPECT_EQ(
+            viewer.pending_training_action_,
+            VisualizerImpl::PendingTrainingAction::None);
+        EXPECT_NE(viewer.getScene().getNode("keep-me"), nullptr);
+        EXPECT_FALSE(viewer.projectHasPath().value());
+        auto after = lfs::io::project::ProjectReader::open(path);
+        ASSERT_TRUE(after);
+        EXPECT_EQ(after->superblock().project_uuid, original_uuid);
+        EXPECT_FALSE(viewer.consumeProjectCreateSucceeded());
     }
 
     TEST_F(VisualizerImplResetTest,

@@ -22,6 +22,14 @@ namespace {
 
     constexpr int FIREWALL_EXIT_CODE = 70; // EX_SOFTWARE, frozen contract
 
+    auto current_process_id() {
+#ifdef _WIN32
+        return _getpid();
+#else
+        return getpid();
+#endif
+    }
+
 } // namespace
 
 TEST(CrashHandlerTest, FlushAndExitExitsWithRequestedCodeZero) {
@@ -65,11 +73,7 @@ TEST(CrashHandlerTest, HandledGpuFailureIsSavedOutsideRotatingLogs) {
                         .capture_stack = false};
                     for (int i = 0; i < 200; ++i)
                         lfs::core::emit_failure_report(report, lfs::core::FailureReportSeverity::Error);
-#ifdef _WIN32
-                    const auto pid = _getpid();
-#else
-                    const auto pid = getpid();
-#endif
+                    const auto pid = current_process_id();
                     const auto path = std::filesystem::temp_directory_path() /
                                       ("lichtfeld-studio-crash-" + std::to_string(pid) + ".log");
                     std::ifstream file(path);

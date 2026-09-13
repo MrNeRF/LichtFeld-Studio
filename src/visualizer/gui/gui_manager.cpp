@@ -91,6 +91,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -4145,6 +4146,19 @@ namespace lfs::vis::gui {
             return std::nullopt;
         }
 
+        // Some Wayland compositors independently present the custom SDL cursor
+        // and the Vulkan selection-brush fallback. SDL may use XWayland inside a
+        // Wayland desktop, so consult the session markers as well as its active
+        // video driver. The fallback has identical selection semantics, so keep
+        // hardware brush cursors off in these sessions to avoid a duplicate ring.
+        const char* const video_driver = SDL_GetCurrentVideoDriver();
+        const char* const session_type = std::getenv("XDG_SESSION_TYPE");
+        if ((video_driver && std::strcmp(video_driver, "wayland") == 0) ||
+            (session_type && std::strcmp(session_type, "wayland") == 0) ||
+            std::getenv("WAYLAND_DISPLAY")) {
+            return std::nullopt;
+        }
+
         const auto* const selection_tool = viewer_->getSelectionTool();
         if (!selection_tool || !selection_tool->isEnabled() ||
             viewer_->getEditorContext().getActiveTool() != ToolType::Selection) {
@@ -4417,6 +4431,7 @@ namespace lfs::vis::gui {
         applyDefaultStyle();
         rebuildFonts(scale);
         current_ui_scale_ = scale;
+        lfs::python::request_redraw();
 
         LOG_INFO("UI scale applied: {:.2f}", scale);
     }
@@ -5296,7 +5311,8 @@ namespace lfs::vis::gui {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
                 if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
-                    overlay_scene_state = scene_manager->buildRenderState();
+                    overlay_scene_state =
+                        scene_manager->buildRenderState({.metadata_only = true});
                 }
                 const GizmoState gizmo_state = rendering_manager->getGizmoState();
                 appendVulkanSceneGuideOverlays(params,
@@ -6052,6 +6068,8 @@ namespace lfs::vis::gui {
             if (block_underlay_input)
                 menu_input = maskInputForBlockedUi(std::move(menu_input));
 
+            if (block_underlay_input && rml_menu_bar_.isOpen())
+                rml_menu_bar_.closeDropdown();
             const bool menu_was_open = rml_menu_bar_.isOpen();
             rml_menu_bar_.setUiHidden(ui_hidden_);
             rml_menu_bar_.processInput(menu_input);
@@ -6240,7 +6258,13 @@ namespace lfs::vis::gui {
         panel_input.screen_y = 0.0f;
         panel_input.screen_w = sdl_input.window_w;
         panel_input.screen_h = sdl_input.window_h;
-        PanelInputState raw_panel_input = panel_input;
+        // Top-level overlays must receive the original events. Menu capture only
+        // masks the panels underneath them, including a held menu-button release.
+        PanelInputState raw_panel_input = buildPanelInputFromSDL(sdl_input);
+        raw_panel_input.screen_x = 0.0f;
+        raw_panel_input.screen_y = 0.0f;
+        raw_panel_input.screen_w = sdl_input.window_w;
+        raw_panel_input.screen_h = sdl_input.window_h;
         if (block_underlay_input)
             panel_input = maskInputForBlockedUi(std::move(panel_input));
         if (!modal_overlay_open && global_context_menu_->isOpen())
@@ -8055,6 +8079,7 @@ namespace lfs::vis::gui {
             } else {
                 pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
             }
+            lfs::python::request_redraw();
         });
 
         state::DiskSpaceSaveFailed::when([this](const auto& e) {

@@ -429,6 +429,7 @@ set(TEST_FILES
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
+    test_training_scene_init_concurrency.cpp
     test_scene_consolidation.cpp
     test_scene_graph_fuzz.cpp
     test_uuid.cpp
@@ -453,6 +454,7 @@ set(TEST_FILES
     test_normal_prior_decode.cpp
     test_normal_auto_generate.cpp
     test_metrics_evaluator.cpp
+    test_metrics_eval_mask.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_nvcodec_sentinel_validation.cpp

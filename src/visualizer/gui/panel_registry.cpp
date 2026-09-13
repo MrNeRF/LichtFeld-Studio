@@ -8,6 +8,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
+#include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -1743,8 +1744,10 @@ apply_registered_chrome:
             }
         }
 
-        if (changed)
+        if (changed) {
             lfs::vis::publish_viewport_toolbar_generation();
+            lfs::python::request_redraw();
+        }
         if (panel_to_notify) {
             try {
                 panel_to_notify->on_visibility_changed(enabled);
