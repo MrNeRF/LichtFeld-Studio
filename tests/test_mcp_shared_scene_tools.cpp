@@ -134,7 +134,7 @@ TEST(McpSharedSceneToolsTest, CameraPoseStartRejectionNeverReportsSuccess) {
     auto backend = fake.backend();
     lfs::core::param::OptimizationParameters params;
     params.refine_camera_poses = true;
-    params.mip_filter = true;
+    params.camera_pose_start_step = -1;
     const auto expected_error = params.validate();
     ASSERT_FALSE(expected_error.empty());
     backend.start_training = [&]() -> std::expected<void, std::string> {
@@ -149,7 +149,7 @@ TEST(McpSharedSceneToolsTest, CameraPoseStartRejectionNeverReportsSuccess) {
     EXPECT_EQ(rejected.at("error").at("message").get<std::string>(), expected_error);
     EXPECT_EQ(rejected.at("error_message").get<std::string>(), expected_error);
     EXPECT_FALSE(rejected.value("success", false));
-    params.mip_filter = false;
+    params.camera_pose_start_step = 500;
     const auto accepted = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
     EXPECT_TRUE(accepted.at("success").get<bool>());
     EXPECT_FALSE(accepted.contains("error"));

@@ -204,14 +204,14 @@ namespace {
             return std::move(*result);
         }
 
-        std::vector<float> render(const Matrix4& pose) {
-            auto result = forward(pose);
+        std::vector<float> render(const Matrix4& pose, bool mip = false) {
+            auto result = forward(pose, 0, 0, mip);
             return values(result.first.image);
         }
 
         Vector6 gradient(const Matrix4& pose, const std::vector<float>& upstream,
-                         const Tensor& alpha_extra = {}, int x = 0, int width = 0) {
-            auto result = forward(pose, x, width);
+                         const Tensor& alpha_extra = {}, int x = 0, int width = 0, bool mip = false) {
+            auto result = forward(pose, x, width, mip);
             auto dimage = Tensor::from_vector(upstream, {3, HEIGHT, static_cast<size_t>(width ? width : WIDTH)}, Device::CUDA);
             auto output = Tensor::full({4, 4}, 123.0f, Device::CUDA);
             fast_rasterize_backward(result.second, dimage, *scene, *optimizer, alpha_extra, {},
@@ -300,6 +300,22 @@ namespace {
                                (2 * EPSILON);
         ASSERT_GT(std::abs(numeric), 1.0e-4);
         EXPECT_NEAR(analytic[5], numeric, 0.03 * std::abs(numeric));
+    }
+
+    TEST_F(CameraPosePhotometricTest, MipCameraGradientMatchesFiniteDifferences) {
+        const auto pose = exp_se3({0.06f, -0.04f, 0.08f, 0.035f, -0.025f, 0.02f});
+        const auto weights = spatial_weights();
+        const auto before = scene->means().clone();
+        const auto analytic = gradient(pose, weights, {}, 0, 0, true);
+        for (const float step : {1.0e-5f, 5.0e-6f}) {
+            for (int axis = 0; axis < 6; ++axis) {
+                SCOPED_TRACE(::testing::Message() << "axis=" << axis << " epsilon=" << step);
+                const double numeric = (scalar_product(render(offset(pose, axis, step), true), weights) -
+                    scalar_product(render(offset(pose, axis, -step), true), weights)) / (2 * step);
+                EXPECT_NEAR(analytic[axis], numeric, 2.0e-5 + 0.06 * std::abs(numeric));
+            }
+        }
+        expect_bytes_equal(before, scene->means());
     }
 
     TEST_F(CameraPosePhotometricTest, SHViewDirectionSurvivesGeometryCancellation) {
@@ -499,9 +515,9 @@ namespace {
                      std::invalid_argument);
         result.second.release_forward_context();
         auto mip = forward(identity_transform(), 0, 0, true);
-        EXPECT_THROW(fast_rasterize_backward(mip.second, upstream, *scene, *optimizer,
-                                             {}, {}, DensificationType::None, 1, {}, {}, {}, &output),
-                     std::invalid_argument);
+        EXPECT_NO_THROW(fast_rasterize_backward(mip.second, upstream, *scene, *optimizer,
+                                               {}, {}, DensificationType::None, 1, {}, {}, {}, &output,
+                                               FastGSBackwardMode::CameraOnly));
     }
 
     TEST_F(CameraPosePhotometricTest, RecoversPerturbedPoseFromImagesWithFixedGeometry) {
@@ -735,7 +751,7 @@ namespace {
         auto invalid = params.to_json();
         invalid["refine_camera_poses"] = "true";
         EXPECT_THROW((void)OptimizationParameters::from_json(invalid), nlohmann::json::exception);
-        for (int option = 0; option < 10; ++option) {
+        for (const int option : {0}) {
             auto incompatible = restored;
             switch (option) {
             case 0: incompatible.gut = true; break;
@@ -765,9 +781,62 @@ namespace {
         ASSERT_TRUE(enabled.has_value()) << enabled.error();
         EXPECT_TRUE((*enabled)->optimization.refine_camera_poses);
         EXPECT_TRUE((*enabled)->overrides.has_optimization_key("refine_camera_poses"));
-        const auto conflict = lfs::core::args::parse_args_and_params(3, argv);
-        ASSERT_FALSE(conflict.has_value());
-        EXPECT_NE(conflict.error().find("Mip Filter"), std::string::npos);
+        const auto combined = lfs::core::args::parse_args_and_params(3, argv);
+        ASSERT_TRUE(combined.has_value()) << combined.error();
+        EXPECT_TRUE((*combined)->optimization.mip_filter);
+    }
+
+    TEST(CameraPoseActivationTest, ScheduleRoundTripValidationAndCliOverrides) {
+        using namespace lfs::core::param;
+        auto params = OptimizationParameters::mcmc_defaults();
+        params.refine_camera_poses = true;
+        params.camera_pose_start_step = 750;
+        params.camera_pose_end_percent = 60;
+        auto restored = OptimizationParameters::from_json(params.to_json());
+        EXPECT_EQ(restored.camera_pose_start_step, 750);
+        EXPECT_EQ(restored.camera_pose_end_percent, 60);
+        EXPECT_EQ(restored.resolved_camera_pose_stop_step(), 18000);
+        EXPECT_TRUE(restored.validate().empty());
+        auto controller = restored;
+        controller.camera_pose_end_percent = 100;
+        controller.ppisp_use_controller = true;
+        controller.ppisp_controller_activation_step = 12000;
+        EXPECT_EQ(controller.resolved_camera_pose_stop_step(), 12000);
+        controller.camera_pose_start_step = 12000;
+        EXPECT_FALSE(controller.validate().empty());
+        auto rounding = restored;
+        rounding.iterations = 30001;
+        rounding.camera_pose_end_percent = 29;
+        EXPECT_EQ(rounding.resolved_camera_pose_stop_step(), 8700);
+        restored.camera_pose_end_percent = 0;
+        EXPECT_FALSE(restored.validate().empty());
+        restored.refine_camera_poses = false;
+        EXPECT_TRUE(restored.validate().empty());
+        restored = params;
+        restored.camera_pose_start_step = static_cast<int>(restored.iterations);
+        EXPECT_FALSE(restored.validate().empty());
+        const char* argv[] = {"LichtFeld-Studio", "--refine-camera-poses", "--camera-pose-start-step", "750", "--camera-pose-end-percent", "60"};
+        const auto parsed = lfs::core::args::parse_args_and_params(6, argv);
+        ASSERT_TRUE(parsed.has_value()) << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.camera_pose_start_step, 750);
+        EXPECT_EQ((*parsed)->optimization.camera_pose_end_percent, 60);
+        EXPECT_TRUE((*parsed)->overrides.has_optimization_key("camera_pose_start_step"));
+        EXPECT_TRUE((*parsed)->overrides.has_optimization_key("camera_pose_end_percent"));
+    }
+
+    TEST(CameraPoseActivationTest, SharedThreeDgsFeaturesRemainCompatible) {
+        using namespace lfs::core::param;
+        auto params = OptimizationParameters::mcmc_defaults();
+        params.refine_camera_poses = true;
+        params.mip_filter = true;
+        params.use_depth_loss = true;
+        params.use_normal_loss = true;
+        params.mask_mode = MaskMode::SegmentAndIgnore;
+        params.use_ppisp = true;
+        params.use_bilateral_grid = true;
+        params.enable_sparsity = true;
+        EXPECT_TRUE(params.camera_pose_incompatibility().empty());
+        EXPECT_TRUE(params.validate().empty());
     }
 
     class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};
@@ -893,7 +962,7 @@ namespace {
     TEST_F(CameraPoseTrainerIntegrationTest, UnsupportedTrainingCombinationsAreExplicit) {
         lfs::core::param::OptimizationParameters params;
         EXPECT_TRUE(trainer_pose_incompatibility(params).empty());
-        for (const int option : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+        for (const int option : {0}) {
             auto unsupported = params;
             switch (option) {
             case 0: unsupported.gut = true; break;

@@ -251,6 +251,8 @@
     "status.showing_projects.other": "Wyświetlono {count} projektów"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Pierwszy krok optymalizacji pozycji kamer. Musi poprzedzać krok zatrzymania.",
+    "tooltip.camera_pose_end_percent": "Blokuje pozycje przy tym procencie wszystkich kroków. Trening gaussów trwa dalej ze stałymi pozycjami.",
     "pose.backend": "Wymaga 3DGS.",
     "pose.mip": "Wyłącz Mip Filter.",
     "pose.rgb": "Użyj wyłącznie nadzoru RGB.",
@@ -276,7 +278,9 @@
     "pose.waiting": "Oczekiwanie",
     "pose.tooltip": "Pozycja kamery: {0}\nFaza: {1}\n{2} (jednostki sceny / stopnie)\nPrzyjęte aktualizacje: {3} | Odrzucone propozycje: {4}\nOdrzucona propozycja zachowuje ostatnią przyjętą pozycję. Te wskaźniki nie mierzą jakości rekonstrukcji.",
     "section.camera_pose": "Optymalizacja pozycji kamer",
-    "tooltip.refine_camera_poses": "Koryguje niewielkie błędy pozycji kamer podczas treningu 3DGS. Ustaw przed inicjalizacją. Tylko RGB, bez filtra Mip, masek, korekcji wyglądu i rozrzedzania.",
+    "tooltip.refine_camera_poses": "Koryguje małe błędy pozycji podczas treningu 3DGS. Ustaw przed inicjalizacją. Straty głębi i normalnych aktualizują gaussy; pozycje używają celu fotometrycznego i są blokowane przed destylacją kontrolera.",
+    "pose.stop_step": "Efektywny krok zatrzymania",
+    "pose.schedule": "Optymalizacja pozycji musi zacząć się przed efektywnym zatrzymaniem i destylacją kontrolera. Procent zatrzymania musi wynosić od 1 do 100.",
     "status_restoring": "Przywracanie",
     "status_saving": "Zapisywanie",
     "action_stop": "Zatrzymaj",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Wydrukuj do Logu"
   },
   "training_params": {
+    "camera_pose_start_step": "Krok początkowy pozycji",
+    "camera_pose_end_percent": "Zatrzymanie pozycji (%)",
     "refine_camera_poses": "Optymalizuj pozycje kamer",
     "strategy": "Strategia:",
     "iterations": "Iteracje:",

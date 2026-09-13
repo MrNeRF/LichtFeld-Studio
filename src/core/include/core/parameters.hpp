@@ -234,6 +234,8 @@ namespace lfs::core {
 
             // Initialization-time opt-in; corrected poses are retained in checkpoints.
             bool refine_camera_poses = false;
+            int camera_pose_start_step = 500;
+            int camera_pose_end_percent = 80;
 
             // Background settings for training
             BackgroundMode bg_mode = BackgroundMode::SolidColor; // Which background mode to use
@@ -327,6 +329,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] int resolved_camera_pose_stop_step() const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 

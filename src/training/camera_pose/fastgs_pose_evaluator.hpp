@@ -18,7 +18,8 @@ namespace lfs::training::camera_pose {
     // image. It must not update appearance parameters, model or camera.
     using PoseObjective = std::function<PoseObjectiveResult(const RenderOutput&, bool gradients)>;
 
-    // Training-thread adapter for full-image FastGS, no Mip/normal/depth loss.
+    // Training-thread adapter for full-image 3DGS, including Mip filtering.
+    // Depth and normal supervision remain in the Gaussian update only.
     // References and objective captures must outlive the adapter. Owner holds
     // the normal training safe point and keeps geometry/SH/background/target
     // immutable for a whole visit. This object does not acquire model locks.
@@ -26,7 +27,7 @@ namespace lfs::training::camera_pose {
     public:
         FastGSPoseEvaluator(lfs::core::Camera& camera, lfs::core::SplatData& model,
                             AdamOptimizer& optimizer, lfs::core::Tensor& background,
-                            PoseObjective objective, lfs::core::Tensor background_image = {});
+                            PoseObjective objective, lfs::core::Tensor background_image = {}, bool mip_filter = false);
         [[nodiscard]] PoseImageEvaluation evaluate(const Matrix4& pose);
         [[nodiscard]] double loss(const Matrix4& pose);
         [[nodiscard]] PoseVisitResult visit(PoseRefinementSession& session, int iteration,
@@ -40,6 +41,7 @@ namespace lfs::training::camera_pose {
         lfs::core::Tensor& background_;
         PoseObjective objective_;
         lfs::core::Tensor background_image_;
+        bool mip_filter_ = false;
     };
 
     // RGB MSE reference objective for the fixed-geometry quality gate.

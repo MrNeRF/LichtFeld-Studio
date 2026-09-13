@@ -672,7 +672,7 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor PPISP::backward(const lfs::core::Tensor& rgb, const lfs::core::Tensor& grad_output, int camera_id,
-                                      int uid) {
+                                      int uid, bool accumulate_parameters) {
         assert(finalized_ && "Must call finalize() before backward()");
         const int camera_idx = translate_camera(camera_id);
         const int frame_idx = translate_frame(uid);
@@ -685,10 +685,16 @@ namespace lfs::training {
 
         auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
+        // Pose-only backward uses disjoint scratch; existing training gradients
+        // and optimizer state must survive unchanged.
+        auto exposure_grad = accumulate_parameters ? exposure_grad_ : lfs::core::Tensor::zeros(exposure_grad_.shape(), lfs::core::Device::CUDA);
+        auto vignetting_grad = accumulate_parameters ? vignetting_grad_ : lfs::core::Tensor::zeros(vignetting_grad_.shape(), lfs::core::Device::CUDA);
+        auto color_grad = accumulate_parameters ? color_grad_ : lfs::core::Tensor::zeros(color_grad_.shape(), lfs::core::Device::CUDA);
+        auto crf_grad = accumulate_parameters ? crf_grad_ : lfs::core::Tensor::zeros(crf_grad_.shape(), lfs::core::Device::CUDA);
         kernels::launch_ppisp_backward_chw(
             exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(), color_params_.ptr<float>(),
-            crf_params_.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), exposure_grad_.ptr<float>(),
-            vignetting_grad_.ptr<float>(), color_grad_.ptr<float>(), crf_grad_.ptr<float>(), grad_rgb.ptr<float>(), h,
+            crf_params_.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), exposure_grad.ptr<float>(),
+            vignetting_grad.ptr<float>(), color_grad.ptr<float>(), crf_grad.ptr<float>(), grad_rgb.ptr<float>(), h,
             w, num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
 
         return grad_rgb;

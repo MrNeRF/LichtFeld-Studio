@@ -317,7 +317,7 @@ namespace lfs::training {
 
     lfs::core::Tensor BilateralGrid::backward(const lfs::core::Tensor& rgb,
                                               const lfs::core::Tensor& grad_output,
-                                              int image_idx) {
+                                              int image_idx, bool accumulate_parameters) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::backward: image_idx out of range");
         }
@@ -332,7 +332,8 @@ namespace lfs::training {
         const auto grad_cont = grad_output.contiguous();
         const float* grid_ptr = slice_ptr(grids_, image_idx);
         const float* offset_ptr = shared_offset_.ptr<float>();
-        float* grad_grid_ptr = slice_grad_.ptr<float>();
+        auto scratch_grad = accumulate_parameters ? slice_grad_ : lfs::core::Tensor::empty(slice_grad_.shape(), lfs::core::Device::CUDA);
+        float* grad_grid_ptr = scratch_grad.ptr<float>();
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
 
         LFS_CUDA_CHECK(cudaMemsetAsync(

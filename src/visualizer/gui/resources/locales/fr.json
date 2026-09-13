@@ -251,6 +251,8 @@
     "status.showing_projects.other": "Affichage de {count} projets"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Première étape d’optimisation des poses. Doit précéder l’étape d’arrêt.",
+    "tooltip.camera_pose_end_percent": "Fige les poses à ce pourcentage des étapes totales. L’entraînement des gaussiennes continue avec des poses fixes.",
     "pose.backend": "Nécessite 3DGS.",
     "pose.mip": "Désactivez Mip Filter.",
     "pose.rgb": "Utilisez uniquement la supervision RGB.",
@@ -276,7 +278,9 @@
     "pose.waiting": "En attente",
     "pose.tooltip": "Pose de caméra : {0}\nPhase : {1}\n{2} (unités de scène / degrés)\nMises à jour acceptées : {3} | Propositions rejetées : {4}\nUne proposition rejetée conserve la dernière pose acceptée. Ces indicateurs ne mesurent pas la qualité de reconstruction.",
     "section.camera_pose": "Optimisation des poses des caméras",
-    "tooltip.refine_camera_poses": "Corrige de petites erreurs de pose pendant l'entraînement 3DGS. À configurer avant l'initialisation. RGB uniquement, sans filtre Mip, masques, correction d'apparence ni parcimonie.",
+    "tooltip.refine_camera_poses": "Corrige les petites erreurs de pose pendant l’entraînement 3DGS. Configurer avant l’initialisation. Les pertes de profondeur et de normales mettent à jour les gaussiennes ; les poses utilisent l’objectif photométrique et sont figées avant la distillation du contrôleur.",
+    "pose.stop_step": "Étape d’arrêt effective",
+    "pose.schedule": "L’optimisation des poses doit commencer avant l’arrêt effectif et la distillation du contrôleur. Le pourcentage doit être compris entre 1 et 100.",
     "status_restoring": "Restauration",
     "status_saving": "Enregistrement",
     "action_stop": "Arrêter",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Imprimer dans le Log"
   },
   "training_params": {
+    "camera_pose_start_step": "Étape initiale des poses",
+    "camera_pose_end_percent": "Arrêt des poses (%)",
     "refine_camera_poses": "Optimiser les poses des caméras",
     "strategy": "Stratégie :",
     "iterations": "Itérations :",

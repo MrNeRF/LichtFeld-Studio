@@ -12,8 +12,8 @@ namespace lfs::training::camera_pose {
     using namespace lfs::core;
 
     FastGSPoseEvaluator::FastGSPoseEvaluator(Camera& camera, SplatData& model,
-                                             AdamOptimizer& optimizer, Tensor& background, PoseObjective objective, Tensor background_image)
-        : camera_(camera), model_(model), optimizer_(optimizer), background_(background), objective_(std::move(objective)), background_image_(std::move(background_image)) {
+                                             AdamOptimizer& optimizer, Tensor& background, PoseObjective objective, Tensor background_image, bool mip_filter)
+        : camera_(camera), model_(model), optimizer_(optimizer), background_(background), objective_(std::move(objective)), background_image_(std::move(background_image)), mip_filter_(mip_filter) {
         if (!objective_)
             throw std::invalid_argument("Missing camera pose image objective");
     }
@@ -34,7 +34,7 @@ namespace lfs::training::camera_pose {
     std::pair<RenderOutput, FastRasterizeContext> FastGSPoseEvaluator::forward(const Matrix4& pose) {
         auto tensors = make_fastgs_pose_override(camera_.uid(), pose);
         auto result = fast_rasterize_forward(camera_, model_, background_, 0, 0, 0, 0,
-                                             false, background_image_, false, &tensors);
+                                             mip_filter_, background_image_, false, &tensors);
         if (!result)
             throw lfs::Exception(std::move(result.error()));
         return std::move(*result);

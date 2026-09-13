@@ -336,6 +336,23 @@ namespace lfs::core {
             return base_iters + sparse_tail;
         }
 
+        int OptimizationParameters::resolved_camera_pose_stop_step() const {
+            // Also queried by the UI while parameters are incomplete/invalid.
+            constexpr auto limit = static_cast<uint64_t>(std::numeric_limits<int>::max());
+            if (iterations == 0 || iterations > limit || sparsify_steps < 0 ||
+                camera_pose_end_percent < 1 || camera_pose_end_percent > 100)
+                return 0;
+            const uint64_t total = iterations + (enable_sparsity ? static_cast<uint64_t>(sparsify_steps) : 0);
+            if (total > limit) return 0;
+            int stop = static_cast<int>(total * static_cast<uint64_t>(camera_pose_end_percent) / 100);
+            if (ppisp_use_controller) {
+                if (!std::isfinite(steps_scaler) || 5000.0 * std::max(steps_scaler, 1.0f) >= limit)
+                    return 0;
+                stop = std::min(stop, resolved_ppisp_controller_activation_step(static_cast<int>(total)));
+            }
+            return stop;
+        }
+
         bool OptimizationParameters::normal_supervision_active(const int iter) const {
             if (!use_normal_loss)
                 return false;
@@ -427,16 +444,6 @@ namespace lfs::core {
         std::string OptimizationParameters::camera_pose_incompatibility(bool localization_key) const {
             if (is_training_feature_unsupported(training_backend_descriptor(raster_backend()).capabilities.camera_pose_refinement))
                 return localization_key ? "training.pose.backend" : "Camera pose refinement requires 3DGS";
-            if (mip_filter)
-                return localization_key ? "training.pose.mip" : "Camera pose refinement does not yet support Mip Filter";
-            if (use_depth_loss || use_normal_loss)
-                return localization_key ? "training.pose.rgb" : "Camera pose refinement currently requires RGB-only supervision";
-            if (mask_mode != MaskMode::None)
-                return localization_key ? "training.pose.mask" : "Camera pose refinement does not yet compose mask losses";
-            if (ppisp_active() || ppisp_use_controller || bilateral_grid_active())
-                return localization_key ? "training.pose.appearance" : "Camera pose refinement does not yet compose appearance correction";
-            if (enable_sparsity)
-                return localization_key ? "training.pose.sparsity" : "Camera pose refinement is not yet integrated with sparsification";
             if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1)
                 return localization_key ? "training.pose.ssim" : "Camera pose refinement requires an SSIM weight in [0,1]";
             return {};
@@ -444,6 +451,8 @@ namespace lfs::core {
 
         std::string OptimizationParameters::validate() const {
             if (refine_camera_poses) {
+                if (camera_pose_start_step < 0 || camera_pose_start_step >= resolved_camera_pose_stop_step())
+                    return "Camera pose start must be nonnegative and precede the effective stop step (before controller distillation); stop percentage must be in [1,100]";
                 if (auto error = camera_pose_incompatibility(); !error.empty())
                     return error;
             }

@@ -251,6 +251,8 @@
     "status.showing_projects.other": "Visualizzazione di {count} progetti"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Primo step in cui ottimizzare le pose. Deve precedere lo step di arresto.",
+    "tooltip.camera_pose_end_percent": "Blocca le pose a questa percentuale degli step totali. Il training delle gaussiane continua con pose fisse.",
     "pose.backend": "Richiede 3DGS.",
     "pose.mip": "Disattiva Mip Filter.",
     "pose.rgb": "Usa solo la supervisione RGB.",
@@ -276,7 +278,9 @@
     "pose.waiting": "In attesa",
     "pose.tooltip": "Posa della camera: {0}\nFase: {1}\n{2} (unità di scena / gradi)\nAggiornamenti accettati: {3} | Proposte rifiutate: {4}\nUna proposta rifiutata mantiene l’ultima posa accettata. Questi indicatori non misurano la qualità della ricostruzione.",
     "section.camera_pose": "Ottimizzazione pose camere",
-    "tooltip.refine_camera_poses": "Corregge piccoli errori di posa durante il training 3DGS. Configurare prima dell'inizializzazione. Richiede solo RGB, senza filtro Mip, maschere, correzione dell'aspetto o sparsità.",
+    "tooltip.refine_camera_poses": "Corregge piccoli errori di posa durante il training 3DGS. Configurare prima dell'inizializzazione. Le loss depth e normal aggiornano le gaussiane; le pose usano l'obiettivo fotometrico. Le pose si fermano prima della distillazione del controller.",
+    "pose.stop_step": "Step di arresto effettivo",
+    "pose.schedule": "Il refine deve iniziare prima dello step di arresto effettivo e della distillazione del controller. La percentuale di arresto deve essere tra 1 e 100.",
     "status_restoring": "Ripristino",
     "status_saving": "Salvataggio",
     "action_stop": "Ferma",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Stampa nel Log"
   },
   "training_params": {
+    "camera_pose_start_step": "Step iniziale delle pose",
+    "camera_pose_end_percent": "Arresto pose (%)",
     "refine_camera_poses": "Ottimizza pose camere",
     "strategy": "Strategia:",
     "iterations": "Iterazioni:",

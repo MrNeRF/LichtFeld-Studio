@@ -29,6 +29,8 @@ class SectionSpec:
 
 
 NUMBER_PROPS = (
+    "camera_pose_start_step",
+    "camera_pose_end_percent",
     "iterations",
     "max_cap",
     "steps_scaler",
@@ -328,6 +330,8 @@ SECTIONS = (
     SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
     SectionSpec("camera_pose", "training.section.camera_pose", (
         _run("camera_pose_activation", "refine_camera_poses", disabled_condition_id="camera_pose_disabled"),
+        _run("camera_pose_schedule", "camera_pose_start_step", "camera_pose_end_percent",
+             visibility_condition_id="dep_camera_pose", disabled_condition_id="adv_disabled"),
     )),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),

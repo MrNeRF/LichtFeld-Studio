@@ -67,8 +67,31 @@ namespace lfs::training {
             return pose_initialization_error("Camera pose refinement requires an initialized dataset", LFS_SOURCE_SITE_CURRENT());
         const auto saved = params.camera_pose_state_json.empty() ? nlohmann::json{} : nlohmann::json::parse(params.camera_pose_state_json);
         auto config = saved.is_null() ? camera_pose_config_.value_or(PoseSessionConfig{}) : pose_session_config_from_state(saved);
+        if (saved.is_null() && !camera_pose_config_) {
+            config.warmup_iterations = params.optimization.camera_pose_start_step;
+        }
         config.total_iterations = params.optimization.resolved_total_iterations();
+        if (config.total_iterations <= 0)
+            return pose_initialization_error("Camera pose training duration must be positive", LFS_SOURCE_SITE_CURRENT());
+        if (saved.is_null() && !camera_pose_config_) {
+            const int stop = params.optimization.resolved_camera_pose_stop_step();
+            // Preserve the exact integer cutoff through floor(total*fraction),
+            // including percentages whose binary representation rounds down.
+            config.freeze_fraction = std::nextafter(static_cast<double>(stop) / config.total_iterations, 1.0);
+        }
+        if (saved.is_null() && params.optimization.ppisp_use_controller) {
+            const int controller_start = params.optimization.resolved_ppisp_controller_activation_step(config.total_iterations);
+            // Controller distillation is a separate phase. Keep camera poses
+            // fixed before it starts, including when Gaussians are not frozen.
+            const double controller_fraction = std::nextafter(
+                static_cast<double>(controller_start) / config.total_iterations, 1.0);
+            config.freeze_fraction = std::min(config.freeze_fraction, controller_fraction);
+        }
         config.optimizer.scene_scale = model.get_scene_scale();
+        if (params.optimization.ppisp_use_controller &&
+            std::floor(config.total_iterations * config.freeze_fraction) >
+                params.optimization.resolved_ppisp_controller_activation_step(config.total_iterations))
+            return pose_initialization_error("Saved camera poses must freeze before controller distillation; reinitialize to change the schedule", LFS_SOURCE_SITE_CURRENT());
         if (config.warmup_iterations >= std::floor(config.total_iterations * config.freeze_fraction))
             return pose_initialization_error("Camera pose warmup must end before the pose-freeze phase; increase training iterations", LFS_SOURCE_SITE_CURRENT());
         std::unordered_set<int> training;

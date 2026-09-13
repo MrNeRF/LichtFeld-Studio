@@ -196,6 +196,7 @@ namespace lfs::training::camera_pose {
         snapshot->generation = generation_;
         snapshot->sequence = sequence;
         snapshot->iteration = iteration;
+        snapshot->stop_iteration = static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction));
         snapshot->paused = paused;
         snapshot->refinement_finished = iteration >= static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction));
         snapshot->cameras.reserve(entries.size());

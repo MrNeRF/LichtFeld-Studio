@@ -273,6 +273,15 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const float det_raw = raw_a * raw_c - raw_b * raw_b;
                 if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
                     opacity_compensation = sqrtf(det_raw * determinant_rcp);
+                    if (grad_w2c) {
+                        // Camera derivatives must include the view-dependent
+                        // Mip opacity compensation sqrt(det(raw)/det(filtered)).
+                        // Keep the established Gaussian-only path unchanged.
+                        const float factor = 0.5f * grad_compensated_opacity * original_opacity * opacity_compensation;
+                        dL_dcov2d.x += factor * (raw_c / det_raw - c * determinant_rcp);
+                        dL_dcov2d.y += factor * raw_b * (determinant_rcp - 1.0f / det_raw);
+                        dL_dcov2d.z += factor * (raw_a / det_raw - a * determinant_rcp);
+                    }
                 } else {
                     opacity_compensation = 0.0f;
                 }

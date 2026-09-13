@@ -251,6 +251,8 @@
     "status.showing_projects.other": "{count} Projekte angezeigt"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Erster Trainingsschritt zur Posenoptimierung. Muss vor dem Stoppschritt liegen.",
+    "tooltip.camera_pose_end_percent": "Posen bei diesem Prozentsatz der gesamten Trainingsschritte fixieren. Das Gauß-Training läuft mit festen Posen weiter.",
     "pose.backend": "Erfordert 3DGS.",
     "pose.mip": "Mip Filter deaktivieren.",
     "pose.rgb": "Nur RGB-Supervision verwenden.",
@@ -276,7 +278,9 @@
     "pose.waiting": "Wartend",
     "pose.tooltip": "Kamerapose: {0}\nPhase: {1}\n{2} (Szeneneinheiten / Grad)\nAkzeptierte Aktualisierungen: {3} | Abgelehnte Vorschläge: {4}\nBei Ablehnung bleibt die zuletzt akzeptierte Pose erhalten. Diese Indikatoren messen nicht die Rekonstruktionsqualität.",
     "section.camera_pose": "Kameraposenoptimierung",
-    "tooltip.refine_camera_poses": "Korrigiert kleine Kameraposenfehler beim 3DGS-Training. Vor der Initialisierung konfigurieren. Nur RGB, ohne Mip-Filter, Masken, Erscheinungskorrektur oder Sparsifizierung.",
+    "tooltip.refine_camera_poses": "Korrigiert kleine Posenfehler beim 3DGS-Training. Vor der Initialisierung konfigurieren. Tiefen- und Normalenverluste optimieren Gauß-Funktionen; Posen verwenden das photometrische Ziel. Posen werden vor der Controller-Destillation fixiert.",
+    "pose.stop_step": "Effektiver Stoppschritt",
+    "pose.schedule": "Die Posenoptimierung muss vor dem effektiven Stoppschritt und der Controller-Destillation beginnen. Der Stoppanteil muss zwischen 1 und 100 liegen.",
     "status_restoring": "Wiederherstellen",
     "status_saving": "Speichern",
     "action_stop": "Stopp",
@@ -1573,6 +1577,8 @@
     "print_to_log": "In Log ausgeben"
   },
   "training_params": {
+    "camera_pose_start_step": "Startschritt der Posen",
+    "camera_pose_end_percent": "Posenstopp (%)",
     "refine_camera_poses": "Kameraposen optimieren",
     "strategy": "Strategie:",
     "iterations": "Iterationen:",

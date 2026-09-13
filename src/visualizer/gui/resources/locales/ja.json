@@ -251,6 +251,8 @@
     "status.showing_projects.other": "{count} 件のプロジェクトを表示中"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "姿勢最適化を開始するステップ。停止ステップより前に設定してください。",
+    "tooltip.camera_pose_end_percent": "全学習ステップのこの割合で姿勢を固定します。ガウシアンの学習は固定した姿勢で継続します。",
     "pose.backend": "3DGS が必要です。",
     "pose.mip": "Mip Filter を無効にしてください。",
     "pose.rgb": "RGB のみの教師信号を使用してください。",
@@ -276,7 +278,9 @@
     "pose.waiting": "待機中",
     "pose.tooltip": "カメラ姿勢: {0}\n段階: {1}\n{2} (シーン単位 / 度)\n採用した更新: {3} | 棄却した候補: {4}\n候補を棄却した場合は最後に採用した姿勢を維持します。これらの指標は再構成品質を測定するものではありません。",
     "section.camera_pose": "カメラ姿勢の最適化",
-    "tooltip.refine_camera_poses": "3DGS学習中に小さなカメラ姿勢誤差を補正します。初期化前に設定してください。RGBのみ対応し、Mipフィルター、マスク、外観補正、スパース化との併用はできません。",
+    "tooltip.refine_camera_poses": "3DGS学習中の小さな姿勢誤差を補正します。初期化前に設定してください。深度と法線の損失はガウシアンを更新し、姿勢は測光目的関数を使用します。姿勢はコントローラーの蒸留前に固定されます。",
+    "pose.stop_step": "実際の停止ステップ",
+    "pose.schedule": "姿勢最適化は実際の停止ステップとコントローラーの蒸留より前に開始する必要があります。停止率は1～100にしてください。",
     "status_restoring": "復元中",
     "status_saving": "保存中",
     "action_stop": "停止",
@@ -1573,6 +1577,8 @@
     "print_to_log": "ログに出力"
   },
   "training_params": {
+    "camera_pose_start_step": "姿勢の開始ステップ",
+    "camera_pose_end_percent": "姿勢の停止 (%)",
     "refine_camera_poses": "カメラ姿勢を最適化",
     "strategy": "戦略:",
     "iterations": "イテレーション:",

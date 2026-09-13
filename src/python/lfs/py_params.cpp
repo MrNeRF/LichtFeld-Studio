@@ -1122,8 +1122,25 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.refine_camera_poses = v; }); },
                 "Refine camera poses during training")
             .def_prop_ro("camera_pose_conflict", [](PyOptimizationParams& self) {
+                if (self.params().refine_camera_poses && (self.params().camera_pose_start_step < 0 ||
+                    self.params().camera_pose_start_step >= self.params().resolved_camera_pose_stop_step()))
+                    return std::string("training.pose.schedule");
                 return self.params().refine_camera_poses ? self.params().camera_pose_incompatibility(true) : std::string{};
             })
+            .def_prop_ro("camera_pose_stop_step", [](PyOptimizationParams& self) {
+                const auto* tm = get_trainer_manager();
+                const auto* trainer = tm ? tm->getTrainer() : nullptr;
+                if (trainer) {
+                    if (const auto snapshot = trainer->cameraPoseSnapshot()) return snapshot->stop_iteration;
+                }
+                return self.params().resolved_camera_pose_stop_step();
+            })
+            .def_prop_rw("camera_pose_start_step",
+                [](PyOptimizationParams& self) { return self.params().camera_pose_start_step; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.camera_pose_start_step = v; }); })
+            .def_prop_rw("camera_pose_end_percent",
+                [](PyOptimizationParams& self) { return self.params().camera_pose_end_percent; },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.camera_pose_end_percent = v; }); })
             .def_prop_ro("camera_pose_edit_block_reason", [](PyOptimizationParams& self) {
                 const auto* tm = get_trainer_manager();
                 const auto* trainer = tm ? tm->getTrainer() : nullptr;

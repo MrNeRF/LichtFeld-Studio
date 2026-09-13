@@ -251,6 +251,8 @@
     "status.showing_projects.other": "正在显示 {count} 个项目"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "开始优化位姿的训练步数，必须早于停止步数。",
+    "tooltip.camera_pose_end_percent": "达到总训练步数的此百分比时固定位姿。高斯训练将使用固定的位姿继续。",
     "pose.backend": "需要 3DGS。",
     "pose.mip": "请禁用 Mip Filter。",
     "pose.rgb": "请仅使用 RGB 监督。",
@@ -276,7 +278,9 @@
     "pose.waiting": "等待中",
     "pose.tooltip": "相机位姿：{0}\n阶段：{1}\n{2}（场景单位 / 度）\n已接受更新：{3} | 已拒绝提议：{4}\n拒绝提议时会保留上次接受的位姿。这些指示器不衡量重建质量。",
     "section.camera_pose": "相机位姿优化",
-    "tooltip.refine_camera_poses": "在 3DGS 训练期间修正小幅相机位姿误差。请在初始化前设置。仅支持 RGB，不可与 Mip 滤波、蒙版、外观校正或稀疏化同时使用。",
+    "tooltip.refine_camera_poses": "在 3DGS 训练中修正小幅位姿误差，请在初始化前设置。深度和法线损失更新高斯，位姿使用光度目标函数。位姿在控制器蒸馏前固定。",
+    "pose.stop_step": "实际停止步数",
+    "pose.schedule": "位姿优化必须在实际停止步数和控制器蒸馏之前开始。停止百分比必须介于 1 和 100 之间。",
     "status_restoring": "正在恢复",
     "status_saving": "正在保存",
     "action_stop": "停止",
@@ -1573,6 +1577,8 @@
     "print_to_log": "打印到日志"
   },
   "training_params": {
+    "camera_pose_start_step": "位姿起始步数",
+    "camera_pose_end_percent": "位姿停止 (%)",
     "refine_camera_poses": "优化相机位姿",
     "strategy": "策略:",
     "iterations": "迭代次数:",

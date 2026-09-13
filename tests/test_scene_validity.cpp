@@ -817,6 +817,7 @@ namespace lfs::python {
             pending.use_depth_loss = false;
             pending.refine_camera_poses = true;
             pending.mip_filter = true;
+            pending.camera_pose_start_step = -1;
         });
         EXPECT_FALSE(manager.preflightStartParameters());
         EXPECT_FALSE(manager.startTraining());
@@ -854,6 +855,8 @@ namespace lfs::python {
         EXPECT_TRUE(manager.waitForInitialization());
         pending.gut = false;
         pending.refine_camera_poses = true;
+        // Mip is supported with pose refinement; reject an invalid schedule instead.
+        pending.camera_pose_start_step = -1;
         const auto pose_resume = manager.resumeTraining();
         ASSERT_FALSE(pose_resume);
         EXPECT_NE(pose_resume.error().user_message().find("Camera pose"), std::string::npos);
@@ -881,6 +884,8 @@ namespace lfs::python {
         manager.setTrainerFromCheckpoint(std::move(trainer), 1);
         ASSERT_TRUE(manager.isPaused());
         manager.getEditableOptParams().refine_camera_poses = true;
+        // This fixture trains for only eight iterations, below the default warmup.
+        manager.getEditableOptParams().camera_pose_start_step = 0;
         // The configuration itself is valid; only the live-session contract rejects it.
         ASSERT_TRUE(manager.getEditableOptParams().validate().empty());
         const auto resumed = manager.resumeTraining();
@@ -2101,6 +2106,10 @@ namespace lfs::python {
         EXPECT_EQ(counts.enabled, 2u);
         EXPECT_EQ(counts.total, 3u);
         EXPECT_EQ(scene.getActiveCameraCount(), 3u);
+        const auto active = scene.getActiveCameras();
+        const auto disabled_camera = scene.getNodeById(train_b)->camera;
+        EXPECT_EQ(active.size(), 3u);
+        EXPECT_EQ(std::find(active.begin(), active.end(), disabled_camera), active.end());
 
         const auto validation_counts = scene.getCameraTrainingCounts(validation);
         EXPECT_EQ(validation_counts.enabled, 1u);

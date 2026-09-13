@@ -156,11 +156,13 @@ namespace lfs::training {
                                                const PPISPRenderOverrides& overrides,
                                                const PPISPRegion& region = {});
 
-        /// Backward pass: accumulate gradients (call optimizer_step after all backward calls)
+        /// Backward pass: accumulate gradients (call optimizer_step after all backward calls).
+        /// With accumulate_parameters=false, only return the image gradient;
+        /// parameter gradients and optimizer state remain unchanged.
         /// @param camera_id Original COLMAP camera_id (translated internally)
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor backward(const lfs::core::Tensor& rgb, const lfs::core::Tensor& grad_output, int camera_id,
-                                   int uid);
+                                    int uid, bool accumulate_parameters = true);
 
         /// Backward pass through ISP using controller-predicted params.
         /// Returns gradient w.r.t. controller_params [1,9] for controller backward.

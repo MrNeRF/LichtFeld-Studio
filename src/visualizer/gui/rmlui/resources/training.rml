@@ -714,6 +714,26 @@
         </div>
     </div>
 
+    <div class="training-panel-block" data-if="pv_section_camera_pose_visible &amp;&amp; dep_camera_pose">
+      <div class="section-header text-accent" id="hdr-camera-pose" data-event-click="toggle_section('camera_pose')">
+        <span class="section-arrow" id="arrow-camera-pose">&#x25BC;</span><span>{{pv_header_camera_pose}}</span>
+      </div>
+      <div class="section-content" id="sec-camera-pose"><div data-class-disabled-overlay="adv_disabled">
+        <div class="setting-row" data-tooltip="training.tooltip.camera_pose_end_percent">
+          <span class="prop-label">@tr:training.pose.stop_step</span><span>{{camera_pose_stop_step}}</span>
+        </div>
+        <div class="setting-row" data-for="row : pv_camera_pose_schedule_rows" data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                 data-event-change="pv_change(row.id, ev.value)" data-event-blur="pv_blur(row.id, row.text)"
+                 data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+        </div>
+      </div></div>
+    </div>
+
     <!-- Optimization subsection -->
     <div class="training-subsection" data-if="pv_section_optimization_visible">
       <div class="section-header text-accent" id="hdr-optimization" data-event-click="toggle_section('optimization')">

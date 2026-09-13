@@ -1253,17 +1253,21 @@ def test_pose_controls_prevent_new_conflicts_and_keep_existing_values_correctabl
                              use_normal_loss=False, mask_mode=SimpleNamespace(value=0))
     model = _ModelStub()
     panel._bind_disabled(model, lambda: params)
-    for prop in ("ppisp", "use_bilateral_grid", "use_exposure_correction", "enable_sparsity"):
+    for prop in ("ppisp", "use_bilateral_grid", "use_exposure_correction"):
         getter = model.bindings["pose_disabled_" + prop][0]
-        assert getter()
+        assert not getter()
         setattr(params, prop, True)
         assert not getter()
         setattr(params, prop, False)
-    for key in ("gut_disabled", "gut_mip_filter_disabled", "gut_depth_supervision_disabled",
-                "gut_normal_supervision_disabled", "pose_disabled_mask_mode"):
-        assert model.bindings[key][0]()
+    assert model.bindings["gut_disabled"][0]()
+    for key in ("gut_mip_filter_disabled", "gut_depth_supervision_disabled",
+                "gut_normal_supervision_disabled"):
+        assert not model.bindings[key][0]()
     params.mask_mode.value = 2
     assert not model.bindings["pose_disabled_mask_mode"][0]()
+    params.mask_mode.value = 0
+    assert not model.bindings["pose_disabled_mask_mode"][0]()
+    assert not model.bindings["pose_disabled_enable_sparsity"][0]()
     params.refine_camera_poses = False
     assert not model.bindings["gut_mip_filter_disabled"][0]()
     assert not model.bindings["pose_disabled_ppisp"][0]()
@@ -1292,11 +1296,14 @@ def test_pose_activation_binding_tracks_native_block_reason(training_panel_modul
 def test_pose_activation_has_own_section_and_presence_based_disabled_binding(training_panel_module):
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/training.rml").read_text(encoding="utf-8")
-    assert "camera_pose" not in training_panel_module.SECTIONS
+    assert "camera_pose" in training_panel_module.SECTIONS
     assert rml.index('id="hdr-sparsity"') < rml.index('{{pv_header_camera_pose}}') < rml.index('id="hdr-optimization"')
     section = rml[rml.index('<div class="training-subsection-title" data-if="pv_section_camera_pose_visible"'):rml.index('<!-- Optimization subsection -->')]
-    assert "toggle_section('camera_pose')" not in section
-    assert 'id="sec-camera-pose"' not in section
+    activation, schedule = section.split('<div class="training-panel-block"', 1)
+    assert "toggle_section('camera_pose')" not in activation
+    assert 'id="sec-camera-pose"' in schedule
+    assert 'pv_section_camera_pose_visible &amp;&amp; dep_camera_pose' in schedule
+    assert 'pv_camera_pose_schedule_rows' in schedule
     assert "{{pv_header_camera_pose}}" in section
     assert 'data-for="row : pv_camera_pose_activation_rows"' in section
     # RmlUi treats disabled as presence-only: attr writes even a false value,

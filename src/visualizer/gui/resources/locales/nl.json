@@ -251,6 +251,8 @@
     "status.showing_projects.other": "{count} projecten weergegeven"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Eerste trainingsstap voor poseoptimalisatie. Moet vóór de stopstap liggen.",
+    "tooltip.camera_pose_end_percent": "Zet poses vast op dit percentage van alle trainingsstappen. De training van gaussianen gaat verder met vaste poses.",
     "pose.backend": "Vereist 3DGS.",
     "pose.mip": "Schakel Mip Filter uit.",
     "pose.rgb": "Gebruik alleen RGB-supervisie.",
@@ -276,7 +278,9 @@
     "pose.waiting": "Wachtend",
     "pose.tooltip": "Camerapose: {0}\nFase: {1}\n{2} (scène-eenheden / graden)\nGeaccepteerde updates: {3} | Afgewezen voorstellen: {4}\nEen afgewezen voorstel behoudt de laatst geaccepteerde pose. Deze indicatoren meten niet de reconstructiekwaliteit.",
     "section.camera_pose": "Cameraposes optimaliseren",
-    "tooltip.refine_camera_poses": "Corrigeert kleine posefouten tijdens 3DGS-training. Instellen vóór initialisatie. Alleen RGB, zonder Mip-filter, maskers, uiterlijkcorrectie of sparsificatie.",
+    "tooltip.refine_camera_poses": "Corrigeert kleine posefouten tijdens 3DGS-training. Instellen vóór initialisatie. Diepte- en normaalverliezen werken gaussianen bij; poses gebruiken het fotometrische doel. Poses worden vastgezet vóór controllerdistillatie.",
+    "pose.stop_step": "Effectieve stopstap",
+    "pose.schedule": "Poseoptimalisatie moet vóór de effectieve stopstap en controllerdistillatie beginnen. Het stoppercentage moet tussen 1 en 100 liggen.",
     "status_restoring": "Herstellen",
     "status_saving": "Opslaan",
     "action_stop": "Stop",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Afdrukken naar Log"
   },
   "training_params": {
+    "camera_pose_start_step": "Startstap poses",
+    "camera_pose_end_percent": "Stop poses (%)",
     "refine_camera_poses": "Cameraposes verfijnen",
     "strategy": "Strategie:",
     "iterations": "Iteraties:",

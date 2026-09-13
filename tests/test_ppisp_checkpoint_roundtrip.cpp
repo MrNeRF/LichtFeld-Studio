@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -67,6 +68,48 @@ namespace {
     }
 
     class PPISPCheckpointRoundtripTest : public tensor_hardening::CudaTest {};
+
+    TEST_F(PPISPCheckpointRoundtripTest, PoseInputBackwardPreservesPendingParameterGradients) {
+        PPISPConfig config;
+        config.warmup_steps = 0;
+        PPISP reference(1000, config), live(1000, config);
+        register_test_frames(reference);
+        register_test_frames(live);
+        const auto input = make_input(0.1f);
+        const auto grad = make_grad(0.03f);
+        const auto expected = reference.backward(input, grad, 20, 101);
+        (void)live.backward(input, grad, 20, 101);
+        std::stringstream before, after;
+        live.serialize(before);
+        for (int visit = 0; visit < 3; ++visit) {
+            const auto actual = live.backward(input, grad, 20, 101, false);
+            EXPECT_LE((actual - expected).abs().max().item<float>(), 1e-6f);
+        }
+        live.serialize(after);
+        EXPECT_EQ(before.str(), after.str());
+        reference.optimizer_step();
+        live.optimizer_step();
+        for (const auto [camera_id, uid] : {std::pair{20, 101}, std::pair{20, 102}, std::pair{30, 201}})
+            EXPECT_LE((live.apply(input, camera_id, uid) - reference.apply(input, camera_id, uid)).abs().max().item<float>(), 1e-6f);
+    }
+
+    TEST_F(PPISPCheckpointRoundtripTest, PoseGridBackwardPreservesPendingSliceAndParameters) {
+        using namespace lfs::training;
+        for (const auto mode : {BilateralGridParameterization::Affine, BilateralGridParameterization::ExposureChroma}) {
+            BilateralGrid grid(1, 2, 2, 2, 1000, {}, mode);
+            const auto input = make_input(0.1f);
+            const auto grad = make_grad(0.03f);
+            const auto expected = grid.backward(input, grad, 0);
+            const auto pending = grid.grad_slice().clone();
+            std::stringstream before, after;
+            grid.serialize(before);
+            const auto actual = grid.backward(input, grad, 0, false);
+            EXPECT_LE((actual - expected).abs().max().item<float>(), 1e-6f);
+            EXPECT_EQ(pending.cpu().to_vector(), grid.grad_slice().cpu().to_vector());
+            grid.serialize(after);
+            EXPECT_EQ(before.str(), after.str());
+        }
+    }
 
     TEST_F(PPISPCheckpointRoundtripTest, AdoptCheckpointStatePreservesColorMeanRegularizer) {
         PPISPConfig config;

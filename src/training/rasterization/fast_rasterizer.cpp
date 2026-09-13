@@ -725,8 +725,8 @@ namespace lfs::training {
                 gradient.stream() != grad_image.stream() || gradient.stream() != ctx.image.stream()) {
                 throw std::invalid_argument("FastGS camera gradient requires contiguous CUDA float32 [4,4] on the render stream");
             }
-            if (ctx.mip_filter || (grad_normal.is_valid() && grad_normal.numel() > 0)) {
-                throw std::invalid_argument("FastGS camera gradients do not yet support Mip Filter or normal supervision");
+            if (grad_normal.is_valid() && grad_normal.numel() > 0) {
+                throw std::invalid_argument("FastGS camera gradients do not yet support normal supervision");
             }
             const auto output_begin = reinterpret_cast<std::uintptr_t>(gradient.data_ptr());
             const auto overlaps = [output_begin](const void* ptr, const size_t bytes) {

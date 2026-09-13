@@ -91,6 +91,7 @@ namespace {
 
     TEST(CameraPoseSessionTest, WarmupPauseAndFinalFreezeDoNotEvaluate) {
         PoseRefinementSession session(1, cameras(), config());
+        EXPECT_EQ(session.published_snapshot()->stop_iteration, 80);
         EXPECT_FALSE(session.visit(30, 9, 1, {}, {}).scheduled);
         session.set_paused(true);
         EXPECT_FALSE(session.visit(30, 10, 1, {}, {}).scheduled);

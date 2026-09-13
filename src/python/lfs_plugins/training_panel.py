@@ -191,6 +191,7 @@ SECTIONS = [
     "init",
     "random_init",
     "sparsity",
+    "camera_pose",
     "save_steps",
     "advanced_registry",
 ]
@@ -592,17 +593,9 @@ class TrainingPanel(Panel):
 
     @staticmethod
     def _pose_option_disabled(params, prop):
-        # Prevent new conflicts, but keep already-selected settings correctable.
-        if params is None or not getattr(params, "refine_camera_poses", False):
-            return False
-        if prop == "mask_mode":
-            mode = getattr(params, prop, 0)
-            return getattr(mode, "value", mode) == 0
-        return prop in (
-            "mip_filter", "use_depth_loss", "use_normal_loss", "ppisp",
-            "ppisp_use_controller", "use_exposure_correction",
-            "use_bilateral_grid", "enable_sparsity",
-        ) and not bool(getattr(params, prop, False))
+        # Shared 3DGS features compose with pose refinement. Backend and
+        # initialized-session guards remain independent of this helper.
+        return False
 
     def _start_error(self):
         # Next-run settings must not gate Resume of an initialized/stored trainer.
@@ -684,11 +677,13 @@ class TrainingPanel(Panel):
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
+            "dep_camera_pose": getattr(params, "refine_camera_poses", False),
             "dep_random": params.random,
         }
         return bool(conditions.get(str(condition_id), True))
 
     def _bind_visibility(self, model, p, d):
+        model.bind_func("dep_camera_pose", lambda: p() is not None and p().has_params() and getattr(p(), "refine_camera_poses", False))
         def _state():
             value = RuntimeState.trainer_state.value
             session = _training_session_state()
@@ -929,6 +924,7 @@ class TrainingPanel(Panel):
 
         model.bind_func("camera_pose_disabled", lambda: bool(_camera_pose_reason()))
         model.bind_func("camera_pose_reason", _camera_pose_reason)
+        model.bind_func("camera_pose_stop_step", lambda: getattr(p(), "camera_pose_stop_step", 0) if p() is not None else 0)
         def _params_edit_locked():
             return not (
                 RuntimeState.trainer_state.value == "ready"
@@ -1643,6 +1639,7 @@ class TrainingPanel(Panel):
                 getattr(params, name, None)
                 for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss",
                              "refine_camera_poses", "camera_pose_edit_block_reason", "camera_pose_conflict",
+                             "camera_pose_start_step", "camera_pose_end_percent", "camera_pose_stop_step",
                              "mask_mode", "ppisp", "ppisp_use_controller", "use_bilateral_grid",
                              "use_exposure_correction", "enable_sparsity")
             )
@@ -2123,8 +2120,6 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
         try:
-            if getattr(params, "refine_camera_poses", False) and int(val_str) != 0:
-                return False
             params.mask_mode = lf.MaskMode(int(val_str))
         except (ValueError, TypeError):
             return False

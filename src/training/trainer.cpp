@@ -3694,6 +3694,11 @@ namespace lfs::training {
             if (auto error = camera_pose::trainer_pose_incompatibility(params.optimization); !error.empty())
                 return error;
             if (params.optimization.resolved_total_iterations() != effective.optimization.resolved_total_iterations() ||
+                params.optimization.camera_pose_start_step != effective.optimization.camera_pose_start_step ||
+                params.optimization.camera_pose_end_percent != effective.optimization.camera_pose_end_percent ||
+                params.optimization.ppisp_use_controller != effective.optimization.ppisp_use_controller ||
+                params.optimization.ppisp_controller_activation_step != effective.optimization.ppisp_controller_activation_step ||
+                (params.optimization.ppisp_use_controller && params.optimization.steps_scaler != effective.optimization.steps_scaler) ||
                 params.optimization.enable_eval != effective.optimization.enable_eval ||
                 params.dataset.data_path != effective.dataset.data_path || params.dataset.test_every != effective.dataset.test_every ||
                 params.disabled_camera_uids != effective.disabled_camera_uids ||
@@ -3712,9 +3717,6 @@ namespace lfs::training {
             if (auto error = cameraPoseUpdateErrorLocked(params); !error.empty())
                 return error;
         }
-        if ((params.optimization.refine_camera_poses || camera_pose_session_.load(std::memory_order_acquire)) &&
-            scene_ && resolve_training_cropbox_loss_geom(*scene_, params.optimization.cropbox_loss_weight))
-            return "Camera pose refinement does not yet compose cropbox ROI loss";
         return {};
     }
 
@@ -6160,8 +6162,6 @@ namespace lfs::training {
                         throw std::runtime_error(error);
                     if (get_total_iterations() != camera_pose_total_iterations_)
                         throw std::runtime_error("Camera pose schedule cannot change during a live session");
-                    if (scene_ && resolve_training_cropbox_loss_geom(*scene_, params_.optimization.cropbox_loss_weight))
-                        throw std::runtime_error("Camera pose refinement does not yet compose cropbox ROI loss");
                     if (pose_session->published_snapshot()->paused)
                         pose_session->set_paused(false);
                 }
@@ -6515,9 +6515,80 @@ namespace lfs::training {
                         // loss workspace on unscheduled visits and during warmup.
                         std::unique_ptr<camera_pose::FastGSPoseEvaluator> pose_evaluator;
                         const auto visit = pose_session->visit(cam->uid(), iter, static_cast<std::uint64_t>(iter), [&](const camera_pose::Matrix4& pose) {
-                                if (!pose_evaluator) pose_evaluator = std::make_unique<camera_pose::FastGSPoseEvaluator>(
-                                    *cam, strategy_->get_model(), strategy_->get_optimizer(), bg,
-                                    camera_pose::make_pose_photometric_objective(gt_image, params_.optimization.lambda_dssim), bg_image);
+                                if (!pose_evaluator) {
+                                    core::Tensor pose_mask;
+                                    const auto& opt = params_.optimization;
+                                    core::Tensor pose_roi;
+                                    const auto pose_cropbox = scene_ ? resolve_training_cropbox_loss_geom(*scene_, opt.cropbox_loss_weight) : std::nullopt;
+                                    if (pose_cropbox) {
+                                        const int h = static_cast<int>(gt_image.shape()[1]);
+                                        const int w = static_cast<int>(gt_image.shape()[2]);
+                                        pose_roi = core::Tensor::empty({static_cast<size_t>(h), static_cast<size_t>(w)}, core::Device::CUDA);
+                                        const auto baseline = camera_pose::make_fastgs_pose_override(cam->uid(), pose);
+                                        const auto [fx, fy, cx, cy] = cam->get_intrinsics();
+                                        kernels::launch_roi_weight_map(baseline.world_view_transform.ptr<float>(), baseline.cam_position.ptr<float>(),
+                                            fx, fy, cx, cy, w, h, pose_cropbox->world_to_cropbox, pose_cropbox->min, pose_cropbox->max,
+                                            pose_cropbox->inverse, opt.cropbox_loss_weight, pose_roi.ptr<float>(), pose_roi.stream());
+                                        // Keep the same pixel support for baseline and candidates;
+                                        // moving out of a weighted region must not lower the objective.
+                                    }
+                                    if (opt.mask_mode != core::param::MaskMode::None &&
+                                        (cam->has_mask() || (opt.use_alpha_as_mask && cam->has_alpha()))) {
+                                        pose_mask = pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0
+                                            ? pipelined_mask_.clone()
+                                            : cam->load_and_get_mask(params_.dataset.resize_factor, params_.dataset.max_width,
+                                                opt.invert_masks, opt.mask_threshold,
+                                                opt.mask_mode != core::param::MaskMode::SegmentAndIgnore).clone();
+                                    }
+                                    const bool pose_grid = bilateral_grid_ && opt.bilateral_grid_active() &&
+                                        (!opt.use_exposure_correction || iter >= opt.exposure_correction_grid_start_iter);
+                                    const bool pose_ppisp = ppisp_ && opt.ppisp_active();
+                                    auto objective = (pose_mask.is_valid() || pose_roi.is_valid() || pose_grid || pose_ppisp)
+                                        ? camera_pose::PoseObjective([this, target = gt_image.clone(), mask = std::move(pose_mask), roi = std::move(pose_roi), opt,
+                                                                    pose_grid, pose_ppisp, camera_id = cam->camera_id(), uid = cam->uid()]
+                                            (const RenderOutput& output, bool gradients) {
+                                            auto corrected = output.image;
+                                            core::Tensor grid_input, isp_input, clamp_gradient;
+                                            if (opt.use_exposure_correction) {
+                                                isp_input = corrected;
+                                                if (pose_ppisp) corrected = ppisp_->apply(isp_input, camera_id, uid);
+                                                grid_input = corrected;
+                                                if (pose_grid) corrected = bilateral_grid_->apply(grid_input, uid);
+                                            } else {
+                                                grid_input = corrected;
+                                                if (pose_grid) corrected = bilateral_grid_->apply(grid_input, uid);
+                                                isp_input = corrected;
+                                                if (pose_ppisp) corrected = ppisp_->apply(isp_input, camera_id, uid);
+                                            }
+                                            if (opt.use_exposure_correction || !pose_ppisp) {
+                                                if (gradients) clamp_gradient = ((corrected > 0.0f) && (corrected < 1.0f)).to(core::DataType::Float32);
+                                                corrected = corrected.clamp(0.0f, 1.0f);
+                                            }
+                                            const auto raw = (pose_grid || pose_ppisp) ? output.image : core::Tensor{};
+                                            auto result = compute_photometric_loss_with_mask(
+                                                corrected, target, mask, roi, output.alpha, opt, raw);
+                                            if (!result) throw std::runtime_error(result.error());
+                                            const auto loss = result->loss.item<float>();
+                                            if (!gradients) return camera_pose::PoseObjectiveResult{loss, {}, {}};
+                                            auto image_gradient = result->grad_corrected;
+                                            if (clamp_gradient.is_valid()) image_gradient = image_gradient * clamp_gradient;
+                                            if (opt.use_exposure_correction) {
+                                                if (pose_grid) image_gradient = bilateral_grid_->backward(grid_input, image_gradient, uid, false);
+                                                if (pose_ppisp) image_gradient = ppisp_->backward(isp_input, image_gradient, camera_id, uid, false);
+                                            } else {
+                                                if (pose_ppisp) image_gradient = ppisp_->backward(isp_input, image_gradient, camera_id, uid, false);
+                                                if (pose_grid) image_gradient = bilateral_grid_->backward(grid_input, image_gradient, uid, false);
+                                            }
+                                            if (result->grad_raw.is_valid()) image_gradient = image_gradient + result->grad_raw;
+                                            auto alpha_gradient = result->grad_alpha;
+                                            if (alpha_gradient.is_valid() && alpha_gradient.shape() != output.alpha.shape())
+                                                alpha_gradient = alpha_gradient.reshape(output.alpha.shape());
+                                            return camera_pose::PoseObjectiveResult{loss, image_gradient, alpha_gradient};
+                                        })
+                                        : camera_pose::make_pose_photometric_objective(gt_image, opt.lambda_dssim);
+                                    pose_evaluator = std::make_unique<camera_pose::FastGSPoseEvaluator>(
+                                        *cam, strategy_->get_model(), strategy_->get_optimizer(), bg, std::move(objective), bg_image, opt.mip_filter);
+                                }
                                 return pose_evaluator->evaluate(pose); }, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->loss(pose); }, stop_token);
                         if (visit.cancelled)
                             return StepDisposition::Stop;
@@ -6729,12 +6800,17 @@ namespace lfs::training {
                             roi_weight_map_.set_stream(roi_stream);
                         }
 
-                        cam->world_view_transform().sync_to_stream(roi_stream);
-                        cam->cam_position().sync_to_stream(roi_stream);
+                        if (refined_pose) {
+                            refined_pose->world_view_transform.sync_to_stream(roi_stream);
+                            refined_pose->cam_position.sync_to_stream(roi_stream);
+                        } else {
+                            cam->world_view_transform().sync_to_stream(roi_stream);
+                            cam->cam_position().sync_to_stream(roi_stream);
+                        }
                         const auto [fx, fy, cx, cy] = cam->get_intrinsics();
                         lfs::training::kernels::launch_roi_weight_map(
-                            cam->world_view_transform_ptr(),
-                            cam->cam_position_ptr(),
+                            refined_pose ? refined_pose->world_view_transform.ptr<float>() : cam->world_view_transform_ptr(),
+                            refined_pose ? refined_pose->cam_position.ptr<float>() : cam->cam_position_ptr(),
                             fx,
                             fy,
                             cx,
@@ -7248,6 +7324,17 @@ namespace lfs::training {
                             }
 
                             if (target_normal.is_valid() && target_normal.numel() > 0) {
+                                if (refined_pose && normal_prior_world_space_) {
+                                    // World-space priors were decoded into the source
+                                    // camera frame. Rotate them into the current frame
+                                    // without modifying cached/pipelined source priors.
+                                    const auto source_rotation = cam->world_view_transform().reshape({4, 4})
+                                        .slice(0, 0, 3).slice(1, 0, 3).contiguous();
+                                    const auto current_rotation = refined_pose->world_view_transform.reshape({4, 4})
+                                        .slice(0, 0, 3).slice(1, 0, 3).contiguous();
+                                    target_normal = current_rotation.matmul(source_rotation.transpose(0, 1))
+                                        .matmul(target_normal.reshape({3, -1})).reshape(target_normal.shape());
+                                }
                                 lfs::core::Tensor rendered_normal = output.normal;
                                 if (!rendered_normal.is_contiguous()) {
                                     rendered_normal = rendered_normal.contiguous();

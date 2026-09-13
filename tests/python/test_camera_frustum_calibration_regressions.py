@@ -132,3 +132,23 @@ def test_pose_markers_keep_numbers_in_tooltip_and_survive_cache_reuse():
     assert marker < reuse
     assert "params.shape_overlay_triangles, params, a, b, color" in gui
     assert "cache.data->frustum_instances.push_back({.model = cache.models[camera_index], .color = color})" in gui
+
+
+def test_pose_composition_keeps_shared_updates_outside_pose_visits():
+    trainer = _read("src/training/trainer.cpp")
+    pose = _function(trainer, "std::optional<FastGSCameraPoseOverride> refined_pose;", 'nvtxRangePush("rasterize")')
+    assert "if (pose_session)" in pose
+    assert "params_.optimization" in pose
+    assert "compute_photometric_loss_with_mask(" in pose
+    assert "corrected, target, mask, roi, output.alpha, opt, raw" in pose
+    assert "bilateral_grid_->backward(grid_input, image_gradient, uid, false)" in pose
+    assert "ppisp_->backward(isp_input, image_gradient, camera_id, uid, false)" in pose
+    assert "optimizer_step" not in pose
+    assert "zero_grad" not in pose
+    assert "bg_image, opt.mip_filter" in pose
+    assert "if (refined_pose && normal_prior_world_space_)" in trainer
+    integration = _read("src/training/camera_pose/trainer_pose_integration.cpp")
+    assert "resolved_camera_pose_stop_step()" in integration
+    assert "pose_session_config_from_state(saved)" in integration
+    assert "source_cameras = scene_->getActiveCameras()" in trainer
+    assert "camera_pose_sources_ = source_cameras" in trainer

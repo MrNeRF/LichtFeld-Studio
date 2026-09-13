@@ -634,9 +634,25 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::refine_camera_poses,
                        "refine_camera_poses", "Camera Pose Refinement", d.refine_camera_poses,
-                       "Refine camera extrinsics during raw RGB FastGS training; configure before initialization")
+                       "Refine camera extrinsics during 3DGS training; configure before initialization")
             .locale("training_params.refine_camera_poses")
             .tooltip("training.tooltip.refine_camera_poses")
+            .all_strategies()
+            .int_prop(&OptimizationParameters::camera_pose_start_step,
+                      "camera_pose_start_step", "Pose start step", d.camera_pose_start_step, 0, 1000000,
+                      "First training step eligible for camera pose refinement")
+            .locale("training_params.camera_pose_start_step")
+            .tooltip("training.tooltip.camera_pose_start_step")
+            .precision(0)
+            .ui_step(100)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::camera_pose_end_percent,
+                      "camera_pose_end_percent", "Pose stop (%)", d.camera_pose_end_percent, 1, 100,
+                      "Freeze camera poses at this percentage of the resolved training duration")
+            .locale("training_params.camera_pose_end_percent")
+            .tooltip("training.tooltip.camera_pose_end_percent")
+            .precision(0)
+            .ui_step(1)
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,

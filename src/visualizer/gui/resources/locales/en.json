@@ -251,6 +251,8 @@
     "status.showing_projects.other": "Showing {count} projects"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "First training step eligible for pose refinement. Must precede the stop step.",
+    "tooltip.camera_pose_end_percent": "Freeze poses at this percentage of total training steps. Gaussian training continues with fixed poses.",
     "pose.backend": "Requires 3DGS.",
     "pose.mip": "Disable Mip Filter.",
     "pose.rgb": "Use RGB-only supervision.",
@@ -276,7 +278,9 @@
     "pose.waiting": "Waiting",
     "pose.tooltip": "Camera pose: {0}\nPhase: {1}\n{2} (scene units / degrees)\nAccepted updates: {3} | Rejected proposals: {4}\nA rejected proposal keeps the last accepted pose. These indicators do not measure reconstruction quality.",
     "section.camera_pose": "Camera pose refinement",
-    "tooltip.refine_camera_poses": "Correct small camera pose errors during 3DGS training. Configure before initialization. Requires RGB-only training without Mip Filter, masks, appearance correction or sparsity.",
+    "tooltip.refine_camera_poses": "Refine small camera pose errors during 3DGS training. Configure before initialization. Depth and normal losses update Gaussians; poses use the photometric objective. Poses freeze before controller distillation.",
+    "pose.stop_step": "Effective stop step",
+    "pose.schedule": "Pose refinement must start before its effective stop step and before controller distillation. Stop percentage must be between 1 and 100.",
     "status_restoring": "Restoring",
     "status_saving": "Saving",
     "action_stop": "Stop",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Print to Log"
   },
   "training_params": {
+    "camera_pose_start_step": "Pose start step",
+    "camera_pose_end_percent": "Pose stop (%)",
     "refine_camera_poses": "Refine camera poses",
     "strategy": "Strategy:",
     "iterations": "Iterations:",

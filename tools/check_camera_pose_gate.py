@@ -21,6 +21,7 @@ from pathlib import Path
 SUITE = "CameraPosePhotometricTest"
 TESTS = frozenset({
     "AnisotropicSH3MatchesSixAxisFiniteDifferences",
+    "MipCameraGradientMatchesFiniteDifferences",
     "OnAxisAnisotropicRollHasNonzeroGradient",
     "SHViewDirectionSurvivesGeometryCancellation",
     "CameraOnlyPreservesModelOptimizerAndSource",
@@ -238,7 +239,9 @@ def inspect_view_gate(root: ET.Element) -> dict:
 
 ACTIVATION_SUITE = "CameraPoseActivationTest"
 ACTIVATION_TESTS = {"ConfigurationPreservesOptInAndRejectsUnsupportedTraining",
-                    "CommandLineCapturesOptInAndRejectsConflict"}
+                    "CommandLineCapturesOptInAndRejectsConflict",
+                    "ScheduleRoundTripValidationAndCliOverrides",
+                    "SharedThreeDgsFeaturesRemainCompatible"}
 
 
 def inspect_activation_gate(root: ET.Element) -> dict:
@@ -263,19 +266,33 @@ def require_production_evaluator(root: ET.Element) -> None:
         raise ValueError("Missing production evaluator evidence; rebuild by the user is required for this gate")
 
 
+def require_no_report_failures(root: ET.Element) -> None:
+    """Never certify a subset while the supplied report contains failures."""
+    for suite in root.iter("testsuite"):
+        for case in suite.findall("testcase"):
+            if any(case.find(tag) is not None for tag in ("failure", "error")):
+                raise ValueError(f"Report contains failed test: {suite.get('name')}.{case.get('name')}")
+    for node in root.iter():
+        if node.tag in ("testsuites", "testsuite"):
+            for key in ("failures", "errors"):
+                if int(node.get(key, "0")) != 0:
+                    raise ValueError(f"Report contains {key}: {node.get(key)}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="gtest XML generated from the current camera-pose sources")
     parser.add_argument("--controller", action="store_true", help="Require checkpoint B controller tests and image-driven recovery as well")
-    parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (28 tests)")
-    parser.add_argument("--evaluator", action="store_true", help="Require all 28 tests using the production FastGS pose evaluator")
-    parser.add_argument("--trainer", action="store_true", help="Require all 31 pose, loss and checkpoint tests")
-    parser.add_argument("--view", action="store_true", help="Require all 34 pose, checkpoint and view contract tests")
-    parser.add_argument("--activation", action="store_true", help="Require all 36 pose, checkpoint, view and activation contract tests")
+    parser.add_argument("--session", action="store_true", help="Require controller and multi-camera session contracts")
+    parser.add_argument("--evaluator", action="store_true", help="Require session contracts using the production 3DGS pose evaluator")
+    parser.add_argument("--trainer", action="store_true", help="Require pose, loss and checkpoint contracts")
+    parser.add_argument("--view", action="store_true", help="Require pose, checkpoint and view contracts")
+    parser.add_argument("--activation", action="store_true", help="Require pose, checkpoint, view and activation contracts")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
+        require_no_report_failures(root)
         result = inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)

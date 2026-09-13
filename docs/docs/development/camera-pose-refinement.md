@@ -29,6 +29,16 @@ between warmup and freeze. Each eligible camera visit permits at most two update
 steps, with subsequent bursts spaced by eight visits to that camera. The
 initialization log reports the camera count, warmup, freeze iteration and cadence.
 
+The activation stays outside the collapsible settings in Training > Advanced.
+When enabled, its settings expose the start step and stop percentage, together
+with the effective stop step. The corresponding CLI options are
+`--camera-pose-start-step` (default `500`) and `--camera-pose-end-percent`
+(default `80`); JSON uses `camera_pose_start_step` and `camera_pose_end_percent`.
+The percentage refers to the resolved training duration, including a sparsity
+tail. With PPISP Controller, poses freeze no later than the start of controller
+distillation. The start must precede this effective stop. These settings require
+reinitialization; a restored pose session retains its saved schedule.
+
 Enable camera frustums in the viewport and expand the camera nodes in Scene Graph
 to observe accepted pose changes and net displacement. Two reference cameras and
 all evaluation cameras remain fixed. Well-calibrated cameras may also stay still.
@@ -69,10 +79,12 @@ gradient.
 
 Camera-only backward disables Gaussian parameter updates and does not commit
 Adam, densification or edge statistics. Calls without camera refinement retain
-the ordinary Gaussian-update path. Mip Filter and normal-loss camera gradients
-are rejected; these restrictions do not disable their ordinary training paths.
-The full-image evaluator does not currently expose depth supervision, tiled
-objectives or a 3DGUT camera-gradient path.
+the ordinary Gaussian-update path. Mip camera gradients include the derivative
+of view-dependent opacity compensation. Depth and normal losses supervise the
+Gaussian update, not the pose update. World-space normal priors are rotated into
+the refined camera frame without changing their cached source data.
+The evaluator remains full-image; tiled objectives and a 3DGUT camera-gradient
+path are not provided.
 
 ## Bounded optimizer
 
@@ -147,7 +159,12 @@ This objective does not implicitly replace the Trainer's L1/SSIM loss.
 The Trainer adapter instead uses the production L1/SSIM photometric objective,
 with the current SSIM weight. Its existing loss API computes image derivatives
 even for candidate scoring, but candidates do not run camera or Gaussian backward.
-PPISP/bilateral composition and tiled evaluation require additional integration.
+Masking, segmentation and alpha consistency reuse the training loss semantics.
+PPISP and bilateral correction are applied in the same order as training, with
+image-only backward and isolated parameter-gradient scratch. Cropbox ROI weights
+are fixed for a whole pose visit, so candidate poses cannot reduce the objective
+simply by moving pixels out of its support. The Gaussian update recomputes ROI
+weights using the accepted pose. Controller distillation starts with fixed poses.
 Allocation, synchronization and rendering costs depend on the dataset and update
 schedule; no performance improvement is guaranteed.
 
@@ -206,9 +223,10 @@ then receives the accepted current pose. Imported Camera tensors remain unchange
 Objective allocation is lazy, so unscheduled visits do not clone targets or
 allocate a photometric workspace. Pause and training completion publish snapshots.
 
-This path currently supports raw RGB FastGS training without Mip Filter, masks,
-depth/normal supervision, cropbox ROI loss, appearance correction or sparsification.
-Unsupported combinations are rejected explicitly. Membership and schedule changes
+The 3DGS path composes Mip Filter, masks, depth/normal Gaussian supervision,
+cropbox ROI weighting, appearance correction and sparsification. Pose visits run
+before Gaussian/appearance updates and topology changes, with the model fixed
+for every baseline/candidate comparison. Membership and schedule changes
 require reinitialization rather than silently reusing an incompatible session.
 
 ## Shared pose state and visualization
@@ -276,14 +294,13 @@ FastGS identifies its internal evaluator implementation.
 
 Start and Resume preflight validate the pending parameters against the initialized
 Trainer before changing lifecycle state. Pose activation, membership, cadence and
-durable-state changes require reinitialization. Active cropbox ROI supervision
-is rejected during preflight; the iteration-time guard remains in place for later
-scene edits. Rejections use the existing command-rejection path, not a training
+durable-state changes require reinitialization. Rejections use the existing
+command-rejection path, not a training
 completion event. MCP Start waits for initialization and returns its failure;
 MCP Resume propagates preflight rejection without reporting success.
 
-The panel prevents enabling conflicting options while pose refinement is selected,
-but leaves already-selected options correctable. Native validation remains
+The panel prevents selecting an unsupported backend while pose refinement is
+selected, but leaves already-selected options correctable. Native validation remains
 authoritative for scripts and pending parameter changes; a pending edit is not
 proof that an active Trainer accepted it.
 

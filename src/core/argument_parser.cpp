@@ -87,6 +87,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--refine-camera-poses", "refine_camera_poses", Bool},
+            OptimizationCliBinding{"--camera-pose-start-step", "camera_pose_start_step", Integer},
+            OptimizationCliBinding{"--camera-pose-end-percent", "camera_pose_end_percent", Integer},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
@@ -695,6 +697,8 @@ namespace {
             ::args::Group rendering_group(parser, "RENDERING OPTIONS:");
             ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
             ::args::Flag refine_camera_poses(rendering_group, "refine_camera_poses", lfs::core::args::optimization_cli_help("--refine-camera-poses"), {"refine-camera-poses"});
+            ::args::ValueFlag<int> camera_pose_start_step(rendering_group, "step", lfs::core::args::optimization_cli_help("--camera-pose-start-step"), {"camera-pose-start-step"});
+            ::args::ValueFlag<int> camera_pose_end_percent(rendering_group, "percent", lfs::core::args::optimization_cli_help("--camera-pose-end-percent"), {"camera-pose-end-percent"});
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
             ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::core::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
@@ -1308,6 +1312,8 @@ namespace {
                                         // Capture flag states
                                         enable_mip_flag = bool(enable_mip),
                                         refine_camera_poses_flag = bool(refine_camera_poses),
+                                        camera_pose_start_step_val = camera_pose_start_step ? std::optional<int>(::args::get(camera_pose_start_step)) : std::optional<int>(),
+                                        camera_pose_end_percent_val = camera_pose_end_percent ? std::optional<int>(::args::get(camera_pose_end_percent)) : std::optional<int>(),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         use_exposure_correction_flag = bool(use_exposure_correction),
                                         use_ppisp_flag = bool(use_ppisp),
@@ -1459,6 +1465,8 @@ namespace {
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(refine_camera_poses_flag, opt.refine_camera_poses);
+                if (camera_pose_start_step_val) opt.camera_pose_start_step = *camera_pose_start_step_val;
+                if (camera_pose_end_percent_val) opt.camera_pose_end_percent = *camera_pose_end_percent_val;
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(use_exposure_correction_flag, opt.use_exposure_correction);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
@@ -1598,6 +1606,8 @@ namespace {
                 note_opt("profile_stop_iter", profile_stop_val.has_value());
                 note_opt("mip_filter", enable_mip_flag);
                 note_opt("refine_camera_poses", refine_camera_poses_flag);
+                note_opt("camera_pose_start_step", camera_pose_start_step_val.has_value());
+                note_opt("camera_pose_end_percent", camera_pose_end_percent_val.has_value());
                 note_opt("use_bilateral_grid", use_bilateral_grid_flag);
                 note_opt("use_exposure_correction", use_exposure_correction_flag);
                 note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||

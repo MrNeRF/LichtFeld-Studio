@@ -12,6 +12,34 @@ from check_camera_pose_gate import require_production_evaluator
 from check_camera_pose_gate import TRAINER_SUITE, TRAINER_TESTS, inspect_trainer_gate
 from check_camera_pose_gate import VIEW_SUITE, VIEW_TESTS, inspect_view_gate
 from check_camera_pose_gate import ACTIVATION_SUITE, ACTIVATION_TESTS, inspect_activation_gate
+from check_camera_pose_gate import require_no_report_failures
+
+
+class ReportFailureTests(unittest.TestCase):
+    def test_accepts_passing_extra_suite(self):
+        root = valid_report()
+        suite = ET.SubElement(root, "testsuite", name="Other", failures="0", errors="0")
+        ET.SubElement(suite, "testcase", name="Pass", status="run", result="completed")
+        require_no_report_failures(root)
+
+    def test_rejects_failure_outside_pose_subset(self):
+        for tag in ("failure", "error"):
+            with self.subTest(tag=tag):
+                root = valid_report()
+                suite = ET.SubElement(root, "testsuite", name="TrainerConstructionTest")
+                case = ET.SubElement(suite, "testcase", name="Resume")
+                ET.SubElement(case, tag)
+                with self.assertRaisesRegex(ValueError, "TrainerConstructionTest.Resume"):
+                    require_no_report_failures(root)
+
+    def test_rejects_nonzero_or_invalid_summary_counts(self):
+        for tag in ("testsuites", "testsuite"):
+            for key in ("failures", "errors"):
+                for value in ("1", "-1", "invalid"):
+                    with self.subTest(tag=tag, key=key, value=value):
+                        root = ET.Element(tag, **{key: value})
+                        with self.assertRaises(ValueError):
+                            require_no_report_failures(root)
 
 
 def valid_report():
@@ -71,8 +99,8 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_28_tests(self):
-        self.assertEqual(inspect_session_gate(self.report())["tests"], 28)
+    def test_accepts_all_29_tests(self):
+        self.assertEqual(inspect_session_gate(self.report())["tests"], 29)
 
     def test_rejects_missing_session_and_missing_previous_gate(self):
         with self.assertRaises(ValueError):
@@ -112,8 +140,8 @@ class CameraPoseTrainerGateReportTests(unittest.TestCase):
         ET.SubElement(props, "property", name="production_evaluator", value="1")
         return root
 
-    def test_accepts_all_31_tests(self):
-        self.assertEqual(inspect_trainer_gate(self.report())["tests"], 31)
+    def test_accepts_all_32_tests(self):
+        self.assertEqual(inspect_trainer_gate(self.report())["tests"], 32)
 
     def test_rejects_incomplete_trainer_evidence(self):
         for mutation in ("suite", "missing", "duplicate", "unknown", "failure", "error", "skipped", "notrun"):
@@ -144,9 +172,9 @@ class CameraPoseViewGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_34_tests(self):
+    def test_accepts_all_35_tests(self):
         result = inspect_view_gate(self.report())
-        self.assertEqual(result["tests"], 34)
+        self.assertEqual(result["tests"], 35)
         self.assertTrue(result["view_pose_contracts"])
 
     def test_rejects_incomplete_view_evidence(self):
@@ -178,9 +206,9 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_36_tests(self):
+    def test_accepts_all_39_tests(self):
         result = inspect_activation_gate(self.report())
-        self.assertEqual(result["tests"], 36)
+        self.assertEqual(result["tests"], 39)
         self.assertTrue(result["activation_contracts"])
 
     def test_rejects_missing_or_failed_activation(self):
@@ -205,7 +233,7 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
 class CameraPoseControllerGateReportTests(unittest.TestCase):
     def test_accepts_complete_controller_report(self):
         result = inspect_controller_gate(valid_controller_report())
-        self.assertEqual(result["tests"], 17)
+        self.assertEqual(result["tests"], 18)
         self.assertEqual(len(result["controller_trials"]), 3)
 
     def test_rejects_checkpoint_a_without_controller(self):
@@ -248,7 +276,7 @@ class CameraPoseControllerGateReportTests(unittest.TestCase):
 class CameraPoseGateReportTests(unittest.TestCase):
     def test_accepts_complete_success_and_reports_all_trials(self):
         result = inspect_gate(valid_report())
-        self.assertEqual(result["tests"], 8)
+        self.assertEqual(result["tests"], 9)
         self.assertEqual(len(result["trials"]), 3)
         self.assertIn("not certified", result["scope"])
 

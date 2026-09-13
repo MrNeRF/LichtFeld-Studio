@@ -251,6 +251,8 @@
     "status.showing_projects.other": "{count}개 프로젝트 표시 중"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "포즈 최적화를 시작할 학습 스텝입니다. 중지 스텝보다 앞서야 합니다.",
+    "tooltip.camera_pose_end_percent": "전체 학습 스텝의 이 비율에서 포즈를 고정합니다. 가우시안 학습은 고정된 포즈로 계속됩니다.",
     "pose.backend": "3DGS가 필요합니다.",
     "pose.mip": "Mip Filter를 비활성화하세요.",
     "pose.rgb": "RGB 감독만 사용하세요.",
@@ -276,7 +278,9 @@
     "pose.waiting": "대기 중",
     "pose.tooltip": "카메라 포즈: {0}\n단계: {1}\n{2} (장면 단위 / 도)\n수락한 업데이트: {3} | 거부한 제안: {4}\n거부된 제안은 마지막으로 수락한 포즈를 유지합니다. 이 표시는 재구성 품질을 측정하지 않습니다.",
     "section.camera_pose": "카메라 포즈 최적화",
-    "tooltip.refine_camera_poses": "3DGS 학습 중 작은 카메라 포즈 오류를 보정합니다. 초기화 전에 설정하세요. RGB만 지원하며 Mip 필터, 마스크, 외관 보정, 희소화와 함께 사용할 수 없습니다.",
+    "tooltip.refine_camera_poses": "3DGS 학습의 작은 포즈 오류를 보정합니다. 초기화 전에 설정하세요. 깊이 및 법선 손실은 가우시안을 갱신하고 포즈는 광도 목적 함수를 사용합니다. 포즈는 컨트롤러 증류 전에 고정됩니다.",
+    "pose.stop_step": "실제 중지 스텝",
+    "pose.schedule": "포즈 최적화는 실제 중지 스텝과 컨트롤러 증류 전에 시작해야 합니다. 중지 비율은 1~100이어야 합니다.",
     "status_restoring": "복원 중",
     "status_saving": "저장 중",
     "action_stop": "중지",
@@ -1573,6 +1577,8 @@
     "print_to_log": "로그에 출력"
   },
   "training_params": {
+    "camera_pose_start_step": "포즈 시작 스텝",
+    "camera_pose_end_percent": "포즈 중지 (%)",
     "refine_camera_poses": "카메라 포즈 최적화 사용",
     "strategy": "전략:",
     "iterations": "반복:",

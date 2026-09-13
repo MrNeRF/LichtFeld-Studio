@@ -52,10 +52,12 @@ namespace lfs::training {
         /// Forward pass: apply color correction
         lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int image_idx);
 
-        /// Backward pass: accumulate gradients (call optimizer_step after all backward calls)
+        /// Backward pass: accumulate gradients (call optimizer_step after all backward calls).
+        /// With accumulate_parameters=false, return the image gradient while
+        /// preserving the pending parameter-gradient slice.
         lfs::core::Tensor backward(const lfs::core::Tensor& rgb,
                                    const lfs::core::Tensor& grad_output,
-                                   int image_idx);
+                                   int image_idx, bool accumulate_parameters = true);
 
         /// Compute TV loss for regularization (returns GPU tensor for async accumulation)
         lfs::core::Tensor tv_loss_gpu();

@@ -251,6 +251,8 @@
     "status.showing_projects.other": "Mostrando {count} proyectos"
   },
   "training": {
+    "tooltip.camera_pose_start_step": "Primer paso para optimizar las poses. Debe ser anterior al paso de parada.",
+    "tooltip.camera_pose_end_percent": "Fija las poses en este porcentaje de los pasos totales. El entrenamiento de gaussianas continúa con poses fijas.",
     "pose.backend": "Requiere 3DGS.",
     "pose.mip": "Desactiva Mip Filter.",
     "pose.rgb": "Usa únicamente supervisión RGB.",
@@ -276,7 +278,9 @@
     "pose.waiting": "En espera",
     "pose.tooltip": "Pose de cámara: {0}\nFase: {1}\n{2} (unidades de escena / grados)\nActualizaciones aceptadas: {3} | Propuestas rechazadas: {4}\nUna propuesta rechazada conserva la última pose aceptada. Estos indicadores no miden la calidad de reconstrucción.",
     "section.camera_pose": "Optimización de poses de cámara",
-    "tooltip.refine_camera_poses": "Corrige pequeños errores de pose durante el entrenamiento 3DGS. Configurar antes de inicializar. Solo RGB, sin filtro Mip, máscaras, corrección de apariencia ni dispersión.",
+    "tooltip.refine_camera_poses": "Corrige pequeños errores de pose durante el entrenamiento 3DGS. Configurar antes de inicializar. Las pérdidas de profundidad y normales actualizan gaussianas; las poses usan el objetivo fotométrico. Las poses se fijan antes de la destilación del controlador.",
+    "pose.stop_step": "Paso de parada efectivo",
+    "pose.schedule": "La optimización de poses debe empezar antes de la parada efectiva y de la destilación del controlador. El porcentaje debe estar entre 1 y 100.",
     "status_restoring": "Restaurando",
     "status_saving": "Guardando",
     "action_stop": "Detener",
@@ -1573,6 +1577,8 @@
     "print_to_log": "Imprimir en el Registro"
   },
   "training_params": {
+    "camera_pose_start_step": "Paso inicial de poses",
+    "camera_pose_end_percent": "Fin de poses (%)",
     "refine_camera_poses": "Optimizar poses de cámara",
     "strategy": "Estrategia:",
     "iterations": "Iteraciones:",

@@ -27,6 +27,8 @@ TRAINING_RML = (
 
 # id: (locale key, tooltip key, precision, step, registry min, registry max, int)
 EXPECTED_NUMBER_ROWS = {
+    "camera_pose_start_step": ("training_params.camera_pose_start_step", "training.tooltip.camera_pose_start_step", 0, 100, 0, 1_000_000, True),
+    "camera_pose_end_percent": ("training_params.camera_pose_end_percent", "training.tooltip.camera_pose_end_percent", 0, 1, 1, 100, True),
     "iterations": (
         "training_params.iterations",
         "training.tooltip.iterations",
@@ -535,13 +537,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 62
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 62
+    assert len(property_view.MIGRATED_PROP_IDS) == 64
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 64
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 85  # Backend alone has a bespoke selector.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 87  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
