@@ -1182,6 +1182,7 @@ namespace lfs::vis::gui::rml_theme {
         const auto& o = t.overlay;
 
         std::size_t seed = 0;
+        hashCombine(seed, lfs::vis::getThemeDpiScale());
         hashCombine(seed, t.name);
 
         hashColor(seed, p.background);
