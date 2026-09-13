@@ -13,6 +13,42 @@
 #include <optional>
 
 namespace lfs::vis {
+    enum class CameraPoseMarker { Diamond, Cross, Square, Pause };
+
+    struct CameraPoseIndicator {
+        unsigned int rgb;
+        std::string_view symbol;
+        CameraPoseMarker marker;
+    };
+
+    // A separate palette for optimizer activity, not reconstruction quality.
+    inline CameraPoseIndicator cameraPoseIndicator(std::string_view state) {
+        if (state == "updated") return {0x45D6B0, "+", CameraPoseMarker::Diamond};
+        if (state == "rejected") return {0xFFB454, "!", CameraPoseMarker::Cross};
+        if (state == "ready") return {0x65C9F2, "o", CameraPoseMarker::Diamond};
+        if (state == "anchor") return {0x83A6FF, "A", CameraPoseMarker::Square};
+        if (state == "evaluation") return {0xC5C9D3, "E", CameraPoseMarker::Square};
+        if (state == "frozen") return {0xC7A0F2, "=", CameraPoseMarker::Square};
+        if (state == "paused") return {0xFFCE73, "=", CameraPoseMarker::Pause};
+        return {0x939BAA, ".", CameraPoseMarker::Diamond};
+    }
+
+    inline std::string_view cameraPoseVisualState(
+        const training::camera_pose::PoseCameraDisplay& pose,
+        const training::camera_pose::PoseSessionSnapshot& snapshot) {
+        using training::camera_pose::PoseDisplayState;
+        if (snapshot.paused && pose.state != PoseDisplayState::Anchor &&
+            pose.state != PoseDisplayState::Evaluation && pose.state != PoseDisplayState::Frozen)
+            return "paused";
+        return training::camera_pose::pose_display_state_name(pose.state);
+    }
+
+    inline glm::vec4 cameraPoseIndicatorColor(const CameraPoseIndicator& indicator, float alpha) {
+        return {((indicator.rgb >> 16) & 255) / 255.0f,
+                ((indicator.rgb >> 8) & 255) / 255.0f,
+                (indicator.rgb & 255) / 255.0f, alpha};
+    }
+
     inline std::shared_ptr<const training::camera_pose::PoseSessionSnapshot> activeCameraPoses() {
         const auto* manager = services().trainerOrNull();
         const auto* trainer = manager ? manager->getTrainer() : nullptr;

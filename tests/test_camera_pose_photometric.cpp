@@ -689,6 +689,21 @@ namespace {
         display.pose.center_displacement = 0;
         display.pose.rotation_displacement = 0;
         EXPECT_EQ(lfs::vis::cameraPoseDisplacementLabel(&display), "\u0394 0 / 0.00\u00b0");
+        PoseSessionSnapshot snapshot;
+        snapshot.paused = true;
+        display.state = PoseDisplayState::Updated;
+        EXPECT_EQ(lfs::vis::cameraPoseVisualState(display, snapshot), "paused");
+        display.state = PoseDisplayState::Anchor;
+        EXPECT_EQ(lfs::vis::cameraPoseVisualState(display, snapshot), "anchor");
+        display.state = PoseDisplayState::Evaluation;
+        EXPECT_EQ(lfs::vis::cameraPoseVisualState(display, snapshot), "evaluation");
+        display.state = PoseDisplayState::Frozen;
+        EXPECT_EQ(lfs::vis::cameraPoseVisualState(display, snapshot), "frozen");
+        snapshot.paused = false;
+        display.state = PoseDisplayState::Rejected;
+        const auto rejected = lfs::vis::cameraPoseIndicator(lfs::vis::cameraPoseVisualState(display, snapshot));
+        EXPECT_EQ(rejected.marker, lfs::vis::CameraPoseMarker::Cross);
+        EXPECT_FLOAT_EQ(lfs::vis::cameraPoseIndicatorColor(rejected, 0.25f).a, 0.25f);
     }
 
     TEST(CameraPoseActivationTest, ConfigurationPreservesOptInAndRejectsUnsupportedTraining) {

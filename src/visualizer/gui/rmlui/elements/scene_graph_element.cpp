@@ -766,6 +766,8 @@ namespace lfs::vis::gui {
             pose_badge->SetProperty("margin-left", "6dp");
             pose_badge->SetProperty("flex-shrink", "0");
             pose_badge->SetProperty("font-size", "11dp");
+            pose_badge->SetProperty("width", "12dp");
+            pose_badge->SetProperty("text-align", "center");
             pose_badge->SetProperty("display", "none");
             slot.pose_badge = slot.content->AppendChild(std::move(pose_badge));
 
@@ -1257,7 +1259,7 @@ namespace lfs::vis::gui {
 
             const auto* pose = findCameraPose(poses.get(), snapshot.camera_uid);
             const auto pose_label = cameraPoseDisplacementLabel(pose);
-            const std::string pose_state = pose ? std::string(training::camera_pose::pose_display_state_name(pose->state)) : std::string{};
+            const std::string pose_state = pose ? std::string(cameraPoseVisualState(*pose, *poses)) : std::string{};
             if (snapshot.camera_loss_icon_color == next_color && snapshot.camera_pose_label == pose_label &&
                 snapshot.camera_pose_state == pose_state)
                 continue;
@@ -1533,8 +1535,12 @@ namespace lfs::vis::gui {
         setCachedClass(slot.node_name, "training-disabled",
                        row.type == core::NodeType::CAMERA && !row.training_enabled);
         setCachedInnerRml(slot.node_name, row.encoded_label);
-        setCachedInnerRml(slot.pose_badge, encode(row.camera_pose_label));
-        setCachedAttribute(slot.pose_badge, "title", row.camera_pose_state);
+        const auto pose_indicator = cameraPoseIndicator(row.camera_pose_state);
+        setCachedInnerRml(slot.pose_badge, std::string(pose_indicator.symbol));
+        setCachedProperty(slot.pose_badge, "color", std::format("#{:06X}", pose_indicator.rgb));
+        setCachedAttribute(slot.pose_badge, "title", row.camera_pose_label.empty() ? std::string{} :
+            std::format("Camera pose: {}\n{} (scene units / degrees)\nOptimizer state, not reconstruction quality.",
+                        row.camera_pose_state, row.camera_pose_label));
         setCachedProperty(slot.pose_badge, "display", row.camera_pose_label.empty() || renaming ? "none" : "block");
         if (renaming) {
             if (rename_buffer_.empty())

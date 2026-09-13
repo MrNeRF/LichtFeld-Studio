@@ -88,3 +88,16 @@ def test_current_pose_is_wired_to_pick_focus_selection_and_scene_graph():
     assert "cameraPoseDisplacementLabel(pose)" in graph
     assert "row.camera_pose_label.empty() || renaming" in graph
     assert 'setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color)' in graph
+
+
+def test_pose_markers_keep_numbers_in_tooltip_and_survive_cache_reuse():
+    graph = _read("src/visualizer/gui/rmlui/elements/scene_graph_element.cpp")
+    assert 'setCachedInnerRml(slot.pose_badge, std::string(pose_indicator.symbol))' in graph
+    assert 'pose_badge->SetProperty("width", "12dp")' in graph
+    assert 'row.camera_pose_state, row.camera_pose_label' in graph
+    gui = _read("src/visualizer/gui/gui_manager.cpp")
+    marker = gui.index("const auto indicator = cameraPoseIndicator(")
+    reuse = gui.index("if (!geometry_changed && !loss_changed && !atlas_changed && cache.valid)")
+    assert marker < reuse
+    assert "params.shape_overlay_triangles, params, a, b, color" in gui
+    assert "cache.data->frustum_instances.push_back({.model = cache.models[camera_index], .color = color})" in gui

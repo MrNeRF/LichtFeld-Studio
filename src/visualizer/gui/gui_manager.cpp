@@ -2933,6 +2933,74 @@ namespace lfs::vis::gui {
                     cache.last_rebuild_log_at = now;
                 }
             }
+            // Pose markers use the shared snapshot palette, independently of
+            // loss-colored frustum instances and thumbnails. Re-emit screen
+            // overlays even when the geometry/texture caches are reused.
+            if (poses) {
+                for (const auto& panel : panels) {
+                    if (!panel.valid())
+                        continue;
+                    for (size_t i = 0; i < cache.cameras.size(); ++i) {
+                        if (!cache.valid_cameras[i])
+                            continue;
+                        const auto* pose = findCameraPose(poses.get(), cache.uids[i]);
+                        if (!pose)
+                            continue;
+                        const float alpha = cameraFrustumVisibilityAlpha(
+                            cache.positions[i], panel.viewport->getTranslation(),
+                            settings.camera_frustum_scale, cache.disabled_cameras[i] != 0);
+                        if (alpha <= 0.01f)
+                            continue;
+                        const auto indicator = cameraPoseIndicator(cameraPoseVisualState(*pose, *poses));
+                        const auto color = cameraPoseIndicatorColor(indicator, alpha);
+                        const auto world = glm::vec3(cache.models[i] * glm::vec4(0.0f, 0.68f, -1.0f, 1.0f));
+                        const auto projected = projectSegmentToScreenClipped(panel, settings, world, world);
+                        if (!projected)
+                            continue;
+                        const auto center = projected->a;
+                        const float r = cache.uids[i] == hovered_camera_id ? 6.0f : 4.0f;
+                        const float margin = r + 2.0f;
+                        if (!std::isfinite(center.x) || !std::isfinite(center.y) ||
+                            center.x < panel.pos.x + margin || center.y < panel.pos.y + margin ||
+                            center.x > panel.pos.x + panel.size.x - margin ||
+                            center.y > panel.pos.y + panel.size.y - margin)
+                            continue;
+                        const auto line = [&](float ax, float ay, float bx, float by) {
+                            const auto a = center + glm::vec2(ax, ay);
+                            const auto b = center + glm::vec2(bx, by);
+                            appendShapeOverlayLine(params.shape_overlay_triangles, params, a, b,
+                                                   glm::vec4(0.04f, 0.04f, 0.04f, alpha), 4.0f);
+                            appendShapeOverlayLine(params.shape_overlay_triangles, params, a, b, color, 2.0f);
+                        };
+                        switch (indicator.marker) {
+                        case CameraPoseMarker::Cross:
+                            line(-r, -r, r, r);
+                            line(-r, r, r, -r);
+                            break;
+                        case CameraPoseMarker::Square:
+                            line(-r, -r, r, -r);
+                            line(r, -r, r, r);
+                            line(r, r, -r, r);
+                            line(-r, r, -r, -r);
+                            break;
+                        case CameraPoseMarker::Pause:
+                            line(-r * 0.5f, -r, -r * 0.5f, r);
+                            line(r * 0.5f, -r, r * 0.5f, r);
+                            break;
+                        case CameraPoseMarker::Diamond:
+                            line(0, -r, r, 0);
+                            line(r, 0, 0, r);
+                            line(0, r, -r, 0);
+                            line(-r, 0, 0, -r);
+                            if (pose->state == training::camera_pose::PoseDisplayState::Updated) {
+                                line(-r * 0.5f, 0, r * 0.5f, 0);
+                                line(0, -r * 0.5f, 0, r * 0.5f);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
             if (!geometry_changed && !loss_changed && !atlas_changed && cache.valid) {
                 params.frustum_overlay_data = cache.data;
                 params.overlay_triangles.insert(params.overlay_triangles.end(),

@@ -229,10 +229,31 @@ and camera-based selection projections also resolve current poses by UID.
 Geometry uses actual displacement without visual exaggeration. Cameras absent
 from the snapshot retain their source transform.
 
-Scene Graph rows show net camera-center distance in scene units and rotation in
-degrees as `delta distance / angle`, with the optimizer state on hover. This
-indicator is separate from reconstruction-loss icon colors and disappears when
-there is no matching pose. Neither distance nor state is a confidence score.
+Scene Graph rows use a fixed-width colored symbol. Hovering shows optimizer state
+and net camera-center distance in scene units / rotation in degrees. The numeric
+values do not consume row width. Viewport frustums have a small, constant-screen-size
+marker above their image plane, enlarged on camera hover. The markers reuse the
+existing panel projection and camera visibility, including orthographic and
+panoramic views. They do not add a selectable camera or alter picking geometry.
+
+Both surfaces share this activity palette:
+
+| State | Color | Graph symbol | Viewport marker |
+| --- | --- | --- | --- |
+| Waiting | Gray | `.` | Diamond |
+| Ready | Cyan | `o` | Diamond |
+| Updated | Teal | `+` | Diamond with cross |
+| Rejected | Amber | `!` | Cross |
+| Anchor | Blue | `A` | Square |
+| Evaluation | Light gray | `E` | Square |
+| Frozen | Violet | `=` | Square |
+| Paused | Yellow | `=` | Two bars |
+
+Pause overrides activity only for movable, non-frozen cameras. Fixed references,
+evaluation cameras and frozen poses retain their own categories. Indicators
+disappear when there is no matching pose session. Existing reconstruction-loss
+colors, selection highlighting and thumbnail tints retain their meanings.
+Neither pose distance nor optimizer state is a confidence or quality score.
 
 Source-pose ghosts, displacement vectors, Edit Mode ownership and visualization
 without a restored Trainer remain integration work. Scene camera records still
