@@ -39,7 +39,7 @@ def _validate(key, value):
     if key == "askBeforePublic":
         if type(value) is not bool:
             raise ValueError("Expected a checkbox value")
-        return value
+        return True  # Public operations always require review, including legacy preferences.
     if key not in ("posterCacheMiB", "refreshMinutes") or isinstance(value, bool):
         raise ValueError("Unknown gallery preference")
     number = int(value)

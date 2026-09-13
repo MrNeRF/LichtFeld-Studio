@@ -31,7 +31,8 @@ def transfer_rows(snapshot, history_limit=30):
                "direction": "↓" if job.get("kind") == "download" else "↑",
                "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else tr("bytes", done=format_size(done), total=format_size(total))),
-               "phase": tr("phase." + phase), "reason": job.get("message", "") if status in ("error", "conflict") else "",
+               "phase": "Needs attention" if job.get("needsAttention") else tr("phase." + phase),
+               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
                "progress": 100 if status == "completed" else min(100, 100 * done / max(1, total)),
                "can_pause": status == "running", "can_resume": status in ("paused", "error", "queued") and not snapshot.get("busy"),
                "can_cancel": status not in ("completed", "canceled")}
@@ -108,7 +109,7 @@ class GalleryTransferPanel(Panel):
         super().on_mount(doc)
         from .gallery_controller import get_gallery_controller
         self._owner = get_gallery_controller()
-        self._unsubscribe = self._owner.subscribe(self._changed)
+        self._unsubscribe = self._owner.subscribe(self._changed, asset_manager=False)
 
     def on_unmount(self, doc):
         if self._unsubscribe:

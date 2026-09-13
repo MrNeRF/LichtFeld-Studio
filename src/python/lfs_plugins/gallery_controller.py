@@ -15,6 +15,7 @@ import lichtfeld as lf
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
 from .gallery_view import capture_camera_path, capture_view, restore_camera_path, restore_view
 from . import gallery_preparation
+from .portal_security import redact, safe_filename
 
 def tr(key, **values):
     from .localization import safe_format
@@ -53,9 +54,12 @@ class GalleryController:
         self._suppress_transfer_progress = False
         self._track_pull_pending = None
         self._subscribers = {}
+        self._asset_subscribers = set()
         self._timer = None
         self._last_notification = 0.0
         self._last_snapshot = None
+        self._hidden_since = time.monotonic()
+        self._wake_generation = 0
         self._next_refresh = 0.0
         self._refresh_pending = False
         self._backoff = 5.0
@@ -88,6 +92,7 @@ class GalleryController:
             self._timer.cancel()
             self._timer = None
         self._subscribers.clear()
+        self._asset_subscribers.clear()
 
     def preferences(self):
         from .gallery_preferences import read_preferences
@@ -361,7 +366,7 @@ class GalleryController:
         scene = scene or {}
         was_public = scene.get("visibility") == "public"
         visibility = details.get("visibility", scene.get("visibility", "private"))
-        if visibility == "public" and self.preferences()["askBeforePublic"] and not self._batch_public_approved(scene, details):
+        if (visibility == "public" or was_public) and not self._batch_public_approved(scene, details):
             key = "confirm.public_update" if was_public else "confirm.public"
             title = details.get("title", scene.get("title", ""))
             self._confirm = (tr(key, title=title), action, tr("action.update" if was_public else "action.submit"))
@@ -493,7 +498,7 @@ class GalleryController:
 
     @staticmethod
     def safe_filename(title):
-        return (re.sub(r"[^\w -]", "", title).strip(" .")[:70] or "Gallery") + ".licht"
+        return safe_filename(title)
 
     def open_portal(self, scene, action="open"):
         if not scene:
@@ -552,9 +557,19 @@ class GalleryController:
                     confirm_discard_work_then(tr("action.pull"), opened)
             break
 
-    def subscribe(self, callback, *, visible=True):
+    def subscribe(self, callback, *, visible=True, asset_manager=True):
         """Subscribe on the UI thread. Timers only post work to that thread."""
+        became_visible = visible and asset_manager and not self._asset_subscribers
+        wake = became_visible and self._hidden_since is not None and time.monotonic() - self._hidden_since > 300
         self._subscribers[callback] = visible
+        if visible and asset_manager:
+            self._asset_subscribers.add(callback)
+        if became_visible:
+            self._hidden_since = None
+        if wake:
+            self._wake_generation += 1
+            self._next_refresh = 0.0
+            self.refresh()
         self._check_identity()
         initial = self.snapshot()
         callback(initial)
@@ -565,6 +580,9 @@ class GalleryController:
         self._schedule_tick()
         def unsubscribe():
             self._subscribers.pop(callback, None)
+            self._asset_subscribers.discard(callback)
+            if not self._asset_subscribers and self._hidden_since is None:
+                self._hidden_since = time.monotonic()
             if not any(self._subscribers.values()) and not self.offline:
                 self._next_refresh = time.monotonic() + self.preferences()["refreshMinutes"] * 60
         return unsubscribe
@@ -576,7 +594,7 @@ class GalleryController:
         state["batchQueued"] = len(self._update_queue)
         for job in state.get("jobs", []):
             job["message"] = localize_message(job.get("message", ""))
-        return dict(state, checkedAt=self.checked_at, offline=self.offline,
+        return dict(state, wakeGeneration=self._wake_generation, checkedAt=self.checked_at, offline=self.offline,
                     message=localize_message(self._message or state.get("message", "")),
                     accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
                     undoPull=copy.deepcopy(self._undo_pull), pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
@@ -717,7 +735,7 @@ class GalleryController:
                     try:
                         callback(copy.deepcopy(snapshot))
                     except Exception as exc:
-                        lf.log.error(f"Gallery subscriber failed: {exc}")
+                        lf.log.error(redact(f"Gallery subscriber failed: {exc}"))
 
     def _publish_runtime_state(self, snapshot):
         """Feed the other lane's optional native status signal from this owner."""
@@ -796,6 +814,8 @@ class GalleryController:
         if identity == self._identity:
             return False
         self._identity = identity
+        self._state = dict(self._state, scenes=[], links={}, jobs=[], posters={}, identity=identity)
+        self._last_snapshot = None
         self._reupload_reason = None
         self._pulled_project = None
         self._update_queue = []
@@ -1354,8 +1374,19 @@ class GalleryController:
 
 
     def _action_resume(self, job_id):
+        job = next((job for job in self.service.snapshot()['jobs'] if job['id'] == job_id), {})
+        if job.get('needsAttention'):
+            identity = self.service.identity()
+            def selected(index):
+                if identity != self.service.identity() or self.service.busy or index not in (1, 2, 'Retry', 'Keep waiting'):
+                    return
+                self.service.resume(job_id, **({'keep_waiting': True} if index in (2, 'Keep waiting') else {}))
+                self._schedule_tick()
+            lf.ui.confirm_dialog('Needs attention', 'Portal is taking longer than expected',
+                                 [tr('action.cancel'), 'Retry', 'Keep waiting'], selected)
+            return
         self.service.resume(job_id)
-
+        self._schedule_phase_poll()
 
     def _action_pause(self):
         if self._import_pending and self._import_pending.get("_register"):

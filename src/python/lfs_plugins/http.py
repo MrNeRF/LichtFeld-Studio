@@ -8,6 +8,7 @@ import logging
 import os
 from functools import lru_cache
 from typing import Optional
+from .portal_security import redact
 
 _log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def _load_ca_bundle_from_certifi() -> Optional[str]:
         try:
             cafile = where()
         except Exception as exc:
-            _log.debug("Failed to resolve CA bundle from %s: %s", module_name, exc)
+            _log.debug("Failed to resolve CA bundle from %s: %s", module_name, redact(exc))
             continue
 
         if cafile and os.path.exists(cafile):
@@ -56,7 +57,7 @@ def _fallback_ssl_context() -> Optional[object]:
     try:
         return ssl.create_default_context(cafile=cafile)
     except Exception as exc:
-        _log.warning("Failed to create fallback SSL context from '%s': %s", cafile, exc)
+        _log.warning("Failed to create fallback SSL context from '%s': %s", cafile, redact(exc))
         return None
 
 

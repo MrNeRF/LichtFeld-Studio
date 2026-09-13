@@ -74,6 +74,8 @@ class GalleryAssetMixin:
         self._gallery_toast = None
         self._gallery_toast_timer = None
         self._gallery_connecting = False
+        self._gallery_wake_verifying = False
+        self._gallery_wake_reverify_pending = False
 
     def _controller(self):
         if self._gallery_controller is None:
@@ -89,6 +91,13 @@ class GalleryAssetMixin:
         previous_identity = self._gallery_state.get("identity")
         previous = self._gallery_state
         self._gallery_state = snapshot
+        if snapshot.get('wakeGeneration', 0) > previous.get('wakeGeneration', 0):
+            self._gallery_wake_verifying = True
+            if self._catalog_verify_active:
+                self._gallery_wake_reverify_pending = True
+                self._catalog_verify_cancel.set()
+            else:
+                self._start_catalog_verify()
         if snapshot.get("relink_required"):
             self._gallery_notice = snapshot.get("message", "")
         if previous_identity != snapshot.get("identity"):
@@ -162,10 +171,13 @@ class GalleryAssetMixin:
         controller = self._gallery_controller
         if controller and getattr(controller, "_operation_project", None) == asset.get("id"):
             phase = controller.phase()
-        return asset_sync_state(None if remote else asset, link, self._gallery_scene(asset),
+        facts = asset_sync_state(None if remote else asset, link, self._gallery_scene(asset),
             self._gallery_state.get("jobs", ()), checked=bool(self._gallery_state.get("checkedAt")),
             storage_issue=self._gallery_state.get("storage_issue", False), phase=phase,
             cached_projection=asset.get("gallery") if "identity" not in self._gallery_state else None)
+        if self._gallery_wake_verifying and not remote and facts['action'] == 'update':
+            facts.update(action='', state='checking', activity='checking', active=True)
+        return facts
 
     def _asset_with_poster(self, asset):
         scene = self._gallery_scene(asset) or {}
@@ -674,6 +686,8 @@ class GalleryAssetMixin:
             time=relative_time(link.get("exchangedAt") or time.time()))
 
     def _selected_gallery_action(self):
+        if self._gallery_wake_verifying:
+            return ''
         asset = self._get_selected_asset()
         if not asset:
             return ""
@@ -685,6 +699,8 @@ class GalleryAssetMixin:
         return facts["action"]
 
     def _begin_gallery_publish(self, asset, action):
+        if self._gallery_wake_verifying and action == 'update':
+            raise ValueError('Checking the saved project after returning to Asset Manager. Try again when checking finishes.')
         warning = self._gallery_quota_warning()
         if warning and not getattr(self, "_gallery_quota_ack", False):
             def proceed():

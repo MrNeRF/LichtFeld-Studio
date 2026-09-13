@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
 
 from .http import urlopen
+from .credential_storage import CredentialStorage
+from .portal_security import redact, remember_secrets
+from .portal_retry import retry_call, retry_after
 
 _log = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ class PortalHTTPError(PortalAccountError):
         self.error = error
         self.retry_after = retry_after
         self.detail = dict(detail) if detail is not None else None
-        super().__init__(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}")
+        super().__init__(redact(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}"))
 
 
 class PortalOriginMismatchError(PortalAccountError):
@@ -226,33 +229,7 @@ def _error_response(raw: bytes) -> tuple[str, Optional[dict[str, object]]]:
 
 
 def _retry_after_seconds(headers: object) -> Optional[float]:
-    from email.utils import parsedate_to_datetime
-
-    if headers is None:
-        return None
-    try:
-        value = headers.get("Retry-After")
-    except AttributeError:
-        return None
-    if value is None:
-        value = headers.get("retry-after")
-    if value is None:
-        return None
-
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        pass
-    else:
-        return max(0.0, seconds) if math.isfinite(seconds) else None
-
-    try:
-        retry_at = parsedate_to_datetime(str(value))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=timezone.utc)
-    return max(0.0, retry_at.timestamp() - time.time())
+    return retry_after(headers)
 
 
 @contextmanager
@@ -301,6 +278,7 @@ class PortalAccountService:
         platform: Optional[str] = None,
         timeout: float = HTTP_TIMEOUT_SEC,
         waiter: Optional[Callable[[float], bool]] = None,
+        storage_backend=None,
     ) -> None:
         import urllib.parse
 
@@ -325,6 +303,7 @@ class PortalAccountService:
             if credentials_path
             else default_credentials
         )
+        self._storage = CredentialStorage(self.credentials_path, storage_backend)
         self._lock_path = self.credentials_path.with_suffix(self.credentials_path.suffix + ".lock")
         self._client_name = client_name
         self._client_version = client_version if client_version is not None else _default_client_version()
@@ -346,7 +325,12 @@ class PortalAccountService:
             tooltip=self._with_portal_host(""),
         )
 
-        stored = self._read_credentials_file()
+        try:
+            with _locked_sidecar(self._lock_path):
+                stored = self._read_credentials_file()
+        except OSError:
+            _log.warning("Portal credential storage is unavailable")
+            stored = None
         if stored is not None and stored.portal_origin == self.base_url:
             self._credentials = stored
             self._apply_credentials_state(stored)
@@ -383,13 +367,9 @@ class PortalAccountService:
 
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
-        if credentials is None:
-            return ()
-        return tuple(
-            token
-            for token in (credentials.access_token, credentials.refresh_token)
-            if token
-        )
+        values = [credentials.access_token, credentials.refresh_token] if credentials is not None else []
+        values.append(self.snapshot().user_code)
+        return tuple(value for value in values if value)
 
     def initialize_async(self) -> None:
         """Validate a stored session once, without blocking panel registration."""
@@ -467,37 +447,35 @@ class PortalAccountService:
         thread.start()
 
     def sign_out(self) -> None:
-        """Best-effort server revocation followed by unconditional local removal."""
+        """Best-effort server revocation followed by unconditional backend removal."""
         self._cancel_event.set()
-        credentials = self._current_credentials()
-        if credentials is not None and credentials.access_expires_at <= time.time():
-            if credentials.refresh_expires_at > time.time():
-                self._refresh_tokens(credentials.access_token)
-
-        with self._refresh_lock:
-            with _locked_sidecar(self._lock_path):
-                disk = self._read_credentials_file()
-                if disk is not None and disk.portal_origin == self.base_url:
-                    credentials = disk
-                elif credentials is not None and credentials.portal_origin != self.base_url:
-                    credentials = None
-
-                if credentials is not None and credentials.access_expires_at > time.time():
-                    try:
-                        self._request_with_bearer("POST", REVOKE_PATH, credentials, {})
-                    except (OSError, PortalAccountError):
-                        pass
-
-                if disk is None or disk.portal_origin == self.base_url:
-                    try:
-                        self.credentials_path.unlink()
-                    except FileNotFoundError:
-                        pass
-                    except OSError:
-                        _log.warning("Could not remove local portal credentials")
-
-        self._clear_current_credentials()
-        self._set_signed_out("")
+        removal_failed = False
+        try:
+            credentials = self._current_credentials()
+            if credentials is not None and credentials.access_expires_at <= time.time():
+                if credentials.refresh_expires_at > time.time():
+                    self._refresh_tokens(credentials.access_token)
+            with self._refresh_lock:
+                with _locked_sidecar(self._lock_path):
+                    disk = self._read_credentials_file()
+                    if disk is not None and disk.portal_origin == self.base_url:
+                        credentials = disk
+                    if credentials is not None and credentials.portal_origin == self.base_url:
+                        try:
+                            self._request_with_bearer("POST", REVOKE_PATH, credentials, {})
+                        except (OSError, PortalAccountError):
+                            pass
+        except (OSError, PortalAccountError):
+            pass
+        finally:
+            try:
+                with _locked_sidecar(self._lock_path):
+                    self._storage.delete()
+            except OSError:
+                removal_failed = True
+                _log.warning("Could not fully remove local portal credentials")
+            self._clear_current_credentials()
+            self._set_signed_out("local_credentials_removal_failed" if removal_failed else "")
 
     def wait_for_idle(self, timeout: float = 5.0) -> None:
         """Join current workers; intended for deterministic shutdown and tests."""
@@ -522,6 +500,7 @@ class PortalAccountService:
                     "scope": "desktop.basic gallery.sync",
                 },
             )
+            remember_secrets(start.get("device_code"), start.get("user_code"))
             device_code = self._required_text(start, "device_code")
             user_code = self._required_text(start, "user_code")
             verification_uri = self._required_text(start, "verification_uri")
@@ -760,7 +739,18 @@ class PortalAccountService:
             **({"response_options": response_options} if response_options is not None else {}),
         )
 
-    def _request_json(
+    def _request_json(self, method, path, body=None, headers=None, *, timeout=None, response_options=None):
+        idempotent = method in ("GET", "HEAD") or (method == "POST" and path.endswith("/complete")
+            and bool((body or {}).get("idempotencyKey")))
+        original = self._current_credentials()
+        def request():
+            if headers and 'Authorization' in headers and self._current_credentials() != original:
+                raise PortalProtocolError('The signed-in account changed. Refresh the gallery before continuing.')
+            return self._request_json_once(method, path, body, headers,
+                timeout=timeout, response_options=response_options)
+        return retry_call(request, idempotent=idempotent)
+
+    def _request_json_once(
         self,
         method: str,
         path: str,
@@ -773,7 +763,9 @@ class PortalAccountService:
         import urllib.error
         import urllib.request
 
-        request_headers = {"Accept": "application/json"}
+        if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
+            raise PortalProtocolError("Invalid portal request path")
+        request_headers = {"Accept": "application/json", "User-Agent": f"LichtFeld-Studio/{self._client_version}"}
         data = None
         if body is not None:
             request_headers["Content-Type"] = "application/json"
@@ -836,6 +828,7 @@ class PortalAccountService:
         payload: Mapping[str, object],
         cached: Optional[_Credentials] = None,
     ) -> _Credentials:
+        remember_secrets(payload.get("access_token"), payload.get("refresh_token"))
         access_token = self._required_text(payload, "access_token")
         refresh_token = self._required_text(payload, "refresh_token")
         token_type = self._required_text(payload, "token_type")
@@ -912,36 +905,14 @@ class PortalAccountService:
         self._set_current_credentials(credentials)
 
     def _write_credentials_file(self, credentials: _Credentials) -> None:
-        import secrets
-
-        directory = self.credentials_path.parent
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temp_path = directory / (
-            f".{self.credentials_path.name}.{os.getpid()}.{threading.get_ident()}."
-            f"{secrets.token_hex(8)}.tmp"
-        )
-        encoded = (json.dumps(credentials.to_dict(), indent=2, sort_keys=True) + "\n").encode("utf-8")
-        fd = -1
-        try:
-            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                fd = -1
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, self.credentials_path)
-        finally:
-            if fd >= 0:
-                os.close(fd)
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
+        self._storage.write((json.dumps(credentials.to_dict(), sort_keys=True) + "\n").encode("utf-8"))
 
     def _read_credentials_file(self) -> Optional[_Credentials]:
         try:
-            with self.credentials_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            raw = self._storage.read()
+            if raw is None:
+                return None
+            payload = json.loads(raw)
         except FileNotFoundError:
             return None
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -950,11 +921,13 @@ class PortalAccountService:
         credentials = _Credentials.from_dict(payload)
         if credentials is None:
             _log.warning("Ignoring portal credentials with an unsupported format")
+        if credentials is not None:
+            remember_secrets(credentials.access_token, credentials.refresh_token)
         return credentials
 
     def _clear_local_credentials(self) -> None:
         try:
-            self.credentials_path.unlink()
+            self._storage.delete()
         except FileNotFoundError:
             pass
         except OSError:
@@ -967,6 +940,7 @@ class PortalAccountService:
             return self._credentials
 
     def _set_current_credentials(self, credentials: _Credentials) -> None:
+        remember_secrets(credentials.access_token, credentials.refresh_token)
         with self._lock:
             self._credentials = credentials
 
@@ -1029,6 +1003,7 @@ class PortalAccountService:
         expires_at: float,
         interval: float,
     ) -> None:
+        remember_secrets(user_code)
         remaining = max(0, int(expires_at - time.time() + 0.999))
         with self._lock:
             self._snapshot = AccountSnapshot(

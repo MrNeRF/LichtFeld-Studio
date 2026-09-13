@@ -40,6 +40,8 @@ END_MARKER = "<</LFSE2E>>"
 EDITOR_OUTPUT_LIMIT = 20000
 JSON_PAYLOAD_LIMIT = 8000
 JOB_FIELDS = ('id', 'kind', 'status', 'total', 'completed', 'serverProcessing', 'error')
+# RmlUi retains the hidden data-for template alongside the instantiated rows.
+TRANSFER_ROW_SELECTOR = '.gallery-transfer-row:not([data-for])'
 LOG_ERRORS = re.compile(r"Traceback|\[error\]|Syntax error parsing property|Missing localization key", re.I)
 # Only this unrelated browser-launch failure is ignored, not arbitrary xdg-open lines.
 LOG_ALLOWLIST = (re.compile(r"xdg-open: no method available for opening", re.I),)
@@ -503,6 +505,20 @@ p = p._load() if hasattr(p, '_load') else p
         state = self.mcp.value(f"dict(notice=p._gallery_notice, phase=p._controller().phase(), jobs=[{{k: j.get(k) for k in {JOB_FIELDS!r}}} for j in p._controller().service.snapshot()['jobs']])")
         raise TimeoutError(f"{description}: {state}")
 
+    def wait_transfer_rows(self, expected):
+        deadline = time.monotonic() + min(5., self.args.timeout)
+        while True:
+            state = self.mcp.value(f"""(lambda elements: dict(
+                count=len(elements),
+                first_row_inner_rml=elements[0].get_inner_rml() if elements else None
+            ))(lf.ui.rml.get_document('lfs.gallery_transfer').query_selector_all({TRANSFER_ROW_SELECTOR!r}))""")
+            if state['count'] == expected:
+                return state
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Rendered transfer rows: expected {expected}, actual DOM row count {state['count']}; "
+                                   f"first row inner RML: {state['first_row_inner_rml']!r}")
+            time.sleep(.3)
+
     def sign_in(self, restart=False):
         if self.portal:
             self.mcp.rpc(f"""from lfs_plugins.portal_account import PortalAccountService, _Credentials
@@ -755,7 +771,7 @@ assert lf.ui.rml.get_document('lfs.asset_manager').query_selector('[data-folder-
         with self.step("Transfers tray: all jobs and human sizes"):
             self.mcp.rpc("if not lf.ui.is_panel_enabled('lfs.gallery_transfer'):\n    p._gallery_command('transfers')")
             self.wait("lf.ui.is_panel_enabled('lfs.gallery_transfer') and lf.ui.rml.get_document('lfs.gallery_transfer') is not None", "Transfers tray")
-            self.wait(f"len(lf.ui.rml.get_document('lfs.gallery_transfer').query_selector_all('.gallery-transfer-row')) == {len(self.jobs)}", "Rendered transfer rows")
+            self.wait_transfer_rows(len(self.jobs))
             self.mcp.rpc(f"""from lfs_plugins.gallery_transfer_panel import transfer_rows
 import re
 tray = lf.ui.get_panel_object('lfs.gallery_transfer')
@@ -765,8 +781,8 @@ assert {{r['id'] for r in rows}} == {self.jobs!r}, rows
 for row in rows:
     assert re.search(r'\\d+(?:\\.\\d+)?\\s*(?:B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)\\b', row['bytes']), row
 doc = lf.ui.rml.get_document('lfs.gallery_transfer')
-visible_rows = doc.query_selector_all('.gallery-transfer-row')
-assert len(visible_rows) == len(rows), 'Tray DOM is missing jobs'
+visible_rows = doc.query_selector_all({TRANSFER_ROW_SELECTOR!r})
+assert len(visible_rows) == len(rows), f'Tray DOM: expected {{len(rows)}}, actual DOM row count {{len(visible_rows)}}; first row inner RML: {{visible_rows[0].get_inner_rml() if visible_rows else None!r}}'
 for element, row in zip(visible_rows, rows):
     assert row['bytes'] in element.get_inner_rml(), row
 """)

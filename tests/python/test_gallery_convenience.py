@@ -33,7 +33,7 @@ def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     set_preference('refreshMinutes', '7', tmp_path)
     set_preference('askBeforePublic', False, tmp_path)
     set_preference('uploadFormat', 'ssog', tmp_path)
-    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=False, posterCacheMiB=128, refreshMinutes=7)
+    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=True, posterCacheMiB=128, refreshMinutes=7)
 
 
 @pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097), ('refreshMinutes', '1.5'),
@@ -245,7 +245,7 @@ def test_update_all_keeps_async_preparation_failure_visible(gallery, monkeypatch
     assert controller._batch_rows[0]['message'] == 'Preparation failed: missing payload'
 
 
-def test_public_preference_applies_to_shared_confirmation(gallery, tmp_path):
+def test_legacy_public_preference_cannot_disable_required_confirmation(gallery, tmp_path):
     from lfs_plugins.gallery_preferences import set_preference
     controller, _, _ = gallery
     controller.service.root = tmp_path
@@ -255,7 +255,7 @@ def test_public_preference_applies_to_shared_confirmation(gallery, tmp_path):
     controller._confirm = None
     set_preference('askBeforePublic', False, tmp_path)
     controller._public_confirmation({}, lambda: actions.append('publish'), details={'visibility': 'public'}, defer=True)
-    assert actions == ['publish'] and controller._confirm is None
+    assert actions == [] and controller._confirm is not None
 
 
 def test_preferences_format_setter_preserves_other_values(gallery, tmp_path):

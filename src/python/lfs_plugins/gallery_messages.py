@@ -6,14 +6,17 @@ Old journals contain English diagnostics. Keep those diagnostic bytes for
 recovery, while presenting concise localized reasons and phases in both panels.
 """
 import re
+from .portal_security import redact
 
 
 def localize_message(message):
     if not message:
         return ""
     import lichtfeld as lf
-    text = str(message)
+    text = redact(message)
     lower = text.casefold()
+    if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
+        return text  # Keep the explanation of restart versus resume visible.
     # Already localized messages/keys are not fed back through the diagnostic
     # classifier. These patterns describe only the old English journal format.
     rules = (
@@ -73,8 +76,8 @@ def report_poll_error(owner, exc, context):
     """Localize on the UI thread and log a repeated polling failure only once."""
     import traceback
     import lichtfeld as lf
-    signature = (type(exc).__name__, str(exc))
+    signature = (type(exc).__name__, redact(exc))
     if getattr(owner, "_last_poll_error", None) != signature:
         owner._last_poll_error = signature
-        lf.log.error(context + "\n" + traceback.format_exc())
+        lf.log.error(redact(context + "\n" + traceback.format_exc()))
     return localize_message(str(exc))

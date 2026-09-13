@@ -410,7 +410,11 @@ def test_native_view_space_round_trip():
 
 
 def downloaded_job(service):
+    path = service.root / 'download.ply'
+    path.write_bytes(b'download')
     job = {"id": "download", "project": "", "kind": "download", "status": "completed",
+        "path": str(path), "total": 8, "completed": 8, "metadata": {"title": "Downloaded"},
+        "message": "Downloaded", "checkpoint": None, "sceneId": "scene", "revision": "remote-new",
         "result": {"id": "scene", "revision": "remote-new"}}
     service._bucket()["jobs"].append(job)
     service._bucket()["links"]["project"] = {"sceneId": "scene", "revision": "old"}

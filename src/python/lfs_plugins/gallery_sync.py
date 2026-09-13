@@ -17,7 +17,11 @@ import time
 from pathlib import Path
 
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
-from .portal_gallery import PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused
+from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused,
+    GalleryProcessingTimeout, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight)
+from .portal_retry import transfer_attempts
+from .portal_security import redact, safe_filename
+from .credential_storage import FileBackend
 from . import gallery_bundle, gallery_preparation
 
 
@@ -101,7 +105,10 @@ def _validate_journal(data):
             identifiers.add(job["id"])
             require(job.get("status") in ("queued", "running", "paused", "error", "conflict", "completed", "canceled"))
             require(job.get("kind", "upload") in ("upload", "download"))
-            for key in ("serverProcessing", "packaged"):
+            for key in ('createdAt', 'finishedAt', 'processingDeadline'):
+                require(key not in job or (type(job[key]) in (int, float) and math.isfinite(job[key]) and job[key] >= 0))
+            require('attempts' not in job or (type(job['attempts']) is int and job['attempts'] >= 0))
+            for key in ("serverProcessing", "packaged", "needsAttention"):
                 require(key not in job or type(job[key]) is bool)
             if "preparation" in job:
                 require(isinstance(job["preparation"], str) and job.get("kind", "upload") == "upload"
@@ -141,7 +148,7 @@ def friendly_error(exc):
             429: "The portal is busy. Wait a moment, then resume.",
         }.get(exc.status, "The portal could not finish this operation. Your local work is safe. Retry when ready.")
     if isinstance(exc, (ValueError, PortalProtocolError)):
-        return str(exc)
+        return redact(exc)
     return "The connection or local storage was interrupted. Check your connection and disk space, then resume."
 
 
@@ -179,6 +186,7 @@ class GallerySync:
         self._origin = None
         self._owner = None
         self._source_formats = []
+        self._max_file_bytes = DEFAULT_MAX_FILE_BYTES
         self._quota_bytes = None
         self._used_bytes = None
         self._completion = None
@@ -252,6 +260,7 @@ class GallerySync:
         with self._persist_lock:
             with self._lock:
                 self._check_journal_ready()
+                self._prune_jobs()
                 encoded = json.dumps(self._data, allow_nan=False)
                 if len(encoded.encode()) > MAX_JOURNAL_BYTES:
                     raise ValueError("Gallery transfer history is too large to save. Keep the recovery folder for help.")
@@ -262,6 +271,9 @@ class GallerySync:
                     file.write(encoded)
                     file.flush()
                     os.fsync(file.fileno())
+                previous = self._journal_bytes()
+                if previous is not None:
+                    FileBackend(self._journal.with_suffix(".json.bak")).write(previous)
                 os.replace(temporary, self._journal)
                 self._journal_seen = True
                 self._disk_digest = hashlib.sha256(encoded.encode()).hexdigest()
@@ -270,6 +282,19 @@ class GallerySync:
                     temporary.unlink(missing_ok=True)
             with self._lock:
                 self.version += 1
+
+    def _prune_jobs(self):
+        now = time.time()
+        for bucket in self._data['accounts'].values():
+            for job in bucket['jobs']:
+                job.setdefault('createdAt', now)
+                if job['status'] in ('completed', 'canceled'):
+                    job.setdefault('finishedAt', now)
+            terminal = sorted((job for job in reversed(bucket['jobs']) if job['status'] in ('completed', 'canceled')),
+                              key=lambda job: job['finishedAt'], reverse=True)
+            recent = {job['id'] for job in terminal[:200] if job['finishedAt'] >= now - 30 * 86400}
+            bucket['jobs'][:] = [job for job in bucket['jobs'] if job['status'] not in ('completed', 'canceled')
+                or job['id'] in recent or job.get('localUpdate', {}).get('backupPath')]
 
     def _journal_digest(self):
         encoded = self._journal_bytes()
@@ -335,6 +360,7 @@ class GallerySync:
         if not snap.signed_in or not snap.email or not snap.connected_since or self._origin != self.account.base_url or self._session != (snap.email, snap.connected_since):
             raise ValueError("The account changed. Refresh the gallery before continuing.")
         client = PortalGalleryClient(self.account, expected_session=self._session, revision_domains=self._revision_domains)
+        client.max_file_bytes = self._max_file_bytes
         client.scene_tokens = {s["id"]: copy.deepcopy(s) for s in self.scenes}
         return client
 
@@ -398,6 +424,7 @@ class GallerySync:
                 self._origin = origin
                 self._completion = None if not same else self._completion
                 self._source_formats = capabilities.get("sourceFormats", [])
+                self._max_file_bytes = capabilities.get("maxFileBytes", DEFAULT_MAX_FILE_BYTES)
                 self._quota_bytes = capabilities.get("quotaBytes")
                 self._used_bytes = capabilities.get("usedBytes")
                 version = capabilities.get("revisionDomains", 0)
@@ -424,6 +451,12 @@ class GallerySync:
                 self._poster_entries.clear()
                 self._poster_identity = identity
                 self._list_etag = None
+                self.scenes = []
+                self._track_fetch = {}
+                self._undo_restore = {}
+                self._completion = None
+                self._checked_at = 0
+                self._refresh_ok = False
 
     def _trim_poster_cache(self, limit):
         files = sorted((self.root / "posters").glob("*.png"), key=lambda p: p.stat().st_atime_ns)
@@ -556,6 +589,10 @@ class GallerySync:
                 raise ValueError("Wait for the current transfer or pause it first.")
             if scene["sourceFormat"] not in ("ply", "sog", "ssog", "spz", "lfsg", "licht"):
                 raise ValueError("This scene format cannot be opened in LichtFeld Studio.")
+            total = scene.get('contentLength')
+            if (type(total) is not int or total <= 0 or type(self._max_file_bytes) is not int
+                    or total > self._max_file_bytes):
+                raise PortalProtocolError('Gallery download exceeds the portal file-size limit')
             identifier = str(uuid.uuid4())
             path = self.root / "downloads" / (identifier + "." + scene["sourceFormat"])
             jobs = self._bucket()["jobs"]
@@ -565,9 +602,12 @@ class GallerySync:
                 "total": scene["contentLength"], "message": "Ready to download"}
             if destination:
                 target = Path(destination)
-                if not target.is_absolute() or target.suffix.lower() != ".licht" or target.exists() or not target.parent.is_dir():
+                if (not target.is_absolute() or target.name != safe_filename(target.stem) or target.exists()
+                        or not target.parent.is_dir() or any(part == ".." for part in target.parts)):
                     raise ValueError("Choose an unused .licht filename in an existing folder.")
                 job["destination"] = str(target)
+            final_path = self._download_destination(job)
+            disk_preflight([(path, total * 2), (final_path, total)])
             guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
             try:
                 guard.__enter__()
@@ -593,16 +633,25 @@ class GallerySync:
                 self.message = job["message"]
                 self.version += 1
 
+    def _download_destination(self, job):
+        if job.get('destination'):
+            return Path(job['destination'])
+        if Path(job['path']).suffix == '.licht':
+            from .asset_index import resolve_default_asset_directory
+            return resolve_default_asset_directory() / ('Gallery-' + job['id'] + '.licht')
+        return Path(job['path'])
+
     def _job(self, job_id):
         return next(j for j in self._bucket()["jobs"] if j["id"] == job_id)
 
-    def resume(self, job_id):
+    def resume(self, job_id, *, keep_waiting=False):
         with self._lock:
             client = self._client()
             job = self._job(job_id)
             if job["status"] in ("completed", "canceled"):
                 raise ValueError("This transfer is already finished.")
             bucket = self._bucket()
+            extend_processing = keep_waiting or job.get("needsAttention", False)
 
         def action():
             def checkpoint(value):
@@ -616,6 +665,7 @@ class GallerySync:
                 self._save()
 
             def progress(done, total):
+                self._client()
                 with self._lock:
                     job.update(completed=done, total=total)
                     self.version += 1
@@ -625,14 +675,40 @@ class GallerySync:
                     "validating": "Checking scene", "publishing": "Publishing scene"}[state["stage"]]
                 with self._lock:
                     job.update(serverProcessing=True, completed=state["completed"], total=state["total"], message=label)
+                    if getattr(client, 'processing_deadline', None) and job.get('processingDeadline') != client.processing_deadline:
+                        job['processingDeadline'] = client.processing_deadline
+                        self._save()
                     self.message = label
                     self.version += 1
 
+            def complete_upload(result):
+                self._client()
+                scene = result["scene"]
+                with self._lock:
+                    self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
+                    bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
+                    bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
+                    bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
+                    job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
+                    self.scenes = [s for s in self.scenes if s["id"] != scene["id"]] + [scene]
+                    self.message = "Upload complete. Review Story on portal after this content change." if job["metadata"].get("replaceSceneId") else "Upload complete."
+                self._save()
+                self._retire_export(job)
+
             try:
                 with self._lock:
-                    job.update(status="running", interrupted=False, serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
+                    if extend_processing:
+                        job["processingDeadline"] = time.time() + PROCESSING_TIMEOUT
+                    job.update(status="running", interrupted=False, needsAttention=False, serverProcessing=False, message="Downloading" if job.get("kind") == "download" else "Uploading")
                     self.message = job["message"]
                 self._save()
+                if keep_waiting and (job.get('checkpoint') or {}).get('uploadId') and job.get('kind') != 'download':
+                    upload_id = str(uuid.UUID(job['checkpoint']['uploadId']))
+                    client.processing_deadline = job.get('processingDeadline')
+                    result = client._await_processing(client._request('GET', f'/splats/uploads/{upload_id}'),
+                        upload_id, job['total'], self._cancel, processing)
+                    complete_upload(result)
+                    return
                 if job.get("ownedExport"):
                     self._cleanup_paths(job, {})  # Apply ownership checks before reading, including resumed packages.
                 if job.get("preparation") and not job.get("packaged"):
@@ -686,9 +762,17 @@ class GallerySync:
                         self.message = job["message"]
                     self._save()
                 if job.get("kind") == "download":
-                    scene = client.download(job["sceneId"], job["path"], on_progress=progress, cancel=self._cancel)
+                    def download_message(message):
+                        with self._lock:
+                            job['message'] = message
+                            self.message = message
+                            self.version += 1
+                    scene = client.download(job["sceneId"], job["path"], on_progress=progress, cancel=self._cancel,
+                        checkpoint=job.get('checkpoint'), on_checkpoint=checkpoint, on_message=download_message,
+                        final_destination=self._download_destination(job))
+                    self._client()
                     with self._lock:
-                        job.update(status="completed", result=scene, message="Downloaded. Open as a new project when ready.")
+                        job.update(status="completed", sha256=(job.get("checkpoint") or {}).get("sha256", ""), result=scene, message="Downloaded. Open as a new project when ready.")
                         self.message = job["message"]
                     self._save()
                     return
@@ -700,19 +784,10 @@ class GallerySync:
                         job["metadata"].update(client.guards(scene_id, revision, ("content", "metadata")))
                     else:
                         job["metadata"]["baseRevision"] = revision
+                client.processing_deadline = job.get('processingDeadline')
                 result = client.upload(job["path"], job["metadata"], checkpoint=job["checkpoint"],
                     on_checkpoint=checkpoint, on_progress=progress, on_processing=processing, cancel=self._cancel)
-                scene = result["scene"]
-                with self._lock:
-                    self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
-                    bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
-                    bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
-                    bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
-                    job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
-                    self.scenes = [s for s in self.scenes if s["id"] != scene["id"]] + [scene]
-                    self.message = "Upload complete. Review Story on portal after this content change." if job["metadata"].get("replaceSceneId") else "Upload complete."
-                self._save()
-                self._retire_export(job)
+                complete_upload(result)
             except Exception as exc:
                 if job["status"] == "completed":
                     with self._lock:
@@ -725,15 +800,27 @@ class GallerySync:
                     job.update(status="paused" if isinstance(exc, GalleryTransferCanceled) else "conflict"
                         if isinstance(exc, PortalHTTPError) and exc.status == 409 else "error", message=friendly_error(exc))
                     if isinstance(exc, GalleryTransferCanceled):
-                        job["message"] = ("Paused. The download will restart when you resume." if job.get("kind") == "download"
+                        job["message"] = (("Paused. The pinned download will resume from its saved bytes." if (job.get('checkpoint') or {}).get('representationId')
+                            else "Paused. The download will restart from zero because the portal has no pinned representation.") if job.get("kind") == "download"
                             else "Paused. Uploaded parts will be reused when you resume.")
+                    if isinstance(exc, GalleryProcessingTimeout):
+                        job.update(needsAttention=True, message=str(exc))
                     if isinstance(exc, GalleryProcessingPaused):
                         job["message"] = "Stopped waiting. The portal may continue checking this upload. Resume to check its status."
                     elif isinstance(exc, GalleryTransferCanceled) and job.get("preparation") and not job.get("packaged"):
                         job["message"] = "Preparation paused. Resume to prepare the saved scene and upload it."
                     self.message = job["message"]
                 self._save()
-        self._launch(action)
+        def attempted():
+            self._client()
+            with self._lock:
+                job['attempts'] = job.get('attempts', 0) + 1
+            self._save()
+
+        def run():
+            with transfer_attempts(attempted, self._cancel):
+                action()
+        self._launch(run)
 
     def link_download(self, job_id, project_id, commit_uuid=""):
         self._client()
@@ -791,8 +878,10 @@ class GallerySync:
                 if remote["revision"] != job["result"]["revision"]:
                     raise ValueError("The gallery item changed since this download. Download its latest version before updating.")
                 directory = self.root / "backups"
-                directory.mkdir(mode=0o700, exist_ok=True)
                 backup = directory / (update_id + ".licht")
+                disk_preflight([(backup, Path(project_path).stat().st_size),
+                                (project_path, expected_stamp[2] + job['total'])])
+                directory.mkdir(mode=0o700, exist_ok=True)
                 if file_stamp(project_path) != expected_stamp:
                     raise ValueError("The local project changed. Review it before updating.")
                 digest = hashlib.sha256()
@@ -855,6 +944,8 @@ class GallerySync:
             retained_asset = None
             retained_project = None
             try:
+                disk_preflight([(target, Path(job['path']).stat().st_size),
+                                (self._download_destination(job), Path(job['path']).stat().st_size)])
                 target.parent.mkdir(mode=0o700, exist_ok=True)
                 with self._lock:
                     record["path"] = str(target)
@@ -1094,6 +1185,11 @@ class GallerySync:
 
         if job.get("kind") == "download":
             owned(job["path"], root / "downloads", job["id"])
+            partial = Path(job['path']).with_name('.' + Path(job['path']).name + '.part')
+            if partial.exists() or partial.is_symlink():
+                if partial.is_symlink() or not partial.is_file():
+                    raise ValueError('A partial download was redirected. Keep it for recovery.')
+                paths.append(partial)
             stage = job.get("stagedImport", {})
             if stage.get("path"):
                 if Path(stage["path"]).suffix == ".scene":

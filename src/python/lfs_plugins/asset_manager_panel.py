@@ -1504,6 +1504,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if not self._panel_mounted:
                 return
             self._catalog_verify_active = True
+            self._catalog_verify_succeeded = False
             self._catalog_verify_refresh_pending = False
             cancel_event = threading.Event()
             self._catalog_verify_cancel = cancel_event
@@ -1528,6 +1529,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             verified = verify_catalog_projects(
                 index, cancel_event, visible_asset_ids=visible_ids
             )
+            self._catalog_verify_succeeded = not cancel_event.is_set()
             _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception:
             _log.exception("Asset Manager catalog verify failed")
@@ -1550,6 +1552,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._catalog_verify_refresh_pending = False
         if not self._panel_mounted:
             return
+        if self._gallery_wake_reverify_pending:
+            self._gallery_wake_reverify_pending = False
+            self._start_catalog_verify()
+            return
+        if getattr(self, '_catalog_verify_succeeded', False):
+            self._gallery_wake_verifying = False
+        elif self._gallery_wake_verifying:
+            self._gallery_notice = 'Could not verify saved projects. Refresh Asset Manager to retry.'
         self._publish_catalog_if_changed()
         self._refresh_records(assets=True, folders=True)
         if self._handle:

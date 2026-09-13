@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 
@@ -222,6 +223,72 @@ class MCPTests(unittest.TestCase):
                        {'content': [{'type': 'image', 'mimeType': 'image/jpeg', 'data': 'AAAA'}]}):
             with self.subTest(result=result), self.assertRaises(ValueError):
                 validator.png_data(result)
+
+
+class TransferTrayTests(unittest.TestCase):
+    def setUp(self):
+        self.run = object.__new__(validator.Run)
+        self.run.args = SimpleNamespace(timeout=300.)
+        self.doc = mock.Mock()
+        lf = SimpleNamespace(ui=SimpleNamespace(rml=SimpleNamespace(
+            get_document=mock.Mock(return_value=self.doc))))
+        self.run.mcp = mock.Mock()
+        self.run.mcp.value.side_effect = lambda expression: eval(expression, {'lf': lf})
+        self.now = 0.
+        self.clock = mock.patch.object(validator.time, 'monotonic', side_effect=lambda: self.now)
+        self.sleep = mock.patch.object(validator.time, 'sleep', side_effect=self.advance)
+        self.clock.start()
+        self.sleep.start()
+        self.addCleanup(self.clock.stop)
+        self.addCleanup(self.sleep.stop)
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def row(self, rml):
+        return SimpleNamespace(get_inner_rml=lambda: rml)
+
+    def test_selector_excludes_template_and_counts_three_rendered_rows(self):
+        template = ET.parse(validator.REPO / 'src/visualizer/gui/rmlui/resources/gallery_transfer_panel.rml')
+        rows = template.findall('.//div[@class="gallery-transfer-row"]')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].get('data-for'), 'job : jobs')
+        rendered = [self.row(f'<span>{i} KiB</span>') for i in (1, 2, 3)]
+        # The old selector also returns the hidden template.
+        self.doc.query_selector_all.side_effect = {
+            '.gallery-transfer-row': rendered + [self.row('{{job.bytes}}')],
+            '.gallery-transfer-row:not([data-for])': rendered,
+        }.__getitem__
+        self.assertEqual(self.run.wait_transfer_rows(3),
+                         {'count': 3, 'first_row_inner_rml': '<span>1 KiB</span>'})
+        self.assertEqual(self.now, 0.)
+
+    def test_wait_allows_rendering_to_catch_up(self):
+        self.doc.query_selector_all.side_effect = [[], [self.row('1 KiB')]]
+        self.assertEqual(self.run.wait_transfer_rows(1)['count'], 1)
+        self.assertGreater(self.now, 0.)
+
+    def test_mismatch_fails_in_five_seconds_with_latest_dom_diagnostics(self):
+        self.doc.query_selector_all.side_effect = lambda selector: [
+            self.row(f'<span>{self.now:.1f} KiB</span>')] * 2
+        with self.assertRaises(TimeoutError) as caught:
+            self.run.wait_transfer_rows(3)
+        self.assertIn('expected 3, actual DOM row count 2', str(caught.exception))
+        self.assertIn(f"first row inner RML: '<span>{self.now:.1f} KiB</span>'", str(caught.exception))
+        self.assertGreaterEqual(self.now, 5.)
+        self.assertLess(self.now, 5.3)
+
+    def test_empty_dom_reports_zero_and_no_first_row(self):
+        self.doc.query_selector_all.return_value = []
+        with self.assertRaisesRegex(TimeoutError, 'actual DOM row count 0; first row inner RML: None'):
+            self.run.wait_transfer_rows(3)
+
+    def test_shorter_user_timeout_is_respected(self):
+        self.run.args.timeout = .5
+        self.doc.query_selector_all.return_value = []
+        with self.assertRaises(TimeoutError):
+            self.run.wait_transfer_rows(3)
+        self.assertLess(self.now, .8)
 
 
 class ReportTests(unittest.TestCase):
