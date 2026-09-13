@@ -115,6 +115,7 @@ namespace lfs::rendering {
     struct GaussianTransientMaskOverlayState {
         lfs::core::Tensor* mask = nullptr;
         bool additive = true;
+        std::shared_ptr<lfs::core::Tensor> owned_mask{};
     };
 
     struct GaussianCursorOverlayState {

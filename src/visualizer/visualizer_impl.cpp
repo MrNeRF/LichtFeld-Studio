@@ -960,7 +960,13 @@ namespace lfs::vis {
             if (!scene_manager_) {
                 return nullptr;
             }
-            if (!hasRenderableGaussians(scene_manager_->getModelForRendering())) {
+            const bool ply_comparison =
+                rendering_manager_ && rendering_manager_->isPLYComparisonActive();
+            // Idle viewport-render polling must not concatenate a combined model
+            // just to decide whether screen positions exist. Selection tools still
+            // go through SelectionService.
+            if (!ply_comparison &&
+                !hasRenderableGaussians(scene_manager_->getModelForRendering())) {
                 return nullptr;
             }
             if (const auto* tm = scene_manager_->getTrainerManager()) {

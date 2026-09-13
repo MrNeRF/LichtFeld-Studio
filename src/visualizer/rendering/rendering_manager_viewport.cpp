@@ -1235,6 +1235,11 @@ namespace lfs::vis {
             } else if (hasRenderableGaussians(sample.model)) {
                 scene_state.combined_model = sample.model;
                 scene_state.transform_indices = scene.peekTransformIndices();
+                scene_state.node_visibility_mask.assign(scene_state.model_transforms.size(), false);
+                if (sample.visible_index >= 0 &&
+                    static_cast<size_t>(sample.visible_index) < scene_state.node_visibility_mask.size()) {
+                    scene_state.node_visibility_mask[static_cast<size_t>(sample.visible_index)] = true;
+                }
                 model = sample.model;
             }
         } else {

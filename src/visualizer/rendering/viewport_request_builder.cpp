@@ -503,9 +503,37 @@ namespace lfs::vis {
             ctx.scene_state.selected_node_mask[static_cast<size_t>(visible_index)];
         overlay.emphasis.emphasized_node_mask =
             overlay.emphasis.dim_non_emphasized ? std::vector<bool>{selected} : std::vector<bool>{};
-        overlay.emphasis.transient_mask = {};
-        overlay.emphasis.focused_gaussian_id = -1;
-        overlay.cursor = {};
+        size_t offset = 0;
+        size_t count = 0;
+        if (ctx.scene_manager) {
+            for (const auto& slot : ctx.scene_manager->getScene().getVisibleSplatNodeSlots()) {
+                if (!slot.node || !slot.node->model) {
+                    continue;
+                }
+                const auto node_count = static_cast<size_t>(slot.node->model->size());
+                if (slot.node->id == node.id) {
+                    count = node_count;
+                    break;
+                }
+                offset += node_count;
+            }
+        }
+        auto& transient = overlay.emphasis.transient_mask;
+        if (transient.mask && transient.mask->is_valid() &&
+            transient.mask->ndim() == 1 && count > 0 &&
+            offset + count <= transient.mask->numel()) {
+            transient.owned_mask = std::make_shared<core::Tensor>(
+                transient.mask->slice(0, offset, offset + count));
+            transient.mask = transient.owned_mask.get();
+        } else {
+            transient = {};
+        }
+        const int focused = overlay.emphasis.focused_gaussian_id;
+        overlay.emphasis.focused_gaussian_id =
+            focused >= 0 && static_cast<size_t>(focused) >= offset &&
+                    static_cast<size_t>(focused) < offset + count
+                ? static_cast<int>(static_cast<size_t>(focused) - offset)
+                : -1;
     }
 
     PlyComparisonDepthSample resolvePlyComparisonDepthSample(
