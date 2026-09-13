@@ -1926,6 +1926,7 @@ namespace lfs::vis {
             if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 // Comparison draws owned node models. Do not concatenate them
                 // into a hidden combined copy just to fill FrameContext.model.
+                scene_manager->getScene().discardUnconsolidatedModelCache();
                 scene_state = scene_manager->buildRenderState({.metadata_only = true});
                 model = nullptr;
                 const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();

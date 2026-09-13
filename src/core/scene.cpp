@@ -890,6 +890,26 @@ namespace lfs::core {
         return single_node_model_ ? single_node_model_ : cached_combined_.get();
     }
 
+    void Scene::discardUnconsolidatedModelCache() const {
+        if (consolidated_ || combined_model_build_running_.load(std::memory_order_acquire)) {
+            return;
+        }
+        // Poll only a finished worker, so mode changes never block on a large
+        // allocation. Its result is released together with any older aggregate.
+        pollCombinedModelBuild();
+        if (!cached_combined_) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        cached_combined_.reset();
+        cached_combined_includes_hidden_ = false;
+        cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
+        model_cache_valid_.store(false, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
+    }
+
     std::shared_ptr<lfs::core::Tensor> Scene::peekTransformIndices() const {
         return cached_transform_indices_;
     }

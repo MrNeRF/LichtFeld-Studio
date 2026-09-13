@@ -1155,6 +1155,32 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
     }
 
+    TEST_F(SceneManagerRenderStateTest, ComparisonReleasesRedundantAggregateAndPreservesOwnedModels) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right = scene.addSplat("right", makeTestSplat(1.0f));
+        scene.setSelection({1});
+        ASSERT_NE(scene.getCombinedModel(), nullptr);
+        ASSERT_NE(scene.peekTransformIndices(), nullptr);
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), nullptr);
+        EXPECT_EQ(scene.peekTransformIndices(), nullptr);
+        ASSERT_NE(scene.getNodeById(left)->model, nullptr);
+        ASSERT_NE(scene.getNodeById(right)->model, nullptr);
+        ASSERT_NE(scene.selectionMaskSliceForNode(right), nullptr);
+        EXPECT_TRUE(scene.hasSelection());
+        // Returning to a mode that needs the aggregate can reconstruct it.
+        ASSERT_NE(scene.getCombinedModel(), nullptr);
+        EXPECT_EQ(scene.getCombinedModel()->size(), 2u);
+        scene.consolidateNodeModels();
+        const auto* consolidated = scene.peekCombinedModel();
+        ASSERT_NE(consolidated, nullptr);
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), consolidated);
+    }
+
     TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
