@@ -5533,11 +5533,14 @@ namespace lfs::core {
             return getTrainingModelGaussianCount();
         }
 
-        const auto* model = getCombinedModel();
-        if (!model) {
-            return 0;
+        size_t total = 0;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::SPLAT && node->model &&
+                isNodeEffectivelyVisible(node->id)) {
+                total += node->model->visible_count();
+            }
         }
-        return model->visible_count();
+        return total;
     }
 
     std::unordered_map<NodeId, size_t> Scene::getActiveGaussianCountsByNode() const {

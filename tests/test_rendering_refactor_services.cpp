@@ -1156,6 +1156,23 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
     }
 
+    TEST_F(SceneManagerRenderStateTest, VisibleCountDoesNotBuildAnAggregate) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right = scene.addSplat("right", makeTwoPointTestSplat(1.0f, 2.0f));
+        scene.getNodeById(right)->model->deleted() =
+            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::CUDA)
+                .to(lfs::core::DataType::Bool);
+        EXPECT_EQ(scene.getVisibleGaussianCount(), 2u);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+        EXPECT_FALSE(scene.combinedModelBuildPending());
+        scene.setNodeVisibility(left, false);
+        EXPECT_EQ(scene.getVisibleGaussianCount(), 1u);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+    }
+
     TEST_F(SceneManagerRenderStateTest, ComparisonReleasesRedundantAggregateAndPreservesOwnedModels) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
