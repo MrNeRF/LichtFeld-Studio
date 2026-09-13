@@ -26,6 +26,19 @@ DEFAULT_ACCOUNT_STATE: dict[str, object] = {
     "tooltip": "",
 }
 
+DEFAULT_GALLERY_STATE: dict[str, object] = {
+    "signed_in": False,
+    "active_uploads": 0,
+    "active_downloads": 0,
+    "paused": 0,
+    "attention": 0,
+    "percent": -1,
+    "label": "",
+    "tooltip": "",
+    "tone": "idle",
+    "epoch": 0,
+}
+
 DEFAULT_BUG_REPORT_STATE: dict[str, object] = {
     "submitting": False,
     "success": False,
@@ -284,6 +297,10 @@ class RuntimeState:
         "account_state",
         DEFAULT_ACCOUNT_STATE.copy(),
     )
+    gallery_state = StateSignal[dict[str, object]](
+        "gallery_state",
+        DEFAULT_GALLERY_STATE.copy(),
+    )
     bug_report_state = Signal(new_bug_report_state(), "bug_report_state")
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",
@@ -356,6 +373,7 @@ class RuntimeState:
         cls.pivot_mode.value = 0
         cls.import_overlay_state.value = {}
         cls.account_state.value = DEFAULT_ACCOUNT_STATE.copy()
+        cls.gallery_state.value = DEFAULT_GALLERY_STATE.copy()
         cls.bug_report_state.value = new_bug_report_state()
         cls.video_export_overlay_state.value = {}
         cls.export_progress_state.value = {}

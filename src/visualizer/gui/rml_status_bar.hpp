@@ -139,6 +139,7 @@ namespace lfs::vis::gui {
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
         Rml::EventListener* account_listener_ = nullptr;
+        Rml::EventListener* gallery_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
         Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;
@@ -247,6 +248,14 @@ namespace lfs::vis::gui {
             std::string account_color;
             bool account_show_tier = false;
             bool account_membership_required = false;
+            bool gallery_visible = false;
+            bool gallery_show_label = false;
+            bool gallery_busy = false;
+            bool gallery_attention = false;
+            bool gallery_error = false;
+            std::string gallery_label;
+            std::string gallery_tooltip;
+            std::string gallery_color;
             std::string lfs_mem_text;
             std::string lfs_mem_color;
             bool show_gpu_model = false;

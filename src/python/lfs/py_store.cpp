@@ -188,6 +188,42 @@ namespace lfs::python {
             return state;
         }
 
+        nb::dict gallery_state_to_dict(const lfs::vis::AppStore::GalleryState& value) {
+            nb::dict state;
+            state["signed_in"] = value.signed_in;
+            state["active_uploads"] = value.active_uploads;
+            state["active_downloads"] = value.active_downloads;
+            state["paused"] = value.paused;
+            state["attention"] = value.attention;
+            state["percent"] = value.percent;
+            state["label"] = value.label;
+            state["tooltip"] = value.tooltip;
+            state["tone"] = value.tone;
+            state["epoch"] = value.epoch;
+            return state;
+        }
+
+        lfs::vis::AppStore::GalleryState gallery_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("gallery_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::GalleryState state;
+            state.signed_in = dict_value(dict, "signed_in", false);
+            state.active_uploads = dict_value(dict, "active_uploads", 0);
+            state.active_downloads = dict_value(dict, "active_downloads", 0);
+            state.paused = dict_value(dict, "paused", 0);
+            state.attention = dict_value(dict, "attention", 0);
+            state.percent = dict_value(dict, "percent", -1);
+            state.label = dict_value(dict, "label", std::string{});
+            state.tooltip = dict_value(dict, "tooltip", std::string{});
+            state.tone = dict_value(dict, "tone", std::string{"idle"});
+            state.epoch = dict_value(dict, "epoch", std::uint64_t{0});
+            return state;
+        }
+
         nb::dict video_export_overlay_state_to_dict(const lfs::vis::AppStore::VideoExportOverlayState& value) {
             nb::dict state;
             state["active"] = value.active;
@@ -321,6 +357,8 @@ namespace lfs::python {
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
             else if (field == "account_state")
                 store.account_state.set(account_state_from_object(value));
+            else if (field == "gallery_state")
+                store.gallery_state.set(gallery_state_from_object(value));
             else if (field == "video_export_overlay_state")
                 store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
             else if (field == "export_progress_state")
@@ -385,6 +423,8 @@ namespace lfs::python {
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
             if (field == "account_state")
                 return account_state_to_dict(store.account_state.get());
+            if (field == "gallery_state")
+                return gallery_state_to_dict(store.gallery_state.get());
             if (field == "video_export_overlay_state")
                 return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
             if (field == "export_progress_state")
@@ -450,6 +490,9 @@ namespace lfs::python {
             if (field == "account_state")
                 return subscribe_observable_as(
                     store.account_state, std::move(callback), account_state_to_dict);
+            if (field == "gallery_state")
+                return subscribe_observable_as(
+                    store.gallery_state, std::move(callback), gallery_state_to_dict);
             if (field == "video_export_overlay_state")
                 return subscribe_observable_as(
                     store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);

@@ -39,6 +39,8 @@ def _install_lichtfeld_stub(monkeypatch):
         "has_gaussian_selection": True,
         "has_gaussian_clipboard": False,
         "active_tool": "builtin.select",
+        "panel_enabled": [],
+        "panels": {},
     }
 
     ui = SimpleNamespace(
@@ -106,7 +108,8 @@ def _install_lichtfeld_stub(monkeypatch):
         toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
         toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
         is_perf_hud_visible=lambda: False,
-        set_panel_enabled=lambda _panel_id, _enabled: None,
+        set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
+        get_panel_object=lambda panel_id: state["panels"].get(panel_id),
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
         can_edit_gaussian_selection=lambda: state["can_edit_gaussian_selection"],
@@ -314,3 +317,60 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[5]["label"] == "tr:main_panel.console"
     view_items[5]["callback"]()
     assert state["python_console_shown"] == 1
+
+
+def _import_tools_menu(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lfs_plugins", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.tools_menu", raising=False)
+
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
+    return import_module("lfs_plugins.tools_menu")
+
+
+def test_tools_menu_includes_gallery_entries(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    labels = [item.get("label") for item in items]
+    assert labels[:3] == [
+        "tr:menu.tools.asset_manager",
+        "tr:menu.tools.gallery",
+        "tr:menu.tools.gallery_transfers",
+    ]
+    assert items[3]["type"] == "separator"
+
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+    items[2]["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.gallery_transfer", True)
+
+
+def test_tools_menu_gallery_selects_scope_when_available(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    selected = []
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace(
+        select_gallery_scope=lambda: selected.append(True),
+    )
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+    assert selected == [True]
+
+
+def test_tools_menu_gallery_skips_missing_select_gallery_scope(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace()
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
