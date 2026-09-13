@@ -8278,11 +8278,11 @@ namespace lfs::vis {
             }));
 
         EXPECT_EQ(viewer.getTrainerManager()->getStateMachine().getFinishReason(),
-                  lfs::vis::FinishReason::Error);
+                  lfs::vis::FinishReason::UserStopped);
         EXPECT_TRUE(viewer.getTrainerManager()->canReset());
 
         // The completion handler queues the requested reset after publishing
-        // Finished(Error); drain that request and verify a fresh Ready trainer.
+        // Finished(UserStopped); drain that request and verify a fresh Ready trainer.
         lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
         EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Ready);
         EXPECT_NE(viewer.getTrainerManager()->getTrainer(), nullptr);
