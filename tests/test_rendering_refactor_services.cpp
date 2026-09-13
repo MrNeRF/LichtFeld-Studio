@@ -1109,7 +1109,8 @@ namespace lfs::vis {
                  .add_mode = true,
                  .selection_tensor = &transient_selection,
                  .preview_selection = &transient_selection,
-                 .focused_gaussian_id = 0},
+                 .focused_gaussian_id = 0,
+                 .selection_mode = SelectionPreviewMode::Rings},
         };
 
         const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
