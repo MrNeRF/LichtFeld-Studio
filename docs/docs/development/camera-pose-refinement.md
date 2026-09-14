@@ -90,8 +90,7 @@ Render outputs carry the effective pose separately from the imported camera.
 MRNF projection fallback and view-based seeding consume that pose, and cached
 seed images retain their matching pose across subsequent camera updates.
 
-Candidate acceptance measures improvement on one training image with the
-Gaussian model held fixed. New sessions additionally refine shared sparse points
+Candidate acceptance holds the Gaussian model fixed. New sessions refine shared sparse points
 when at least three active training cameras observe the same COLMAP point ID.
 The point solve minimizes image-size-normalized Huber reprojection error over
 all training observations in each track. Evaluation and disabled cameras are
@@ -99,10 +98,27 @@ excluded; reference poses remain fixed but their observations constrain points.
 Camera support requires at least 12 observations spanning 10% of both image
 dimensions. The joint constraint applies to MRNF, MCMC and IGS+.
 
-For each pose candidate, incident points are solved with the other camera poses
-fixed. Baseline and candidate solves start from identical positions with the
-same iteration budget. A candidate must not increase shared reprojection cost
-and must improve the photometric objective. Pose and point state commit together;
+New sessions use a combined objective: training-image photometric loss plus
+`1e-4` times the sum of robust reprojection losses over incident track observations.
+Reprojection residuals use pixels at a 1600-pixel long edge and a one-pixel Huber
+threshold, independently of source resolution and training resize. The coefficient
+weights each observation, with no division by track or camera count. This follows
+the summed BA formulation in [GloSplat](https://arxiv.org/abs/2603.04847), implemented
+independently. The bounded alternating solver and canonical pixel coordinates
+are adaptations, not a reproduction of its Adam optimizer or reported results.
+
+Each scheduled visit first relaxes incident points with camera poses fixed.
+It then holds those points fixed while optimizing the active pose using the
+combined objective and its matching analytic left-tangent gradient. Candidate
+search does not repeat the point solve. The robust camera reprojection curvature
+preconditions the combined gradient in scene-normalized coordinates, with identity
+damping. This accounts for translation/rotation coupling without claiming to
+model photometric curvature or recover unobservable geometry. The direction must
+pass the existing descent, motion-bound and nonlinear acceptance checks; it shares
+the candidate budget with the fallback search. A small increase in either component can
+be accepted when the combined objective decreases sufficiently; there is no
+separate non-increase reprojection veto. Motion bounds, source priors and valid
+projections still apply. Pose and point state commit together;
 exceptions and cancellation discard pending changes. Point-only improvement may
 be retained even when no camera step is accepted. Point displacement is bounded
 relative to imported coordinates by the configured camera-center displacement
@@ -111,7 +127,11 @@ adjustment or a guarantee that incorrect correspondences can be recovered.
 
 Cameras without sufficient shared support retain the fixed-source constraint
 below, or photometric-only acceptance when sparse support is unavailable.
-Legacy pose checkpoints retain their original fixed-source method on resume.
+Legacy pose checkpoints retain their original objective on resume: version one
+uses fixed sources and version two uses the strict shared-geometry gate.
+Version three persists the combined-objective weight, including an empty shared
+graph when no suitable tracks exist. Changing objectives requires a new training
+session; opening an older checkpoint does not silently migrate it.
 
 The sparse constraint selects a fixed set of source-visible observations,
 discarding source residuals above the larger of four times the median and four
@@ -155,7 +175,7 @@ matching a COLMAP ID to an array index. Reconstruction gains and solve overhead
 must be measured on the dataset; an improved sparse residual alone does not
 establish better novel-view rendering.
 
-For shared geometry, the pose proposal uses a reduced Gauss-Newton system.
+In legacy version-two sessions, the pose proposal uses a reduced Gauss-Newton system.
 Huber-weighted reprojection Jacobians include both the active camera's left
 SE(3) increment and each incident point's world-space increment. Eliminating
 the point blocks with a Schur complement accounts for point motion before
@@ -201,15 +221,17 @@ Weak source priors penalize normalized center displacement and rotation chord
 distance. A scaled inverse-BFGS approximation supplies a safeguarded descent
 direction in left-tangent coordinates; it is not an exact manifold Hessian.
 
-Acceptance requires both a decrease in image loss and sufficient Armijo decrease
-in image loss plus priors. Rejected or nonfinite candidates leave the current pose
+Acceptance requires both a decrease in the supplied data objective (photometric,
+or combined photometric/reprojection) and sufficient Armijo decrease in that
+objective plus priors. Rejected or nonfinite candidates leave the current pose
 unchanged. Callback exceptions roll back controller state. Frozen, anchor and
 evaluation cameras do not invoke candidate rendering.
 
 Baseline UID, pose revision and model revision must match the current state.
 The owner must advance the model revision whenever geometry, appearance, masks,
 resolution, background or the objective changes. Curvature history is discarded
-when that revision changes. Reset restores the source pose and invalidates old
+when that revision changes. Combined sessions also clear history at the start
+of each visit because the point block changes the objective. Reset restores the source pose and invalidates old
 baseline evaluations.
 
 ## Multi-camera session

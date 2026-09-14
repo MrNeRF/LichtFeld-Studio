@@ -211,7 +211,7 @@ def main():
             status.update(status='failed', error=f'{type(error).__name__}: {error}')
             save(folder / 'status.json', status)
             raise
-    print(f'All 12 runs completed. Results: {output / "summary.csv"}', flush=True)
+    print(f'All {len(runs)} runs completed. Results: {output / "summary.csv"}', flush=True)
 
 
 if __name__ == '__main__':

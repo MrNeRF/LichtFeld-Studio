@@ -37,6 +37,11 @@ namespace lfs::training::camera_pose {
         int visits_between_updates = 8;
         int steps_per_visit = 2;
         bool choose_anchors = true;
+        // Zero preserves the legacy strict geometry gate. New Trainer sessions
+        // use a combined image + weighted summed robust reprojection objective.
+        // Persisted with the session so resume never silently changes objectives.
+        double joint_reprojection_weight = 0.0;
+        static constexpr double DEFAULT_JOINT_REPROJECTION_WEIGHT = 1.0e-4;
         // scene_scale is explicit in scene units; caller must estimate it once
         // from source geometry, not from evolving optimized poses.
         BoundedPoseConfig optimizer{};
@@ -81,6 +86,7 @@ namespace lfs::training::camera_pose {
         std::uint64_t point_solves = 0, point_proposals = 0;
         std::uint64_t fixed_rejections = 0, joint_rejections = 0;
         std::uint64_t invalid_losses = 0, image_rejections = 0, objective_rejections = 0;
+        std::uint64_t combined_rejections = 0;
         std::uint64_t candidate_renders = 0, accepted_candidates = 0, committed_steps = 0;
         std::uint64_t no_descent = 0, exceptions = 0, cancellations = 0;
         double visit_ms = 0, point_ms = 0, baseline_ms = 0, candidate_ms = 0, proposal_ms = 0;

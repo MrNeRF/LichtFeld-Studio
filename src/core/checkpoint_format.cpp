@@ -4,6 +4,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include <cmath>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -292,7 +293,7 @@ namespace lfs::core {
         try {
             const auto state = nlohmann::json::parse(params.camera_pose_state_json);
             if (!state.is_object() || !state.at("version").is_number_integer() ||
-                (state.at("version") != 1 && state.at("version") != 2) ||
+                (state.at("version") != 1 && state.at("version") != 2 && state.at("version") != 3) ||
                 !state.at("iteration").is_number_integer() || state.at("iteration") != header.iteration ||
                 !state.at("cameras").is_array() || !state.at("settings").is_object())
                 return invalid("Checkpoint camera pose version, iteration or payload is invalid");
@@ -301,6 +302,15 @@ namespace lfs::core {
             if (state.at("version") == 2 &&
                 (!state.contains("points") || !state.at("points").is_array() || state.at("points").empty()))
                 return invalid("Checkpoint shared camera geometry is missing");
+            if (state.at("version") == 3) {
+                const auto& settings = state.at("settings");
+                if (!state.contains("points") || !state.at("points").is_array() ||
+                    !settings.contains("joint_reprojection_weight") || !settings.at("joint_reprojection_weight").is_number())
+                    return invalid("Checkpoint combined camera objective is missing");
+                const double weight = settings.at("joint_reprojection_weight").get<double>();
+                if (!std::isfinite(weight) || weight <= 0)
+                    return invalid("Checkpoint combined camera objective weight is invalid");
+            }
         } catch (const std::exception& error) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::DataLoss,

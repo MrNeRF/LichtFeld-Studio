@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "training/camera_pose/pose_refinement_session.hpp"
+#include "training/camera_pose/joint_pose_proposal.hpp"
 #include <algorithm>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -301,6 +302,240 @@ namespace {
             }
         }
         return result;
+    }
+
+    PoseSessionConfig combined_config() {
+        auto result = config();
+        result.joint_reprojection_weight = PoseSessionConfig::DEFAULT_JOINT_REPROJECTION_WEIGHT;
+        return result;
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, AnalyticGradientMatchesLeftRetractionAndResolutionScaling) {
+        auto tracks = build_sparse_point_tracks(shared_measurements());
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        // Both the quadratic and robust branches, at a nonidentity pose.
+        for (const float translation : {0.001f, 0.04f}) {
+            const auto pose = exp_se3({translation, -0.002f, 0.003f, 0.001f, -0.001f, 0.002f});
+            const auto objective = sparse_pose_objective(30, pose, tracks, points);
+            ASSERT_TRUE(objective);
+            for (size_t axis = 0; axis < 6; ++axis) {
+                Twist delta{};
+                constexpr float epsilon = 0.0001f;
+                delta[axis] = epsilon;
+                const auto plus = sparse_pose_objective(30, apply_left_increment(delta, pose), tracks, points);
+                delta[axis] = -epsilon;
+                const auto minus = sparse_pose_objective(30, apply_left_increment(delta, pose), tracks, points);
+                ASSERT_TRUE(plus);
+                ASSERT_TRUE(minus);
+                const double numerical = (plus->cost - minus->cost) / (2 * epsilon);
+                EXPECT_NEAR(objective->gradient[axis], numerical, 0.02 + 0.002 * std::abs(numerical));
+            }
+            auto scaled = tracks;
+            for (auto& track : scaled)
+                for (auto& m : track.measurements) {
+                    m.calibration.fx *= 4;
+                    m.calibration.fy *= 4;
+                    m.calibration.cx *= 4;
+                    m.calibration.cy *= 4;
+                    m.calibration.width *= 4;
+                    m.calibration.height *= 4;
+                    m.u *= 4;
+                    m.v *= 4;
+                }
+            const auto larger = sparse_pose_objective(30, pose, scaled, points);
+            ASSERT_TRUE(larger);
+            EXPECT_NEAR(larger->cost, objective->cost, 1e-10);
+            for (size_t axis = 0; axis < 6; ++axis)
+                EXPECT_NEAR(larger->gradient[axis], objective->gradient[axis], 1e-10);
+        }
+        EXPECT_FALSE(sparse_pose_objective(90, identity_transform(), tracks, points));
+        points.front()[2] = -1;
+        EXPECT_FALSE(sparse_pose_objective(30, identity_transform(), tracks, points));
+        points.clear();
+        EXPECT_FALSE(sparse_pose_objective(30, identity_transform(), tracks, points));
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, PhotometricGainCanOutweighReprojectionIncreaseWithoutNestedPointSolves) {
+        auto measurements = shared_measurements();
+        for (auto& m : measurements) {
+            m.source[0] -= 0.002;
+            m.source[1] += 0.001;
+            m.source[2] -= 0.003;
+        }
+        PoseRefinementSession session(1, cameras(), combined_config());
+        session.configure_sparse_points(measurements);
+        const auto tracks = build_sparse_point_tracks(measurements);
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        const auto before = sparse_pose_objective(30, identity_transform(), tracks, points);
+        ASSERT_TRUE(before);
+        const auto result = session.visit(30, 10, 1, evaluate, loss);
+        ASSERT_GT(result.accepted_steps, 0);
+        EXPECT_LT(loss(session.current_pose(30)), loss(identity_transform()));
+        const auto state = session.save_state();
+        for (size_t i = 0; i < points.size(); ++i)
+            points[i] = state["points"][i]["current"].get<SparsePointPosition>();
+        const auto after = sparse_pose_objective(30, session.current_pose(30), tracks, points);
+        ASSERT_TRUE(after);
+        EXPECT_GT(after->cost, before->cost);
+        // The coefficient multiplies the observation SUM, not its mean.
+        const double weight = combined_config().joint_reprojection_weight;
+        EXPECT_LT(loss(session.current_pose(30)) + weight * after->cost,
+                  loss(identity_transform()) + weight * before->cost);
+        EXPECT_EQ(session.diagnostics().point_solves, tracks.size());
+        for (const int uid : {10, 20, 90})
+            EXPECT_EQ(session.current_pose(uid), uid == 10 ? identity_transform() : cameras()[1].source);
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, ReprojectionGainCanOutweighPhotometricIncrease) {
+        auto measurements = shared_measurements();
+        for (auto& m : measurements)
+            if (m.camera_uid == 30)
+                m.u += m.calibration.fx * 0.01 / (m.source[2] - 0.003);
+        PoseRefinementSession session(1, cameras(), combined_config());
+        session.configure_sparse_points(measurements);
+        // Any rigid movement worsens this photometric objective. A linear
+        // translation penalty was insufficient: rotation can reduce reprojection
+        // while translation independently improves that penalty.
+        auto image_loss = [](const Matrix4& pose) {
+            double value = 0.01;
+            const auto source = identity_transform();
+            for (size_t i = 0; i < pose.size(); ++i)
+                value += 0.001 * std::pow(pose[i] - source[i], 2);
+            return value;
+        };
+        const auto result = session.visit(30, 10, 1, [&](const Matrix4& pose) {
+            Matrix4 gradient{};
+            const auto source = identity_transform();
+            for (size_t i = 0; i < pose.size(); ++i)
+                gradient[i] = 0.002f * (pose[i] - source[i]);
+            return PoseImageEvaluation{image_loss(pose), left_increment_gradient(pose, gradient)}; }, image_loss);
+        ASSERT_GT(result.accepted_steps, 0);
+        EXPECT_GT(image_loss(session.current_pose(30)), image_loss(identity_transform()));
+        EXPECT_EQ(session.diagnostics().point_solves, session.shared_point_count());
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, ObservationSumAndOnePixelHuberAreNotDatasetAverages) {
+        auto tracks = build_sparse_point_tracks(shared_measurements());
+        tracks.resize(1);
+        const std::vector<SparsePointPosition> points{tracks.front().source};
+        for (auto& m : tracks.front().measurements) {
+            const auto& p = points.front();
+            m.u = m.calibration.fx * (p[0] + m.pose[3]) / p[2] + m.calibration.cx;
+            m.v = m.calibration.fy * p[1] / p[2] + m.calibration.cy;
+            if (m.camera_uid == 30)
+                m.u += 2;
+        }
+        const auto single = sparse_pose_objective(30, identity_transform(), tracks, points, true);
+        ASSERT_TRUE(single);
+        EXPECT_NEAR(single->cost, 1.5, 1e-10); // rho(2) = 2 - 1/2
+        auto repeated = tracks;
+        repeated.push_back(tracks.front());
+        ++repeated.back().point_id;
+        const std::vector<SparsePointPosition> twice{points.front(), points.front()};
+        const auto doubled = sparse_pose_objective(30, identity_transform(), repeated, twice, true);
+        ASSERT_TRUE(doubled);
+        EXPECT_NEAR(doubled->cost, 2 * single->cost, 1e-10);
+        for (size_t a = 0; a < 6; ++a) {
+            EXPECT_NEAR(doubled->gradient[a], 2 * single->gradient[a], 1e-10);
+            for (size_t b = 0; b < 6; ++b)
+                EXPECT_NEAR(doubled->curvature[a][b], 2 * single->curvature[a][b], 1e-10);
+        }
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, CoupledDirectionSolvesDampedSystemAndPreservesWorldUnits) {
+        auto tracks = build_sparse_point_tracks(shared_measurements());
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        const auto geometry = sparse_pose_objective(30, identity_transform(), tracks, points, true);
+        ASSERT_TRUE(geometry);
+        constexpr double weight = 1e-4;
+        constexpr double scale = 2;
+        const Twist gradient{0.2f, -0.1f, 0.03f, 0.5f, -0.4f, 0.1f};
+        const auto step = propose_combined_pose(*geometry, gradient, weight, scale);
+        ASSERT_TRUE(step);
+        double slope = 0;
+        for (size_t a = 0; a < 6; ++a) {
+            const double sa = a < 3 ? scale : 1.0;
+            double lhs = 0;
+            for (size_t b = 0; b < 6; ++b) {
+                const double sb = b < 3 ? scale : 1.0;
+                EXPECT_NEAR(geometry->curvature[a][b], geometry->curvature[b][a], 1e-9);
+                lhs += (weight * geometry->curvature[a][b] * sa * sb + (a == b ? 1.0 : 0.0)) * (*step)[b] / sb;
+            }
+            EXPECT_NEAR(lhs, -gradient[a] * sa, 1e-5);
+            slope += gradient[a] * (*step)[a];
+        }
+        EXPECT_LT(slope, 0);
+        for (auto& track : tracks)
+            for (auto& m : track.measurements)
+                for (const int axis : {3, 7, 11})
+                    m.pose[axis] *= 10;
+        for (auto& point : points)
+            for (auto& value : point)
+                value *= 10;
+        auto scaled_gradient = gradient;
+        for (size_t a = 0; a < 3; ++a)
+            scaled_gradient[a] /= 10;
+        const auto larger = sparse_pose_objective(30, identity_transform(), tracks, points, true);
+        ASSERT_TRUE(larger);
+        const auto scaled_step = propose_combined_pose(*larger, scaled_gradient, weight, scale * 10);
+        ASSERT_TRUE(scaled_step);
+        for (size_t a = 0; a < 6; ++a)
+            EXPECT_NEAR((*scaled_step)[a] / (a < 3 ? 10 : 1), (*step)[a], 1e-6);
+        EXPECT_FALSE(propose_combined_pose(*geometry, Twist{}, weight, scale));
+        EXPECT_FALSE(propose_combined_pose(*geometry, gradient, -weight, scale));
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, VersionThreePreservesObjectiveAndLegacyRemainsExplicit) {
+        for (const bool with_points : {false, true}) {
+            PoseRefinementSession source(1, cameras(), combined_config());
+            if (with_points)
+                source.configure_sparse_points(shared_measurements());
+            const auto state = source.save_state();
+            ASSERT_EQ(state["version"], 3);
+            const auto saved_config = pose_session_config_from_state(state);
+            EXPECT_EQ(saved_config.joint_reprojection_weight, combined_config().joint_reprojection_weight);
+            PoseRefinementSession restored(2, cameras(), saved_config);
+            if (with_points)
+                restored.configure_sparse_points(shared_measurements());
+            EXPECT_NO_THROW(restored.restore_state(state));
+            const auto before = restored.save_state();
+            auto wrong = state;
+            wrong["settings"]["joint_reprojection_weight"] = 0.001;
+            EXPECT_THROW(restored.restore_state(wrong), std::invalid_argument);
+            EXPECT_EQ(restored.save_state(), before);
+            wrong["settings"].erase("joint_reprojection_weight");
+            EXPECT_THROW((void)pose_session_config_from_state(wrong), std::invalid_argument);
+        }
+        PoseRefinementSession legacy(1, cameras(), config());
+        legacy.configure_sparse_points(shared_measurements());
+        EXPECT_EQ(legacy.save_state()["version"], 2);
+        EXPECT_EQ(pose_session_config_from_state(legacy.save_state()).joint_reprojection_weight, 0);
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, CancelledOrInvalidEvaluationNeverCommitsPartialGeometry) {
+        for (const bool cancel : {false, true}) {
+            PoseRefinementSession session(1, cameras(), combined_config());
+            session.configure_sparse_points(shared_measurements());
+            const auto before = session.save_state();
+            std::stop_source stop;
+            auto callback = [&](const Matrix4&) -> PoseImageEvaluation {
+                if (cancel)
+                    stop.request_stop();
+                return {-1, {}};
+            };
+            if (cancel)
+                EXPECT_TRUE(session.visit(30, 10, 1, callback, loss, stop.get_token()).cancelled);
+            else
+                EXPECT_THROW((void)session.visit(30, 10, 1, callback, loss), std::runtime_error);
+            EXPECT_EQ(session.save_state()["points"], before["points"]);
+            EXPECT_EQ(session.save_state()["cameras"], before["cameras"]);
+        }
     }
 
     TEST(CameraPoseJointGeometryTest, PointOnlyRefinementPersistsAndResetRestoresSource) {

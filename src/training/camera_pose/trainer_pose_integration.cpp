@@ -70,6 +70,7 @@ namespace lfs::training {
         auto config = saved.is_null() ? camera_pose_config_.value_or(PoseSessionConfig{}) : pose_session_config_from_state(saved);
         if (saved.is_null() && !camera_pose_config_) {
             config.warmup_iterations = params.optimization.camera_pose_start_step;
+            config.joint_reprojection_weight = PoseSessionConfig::DEFAULT_JOINT_REPROJECTION_WEIGHT;
         }
         config.total_iterations = params.optimization.resolved_total_iterations();
         if (config.total_iterations <= 0)
@@ -120,7 +121,7 @@ namespace lfs::training {
         // Legacy checkpoints retain their original fixed-structure objective.
         // New sessions and shared-geometry checkpoints use the active training
         // membership and the already-prepared undistortion calibration.
-        if (saved.is_null() || saved.at("version") == 2) {
+        if (saved.is_null() || saved.at("version") == 2 || saved.at("version") == 3) {
             std::vector<SparseTrackMeasurement> measurements;
             for (const auto& camera : camera_pose_sources_) {
                 auto observations = make_sparse_track_measurements(*camera, training.contains(camera->uid()));
@@ -148,6 +149,9 @@ namespace lfs::training {
         }
         LOG_INFO("Camera pose SfM geometry: {} shared points; {}/{} movable cameras use joint reprojection, {} use fixed source reprojection, {} use photometric-only acceptance",
                  session->shared_point_count(), joint, movable, guarded, movable - guarded - joint);
+        LOG_INFO("Camera pose objective: {}; reprojection weight={}",
+                 config.joint_reprojection_weight > 0 ? "photometric + summed reprojection, one-pixel Huber, alternating point updates" : "legacy strict reprojection gate",
+                 config.joint_reprojection_weight);
         LOG_INFO("Camera pose refinement: {} cameras, warmup={}, freeze at={}, steps/visit={}, visits between updates={}, restored={}",
                  session->published_snapshot()->cameras.size(), config.warmup_iterations, static_cast<int>(std::floor(config.total_iterations * config.freeze_fraction)),
                  config.steps_per_visit, config.visits_between_updates, !saved.is_null());

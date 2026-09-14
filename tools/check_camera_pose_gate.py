@@ -422,6 +422,40 @@ def inspect_schur_gate(root: ET.Element) -> dict:
     return result
 
 
+COMBINED_SUITES = {
+    "CameraPoseCombinedObjectiveTest": {
+        "AnalyticGradientMatchesLeftRetractionAndResolutionScaling",
+        "PhotometricGainCanOutweighReprojectionIncreaseWithoutNestedPointSolves",
+        "ReprojectionGainCanOutweighPhotometricIncrease",
+        "CoupledDirectionSolvesDampedSystemAndPreservesWorldUnits",
+        "ObservationSumAndOnePixelHuberAreNotDatasetAverages",
+        "VersionThreePreservesObjectiveAndLegacyRemainsExplicit",
+        "CancelledOrInvalidEvaluationNeverCommitsPartialGeometry",
+    },
+    "CameraPoseCombinedIntegrationTest": {
+        "ProductionObjectiveAndVersionThreeCheckpointRoundTrip",
+    },
+}
+
+
+def inspect_combined_gate(root: ET.Element) -> dict:
+    result = inspect_schur_gate(root)
+    for name, inventory in COMBINED_SUITES.items():
+        suites = [s for s in root.iter("testsuite") if s.get("name") == name]
+        if len(suites) != 1:
+            raise ValueError(f"Missing or duplicated combined objective suite: {name}")
+        cases = suites[0].findall("testcase")
+        if len(cases) != len(inventory) or {c.get("name") for c in cases} != inventory:
+            raise ValueError(f"Wrong combined objective test inventory: {name}")
+        for case in cases:
+            if (case.get("status") != "run" or case.get("result") != "completed"
+                    or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+                raise ValueError(f"Combined objective test not successfully executed: {case.get('name')}")
+        result["tests"] += len(cases)
+    result.update(combined_objective_contracts=True, reconstruction_quality_validated=False)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -455,12 +489,13 @@ def main() -> int:
     parser.add_argument("--joint-integration", action="store_true", help="Also require production joint evaluator and checkpoint envelope contracts; not reconstruction quality validation")
     parser.add_argument("--diagnostics", action="store_true", help="Also require non-persistent diagnostics contracts")
     parser.add_argument("--schur", action="store_true", help="Also require joint Schur proposal contracts; not reconstruction quality validation")
+    parser.add_argument("--combined", action="store_true", help="Also require combined objective and version-three checkpoint contracts; not reconstruction quality validation")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
         require_no_report_failures(root)
-        result = inspect_schur_gate(root) if args.schur else inspect_diagnostics_gate(root) if args.diagnostics else inspect_joint_integration_gate(root) if args.joint_integration else inspect_joint_session_gate(root) if args.joint_session else inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
+        result = inspect_combined_gate(root) if args.combined else inspect_schur_gate(root) if args.schur else inspect_diagnostics_gate(root) if args.diagnostics else inspect_joint_integration_gate(root) if args.joint_integration else inspect_joint_session_gate(root) if args.joint_session else inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

@@ -1022,13 +1022,15 @@ namespace {
 
     class CameraPoseJointIntegrationTest : public CameraPosePhotometricTest {
     protected:
-        std::unique_ptr<PoseRefinementSession> joint_session() {
+        std::unique_ptr<PoseRefinementSession> joint_session(bool combined = false) {
             auto far = identity_transform();
             far[3] = 1;
             PoseSessionConfig config;
             config.total_iterations = 100;
             config.warmup_iterations = 0;
             config.choose_anchors = false;
+            if (combined)
+                config.joint_reprojection_weight = PoseSessionConfig::DEFAULT_JOINT_REPROJECTION_WEIGHT;
             config.optimizer.scene_scale = scene->get_scene_scale();
             const std::vector<PoseCameraInput> inputs{
                 {camera->uid(), identity_transform(), PoseRole::Train},
@@ -1115,6 +1117,72 @@ namespace {
         bad.erase("points");
         loaded_params.camera_pose_state_json = bad.dump();
         EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+    }
+
+    class CameraPoseCombinedIntegrationTest : public CameraPoseJointIntegrationTest {};
+
+    TEST_F(CameraPoseCombinedIntegrationTest, ProductionObjectiveAndVersionThreeCheckpointRoundTrip) {
+        auto session = joint_session(true);
+        const auto target = Tensor::from_vector(render(identity_transform()), {3, HEIGHT, WIDTH}, Device::CUDA);
+        auto means = scene->means().clone();
+        // Record the unrectified value so an identical-image SSIM roundoff
+        // failure is distinguishable from NaN or a genuinely invalid objective.
+        auto rendered = forward(identity_transform());
+        losses::PhotometricLoss raw_loss;
+        const auto raw = raw_loss.forward(rendered.first.image, target, {0.2f});
+        ASSERT_TRUE(raw.has_value()) << raw.error();
+        const float raw_value = raw->first.item<float>();
+        std::ostringstream raw_text;
+        raw_text << std::scientific << raw_value;
+        RecordProperty("identical_image_raw_loss", raw_text.str());
+        ASSERT_TRUE(std::isfinite(raw_value));
+        ASSERT_GE(raw_value, -32 * std::numeric_limits<float>::epsilon() * 0.2f);
+        auto objective = make_pose_photometric_objective(target, 0.2f);
+        const auto checked = objective(rendered.first, true);
+        EXPECT_GE(checked.loss, 0);
+        EXPECT_DOUBLE_EQ(checked.loss, objective(rendered.first, false).loss);
+        if (raw_value < 0) {
+            EXPECT_DOUBLE_EQ(checked.loss, 0);
+            for (const float value : values(checked.grad_image))
+                EXPECT_EQ(value, 0);
+        }
+        rendered.second.release_forward_context();
+        FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background,
+                                      objective, {}, false, session.get());
+        const auto result = evaluator.visit(*session, 5, 1);
+        EXPECT_TRUE(result.scheduled);
+        EXPECT_EQ(session->diagnostics().point_solves, session->shared_point_count());
+        expect_bytes_equal(scene->means(), means);
+        ASSERT_EQ(session->save_state()["version"], 3);
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 100;
+        params.optimization.max_cap = 64;
+        params.camera_pose_state_json = session->save_state().dump();
+        auto source_model = scene->clone();
+        MCMC strategy(source_model);
+        std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+        const auto written = serialize_checkpoint(stream, 5, strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(written.has_value()) << lfs::format_for_developer(written.error());
+        auto loaded_model = scene->clone();
+        MCMC loaded_strategy(loaded_model);
+        lfs::core::param::TrainingParameters loaded_params;
+        stream.seekg(0);
+        const auto loaded = load_checkpoint(stream, written->bytes, loaded_strategy, loaded_params,
+                                            nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        auto resumed = joint_session(true);
+        const auto state = nlohmann::json::parse(loaded_params.camera_pose_state_json);
+        resumed->restore_state(state);
+        EXPECT_EQ(resumed->save_state()["points"], session->save_state()["points"]);
+        EXPECT_EQ(resumed->current_pose(camera->uid()), session->current_pose(camera->uid()));
+        expect_bytes_equal(loaded_model.means(), source_model.means());
+        for (const auto& invalid_weight : {nlohmann::json(nullptr), nlohmann::json(0), nlohmann::json(-0.1), nlohmann::json("0.0001")}) {
+            auto bad = state;
+            bad["settings"]["joint_reprojection_weight"] = invalid_weight;
+            loaded_params.camera_pose_state_json = bad.dump();
+            EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+        }
     }
 
     class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};

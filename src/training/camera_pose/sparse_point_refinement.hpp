@@ -66,6 +66,68 @@ namespace lfs::training::camera_pose {
         double source_cost, candidate_cost;
     };
 
+    // Reprojection is measured in pixels at a 1600-pixel long edge, independent
+    // of source/training image resolution. SUM over incident track observations:
+    // the BA coefficient weights each observation, not a dataset-dependent mean.
+    // Points and other camera poses stay fixed. Huber transition is one pixel.
+    struct SparsePoseObjective {
+        double cost = 0;
+        std::array<double, 6> gradient{};
+        std::array<std::array<double, 6>, 6> curvature{};
+    };
+
+    inline std::optional<SparsePoseObjective> sparse_pose_objective(
+        int uid, const Matrix4& pose, std::span<const SparsePointTrack> tracks,
+        std::span<const SparsePointPosition> points, bool with_curvature = false) {
+        if (tracks.empty() || tracks.size() != points.size())
+            return std::nullopt;
+        SparsePoseObjective result;
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            int active = 0;
+            for (const auto& m : tracks[i].measurements) {
+                const auto& p = m.camera_uid == uid ? pose : m.pose;
+                const auto& point = points[i];
+                const auto& k = m.calibration;
+                if (!m.training || k.width <= 0 || k.height <= 0 || k.fx <= 0 || k.fy <= 0)
+                    return std::nullopt;
+                const double x = p[0] * point[0] + p[1] * point[1] + p[2] * point[2] + p[3];
+                const double y = p[4] * point[0] + p[5] * point[1] + p[6] * point[2] + p[7];
+                const double z = p[8] * point[0] + p[9] * point[1] + p[10] * point[2] + p[11];
+                if (!std::isfinite(z) || z <= 0)
+                    return std::nullopt;
+                const double scale = 1600.0 / std::max(k.width, k.height);
+                const double ru = (k.fx * x / z + k.cx - m.u) * scale;
+                const double rv = (k.fy * y / z + k.cy - m.v) * scale;
+                const double r = std::hypot(ru, rv);
+                if (!std::isfinite(r))
+                    return std::nullopt;
+                result.cost += r <= 1.0 ? 0.5 * r * r : r - 0.5;
+                if (m.camera_uid != uid)
+                    continue;
+                ++active;
+                const double w = r <= 1.0 ? 1.0 : 1.0 / r;
+                const double u = k.fx * scale / z, v = k.fy * scale / z;
+                const std::array<double, 6> ju{u, 0, -u * x / z, -u * x * y / z, u * (z + x * x / z), -u * y};
+                const std::array<double, 6> jv{0, v, -v * y / z, -v * (z + y * y / z), v * x * y / z, v * x};
+                for (size_t axis = 0; axis < 6; ++axis)
+                    result.gradient[axis] += w * (ju[axis] * ru + jv[axis] * rv);
+                if (with_curvature)
+                    for (size_t a = 0; a < 6; ++a)
+                        for (size_t b = 0; b < 6; ++b)
+                            result.curvature[a][b] += w * (ju[a] * ju[b] + jv[a] * jv[b]);
+            }
+            if (active != 1)
+                return std::nullopt;
+        }
+        for (auto& value : result.gradient) {
+            if (!std::isfinite(value))
+                return std::nullopt;
+        }
+        if (!std::isfinite(result.cost))
+            return std::nullopt;
+        return result;
+    }
+
     inline double sparse_point_cost(const SparsePointTrack& track, const SparsePointPosition& point,
                                     const double huber_pixels = 2.0) {
         if (track.measurements.empty() || !std::isfinite(huber_pixels) || huber_pixels <= 0)

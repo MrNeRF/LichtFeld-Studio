@@ -63,7 +63,8 @@ namespace lfs::training::camera_pose {
         if (generation == 0 || config.total_iterations <= 0 || config.warmup_iterations < 0 ||
             !std::isfinite(config.freeze_fraction) || config.freeze_fraction <= 0 || config.freeze_fraction > 1 ||
             config.warmup_iterations >= std::floor(config.total_iterations * config.freeze_fraction) ||
-            config.visits_between_updates < 1 || config.steps_per_visit < 1 || config.steps_per_visit > 8)
+            config.visits_between_updates < 1 || config.steps_per_visit < 1 || config.steps_per_visit > 8 ||
+            !std::isfinite(config.joint_reprojection_weight) || config.joint_reprojection_weight < 0)
             throw std::invalid_argument("Invalid camera pose session schedule");
         std::sort(cameras.begin(), cameras.end(), [](const auto& a, const auto& b) { return a.uid < b.uid; });
         std::vector<size_t> training, anchors;
@@ -205,17 +206,39 @@ namespace lfs::training::camera_pose {
         auto working = entry.optimizer;
         auto display = PoseDisplayState::Ready;
         const auto joint = tracks_by_camera_.find(uid);
+        const bool combined = joint != tracks_by_camera_.end() && config_.joint_reprojection_weight > 0;
+        if (combined)
+            working.set_frozen(false); // Point relaxation changes the objective between visits.
         std::vector<SparsePointTrack> joint_tracks;
         std::vector<SparsePointPosition> points;
         if (joint != tracks_by_camera_.end()) {
             for (const auto i : joint->second) {
                 joint_tracks.push_back(sparse_tracks_[i]);
                 points.push_back(sparse_positions_[i]);
-                for (auto& m : joint_tracks.back().measurements)
+                for (auto& m : joint_tracks.back().measurements) {
                     m.pose = current_pose(m.camera_uid);
+                    if (combined) {
+                        // Local solver coordinates only; source graph and its
+                        // fingerprint retain the original undistorted calibration.
+                        auto& k = m.calibration;
+                        const int long_edge = std::max(k.width, k.height);
+                        const double scale = 1600.0 / long_edge;
+                        k.fx *= scale;
+                        k.fy *= scale;
+                        k.cx *= scale;
+                        k.cy *= scale;
+                        m.u *= scale;
+                        m.v *= scale;
+                        k.width = k.width == long_edge ? 1600 : static_cast<int>(std::ceil(k.width * scale));
+                        k.height = k.height == long_edge ? 1600 : static_cast<int>(std::ceil(k.height * scale));
+                    }
+                }
             }
         }
         const double point_limit = config_.optimizer.scene_scale * config_.optimizer.max_center_fraction;
+        // The BA term sums observations; its coefficient must not be diluted
+        // by the number of tracks or cameras in the reconstruction.
+        const double geometry_weight = config_.joint_reprojection_weight;
         auto relax_points = [&](const Matrix4& pose, std::vector<SparsePointPosition>& positions,
                                 double ceiling = std::numeric_limits<double>::infinity()) {
             const WallTimer timer{diagnostics_.point_ms};
@@ -228,11 +251,11 @@ namespace lfs::training::camera_pose {
                     if (m.camera_uid == uid)
                         m.pose = pose;
                 ++diagnostics_.point_solves;
-                if (const auto proposal = propose_sparse_point(track, point_limit, 2.0, positions[i])) {
+                if (const auto proposal = propose_sparse_point(track, point_limit, combined ? 1.0 : 2.0, positions[i])) {
                     ++diagnostics_.point_proposals;
                     positions[i] = proposal->position;
                 }
-                cost += sparse_point_cost(track, positions[i]);
+                cost += sparse_point_cost(track, positions[i], combined ? 1.0 : 2.0);
                 // Each completed track contributes nonnegative cost. Once this
                 // partial sum fails, solving remaining independent tracks cannot
                 // rescue this candidate. Partially updated candidates never commit.
@@ -247,11 +270,13 @@ namespace lfs::training::camera_pose {
                 break;
             }
             const auto pose = working.snapshot();
-            // Baseline and candidates start from identical points and receive
+            // Legacy baseline and candidates start from identical points and receive
             // the same solve budget. Extra point iterations must not buy an
             // otherwise geometrically worse camera update.
-            const auto initial_points = points;
-            const double geometry_baseline = relax_points(pose.current, points);
+            const auto initial_points = combined ? std::vector<SparsePointPosition>{} : points;
+            // Combined mode alternates blocks: relax points once, then keep them
+            // fixed for the entire pose visit, including curvature history.
+            const double geometry_baseline = !combined || step == 0 ? relax_points(pose.current, points) : 0.0;
             if (stop.stop_requested()) {
                 result.cancelled = true;
                 break;
@@ -263,7 +288,23 @@ namespace lfs::training::camera_pose {
                 ++diagnostics_.baseline_evaluations;
                 return evaluate(pose.current);
             }();
-            if (!joint_tracks.empty()) {
+            if (stop.stop_requested()) {
+                result.cancelled = true;
+                break;
+            }
+            if (combined) {
+                if (!std::isfinite(image.loss) || image.loss < 0 ||
+                    !std::all_of(image.gradient.begin(), image.gradient.end(), [](float value) { return std::isfinite(value); }))
+                    throw std::runtime_error("Invalid photometric pose baseline");
+                const auto geometry = sparse_pose_objective(uid, pose.current, joint_tracks, points, true);
+                if (!geometry)
+                    throw std::runtime_error("Shared point objective is invalid");
+                image.loss += geometry_weight * geometry->cost;
+                for (size_t axis = 0; axis < 6; ++axis)
+                    image.gradient[axis] = static_cast<float>(image.gradient[axis] + geometry_weight * geometry->gradient[axis]);
+                image.geometric_proposal = propose_combined_pose(*geometry, image.gradient, geometry_weight,
+                                                                 config_.optimizer.scene_scale);
+            } else if (!joint_tracks.empty()) {
                 const WallTimer timer{diagnostics_.proposal_ms};
                 image.geometric_proposal = propose_joint_pose(uid, pose.current, joint_tracks, points,
                                                               config_.optimizer.scene_scale);
@@ -283,7 +324,15 @@ namespace lfs::training::camera_pose {
                     ++diagnostics_.fixed_rejections;
                     return std::numeric_limits<double>::infinity();
                 }
-                if (!joint_tracks.empty()) {
+                double geometry_cost = 0;
+                if (combined) {
+                    const auto geometry = sparse_pose_objective(uid, candidate, joint_tracks, points);
+                    if (!geometry) {
+                        ++diagnostics_.joint_rejections;
+                        return std::numeric_limits<double>::infinity();
+                    }
+                    geometry_cost = geometry_weight * geometry->cost;
+                } else if (!joint_tracks.empty()) {
                     candidate_points = initial_points;
                     const double cost = relax_points(candidate, candidate_points,
                                                      geometry_baseline + 1e-12 * joint_tracks.size());
@@ -302,11 +351,16 @@ namespace lfs::training::camera_pose {
                 }();
                 if (!std::isfinite(loss) || loss < 0)
                     ++diagnostics_.invalid_losses;
-                else if (!(loss < baseline.image_loss * (1 - config_.optimizer.min_relative_improvement)))
-                    ++diagnostics_.image_rejections;
-                else
+                else if (!(loss + geometry_cost < baseline.image_loss * (1 - config_.optimizer.min_relative_improvement))) {
+                    if (combined)
+                        ++diagnostics_.combined_rejections;
+                    else
+                        ++diagnostics_.image_rejections;
+                } else
                     ++passed_image;
-                return loss;
+                // Invalid render losses must remain invalid before adding a
+                // positive geometry term (which could otherwise hide negatives).
+                return std::isfinite(loss) && loss >= 0 ? loss + geometry_cost : std::numeric_limits<double>::quiet_NaN();
             });
             const bool accepted = update.status == PoseStepStatus::Accepted;
             diagnostics_.accepted_candidates += accepted;
@@ -317,7 +371,8 @@ namespace lfs::training::camera_pose {
                 break;
             }
             if (update.status == PoseStepStatus::Accepted) {
-                points = std::move(candidate_points);
+                if (!combined)
+                    points = std::move(candidate_points);
                 ++result.accepted_steps;
                 display = PoseDisplayState::Updated;
             } else {
@@ -394,10 +449,10 @@ namespace lfs::training::camera_pose {
 
     void PoseRefinementSession::log_diagnostics() const {
         const auto& d = diagnostics_;
-        LOG_INFO("Camera pose diagnostics (since start/restore): visits={} baselines={} checks={} renders={} fixed_reject={} joint_reject={} invalid_loss={} image_reject={} objective_reject={} accepted_candidates={} committed_steps={} no_descent={} exceptions={} cancellations={} point_solves={} point_proposals={}",
+        LOG_INFO("Camera pose diagnostics (since start/restore): visits={} baselines={} checks={} renders={} fixed_reject={} joint_reject={} invalid_loss={} image_reject={} objective_reject={} accepted_candidates={} committed_steps={} no_descent={} exceptions={} cancellations={} point_solves={} point_proposals={} combined_reject={}",
                  d.visits, d.baseline_evaluations, d.candidate_checks, d.candidate_renders, d.fixed_rejections, d.joint_rejections,
                  d.invalid_losses, d.image_rejections, d.objective_rejections, d.accepted_candidates, d.committed_steps,
-                 d.no_descent, d.exceptions, d.cancellations, d.point_solves, d.point_proposals);
+                 d.no_descent, d.exceptions, d.cancellations, d.point_solves, d.point_proposals, d.combined_rejections);
         LOG_INFO("Camera pose wall time (ms, since start/restore): visits={} points={} baseline={} candidates={} proposal={} other={}; host elapsed including callback waits, not GPU event timing",
                  d.visit_ms, d.point_ms, d.baseline_ms, d.candidate_ms, d.proposal_ms,
                  std::max(0.0, d.visit_ms - d.point_ms - d.baseline_ms - d.candidate_ms - d.proposal_ms));

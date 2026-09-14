@@ -21,6 +21,7 @@ from check_camera_pose_gate import JOINT_SESSION_SUITE, JOINT_SESSION_TESTS, ins
 from check_camera_pose_gate import JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS, inspect_joint_integration_gate
 from check_camera_pose_gate import DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS, inspect_diagnostics_gate
 from check_camera_pose_gate import SCHUR_SUITE, SCHUR_TESTS, inspect_schur_gate
+from check_camera_pose_gate import COMBINED_SUITES, inspect_combined_gate
 
 
 class ReportFailureTests(unittest.TestCase):
@@ -38,6 +39,9 @@ class ReportFailureTests(unittest.TestCase):
                                 (SPARSE_POINT_SUITE, SPARSE_POINT_TESTS), (JOINT_SESSION_SUITE, JOINT_SESSION_TESTS),
                                 (JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS),
                                 (DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS), (SCHUR_SUITE, SCHUR_TESTS)):
+            with self.subTest(suite=suite):
+                self.assertEqual(found.get(suite), expected)
+        for suite, expected in COMBINED_SUITES.items():
             with self.subTest(suite=suite):
                 self.assertEqual(found.get(suite), expected)
 
@@ -400,6 +404,45 @@ class CameraPoseSchurGateTests(unittest.TestCase):
                 ET.SubElement(case, defect)
             with self.subTest(defect=defect), self.assertRaises(ValueError):
                 inspect_schur_gate(root)
+
+
+class CameraPoseCombinedGateTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseSchurGateTests().report()
+        for name, inventory in COMBINED_SUITES.items():
+            suite = ET.SubElement(root, "testsuite", name=name)
+            for case in sorted(inventory):
+                ET.SubElement(suite, "testcase", name=case, status="run", result="completed")
+        return root
+
+    def test_combined_contracts_do_not_certify_quality(self):
+        result = inspect_combined_gate(self.report())
+        self.assertEqual(result["tests"], 81)
+        self.assertTrue(result["combined_objective_contracts"])
+        self.assertFalse(result["reconstruction_quality_validated"])
+
+    def test_missing_or_unexecuted_combined_cases_fail(self):
+        for name in COMBINED_SUITES:
+            for defect in ("suite", "duplicate_suite", "missing", "duplicate", "unknown", "notrun", "failure", "error", "skipped"):
+                root = self.report()
+                suite = root.find(f"testsuite[@name='{name}']")
+                case = suite.find("testcase")
+                if defect == "suite":
+                    root.remove(suite)
+                elif defect == "duplicate_suite":
+                    root.append(suite)
+                elif defect == "missing":
+                    suite.remove(case)
+                elif defect == "duplicate":
+                    suite.append(case)
+                elif defect == "unknown":
+                    case.set("name", "Unknown")
+                elif defect == "notrun":
+                    case.set("status", "notrun")
+                else:
+                    ET.SubElement(case, defect)
+                with self.subTest(suite=name, defect=defect), self.assertRaises(ValueError):
+                    inspect_combined_gate(root)
 
 
 class CameraPoseActivationGateReportTests(unittest.TestCase):

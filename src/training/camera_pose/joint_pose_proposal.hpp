@@ -53,6 +53,44 @@ namespace lfs::training::camera_pose {
         };
     } // namespace joint_detail
 
+    // Precondition the COMBINED gradient, not the geometric gradient alone.
+    // The identity term is damping in scene-normalized tangent coordinates,
+    // not an additional objective or a claim of recovered observability.
+    // Points remain fixed, so this uses the camera block, not a Schur elimination.
+    inline std::optional<Twist> propose_combined_pose(
+        const SparsePoseObjective& geometry, const Twist& gradient,
+        double weight, double scene_scale) {
+        if (!std::isfinite(weight) || weight <= 0 || !std::isfinite(scene_scale) || scene_scale <= 0)
+            return std::nullopt;
+        joint_detail::Matrix<6> h{};
+        joint_detail::Vector<6> rhs{};
+        for (size_t a = 0; a < 6; ++a) {
+            const double sa = a < 3 ? scene_scale : 1.0;
+            rhs[a] = -gradient[a] * sa;
+            if (!std::isfinite(rhs[a]))
+                return std::nullopt;
+            for (size_t b = 0; b < 6; ++b) {
+                const double sb = b < 3 ? scene_scale : 1.0;
+                h[a][b] = weight * geometry.curvature[a][b] * sa * sb + (a == b ? 1.0 : 0.0);
+                if (!std::isfinite(h[a][b]))
+                    return std::nullopt;
+            }
+        }
+        joint_detail::Factor<6> factor;
+        if (!factor.compute(h))
+            return std::nullopt;
+        const auto step = factor.solve(rhs);
+        Twist proposal{};
+        double slope = 0;
+        for (size_t a = 0; a < 6; ++a) {
+            proposal[a] = static_cast<float>(step[a] * (a < 3 ? scene_scale : 1.0));
+            if (!std::isfinite(proposal[a]))
+                return std::nullopt;
+            slope += proposal[a] * gradient[a];
+        }
+        return std::isfinite(slope) && slope < 0 ? std::optional<Twist>(proposal) : std::nullopt;
+    }
+
     // One active camera, all incident points, all other cameras fixed. Eliminate
     // point increments from the robust GN system before solving the camera block:
     // S = A - E C^-1 E^T, rhs = -g_camera + E C^-1 g_point.

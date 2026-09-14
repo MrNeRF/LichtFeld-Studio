@@ -12,7 +12,10 @@ namespace lfs::training::camera_pose {
 
         Json settings(const PoseSessionConfig& config) {
             const auto& opt = config.optimizer;
-            return {{"total_iterations", config.total_iterations}, {"warmup_iterations", config.warmup_iterations}, {"freeze_fraction", config.freeze_fraction}, {"visits_between_updates", config.visits_between_updates}, {"steps_per_visit", config.steps_per_visit}, {"choose_anchors", config.choose_anchors}, {"optimizer", {{"scene_scale", opt.scene_scale}, {"max_center_fraction", opt.max_center_fraction}, {"max_rotation_radians", opt.max_rotation_radians}, {"step_center_fraction", opt.step_center_fraction}, {"step_rotation_radians", opt.step_rotation_radians}, {"center_prior", opt.center_prior}, {"rotation_prior", opt.rotation_prior}, {"min_relative_improvement", opt.min_relative_improvement}, {"max_backtracks", opt.max_backtracks}}}};
+            Json result = {{"total_iterations", config.total_iterations}, {"warmup_iterations", config.warmup_iterations}, {"freeze_fraction", config.freeze_fraction}, {"visits_between_updates", config.visits_between_updates}, {"steps_per_visit", config.steps_per_visit}, {"choose_anchors", config.choose_anchors}, {"optimizer", {{"scene_scale", opt.scene_scale}, {"max_center_fraction", opt.max_center_fraction}, {"max_rotation_radians", opt.max_rotation_radians}, {"step_center_fraction", opt.step_center_fraction}, {"step_rotation_radians", opt.step_rotation_radians}, {"center_prior", opt.center_prior}, {"rotation_prior", opt.rotation_prior}, {"min_relative_improvement", opt.min_relative_improvement}, {"max_backtracks", opt.max_backtracks}}}};
+            if (config.joint_reprojection_weight > 0)
+                result["joint_reprojection_weight"] = config.joint_reprojection_weight;
+            return result;
         }
 
         std::uint64_t counter(const Json& value) {
@@ -47,11 +50,18 @@ namespace lfs::training::camera_pose {
 
     PoseSessionConfig pose_session_config_from_state(const nlohmann::json& state) {
         const int version = integer(state.at("version"));
-        if (version != 1 && version != 2)
+        if (version != 1 && version != 2 && version != 3)
             throw std::invalid_argument("Unsupported camera pose state version");
         const auto& saved = state.at("settings");
         const auto& opt = saved.at("optimizer");
         PoseSessionConfig config;
+        if (version == 3) {
+            if (!saved.contains("joint_reprojection_weight") || !saved.at("joint_reprojection_weight").is_number())
+                throw std::invalid_argument("Missing combined pose objective weight");
+            config.joint_reprojection_weight = saved.at("joint_reprojection_weight").get<double>();
+            if (!std::isfinite(config.joint_reprojection_weight) || config.joint_reprojection_weight <= 0)
+                throw std::invalid_argument("Invalid combined pose objective weight");
+        }
         config.total_iterations = integer(saved.at("total_iterations"));
         config.warmup_iterations = integer(saved.at("warmup_iterations"));
         config.freeze_fraction = saved.at("freeze_fraction").get<double>();
@@ -78,8 +88,13 @@ namespace lfs::training::camera_pose {
             const auto pose = entry.optimizer.snapshot();
             cameras.push_back({{"uid", pose.uid}, {"role", static_cast<int>(entry.role)}, {"source", pose.source}, {"current", pose.current}, {"revision", pose.revision}, {"accepted_steps", pose.accepted_steps}, {"rejected_steps", pose.rejected_steps}, {"display_state", static_cast<int>(entry.state)}, {"eligible_visits", entry.visits}, {"candidate_renders", entry.renders}});
         }
-        Json result = {{"version", sparse_tracks_.empty() ? 1 : 2}, {"settings", settings(config_)}, {"iteration", iteration_}, {"paused", paused_}, {"cameras", std::move(cameras)}};
-        if (!sparse_tracks_.empty()) {
+        Json result = {{"version", config_.joint_reprojection_weight > 0 ? 3 : sparse_tracks_.empty() ? 1
+                                                                                                      : 2},
+                       {"settings", settings(config_)},
+                       {"iteration", iteration_},
+                       {"paused", paused_},
+                       {"cameras", std::move(cameras)}};
+        if (!sparse_tracks_.empty() || config_.joint_reprojection_weight > 0) {
             auto points = Json::array();
             for (size_t i = 0; i < sparse_tracks_.size(); ++i) {
                 const auto& track = sparse_tracks_[i];
@@ -93,7 +108,8 @@ namespace lfs::training::camera_pose {
     void PoseRefinementSession::restore_state(const nlohmann::json& state) {
         // Parse and validate on copies; no live pose, cadence, generation or
         // snapshot changes until every camera and the new snapshot are ready.
-        const int version = sparse_tracks_.empty() ? 1 : 2;
+        const int version = config_.joint_reprojection_weight > 0 ? 3 : sparse_tracks_.empty() ? 1
+                                                                                               : 2;
         if (!state.is_object() || state.size() != (version == 1 ? 5u : 6u) || integer(state.at("version")) != version ||
             state.at("settings") != settings(config_) || !state.at("paused").is_boolean())
             throw std::invalid_argument("Camera pose state version or configuration mismatch");
@@ -137,7 +153,7 @@ namespace lfs::training::camera_pose {
                 throw std::invalid_argument("Saved pose accepted steps exceed candidate renders");
         }
         auto positions = sparse_positions_;
-        if (version == 2) {
+        if (version >= 2) {
             const auto& points = state.at("points");
             if (!points.is_array() || points.size() != sparse_tracks_.size())
                 throw std::invalid_argument("Shared point state membership mismatch");

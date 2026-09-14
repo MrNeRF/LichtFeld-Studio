@@ -159,9 +159,17 @@ namespace lfs::training::camera_pose {
             auto result = loss->forward(output.image, fixed_target, {lambda_dssim});
             if (!result)
                 throw std::runtime_error(result.error());
+            const float value = result->first.item<float>();
+            // SSIM can exceed one by float roundoff for identical images.
+            // Rectify only that narrow numerical range, with the matching zero
+            // derivative. Nonfinite/substantially negative objectives still fail
+            // evaluator validation; ordinary Gaussian training is unaffected.
+            const float tolerance = 32 * std::numeric_limits<float>::epsilon() * lambda_dssim;
+            if (std::isfinite(value) && value < 0 && value >= -tolerance)
+                return PoseObjectiveResult{0.0, gradients ? Tensor::zeros_like(result->second.grad_image) : Tensor{}, {}};
             // The existing loss API also computes its gradient for candidates;
             // camera/Gaussian backward is still omitted for candidate scoring.
-            return PoseObjectiveResult{result->first.item<float>(),
+            return PoseObjectiveResult{value,
                                        gradients ? result->second.grad_image : Tensor{},
                                        {}};
         };

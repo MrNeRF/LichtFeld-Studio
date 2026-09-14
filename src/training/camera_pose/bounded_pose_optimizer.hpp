@@ -50,6 +50,8 @@ namespace lfs::training::camera_pose {
         // Baseline gradient and every candidate loss use the SAME frozen model.
         std::uint64_t model_revision = 0;
         std::uint64_t pose_revision = 0;
+        // Scalar data objective and its matching gradient. Normally photometric;
+        // combined sessions supply image + reprojection (source prior is internal).
         double image_loss = 0.0;
         Twist image_gradient{}; // Fresh left-tangent gradient, not matrix gradient
         std::optional<Twist> geometric_proposal{}; // World-unit left increment; never an acceptance override.
