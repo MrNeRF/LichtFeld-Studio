@@ -1,16 +1,20 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "licht_test_support.hpp"
 #include "training/dataset.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -236,6 +240,77 @@ TEST_F(PipelinedImageLoaderTest, MultipleRequestsPreserveIdsAndOptionalMask) {
     EXPECT_EQ(mask_by_sequence,
               (std::map<size_t, bool>{{11u, false}, {12u, true}}));
 }
+
+class PipelinedMaskUndistortTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
+
+TEST_P(PipelinedMaskUndistortTest, ProcessesEntireOutputMaskOnColdAndRepeatedLoad) {
+    const auto [alpha_mask, enlarge] = GetParam();
+    const lfs::test::licht::TemporaryDirectory temp("lfs-mask-undistort");
+    constexpr int src_w = 128;
+    constexpr int src_h = 96;
+    const int dst_w = enlarge ? src_w * 2 : src_w / 2;
+    const int dst_h = enlarge ? src_h * 2 : src_h / 2;
+    const auto image_path = temp.path / "image.png";
+    const auto mask_path = temp.path / "mask.png";
+    const std::vector<uint8_t> rgba(src_w * src_h * 4, 64);
+    const std::vector<uint8_t> mask(src_w * src_h, 64);
+    ASSERT_TRUE(save_png(image_path, rgba.data(), src_w, src_h, 4, 8, 1));
+    ASSERT_TRUE(save_png(mask_path, mask.data(), src_w, src_h, 1, 8, 1));
+
+    UndistortParams undistort{};
+    undistort.src_width = src_w;
+    undistort.src_height = src_h;
+    undistort.dst_width = dst_w;
+    undistort.dst_height = dst_h;
+    undistort.src_fx = undistort.src_fy = src_w;
+    undistort.src_cx = src_w / 2.0f;
+    undistort.src_cy = src_h / 2.0f;
+    undistort.dst_fx = undistort.dst_fy = static_cast<float>(dst_w);
+    undistort.dst_cx = dst_w / 2.0f;
+    undistort.dst_cy = dst_h / 2.0f;
+    undistort.model_type = CameraModelType::PINHOLE;
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.decoder_pool_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    PipelinedImageLoader loader(config);
+    ImageRequest request{};
+    request.path = image_path;
+    request.params.resize_factor = 1;
+    request.params.max_width = 0;
+    request.params.undistort = &undistort;
+    request.undistort = &undistort;
+    request.extract_alpha_as_mask = alpha_mask;
+    request.mask_params = {.invert = true, .threshold = 0.5f};
+    request.alpha_mask_params = request.mask_params;
+    if (!alpha_mask)
+        request.mask_path = mask_path;
+
+    for (size_t sequence = 0; sequence < 2; ++sequence) {
+        SCOPED_TRACE(sequence);
+        request.sequence_id = sequence;
+        loader.prefetch({request});
+        const auto ready = loader.try_get_for(std::chrono::seconds(20));
+        ASSERT_TRUE(ready.has_value());
+        ASSERT_TRUE(ready->error.empty()) << ready->error;
+        ASSERT_TRUE(ready->mask.has_value());
+        EXPECT_EQ(ready->tensor.shape(), TensorShape({3, static_cast<size_t>(dst_h), static_cast<size_t>(dst_w)}));
+        EXPECT_EQ(ready->mask->shape(), TensorShape({static_cast<size_t>(dst_h), static_cast<size_t>(dst_w)}));
+        // All source values are below 0.5, including undistortion's zero border.
+        // Invert then threshold must keep every output pixel, including the
+        // tail beyond the source pixel count when undistortion enlarges it.
+        const auto values = ready->mask->cpu().to_vector();
+        ASSERT_FALSE(values.empty());
+        EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](const float value) { return value == 1.0f; }));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(AlphaAndSidecar, PipelinedMaskUndistortTest,
+                         ::testing::Combine(::testing::Bool(), ::testing::Bool()));
 
 TEST(SidecarResumeSampler, DeterministicCameraStreamContinuesAtCheckpointOffset) {
     constexpr std::uint64_t seed = 0x4c46535f73616d70ULL;
