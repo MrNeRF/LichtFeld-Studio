@@ -12,7 +12,6 @@ from collections import OrderedDict
 from typing import Iterable
 
 import lichtfeld as lf
-import numpy as np
 
 from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, histogram_tr
 from . import rml_widgets as w
@@ -1421,42 +1420,43 @@ class HistogramPanel(Panel):
         valid_values = values_cpu[finite_mask_cpu]
         if int(valid_values.numel) == 0:
             return None
-        valid_np = np.asarray(valid_values.numpy(copy=True), dtype=np.float32).reshape(-1)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        sorted_np = np.sort(valid_np)
+        sorted_values, _ = valid_values.sort()
         auto_min, auto_max = self._histogram_bounds(valid_values, metric_id)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         histogram_min, histogram_max = HistogramPanel._resolve_and_snap_bounds(
             valid_values, auto_min, auto_max, custom_range
         )
-        counts, edges = HistogramPanel._histogram_counts_numpy(
-            valid_np, histogram_min, histogram_max, int(bin_count)
+        valid_bin_indices = self._bin_indices_for_values(
+            valid_values, histogram_min, histogram_max, int(bin_count)
+        )
+        counts, edges = self._build_histogram(
+            valid_bin_indices, int(valid_values.numel), histogram_min, histogram_max, int(bin_count)
         )
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        bin_indices = HistogramPanel._bin_indices_numpy(
-            np.asarray(values_cpu.numpy(copy=True), dtype=np.float32).reshape(-1),
-            np.asarray(finite_mask_cpu.numpy(copy=True), dtype=bool).reshape(-1),
+        bin_indices = self._build_selection_bin_indices(
+            values_cpu,
+            finite_mask_cpu,
             histogram_min,
             histogram_max,
             int(bin_count),
         )
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        sorted_values = lf.Tensor.from_numpy(sorted_np.astype(np.float32, copy=False))
         return {
             "values": values_cpu,
             "finite_mask": finite_mask_cpu,
             "valid_values": valid_values,
             "finite_values_cpu": valid_values,
             "sorted_values": sorted_values,
-            "min_value": float(sorted_np[0]),
-            "max_value": float(sorted_np[-1]),
-            "mean_value": float(np.mean(valid_np, dtype=np.float64)),
-            "median_value": float(np.percentile(sorted_np, 50.0)),
-            "p95_value": float(np.percentile(sorted_np, 95.0)),
+            "min_value": float(sorted_values[0].item()),
+            "max_value": float(sorted_values[-1].item()),
+            "mean_value": float(valid_values.mean().item()),
+            "median_value": self._percentile_from_sorted(sorted_values, 50.0),
+            "p95_value": self._percentile_from_sorted(sorted_values, 95.0),
             "auto_min": auto_min,
             "auto_max": auto_max,
             "histogram_min": histogram_min,
@@ -1488,8 +1488,6 @@ class HistogramPanel(Panel):
         y_valid = y_cpu[mask_cpu]
         if int(x_valid.numel) == 0:
             return {"kind": "empty"}
-        x_np = np.asarray(x_valid.numpy(copy=True), dtype=np.float32).reshape(-1)
-        y_np = np.asarray(y_valid.numpy(copy=True), dtype=np.float32).reshape(-1)
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
         x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id)
@@ -1498,29 +1496,19 @@ class HistogramPanel(Panel):
             return {"kind": "cancelled"}
         x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range)
         y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range)
-        x_edges = HistogramPanel._compute_bin_edges(x_min, x_max, int(x_bin_count))
-        y_edges = HistogramPanel._compute_bin_edges(y_min, y_max, int(y_bin_count))
-        in_range = (
-            (x_np >= x_min) & (x_np <= x_max) &
-            (y_np >= y_min) & (y_np <= y_max)
-        )
-        heatmap = np.histogram2d(
-            x_np[in_range], y_np[in_range], bins=[x_edges, y_edges]
-        )[0].T.astype(np.int64, copy=False).reshape(-1)
-        if self._histogram_compute_cancelled(cancel_event):
-            return {"kind": "cancelled"}
-        all_x = np.asarray(x_cpu.numpy(copy=True), dtype=np.float32).reshape(-1)
-        all_y = np.asarray(y_cpu.numpy(copy=True), dtype=np.float32).reshape(-1)
-        mask_np = np.asarray(mask_cpu.numpy(copy=True), dtype=bool).reshape(-1)
-        if self._histogram_compute_cancelled(cancel_event):
-            return {"kind": "cancelled"}
-        x_bin_indices = self._bin_indices_numpy(
-            all_x, mask_np, x_min, x_max, int(x_bin_count)
+        x_bin_indices = self._build_selection_bin_indices(
+            x_cpu, mask_cpu, x_min, x_max, int(x_bin_count)
         )
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
-        y_bin_indices = self._bin_indices_numpy(
-            all_y, mask_np, y_min, y_max, int(y_bin_count)
+        y_bin_indices = self._build_selection_bin_indices(
+            y_cpu, mask_cpu, y_min, y_max, int(y_bin_count)
+        )
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
+        heatmap, x_edges, y_edges = self._build_compare_heatmap(
+            x_bin_indices, y_bin_indices, int(x_cpu.numel),
+            x_min, x_max, y_min, y_max, int(x_bin_count), int(y_bin_count)
         )
         if self._histogram_compute_cancelled(cancel_event):
             return {"kind": "cancelled"}
@@ -1543,7 +1531,7 @@ class HistogramPanel(Panel):
             "y_max": y_max,
             "x_bin_indices": x_bin_indices,
             "y_bin_indices": y_bin_indices,
-            "counts": [int(value) for value in heatmap.tolist()],
+            "counts": heatmap,
             "x_edges": x_edges,
             "y_edges": y_edges,
         }
@@ -2429,41 +2417,6 @@ class HistogramPanel(Panel):
         if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
             lo, hi = auto_min, auto_max
         return HistogramPanel._snap_bounds_to_data(values, lo, hi)
-
-    @staticmethod
-    def _histogram_counts_numpy(
-        values: np.ndarray, histogram_min: float, histogram_max: float, bin_count: int
-    ) -> tuple[list[int], list[float]]:
-        edges = HistogramPanel._compute_bin_edges(histogram_min, histogram_max, bin_count)
-        span = histogram_max - histogram_min
-        if not math.isfinite(span) or span <= 0.0:
-            counts = [0] * bin_count
-            if values.size:
-                counts[-1] = int(values.size)
-            return counts, edges
-        in_range = values[np.isfinite(values) & (values >= histogram_min) & (values <= histogram_max)]
-        counts, _ = np.histogram(in_range, bins=np.asarray(edges, dtype=np.float64))
-        return [int(value) for value in counts.tolist()], edges
-
-    @staticmethod
-    def _bin_indices_numpy(
-        values: np.ndarray,
-        finite_mask: np.ndarray,
-        histogram_min: float,
-        histogram_max: float,
-        bin_count: int,
-    ) -> lf.Tensor:
-        indices = np.full(values.shape, -1, dtype=np.int32)
-        span = histogram_max - histogram_min
-        if math.isfinite(span) and span > 0.0:
-            in_range = finite_mask & (values >= histogram_min) & (values <= histogram_max)
-            indices[in_range] = np.floor(
-                ((values[in_range] - histogram_min) / span) * bin_count
-            ).astype(np.int32)
-            indices[in_range] = np.clip(indices[in_range], 0, bin_count - 1)
-        elif values.size:
-            indices[finite_mask] = bin_count - 1
-        return lf.Tensor.from_numpy(np.ascontiguousarray(indices))
 
     def _build_histogram(
         self,
