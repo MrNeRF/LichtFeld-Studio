@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "Este enlace no pertenece a tu portal y se ha bloqueado.",
   "asset_manager.gallery.format.studio_hint": "Sin recodificación.",
   "asset_manager.gallery.format.sog_hint": "Menor tamaño, carga web rápida.",
   "asset_manager.gallery.format.ssog_hint": "Carga progresiva de escenas grandes.",

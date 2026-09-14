@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "이 링크는 사용 중인 포털에 속하지 않아 차단되었습니다.",
   "asset_manager.gallery.format.studio_hint": "다시 인코딩하지 않습니다.",
   "asset_manager.gallery.format.sog_hint": "최소 크기, 빠른 웹 로딩.",
   "asset_manager.gallery.format.ssog_hint": "큰 장면을 스트리밍합니다.",

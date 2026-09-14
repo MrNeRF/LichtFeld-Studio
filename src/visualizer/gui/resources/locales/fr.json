@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "Ce lien n’appartient pas à votre portail et a été bloqué.",
   "asset_manager.gallery.format.studio_hint": "Sans réencodage.",
   "asset_manager.gallery.format.sog_hint": "Taille minimale, chargement web rapide.",
   "asset_manager.gallery.format.ssog_hint": "Chargement progressif des grandes scènes.",

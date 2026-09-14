@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "此链接不属于您的门户，已被阻止。",
   "asset_manager.gallery.format.studio_hint": "不重新编码。",
   "asset_manager.gallery.format.sog_hint": "体积最小，网页加载快。",
   "asset_manager.gallery.format.ssog_hint": "流式加载大型场景。",

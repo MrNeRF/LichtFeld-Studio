@@ -140,7 +140,7 @@ class PortalGalleryClient:
         if path == "/me":
             version = result.get("revisionDomains", 0)
             self.revision_domains = version if type(version) is int else 0
-            if self.revision_domains < 1 or not isinstance(result.get("storageHosts"), list):
+            if self.revision_domains < 1:
                 raise PortalProtocolError(UNSUPPORTED_PORTAL)
             self.max_file_bytes = result.get("maxFileBytes", DEFAULT_MAX_FILE_BYTES)
             self.storage_hosts = result.get("storageHosts")

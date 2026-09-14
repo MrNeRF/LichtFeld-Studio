@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "Deze link hoort niet bij je portaal en is geblokkeerd.",
   "asset_manager.gallery.format.studio_hint": "Geen hercodering.",
   "asset_manager.gallery.format.sog_hint": "Kleinste formaat, snel laden op het web.",
   "asset_manager.gallery.format.ssog_hint": "Streamt grote scènes.",

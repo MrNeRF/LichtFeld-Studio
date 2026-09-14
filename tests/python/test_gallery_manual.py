@@ -324,14 +324,106 @@ def test_closed_update_uses_saved_file_proof_without_live_capture(gallery, monke
 
 
 @pytest.mark.parametrize('field', [None, 'portalOwnedHosts'])
-def test_me_without_storage_hosts_is_refused(field):
+def test_me_without_storage_hosts_connects_without_adopting_alias(field):
     capabilities = {'revisionDomains': 1}
     if field:
         capabilities[field] = ['cdn.portal.example']
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(
         request_json_authenticated=lambda *a, **kw: capabilities))
-    with pytest.raises(portal_gallery.PortalProtocolError, match='^This portal version does not support gallery sync$'):
-        client._request('GET', '/me')
+    assert client._request('GET', '/me') == capabilities
+    assert client.storage_hosts is None
+
+
+@pytest.fixture
+def refresh_account(gallery, tmp_path, monkeypatch):
+    """Fresh journal and real controller/client with an in-memory portal transport."""
+    from lfs_plugins import gallery_sync as sync
+    controller, _, _ = gallery
+    calls = []
+    class RefreshAccount(Account):
+        signed_in = False
+        connected_since = 'first'
+        capabilities = {'gallerySyncVersion': 1, 'revisionDomains': 1, 'sourceFormats': ['licht']}
+
+        def snapshot(self):
+            return SimpleNamespace(signed_in=self.signed_in, email=self.email,
+                                   connected_since=self.connected_since)
+
+        def request_json_authenticated(self, method, path, body=None, **kwargs):
+            calls.append((self.email, self.connected_since, method, path))
+            assert kwargs['expected_session'] == (self.email, self.connected_since)
+            if path == '/api/gallery/v1/me':
+                return dict(self.capabilities, id=self.owner)
+            assert path == '/api/gallery/v1/splats'
+            return {'scenes': [{'id': self.owner + '-scene', 'status': 'ready',
+                                'contentRevision': 'c', 'metadataRevision': 'm'}]}
+
+    account = RefreshAccount()
+    service = sync.GallerySync(account, tmp_path / 'fresh-journal')
+    assert not service._journal.exists()
+    controller.service = service
+    controller._identity = service.identity()
+    monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
+
+    def refresh():
+        controller.refresh()
+        if service._thread:
+            finish(service)
+        controller._poll()
+        assert not controller._work_pending()
+
+    return SimpleNamespace(account=account, service=service, controller=controller,
+                           calls=calls, refresh=refresh)
+
+
+@pytest.mark.parametrize('supported', [True, False])
+def test_sign_in_refresh_checks_me_before_accepting_or_refusing(refresh_account, supported):
+    run = refresh_account
+    if not supported:
+        run.account.capabilities = {'gallerySyncVersion': 1}
+    run.account.signed_in = True
+    run.refresh()
+    state = run.service.snapshot()
+    ui = run.controller.snapshot()
+    assert state['connected'] is supported and state['refresh_ok'] is supported
+    assert state['unsupported'] is not supported and ui['unsupported'] is not supported
+    assert ui['offline'] is not supported
+    paths = [call[-1] for call in run.calls]
+    assert paths == ['/api/gallery/v1/me'] + (['/api/gallery/v1/splats'] if supported else [])
+    if supported:
+        assert [scene['id'] for scene in state['scenes']] == ['one-scene']
+        assert ui['message'] == 'Gallery is up to date.'
+    else:
+        assert state['scenes'] == []
+        assert state['message'] == portal_gallery.UNSUPPORTED_PORTAL
+        assert ui['message'] == portal_gallery.UNSUPPORTED_PORTAL
+        run.refresh()
+        run.controller._poll()
+        assert len(run.calls) == 1
+
+
+@pytest.mark.parametrize('initially_supported', [True, False])
+@pytest.mark.parametrize('change', ['account', 'session'])
+def test_new_identity_refresh_fetches_me_and_listing(refresh_account, initially_supported, change):
+    run = refresh_account
+    supported = dict(run.account.capabilities, storageHosts=['portal.example'])
+    run.account.capabilities = supported if initially_supported else {'gallerySyncVersion': 1}
+    run.account.signed_in = True
+    run.refresh()
+    if change == 'account':
+        run.account.email, run.account.owner = 'two@example.com', 'two'
+    else:
+        run.account.connected_since = 'second'
+    run.account.capabilities = supported
+    assert not run.service.snapshot()['unsupported']
+    run.calls.clear()
+    run.refresh()
+    state = run.service.snapshot()
+    assert state['connected'] and state['refresh_ok'] and not state['unsupported']
+    assert [call[-1] for call in run.calls] == ['/api/gallery/v1/me', '/api/gallery/v1/splats']
+    assert [scene['id'] for scene in state['scenes']] == [run.account.owner + '-scene']
+    assert not run.controller.snapshot()['offline']
+    assert run.controller.snapshot()['message'] == 'Gallery is up to date.'
 
 
 def test_closed_update_rechecks_reviewed_commit_before_patch(gallery, monkeypatch, tmp_path):

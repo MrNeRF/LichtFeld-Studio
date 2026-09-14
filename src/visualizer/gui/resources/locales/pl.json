@@ -1,4 +1,5 @@
 {
+  "asset_manager.gallery.error.unsafe_url": "Ten link nie należy do Twojego portalu i został zablokowany.",
   "asset_manager.gallery.format.studio_hint": "Bez ponownego kodowania.",
   "asset_manager.gallery.format.sog_hint": "Najmniejszy rozmiar, szybkie ładowanie w sieci.",
   "asset_manager.gallery.format.ssog_hint": "Strumieniowe ładowanie dużych scen.",

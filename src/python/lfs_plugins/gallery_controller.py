@@ -641,6 +641,8 @@ class GalleryController:
 
     def refresh(self):
         if not self.service.busy:
+            self._check_identity()
+            self._message = ""
             self._refresh_pending = True
             self.service.refresh()
             self._schedule_poll()

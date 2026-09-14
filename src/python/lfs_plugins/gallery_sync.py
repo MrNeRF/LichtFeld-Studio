@@ -176,7 +176,7 @@ class GallerySync:
         self._quota_bytes = None
         self._used_bytes = None
         self._completion = None
-        self._unsupported_origin = None
+        self._unsupported_identity = None
         self._revision_domains = 0
         self._list_etag = None
         self._checked_at = 0
@@ -331,7 +331,7 @@ class GallerySync:
                 "storage_issue": self._journal_problem,
                 "refresh_ok": self._refresh_ok,
                 "relink_required": self._relink_required if snap.signed_in else False,
-                "unsupported": self._unsupported_origin == self.account.base_url,
+                "unsupported": self._unsupported_identity == self.identity(),
                 "source_formats": self._source_formats if same else [],
                 "owner": self._owner if same else None,
                 "quotaBytes": self._quota_bytes if same else None,
@@ -346,7 +346,7 @@ class GallerySync:
 
     def _client(self):
         self._check_journal_ready()
-        if self._unsupported_origin == self.account.base_url:
+        if self._unsupported_identity == self.identity():
             raise PortalProtocolError(UNSUPPORTED_PORTAL)
         snap = self.account.snapshot()
         if not snap.signed_in or not snap.email or not snap.connected_since or self._origin != self.account.base_url or self._session != (snap.email, snap.connected_since):
@@ -410,8 +410,9 @@ class GallerySync:
         self._launch(checked, operation="metadata")
 
     def refresh(self):
-        if self._unsupported_origin == self.account.base_url:
+        if self._unsupported_identity == self.identity():
             return
+        self._unsupported_identity = None
         self._refresh_ok = False
         def action():
             snap = self.account.snapshot()
@@ -425,12 +426,11 @@ class GallerySync:
             try:
                 capabilities = client._request("GET", "/me")
                 if (capabilities.get("gallerySyncVersion") != 1
-                        or not isinstance(capabilities.get("storageHosts"), list)
                         or type(capabilities.get("revisionDomains")) is not int or capabilities["revisionDomains"] < 1):
                     raise PortalProtocolError(UNSUPPORTED_PORTAL)
             except PortalProtocolError as exc:
                 if str(exc) == UNSUPPORTED_PORTAL:
-                    self._unsupported_origin = origin
+                    self._unsupported_identity = (origin, *session, True)
                     self._owner = None
                     self.scenes = []
                 raise
