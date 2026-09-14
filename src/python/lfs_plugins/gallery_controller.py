@@ -1661,8 +1661,6 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         action = "unlink"
     if relationship in ("identity_ambiguous", "local_file_problem") or storage_issue or (cached_projection and not link):
         action = "check"
-    if relationship == "local_file_problem":
-        action = "locate" if project.get("status") == "MISSING" else ""
     reason = job.get("message") or project.get("error", "")
     if relationship == "local_file_problem":
         reason = project.get("error")

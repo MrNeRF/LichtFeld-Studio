@@ -205,22 +205,25 @@ class GalleryAssetMixin:
         detail = job.get("transferDetail", "")
         byte_label = tr("bytes", prefix="gallery.transfer.", done=self._format_size(job.get("completed", 0)),
                         total=self._format_size(job["total"])) if facts["active"] and job.get("total") else ""
-        action_label = tr("asset_manager.action.locate_file") if facts["action"] == "locate" else tr("action." + facts["action"]) if facts["action"] else ""
+        gallery_action = facts["action"]
+        if facts["relationship"] == "local_file_problem":
+            gallery_action = "locate" if asset.get("status") == "MISSING" else ""
+        action_label = tr("asset_manager.action.locate_file") if gallery_action == "locate" else tr("action." + gallery_action) if gallery_action else ""
         return {"gallery_state": facts["state"], "gallery_label": label,
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
                 "gallery_stored": stored,
                 "gallery_stored_label": tr("state.stored") + " · " + self._gallery_checked_label() if stored else "",
                 "gallery_can_pause": can_pause, "gallery_can_cancel": can_cancel,
-                "gallery_action_persistent": can_cancel or facts["action"] in ("retry", "resume"),
-                "gallery_has_controls": can_cancel or bool(facts["action"]),
+                "gallery_action_persistent": can_cancel or gallery_action in ("retry", "resume"),
+                "gallery_has_controls": can_cancel or bool(gallery_action),
                 "gallery_tooltip": "\n".join(filter(None, (label, byte_label, detail))),
                 "gallery_progress_width": f"{35 if indeterminate else facts['progress']}%",
                 "gallery_indeterminate": indeterminate,
                 "gallery_icon": "../icon/gallery-" + facts["icon"] + ".png",
                 "gallery_tone": "gallery-tone-" + facts["tone"],
                 "gallery_has_badge": facts["relationship"] != "local_file_problem",
-                "gallery_has_action": bool(facts["action"]), "gallery_action": facts["action"], "gallery_action_label": action_label,
+                "gallery_has_action": bool(gallery_action), "gallery_action": gallery_action, "gallery_action_label": action_label,
                 "gallery_progress": facts["progress"], "gallery_active": facts["active"],
                 "remote_only": bool(asset.get("remote_only"))}
 
@@ -324,17 +327,16 @@ class GalleryAssetMixin:
     def _gallery_context_items(self, asset):
         facts = self._gallery_facts(asset)
         scene = self._gallery_scene(asset)
+        badge = self._gallery_badge(asset)
         items = []
-        if facts["action"] and facts["action"] != "open" and (self._project_available(asset) or asset.get("remote_only") or facts["relationship"] in ("local_missing", "local_file_problem")):
-            label = tr("asset_manager.action.locate_file") if facts["action"] == "locate" else tr("action." + facts["action"])
-            items.append({"label": label, "action": "gallery:" + facts["action"], "separator_before": True})
+        if badge["gallery_action"] and badge["gallery_action"] != "open" and (self._project_available(asset) or asset.get("remote_only") or facts["relationship"] in ("local_missing", "local_file_problem")):
+            items.append({"label": badge["gallery_action_label"], "action": "gallery:" + badge["gallery_action"], "separator_before": True})
         if asset.get("remote_only"):
             items.append({"label": tr("action.pull_open"), "action": "gallery:pull_open"})
         if facts["relationship"] == "remote_deleted" and facts["action"] != "unlink":
             items.append({"label": tr("action.unlink"), "action": "gallery:unlink"})
         if scene:
             items += [{"label": tr("action.open"), "action": "gallery:open"}, {"label": tr("action.copy"), "action": "gallery:copy"}]
-        badge = self._gallery_badge(asset)
         if badge["gallery_can_pause"]:
             items.append({"label": tr("action.pause", prefix="gallery.transfer."), "action": "gallery:pause_transfer"})
         if badge["gallery_can_cancel"]:
@@ -641,7 +643,7 @@ class GalleryAssetMixin:
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        return self._gallery_facts(asset)["action"]
+        return self._gallery_badge(asset)["gallery_action"]
 
     def _begin_gallery_publish(self, asset, action):
         warning = self._gallery_quota_warning()
