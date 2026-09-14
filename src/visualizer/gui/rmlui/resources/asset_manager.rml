@@ -130,7 +130,7 @@
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-class-gallery-remote="asset.remote_only" data-style-decorator="asset.thumbnail_decorator">
                         <span class="gallery-stored" data-if="asset.gallery_stored" data-attr-title="asset.gallery_stored_label">✓</span>
-                        <span class="gallery-badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-title="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
+                        <span class="gallery-badge" data-if="asset.gallery_has_badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-title="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
                         <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <div class="asset-card-body">
@@ -179,7 +179,7 @@
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
                       <span class="asset-col asset-col-gallery" data-attr-title="asset.gallery_tooltip">
-                        <img class="gallery-list-icon" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
+                        <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
                         <span data-if="!asset.gallery_has_controls">{{asset.gallery_label}}</span>
                         <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
                         <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_pause" data-attr-data-asset-id="asset.id" data-asset-action="gallery:pause_transfer" data-attr-title="g_action_pause">Ⅱ</button>

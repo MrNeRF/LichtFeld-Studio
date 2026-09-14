@@ -188,6 +188,8 @@ class GalleryAssetMixin:
         label = tr(state_key, percent=facts["progress"])
         if facts["reason"] and facts["state"] == "error":
             label = tr("state.with_reason", state=label, reason=facts["reason"])
+        if facts["relationship"] == "local_file_problem":
+            label = getattr(self, "_project_status_label", lambda _asset: label)(asset)
         if asset.get("remote_only"):
             label = tr("state.remote_detail", state=label, size=self._format_size(asset.get("file_size_bytes")),
                        format=asset.get("source_format", "licht").upper())
@@ -203,6 +205,7 @@ class GalleryAssetMixin:
         detail = job.get("transferDetail", "")
         byte_label = tr("bytes", prefix="gallery.transfer.", done=self._format_size(job.get("completed", 0)),
                         total=self._format_size(job["total"])) if facts["active"] and job.get("total") else ""
+        action_label = tr("asset_manager.action.locate_file") if facts["action"] == "locate" else tr("action." + facts["action"]) if facts["action"] else ""
         return {"gallery_state": facts["state"], "gallery_label": label,
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
@@ -216,7 +219,8 @@ class GalleryAssetMixin:
                 "gallery_indeterminate": indeterminate,
                 "gallery_icon": "../icon/gallery-" + facts["icon"] + ".png",
                 "gallery_tone": "gallery-tone-" + facts["tone"],
-                "gallery_has_action": bool(facts["action"]), "gallery_action": facts["action"], "gallery_action_label": tr("action." + facts["action"]) if facts["action"] else "",
+                "gallery_has_badge": facts["relationship"] != "local_file_problem",
+                "gallery_has_action": bool(facts["action"]), "gallery_action": facts["action"], "gallery_action_label": action_label,
                 "gallery_progress": facts["progress"], "gallery_active": facts["active"],
                 "remote_only": bool(asset.get("remote_only"))}
 
@@ -321,8 +325,9 @@ class GalleryAssetMixin:
         facts = self._gallery_facts(asset)
         scene = self._gallery_scene(asset)
         items = []
-        if facts["action"] and facts["action"] != "open" and (self._project_available(asset) or asset.get("remote_only") or facts["relationship"] == "local_missing"):
-            items.append({"label": tr("action." + facts["action"]), "action": "gallery:" + facts["action"], "separator_before": True})
+        if facts["action"] and facts["action"] != "open" and (self._project_available(asset) or asset.get("remote_only") or facts["relationship"] in ("local_missing", "local_file_problem")):
+            label = tr("asset_manager.action.locate_file") if facts["action"] == "locate" else tr("action." + facts["action"])
+            items.append({"label": label, "action": "gallery:" + facts["action"], "separator_before": True})
         if asset.get("remote_only"):
             items.append({"label": tr("action.pull_open"), "action": "gallery:pull_open"})
         if facts["relationship"] == "remote_deleted" and facts["action"] != "unlink":
@@ -417,6 +422,8 @@ class GalleryAssetMixin:
                     self._controller().command(command, facts["jobId"] or None)
             elif action in ("pull", "pull_open"):
                 self._pull_gallery_asset(asset, open_after=action == "pull_open")
+            elif action == "locate":
+                self.on_locate_file()
             elif action in ("open", "copy"):
                 self._controller().open_portal(self._gallery_scene(asset), action)
             elif action == "unlink":

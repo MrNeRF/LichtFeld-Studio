@@ -878,6 +878,22 @@ def test_gallery_grid_geometry_uses_dp_and_subtracts_column_gaps(panel_module, m
     panel._window_assets([_project(id=str(index), project_uuid=str(index)) for index in range(12)])
     assert panel._asset_card_slot_width == pytest.approx(slot)
 
+@pytest.mark.parametrize("status,action", [("MISSING", "locate"), ("UNREADABLE", ""), ("UNSUPPORTED", ""), ("REPAIR_ONLY", ""), ("UNSUPPORTED_NEWER", "")])
+def test_file_problems_hide_gallery_verbs(panel_module, status, action):
+    asset = _project(status=status, exists=status == "MISSING", available=False)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    badge = panel._gallery_badge(asset)
+    actions = [item["action"] for item in panel._asset_context_menu_items(asset)]
+
+    assert badge["gallery_action"] == action
+    assert badge["gallery_has_badge"] is False
+    assert "gallery:publish" not in actions
+    assert "gallery:update" not in actions
+    assert "gallery:pull" not in actions
+    assert ("gallery:locate" in actions) is (status == "MISSING")
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
