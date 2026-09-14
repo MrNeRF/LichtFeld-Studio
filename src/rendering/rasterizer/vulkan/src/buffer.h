@@ -280,7 +280,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<uint32_t> lod_gpu_indices;         // [M] GPU-produced physical splat indices
     Buffer<uint32_t> lod_gpu_logical_indices; // [M] GPU-produced logical/model splat indices
     Buffer<float> lod_gpu_weights;            // [M] GPU-produced transition opacity weights
-    Buffer<uint32_t> lod_gpu_counts;          // [0]=selected, [1]=overflow
+    Buffer<uint32_t> lod_gpu_counts;          // selected, overflow, threshold scale, indirect dispatch xyz
     Buffer<uint32_t> lod_chunk_touch;         // [C] per-chunk traversal priority (0xffffffff = in use)
     // GPU-compacted chunk_touch (Phase D): counts[4], protected ids, miss pairs.
     Buffer<uint32_t> lod_compact_counts;

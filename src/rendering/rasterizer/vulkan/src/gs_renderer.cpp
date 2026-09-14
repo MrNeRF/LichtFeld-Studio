@@ -5,6 +5,7 @@
 #include "visible_mask.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <csignal>
 #include <cstring>
@@ -666,7 +667,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
         destroyLodSelectionReadback();
     }
 
-    const VkDeviceSize byte_size = (2 + chunk_capacity) * sizeof(uint32_t);
+    const VkDeviceSize byte_size = (3 + chunk_capacity) * sizeof(uint32_t);
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size = byte_size;
@@ -693,7 +694,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
             std::format(
                 "LOD-selection readback buffer allocation failed (requested_bytes={}, payload_words={}, allocator={:#x}, result={}({}))",
                 byte_size,
-                2 + chunk_capacity,
+                3 + chunk_capacity,
                 lfs::rendering::vkHandleValue(allocator),
                 lfs::rendering::vkResultToString(create_result),
                 static_cast<int>(create_result)),
@@ -780,22 +781,23 @@ VulkanGSRenderer::pollDeferredLodSelectionStats() {
         return std::nullopt;
     if (!invalidateReadbackBuffer(
             lod_selection_readback_buffer_,
-            (2 + 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap) * sizeof(uint32_t)))
+            (3 + 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap) * sizeof(uint32_t)))
         return std::nullopt;
 
     LodSelectionStats stats{};
     stats.candidate_count = lod_selection_readback_mapped_[0];
     stats.rendered_capacity = lod_selection_readback_capacity_;
     stats.overflow_count = lod_selection_readback_mapped_[1];
+    stats.threshold_scale = std::bit_cast<float>(lod_selection_readback_mapped_[2]);
     const uint32_t* const words = lod_selection_readback_mapped_;
     const size_t protected_count =
-        std::min<size_t>(words[2], kLodCompactProtectedCap);
-    const size_t miss_count = std::min<size_t>(words[3], kLodCompactMissCap);
-    stats.protected_overflow = words[4];
-    stats.miss_overflow = words[5];
-    stats.protected_chunks.assign(words + 6, words + 6 + protected_count);
+        std::min<size_t>(words[3], kLodCompactProtectedCap);
+    const size_t miss_count = std::min<size_t>(words[4], kLodCompactMissCap);
+    stats.protected_overflow = words[5];
+    stats.miss_overflow = words[6];
+    stats.protected_chunks.assign(words + 7, words + 7 + protected_count);
     stats.miss_candidates.reserve(miss_count);
-    const uint32_t* const misses = words + 6 + kLodCompactProtectedCap;
+    const uint32_t* const misses = words + 7 + kLodCompactProtectedCap;
     for (size_t i = 0; i < miss_count; ++i) {
         stats.miss_candidates.emplace_back(misses[i * 2], misses[i * 2 + 1]);
     }
@@ -910,10 +912,10 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         vulkan_dispatch_.cmd_copy_buffer(command_buffer, src.buffer,
                                          lod_selection_readback_buffer_.buffer, 1, &copy);
     };
-    copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 2);
-    copy_region(buffers.lod_compact_counts.deviceBuffer, 2, 4);
-    copy_region(buffers.lod_compact_protected.deviceBuffer, 6, kLodCompactProtectedCap);
-    copy_region(buffers.lod_compact_misses.deviceBuffer, 6 + kLodCompactProtectedCap,
+    copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 3);
+    copy_region(buffers.lod_compact_counts.deviceBuffer, 3, 4);
+    copy_region(buffers.lod_compact_protected.deviceBuffer, 7, kLodCompactProtectedCap);
+    copy_region(buffers.lod_compact_misses.deviceBuffer, 7 + kLodCompactProtectedCap,
                 2 * kLodCompactMissCap);
 
     // Host coherence still requires fence/timeline wait at endCommandBatch (§3.2 G3).
@@ -1174,7 +1176,7 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
         return;
     }
 
-    auto& counts = clearDeviceBuffer(buffers.lod_gpu_counts, 2);
+    auto& counts = clearDeviceBuffer(buffers.lod_gpu_counts, 6);
     auto& out_indices = resizeDeviceBuffer(buffers.lod_gpu_indices, uniforms.output_capacity, true);
     auto& out_logical_indices = resizeDeviceBuffer(buffers.lod_gpu_logical_indices,
                                                    uniforms.output_capacity,
@@ -1189,24 +1191,33 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
     // are never read.
     // Tags from lod_select_threshold.slang bindings 0–11.
     using lfs::rendering::vulkan::BufferUse;
-    executeCompute(
-        {{uniforms.physical_node_count, 128}},
-        &uniforms, sizeof(uniforms),
-        pipeline_lod_select_threshold,
-        std::vector<TaggedBinding>{
-            {node_bounds, BufferUse::ComputeRead},
-            {node_links, BufferUse::ComputeRead},
-            {chunk_to_page, BufferUse::ComputeRead},
-            {counts, BufferUse::ComputeReadWrite},
-            {out_indices, BufferUse::ComputeWrite},
-            {out_logical_indices, BufferUse::ComputeWrite},
-            {out_weights, BufferUse::ComputeWrite},
-            {chunk_touch, BufferUse::ComputeReadWrite},
-            {out_levels, BufferUse::ComputeWrite},
-            {page_age, BufferUse::ComputeRead},
-            {page_frames, BufferUse::ComputeRead},
-            {page_to_chunk, BufferUse::ComputeRead},
-        });
+    const auto bindings = std::vector<TaggedBinding>{
+        {node_bounds, BufferUse::ComputeRead},
+        {node_links, BufferUse::ComputeRead},
+        {chunk_to_page, BufferUse::ComputeRead},
+        {counts, BufferUse::ComputeReadWrite},
+        {out_indices, BufferUse::ComputeWrite},
+        {out_logical_indices, BufferUse::ComputeWrite},
+        {out_weights, BufferUse::ComputeWrite},
+        {chunk_touch, BufferUse::ComputeReadWrite},
+        {out_levels, BufferUse::ComputeWrite},
+        {page_age, BufferUse::ComputeRead},
+        {page_frames, BufferUse::ComputeRead},
+        {page_to_chunk, BufferUse::ComputeRead},
+    };
+    executeCompute({{uniforms.physical_node_count, 128}},
+                   &uniforms, sizeof(uniforms), pipeline_lod_select_threshold, bindings);
+    // Keep repairs on the GPU. Once a complete cut fits, subsequent indirect
+    // dispatches have zero work; projection never sees a truncated prefix.
+    for (uint32_t pass = 1; pass <= 16; ++pass) {
+        auto gate = uniforms;
+        gate.budget_pass = pass;
+        executeCompute({{1, 128}}, &gate, sizeof(gate), pipeline_lod_select_threshold, bindings);
+        auto retry = uniforms;
+        retry.budget_pass = 17;
+        executeComputeIndirect(counts, 3 * sizeof(uint32_t),
+                               &retry, sizeof(retry), pipeline_lod_select_threshold, bindings);
+    }
 
     // Phase D: compact chunk_touch on the GPU so the readback and the CPU
     // request pass scale with the working set, not the logical chunk count.
