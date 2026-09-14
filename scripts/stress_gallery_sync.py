@@ -1010,6 +1010,7 @@ Scene.objects.bulk_create(rows)
             "over_length": locale["asset_manager.gallery.error.download_size"],
             "corrupted": locale["asset_manager.gallery.error.download_damaged"],
         }
+        self.rpc("from lfs_plugins.gallery_messages import localize_message")
         self.publish()
         self.rpc(f"new.unlink({self.asset_id!r})")
         self.refresh()
@@ -1028,8 +1029,9 @@ Scene.objects.bulk_create(rows)
             job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}
                 or j.get('stagedImport', {}).get('state') == 'failed', "specific bad-download failure")
             message = job.get("stagedImport", {}).get("message") or job["message"]
+            reason = self.value(f"localize_message({message!r})")
             assert job['status'] == 'error' or job.get('stagedImport', {}).get('state') == 'failed', job
-            assert message == expected_messages[mode], message
+            assert reason == expected_messages[mode], dict(message=message, reason=reason)
             assert self.value("sorted(p._asset_index_assets())") == baseline, "Bad download registered a project"
             self.rpc("assert not list(new.root.rglob('.gallery-*'))")
             self.rpc(f"""from lfs_plugins.gallery_transfer_panel import transfer_rows
@@ -1041,7 +1043,7 @@ assert not _bad_path.with_name('.' + _bad_path.name + '.part').exists()
             stage = job.get("stagedImport", {}).get("path")
             if stage:
                 assert not Path(stage).exists(), "Failed staging was not cleaned"
-            self.observe(mode, safe_job(job))
+            self.observe(mode, dict(safe_job(job), localized_reason=reason))
             self.wait_value("new.busy", "bad transfer idle", accept=lambda busy: not busy)
             self.rpc(f"new.discard({identifier!r})")
             self.wait_value("new.busy", "bad transfer discarded", accept=lambda busy: not busy)

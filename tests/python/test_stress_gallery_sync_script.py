@@ -1001,17 +1001,23 @@ def test_account_switch_asserts_public_transfer_rows(waiting_run, panel_module, 
     else:
         run.account_switch()
 
-@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'opposite_reason', 'extra_text', 'registered',
+@pytest.mark.parametrize('failure', [None, 'unrecognized', 'wrong_reason', 'opposite_reason', 'extra_text', 'registered',
                                      'staging', 'paused', 'resume', 'download_file', 'partial'])
 @pytest.mark.parametrize('failed_mode', ['over_length', 'corrupted'])
+@pytest.mark.parametrize('staged_import', [False, True])
 def test_bad_downloads_requires_localized_reason_and_cleanup(
-        waiting_run, panel_module, tmp_path, monkeypatch, failure, failed_mode):
+        waiting_run, panel_module, tmp_path, monkeypatch, failure, failed_mode, staged_import):
     run = waiting_run
     locale = json.loads((SCRIPTS.parent / 'src/visualizer/gui/resources/locales/en.json').read_text(encoding='utf-8'))
     expected = {
         'over_length': locale['asset_manager.gallery.error.download_size'],
         'corrupted': locale['asset_manager.gallery.error.download_damaged'],
     }
+    raw = {
+        'over_length': 'Gallery download is incomplete or larger than the portal declared',
+        'corrupted': 'The download is damaged or was changed on the portal',
+    }
+    monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: locale.get(key, key))
     run.asset_id, run.scene_id = 'asset', 'scene'
     run.proxy = SimpleNamespace(inflate_download=0)
     run.publish = run.refresh = lambda: None
@@ -1022,7 +1028,8 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
                          snapshot=lambda: dict(jobs=[current_job]))))
     def rpc(code):
         calls.append(code)
-        if code.startswith('from lfs_plugins.gallery_transfer_panel'):
+        if code.startswith(('from lfs_plugins.gallery_transfer_panel',
+                            'from lfs_plugins.gallery_messages')):
             exec(code, namespace)
     run.rpc = rpc
     run.db = lambda code: calls.append(code)
@@ -1036,21 +1043,25 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
         return current
     run.pull = pull
     def value(expression):
+        if expression.startswith('localize_message('):
+            reason = eval(expression, namespace)
+            if failure == 'extra_text' and current == failed_mode:
+                reason += ' Unexpected diagnostic'
+            return reason
         assert expression == 'sorted(p._asset_index_assets())'
         return ['asset', 'unexpected'] if failure == 'registered' and current == failed_mode else ['asset']
     run.value = value
     def wait_job(identifier, accept, label):
-        message = expected[identifier]
+        message = raw[identifier]
         if identifier == failed_mode:
-            if failure == 'legacy': message = 'Invalid download checksum'
+            if failure == 'unrecognized': message = 'Unrecognized diagnostic'
             if failure == 'wrong_reason': message = locale['asset_manager.gallery.state.connection_lost']
             if failure == 'opposite_reason':
-                message = expected['corrupted' if identifier == 'over_length' else 'over_length']
-            if failure == 'extra_text': message += ' Unexpected diagnostic'
+                message = raw['corrupted' if identifier == 'over_length' else 'over_length']
             if failure == 'staging': stage.write_bytes(b'leftover')
         job = dict(id=identifier, status='error', message=message, retryable=False,
                    path=str(tmp_path / (identifier + '.licht')))
-        if identifier == 'corrupted':
+        if identifier == 'corrupted' and staged_import:
             job.update(message='Download failed', stagedImport=dict(state='failed', message=message, path=str(stage)))
         elif failure == 'staging':
             job['stagedImport'] = dict(path=str(stage))
@@ -1076,6 +1087,8 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
     else:
         run.bad_downloads()
         assert [row['label'] for row in run.observations] == ['over_length', 'corrupted']
+        for row in run.observations:
+            assert row['value']['localized_reason'] == expected[row['label']]
         assert calls.count("assert not list(new.root.rglob('.gallery-*'))") == 2
         assert "new.discard('over_length')" in calls and "new.discard('corrupted')" in calls
         # Execute the actual injected mutation: it must damage a native project
