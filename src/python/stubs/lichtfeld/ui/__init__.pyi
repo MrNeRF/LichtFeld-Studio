@@ -1984,6 +1984,11 @@ def save_sog_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for SOG files. Returns empty string if cancelled.
     """
 
+def save_ssog_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for SSOG files. Returns empty string if cancelled.
+    """
+
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.

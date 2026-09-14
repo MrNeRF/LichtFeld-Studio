@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
             return;
         bottom_dock_active_tab_id_ = id;
         lfs::vis::publish_viewport_toolbar_generation();
+        lfs::python::request_redraw();
     }
 
     void PanelLayoutManager::setShowSequencer(const bool visible) {

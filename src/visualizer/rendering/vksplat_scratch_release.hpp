@@ -18,6 +18,7 @@ namespace lfs::vis::detail {
         _VulkanBuffer old = dev;
         dev = {};
         dev.label = old.label;
+        dev.extra_usage = old.extra_usage;
         buffer.clear();
         buffer.shrink_to_fit();
         if (old.allocation == VK_NULL_HANDLE) {

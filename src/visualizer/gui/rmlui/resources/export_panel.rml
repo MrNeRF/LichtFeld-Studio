@@ -82,7 +82,42 @@
         </div>
       </div>
 
-      <!-- RAD Settings - only shown for RAD format -->
+      <!-- SSOG settings -->
+      <div class="ep-section" data-if="show_ssog_settings">
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.ssog_bundle</span>
+          <div class="setting-row__control-col"><input type="checkbox" data-attrif-checked="ssog_bundle" data-event-change="toggle_ssog_bundle" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-if="show_ssog_folder">
+          <span class="setting-row__label-col">@tr:export_dialog.folder_name</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="ssog_folder_name" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.lod_levels</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_levels" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.lod_ratio</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_ratio" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.chunk_count_k</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_count_k" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.chunk_extent</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_extent" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.chunk_min_k</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_min_k" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.kmeans_iterations</span>
+          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="kmeans_iterations" /></div>
+        </div>
+      </div>
+
       <div data-if="show_rad_settings">
         <div class="separator"></div>
         <div class="ep-section">

@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -271,10 +272,14 @@ namespace lfs::vis {
         }
 
         struct TrainingSceneInitializationRollback {
-            explicit TrainingSceneInitializationRollback(lfs::core::Scene& scene)
+            using OwnerRunner = std::function<void(std::function<void()>)>;
+
+            explicit TrainingSceneInitializationRollback(lfs::core::Scene& scene,
+                                                         OwnerRunner run_on_owner = {})
                 : scene(&scene),
                   initial_point_cloud(scene.getInitialPointCloud()),
-                  point_cloud_modified(scene.isPointCloudModified()) {
+                  point_cloud_modified(scene.isPointCloudModified()),
+                  run_on_owner(std::move(run_on_owner)) {
                 const auto* const model_node =
                     scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
                 if (model_node && model_node->model) {
@@ -311,12 +316,27 @@ namespace lfs::vis {
             TrainingSceneInitializationRollback& operator=(const TrainingSceneInitializationRollback&) = delete;
 
             ~TrainingSceneInitializationRollback() {
-                if (!committed) {
+                if (committed) {
+                    return;
+                }
+                auto body = [this] { restore(); };
+                if (run_on_owner) {
+                    try {
+                        run_on_owner(std::move(body));
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("Failed to dispatch training initialization scene rollback: {}",
+                                  error.what());
+                    } catch (...) {
+                        LOG_ERROR("Failed to dispatch training initialization scene rollback");
+                    }
+                } else {
                     restore();
                 }
             }
 
             void commit() noexcept { committed = true; }
+
+            void noteGraphWillMutate() noexcept { graph_mutated = true; }
 
         private:
             static lfs::core::Scene::RestoreNodeDesc makeRestoreNodeDesc(
@@ -351,7 +371,7 @@ namespace lfs::vis {
 
                     if (had_model) {
                         scene->replaceNodeModel(model_name, std::move(original_model));
-                    } else {
+                    } else if (graph_mutated) {
                         const auto model_id = scene->getTrainingModelNodeId();
                         if (model_id != lfs::core::NULL_NODE) {
                             scene->removeNodeById(model_id, false);
@@ -387,7 +407,9 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::PointCloud> initial_point_cloud;
             bool point_cloud_modified = false;
             std::vector<std::pair<std::shared_ptr<lfs::core::Camera>, lfs::core::CameraSplit>> camera_splits;
+            OwnerRunner run_on_owner;
             bool committed = false;
+            bool graph_mutated = false;
         };
     } // namespace
 
@@ -418,20 +440,6 @@ namespace lfs::vis {
         // size the exportable block to live N (+ 1.5× headroom), not
         // max_cap. Virtual-reserve max_cap so densify can grow in place.
         std::size_t live_estimate = min_capacity;
-        if (live_estimate == 0 && scene_) {
-            if (const auto* model = scene_->getTrainingModel()) {
-                live_estimate = static_cast<std::size_t>(model->size());
-            } else if (const auto pc = scene_->getInitialPointCloud()) {
-                live_estimate = static_cast<std::size_t>(pc->size());
-            } else {
-                for (const auto* node : scene_->getNodes()) {
-                    if (node && node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
-                        live_estimate = static_cast<std::size_t>(node->point_cloud->size());
-                        break;
-                    }
-                }
-            }
-        }
         if (live_estimate == 0 && params.optimization.random) {
             live_estimate = static_cast<std::size_t>(
                 std::max(params.optimization.init_num_pts, 1));
@@ -1130,6 +1138,25 @@ namespace lfs::vis {
         return {};
     }
 
+    void TrainerManager::runOnSceneOwnerThread(std::function<void()> run,
+                                               std::function<void()> cancel) {
+        const bool use_queue = static_cast<bool>(test_scene_owner_poster_) ||
+                               (viewer_ && !viewer_->isOnViewerThread());
+        if (!use_queue) {
+            run();
+            return;
+        }
+        post_work_and_wait(
+            [this](Visualizer::WorkItem work) {
+                if (test_scene_owner_poster_) {
+                    return test_scene_owner_poster_(std::move(work.run), std::move(work.cancel));
+                }
+                return viewer_->postWork(std::move(work));
+            },
+            std::move(run),
+            std::move(cancel));
+    }
+
     lfs::Result<void>
     TrainerManager::initializeTrainingOnWorker(const std::stop_token stop_token) {
         if (!trainer_) {
@@ -1147,12 +1174,30 @@ namespace lfs::vis {
             trainer_->set_lpips_weights_path(evaluation_weights_preparer_(!trainer_->getParams().no_download));
 
         std::optional<TrainingSceneInitializationRollback> scene_rollback;
+        std::optional<lfs::training::TrainingModelGraphCapture> graph_capture;
         if (scene_) {
-            // The snapshot is intentionally taken by the worker. It includes
-            // the model/node state that initialization may replace, so a failed
-            // allocator or trainer setup cannot leave a half-started scene.
-            std::unique_lock scene_lock(trainer_->getRenderMutex());
-            scene_rollback.emplace(*scene_);
+            if (stop_token.stop_requested()) {
+                return lfs::Result<void>::failure(training_initialization_error(
+                    "Training stop requested before scene snapshot"));
+            }
+            std::string snapshot_cancel;
+            runOnSceneOwnerThread(
+                [&] {
+                    scene_rollback.emplace(*scene_, [this](std::function<void()> work) {
+                        runOnSceneOwnerThread(std::move(work), [] {
+                            LOG_WARN("Training scene rollback skipped because the owner thread cancelled the work");
+                        });
+                    });
+                    graph_capture = lfs::training::captureTrainingModelGraph(*scene_);
+                },
+                [&] {
+                    snapshot_cancel =
+                        "Training scene snapshot cancelled during viewer shutdown";
+                });
+            if (!snapshot_cancel.empty()) {
+                return lfs::Result<void>::failure(training_initialization_error(
+                    std::move(snapshot_cancel)));
+            }
         }
 
         const auto& params = trainer_->getParams();
@@ -1172,8 +1217,7 @@ namespace lfs::vis {
 
         if (trainer_->isInitialized()) {
             if (scene_) {
-                std::unique_lock scene_lock(trainer_->getRenderMutex());
-                auto* const model = scene_->getTrainingModel();
+                auto* const model = graph_capture->training_model;
                 const std::size_t model_size = model ? static_cast<std::size_t>(model->size()) : 0;
                 const bool force_reallocation = splat_storage_.has_value();
                 auto tensor_allocator_result = createTrainingSplatTensorAllocator(params, model_size);
@@ -1184,6 +1228,7 @@ namespace lfs::vis {
                 if (tensor_allocator) {
                     trainer_->setSplatTensorAllocator(tensor_allocator);
                     if (model) {
+                        std::unique_lock scene_lock(trainer_->getRenderMutex());
                         if (auto result = lfs::training::migrateTrainingModelToAllocator(
                                 params, *model, tensor_allocator, force_reallocation);
                             !result) {
@@ -1199,23 +1244,68 @@ namespace lfs::vis {
             }
             LOG_DEBUG("Resuming from iteration {}", trainer_->get_current_iteration());
         } else {
+            std::optional<lfs::training::TrainingModelGraphInstall> pending_install;
             if (scene_) {
-                std::unique_lock scene_lock(trainer_->getRenderMutex());
-                auto tensor_allocator_result = createTrainingSplatTensorAllocator(params);
+                const std::size_t estimate =
+                    graph_capture->training_model
+                        ? static_cast<std::size_t>(graph_capture->training_model->size())
+                    : graph_capture->point_cloud
+                        ? static_cast<std::size_t>(graph_capture->point_cloud->size())
+                        : 0;
+                auto tensor_allocator_result =
+                    createTrainingSplatTensorAllocator(params, estimate);
                 if (!tensor_allocator_result) {
                     return lfs::Result<void>::failure(std::move(tensor_allocator_result.error()));
                 }
                 auto tensor_allocator = std::move(*tensor_allocator_result);
                 trainer_->setSplatTensorAllocator(tensor_allocator);
-                if (auto result = lfs::training::initializeTrainingModel(
-                        params, *scene_, std::move(tensor_allocator));
-                    !result) {
+                std::unique_lock scene_lock(trainer_->getRenderMutex());
+                auto prepared = lfs::training::prepareTrainingModel(
+                    params, *scene_, std::move(tensor_allocator),
+                    graph_capture ? &*graph_capture : nullptr);
+                if (!prepared) {
                     return lfs::Result<void>::failure(
-                        training_initialization_error(result.error()));
+                        training_initialization_error(prepared.error()));
+                }
+                if (*prepared) {
+                    pending_install = std::move(**prepared);
                 }
                 lfs::core::Tensor::log_storage_memory("After training model initialization");
-                if (auto* const model = scene_->getTrainingModel()) {
-                    installExportableCapacityEnsure(*model);
+            }
+
+            if (scene_) {
+                if (stop_token.stop_requested()) {
+                    return lfs::Result<void>::failure(training_initialization_error(
+                        "Training stop requested before scene-graph install"));
+                }
+                // Graph writes must run on the scene-owner thread. Do not hold
+                // render_mutex across this wait: the owner thread may take it shared.
+                std::expected<void, std::string> install_result;
+                runOnSceneOwnerThread(
+                    [&] {
+                        if (pending_install) {
+                            if (scene_rollback) {
+                                scene_rollback->noteGraphWillMutate();
+                            }
+                            install_result = lfs::training::installTrainingModel(
+                                *scene_, std::move(*pending_install));
+                        } else if (auto* model = graph_capture->training_model) {
+                            scene_->syncTrainingModelTopology(static_cast<size_t>(model->size()));
+                            scene_->notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                        }
+                        if (install_result) {
+                            if (auto* model = scene_->getTrainingModel()) {
+                                installExportableCapacityEnsure(*model);
+                            }
+                        }
+                    },
+                    [&] {
+                        install_result = std::unexpected(
+                            "Training scene-graph install cancelled during viewer shutdown");
+                    });
+                if (!install_result) {
+                    return lfs::Result<void>::failure(
+                        training_initialization_error(install_result.error()));
                 }
             }
 
@@ -2171,9 +2261,12 @@ namespace lfs::vis {
             const std::string error_message = typed.user_message().empty()
                                                   ? std::string(typed.detail())
                                                   : std::string(typed.user_message());
-            LOG_ERROR("Training initialization failed: {}", error_message);
-            last_error_ = error_message;
-            last_training_error_.set(typed);
+            const bool user_stopped = stop_token.stop_requested();
+            if (!user_stopped) {
+                LOG_ERROR("Training initialization failed: {}", error_message);
+                last_error_ = error_message;
+                last_training_error_.set(typed);
+            }
 
             // The initialization helper rolls back all scene changes before
             // this existing completion/error path is made observable. Keep
@@ -2186,17 +2279,17 @@ namespace lfs::vis {
                     .iteration = 0,
                     .final_loss = 0.0f,
                     .elapsed_seconds = 0.0f,
-                    .success = false,
-                    .user_stopped = false,
+                    .success = user_stopped,
+                    .user_stopped = user_stopped,
                     .resource_exhausted = false,
-                    .reason = FinishReason::Error,
-                    .error = error_message,
-                    .typed_error = typed};
+                    .reason = user_stopped ? FinishReason::UserStopped : FinishReason::Error,
+                    .error = user_stopped ? std::string{} : error_message,
+                    .typed_error = user_stopped ? std::nullopt : std::optional{typed}};
             }
             {
                 std::lock_guard lock(initialization_mutex_);
                 initialization_complete_ = true;
-                initialization_error_ = typed;
+                initialization_error_ = user_stopped ? std::nullopt : std::optional{typed};
             }
             initialization_cv_.notify_all();
             release_training_thread_local_cuda_caches();

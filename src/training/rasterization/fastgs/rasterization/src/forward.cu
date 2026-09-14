@@ -77,10 +77,6 @@ namespace {
             return base ? base + cub_workspace_offset_bytes : nullptr;
         }
 
-        bool owns_sorted_indices(const void* ptr) const noexcept {
-            return ptr != nullptr && ptr == retained_indices();
-        }
-
         void bind_layout(char* allocation,
                          int instance_count,
                          size_t cub_bytes,

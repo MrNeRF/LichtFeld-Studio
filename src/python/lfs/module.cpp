@@ -1164,22 +1164,43 @@ NB_MODULE(lichtfeld, m) {
         "project_create",
         [](const std::string& path,
            const bool discard_changes,
-           const bool stop_training) {
+           const bool stop_training,
+           const bool overwrite) {
             nb::gil_scoped_release release;
             const auto project_path = python_utf8_path(path);
+            auto* const viewer = lfs::python::get_visualizer();
+            bool created = false;
             emit_project_cmd_marshaled(
                 "python.project_create",
-                [project_path, discard_changes, stop_training] {
+                [project_path, discard_changes, stop_training,
+                 overwrite, viewer, &created] {
                     lfs::core::events::cmd::ProjectCreate{
                         .path = project_path,
                         .discard_changes = discard_changes,
-                        .stop_training = stop_training}
+                        .stop_training = stop_training,
+                        .allow_existing_destination_replacement =
+                            overwrite}
                         .emit();
+                    created = !viewer || viewer->consumeProjectCreateSucceeded();
                 });
+            return created;
         },
         nb::arg("path"), nb::arg("discard_changes") = false,
         nb::arg("stop_training") = false,
+        nb::arg("overwrite") = false,
         "Create and bind a new .licht project at path");
+    m.def(
+        "project_create_pending",
+        []() {
+            nb::gil_scoped_release release;
+            bool pending = false;
+            emit_project_cmd_marshaled("python.project_create_pending", [&pending] {
+                const auto* const viewer = lfs::python::get_visualizer();
+                pending = viewer && viewer->projectCreatePending();
+            });
+            return pending;
+        },
+        "Whether a stop-then-create is queued and has not bound yet");
     m.def(
         "project_embed_dataset",
         []() {
@@ -1837,16 +1858,25 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
+           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance);
+                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        nb::kw_only(),
+        nb::arg("lod_levels") = 4,
+        nb::arg("lod_ratio") = 0.5f,
+        nb::arg("chunk_count_k") = 512,
+        nb::arg("chunk_extent") = 16.0f,
+        nb::arg("chunk_min_k") = 8,
+        nb::arg("kmeans_iterations") = 10,
+        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. "
+        "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");

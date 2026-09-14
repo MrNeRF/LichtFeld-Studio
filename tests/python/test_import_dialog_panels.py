@@ -30,6 +30,10 @@ def import_dialog_module(monkeypatch, tmp_path):
         params=SimpleNamespace(dataset_path=str(dataset), output_path=str(tmp_path / "output")),
     )
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.io = SimpleNamespace(is_ssog_path=lambda path: (
+        Path(path).is_file() and (Path(path).suffix == ".ssog" or Path(path).name == "lod-meta.json")
+        or (Path(path) / "lod-meta.json").is_file()
+    ))
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
@@ -117,3 +121,19 @@ def test_new_project_typed_source_path_validates(import_dialog_module, monkeypat
     assert panel._source_kind == "dataset"
     assert panel._can_create() is True
     assert browse_calls == []
+
+
+def test_new_project_recognizes_ssog(import_dialog_module, tmp_path):
+    module, _, _, _ = import_dialog_module
+    folder = tmp_path / "ssog_directory"
+    folder.mkdir()
+    assert not module.NewProjectPanel._is_splat_path(str(folder))
+    (folder / "lod-meta.json").write_text("{}")
+    assert module.NewProjectPanel._is_splat_path(str(folder))
+    assert module.NewProjectPanel._is_splat_path(str(folder / "lod-meta.json"))
+    assert not module.NewProjectPanel._is_splat_path(str(tmp_path / "transforms.json"))
+
+
+def test_new_project_recognizes_ssog_bundle(import_dialog_module, tmp_path):
+    module, _, _, _ = import_dialog_module
+    assert module.NewProjectPanel._is_splat_path(str(tmp_path / "scene.ssog"))

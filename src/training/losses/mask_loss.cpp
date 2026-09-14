@@ -53,7 +53,8 @@ namespace lfs::training::losses {
         MaskPreprocessWorkspace& ws,
         const lfs::core::Tensor& user_mask,
         const lfs::core::Tensor& roi_weight,
-        const bool segment_and_ignore) {
+        const bool segment_and_ignore,
+        const bool require_float) {
         if (!user_mask.is_valid() || user_mask.numel() == 0) {
             return roi_weight;
         }
@@ -81,7 +82,8 @@ namespace lfs::training::losses {
         }
 
         // No user remap + no ROI: return original (UInt8 ok for masked SSIM).
-        if (!segment_and_ignore && !roi_weight.is_valid()) {
+        if (!segment_and_ignore && !roi_weight.is_valid() &&
+            (!require_float || user_mask.dtype() == lfs::core::DataType::Float32)) {
             return user_mask;
         }
 

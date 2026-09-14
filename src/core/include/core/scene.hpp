@@ -405,6 +405,20 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+        // True when a combined or single-node alias is already installed.
+        // Does not poll the worker or start a rebuild.
+        [[nodiscard]] bool hasPreparedCombinedModel() const;
+        // Installed combined/single-node alias, or null. Does not build.
+        [[nodiscard]] const lfs::core::SplatData* peekCombinedModel() const;
+        // Drop redundant aggregate storage while rendering owned nodes. A running
+        // worker is drained on a later call; consolidated storage is preserved.
+        void discardUnconsolidatedModelCache() const;
+        // Installed per-gaussian transform indices, or null. Does not build.
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> peekTransformIndices() const;
+        // Slice of the full-scene splat selection covering one node. Does not
+        // consult or build the combined model.
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor>
+        selectionMaskSliceForNode(NodeId node_id) const;
 
         struct CombinedModelBuildInput {
             std::shared_ptr<const lfs::core::SplatData> model;

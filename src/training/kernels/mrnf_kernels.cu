@@ -32,6 +32,10 @@ namespace lfs::training::mrnf_strategy {
         }
 
         __device__ __forceinline__ float d_logit(float p) {
+            if (isnan(p))
+                return p;
+            // The upper bound must be representable below 1 in float32.
+            p = fminf(fmaxf(p, 1e-12f), nextafterf(1.0f, 0.0f));
             return logf(p / (1.0f - p));
         }
 
@@ -138,9 +142,12 @@ namespace lfs::training::mrnf_strategy {
 
         const float t_shrink = 1.0f - train_t;
 
-        float opac = d_sigmoid(raw_opacities[idx]) - opac_decay * t_shrink;
-        opac = fminf(fmaxf(opac, 1e-12f), 1.0f - 1e-12f);
-        raw_opacities[idx] = d_logit(opac);
+        const float opacity_delta = opac_decay * t_shrink;
+        // A sigmoid/logit round trip loses finite saturated logits even when
+        // decay is disabled. Still repair infinities from older checkpoints.
+        if (opacity_delta != 0.0f || isinf(raw_opacities[idx])) {
+            raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - opacity_delta);
+        }
 
         const float decay_factor = 1.0f - scl_decay * t_shrink;
         for (int d = 0; d < 3; ++d) {

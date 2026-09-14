@@ -79,6 +79,14 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_has_path = lambda: False
     lf_stub.project_open = project_open
     lf_stub.new_project = new_project
+    created = []
+
+    def project_create(path, discard_changes=False, stop_training=False, overwrite=False):
+        created.append((path, discard_changes, stop_training, overwrite))
+        return True
+
+    lf_stub.project_create = project_create
+    lf_stub.project_create_calls = created
     lf_stub.is_training_active = lambda: training_active
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
@@ -365,6 +373,7 @@ def test_imports_are_grouped_before_exports(monkeypatch):
     assert operator_names == [
         "ImportDatasetOperator",
         "ImportPlyOperator",
+        "ImportSsogOperator",
         "ImportMeshOperator",
         "ImportCheckpointOperator",
         "ImportConfigOperator",
@@ -517,6 +526,29 @@ def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
     assert file_menu.lf.project_open_stop_training == [True]
 
 
+def test_create_path_confirmations_preserve_overwrite_authorization(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_project_switch_confirmation(
+        True, "", False, "/tmp/existing.licht", True
+    )
+    assert file_menu.lf.project_create_calls == [
+        ("/tmp/existing.licht", True, False, True)
+    ]
+
+    file_menu._show_stop_training_confirmation(
+        True, "", True, False, "/tmp/existing.licht", True
+    )
+    _title, _message, _buttons, stop_callback = file_menu.lf.confirm_dialogs[0]
+    stop_callback("tr:common.yes")
+    assert file_menu.lf.project_create_calls[-1] == (
+        "/tmp/existing.licht",
+        True,
+        True,
+        True,
+    )
+
+
 def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
 
@@ -589,3 +621,11 @@ def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
             },
         ),
     ]
+
+
+def test_splat_picker_imports_ssog_as_splat(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/garden.ssog"
+    file_menu.lf.ui.open_ply_file_dialog = lambda _default: selected
+    assert file_menu.ImportPlyOperator().execute(None) == {"FINISHED"}
+    assert file_menu.lf.load_file_calls == [((selected,), {"is_dataset": False})]

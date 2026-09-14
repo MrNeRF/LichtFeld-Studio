@@ -345,8 +345,10 @@ class NewProjectPanel(_ImportDialogPanel):
 
     @staticmethod
     def _is_splat_path(path: str) -> bool:
+        if lf.io.is_ssog_path(path):
+            return True
         suffix = Path(path).suffix.lower()
-        return suffix in {".ply", ".sog", ".spz", ".rad"} or suffix.startswith(".usd")
+        return suffix in {".ply", ".sog", ".ssog", ".spz", ".rad"} or suffix.startswith(".usd")
 
     def _set_source_path(self, value, derive_name=False):
         previous = self._source_path
@@ -505,11 +507,36 @@ class NewProjectPanel(_ImportDialogPanel):
     def _target_exists(self) -> bool:
         return bool(self._name.strip()) and self._target_exists_cached
 
+    def _destination_exists(self) -> bool:
+        try:
+            exists = self._target_path().exists()
+        except OSError:
+            exists = False
+        self._target_exists_cached = exists
+        return bool(self._name.strip()) and exists
+
     def _can_create(self) -> bool:
         return (
             self._name_is_valid()
-            and not self._target_exists()
             and self._source_kind in {"blank", "dataset", "splat"}
+        )
+
+    def _confirm_overwrite(self, on_overwrite) -> None:
+        overwrite_label = lf.ui.tr("new_project.overwrite")
+        cancel_label = lf.ui.tr("common.cancel")
+        message = (
+            lf.ui.tr("new_project.overwrite_message") or ""
+        ).replace("{name}", self._name.strip())
+
+        def _on_result(button, _overwrite=overwrite_label):
+            if button == _overwrite:
+                on_overwrite()
+
+        lf.ui.confirm_dialog(
+            lf.ui.tr("new_project.overwrite_title"),
+            message,
+            [overwrite_label, cancel_label],
+            _on_result,
         )
 
     def _location_preview(self) -> str:
@@ -696,7 +723,6 @@ class NewProjectPanel(_ImportDialogPanel):
         if not self._can_create():
             return
 
-        name = self._name.strip()
         source_path = self._source_path.strip()
         source_kind = self._source_kind
         target = self._target_path()
@@ -708,8 +734,30 @@ class NewProjectPanel(_ImportDialogPanel):
         min_track_length = self._min_track_length
         embed_dataset = self._embed_dataset
 
-        def _commit(stop_training: bool) -> None:
-            if not self._can_create() or self._target_path() != target:
+        def _commit(stop_training: bool, overwrite: bool) -> None:
+            if (
+                not self._name_is_valid()
+                or self._source_kind not in {"blank", "dataset", "splat"}
+                or self._target_path() != target
+            ):
+                self._dirty_model()
+                return
+            if self._destination_exists() and not overwrite:
+                self._confirm_overwrite(lambda: _commit(stop_training, True))
+                return
+            created = lf.project_create(
+                str(target),
+                discard_changes=True,
+                stop_training=stop_training,
+                overwrite=overwrite,
+            )
+            pending = bool(
+                getattr(lf, "project_create_pending", lambda: False)()
+            )
+            if created is False and not pending:
+                if self._destination_exists() and not overwrite:
+                    self._confirm_overwrite(lambda: _commit(stop_training, True))
+                    return
                 self._dirty_model()
                 return
             params = lf.optimization_params()
@@ -720,7 +768,6 @@ class NewProjectPanel(_ImportDialogPanel):
                     params.ppisp = True
 
             lf.ui.set_panel_enabled(self.id, False)
-            lf.project_create(str(target), discard_changes=True, stop_training=stop_training)
             if source_kind == "dataset":
                 load_kwargs = {
                     "path": source_path,
@@ -740,10 +787,16 @@ class NewProjectPanel(_ImportDialogPanel):
             elif source_kind == "splat":
                 lf.load_file(path=source_path, is_dataset=False, discard_changes=True)
 
-        confirm_discard_work_then(
-            lf.ui.tr("new_project.title"),
-            _commit,
-        )
+        def _after_consent(overwrite: bool) -> None:
+            confirm_discard_work_then(
+                lf.ui.tr("new_project.title"),
+                lambda stop_training: _commit(stop_training, overwrite),
+            )
+
+        if self._destination_exists():
+            self._confirm_overwrite(lambda: _after_consent(True))
+            return
+        _after_consent(False)
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
         lf.ui.set_panel_enabled(self.id, False)

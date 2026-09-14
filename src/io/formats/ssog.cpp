@@ -1,0 +1,897 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ssog.hpp"
+#include "core/logger.hpp"
+#include "io/atomic_output.hpp"
+#include "io/splat_decimate.hpp"
+#include "sogs.hpp"
+#include "ssog_morton.hpp"
+#include <algorithm>
+#include <archive.h>
+#include <archive_entry.h>
+#include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <climits>
+#include <cmath>
+#include <cuda_runtime.h>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <numeric>
+#include <regex>
+#include <set>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_invoke.h>
+#include <thread>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace lfs::io {
+    namespace {
+        namespace fs = std::filesystem;
+        using Json = nlohmann::json;
+        using core::Device;
+        using core::Tensor;
+        using Clock = std::chrono::steady_clock;
+        struct Cancelled {};
+        void progress(const SsogSaveOptions& o, float p, const std::string& stage) {
+            if (o.progress_callback && !o.progress_callback(p, stage))
+                throw Cancelled{};
+        }
+        fs::path manifest_path(const fs::path& p) {
+            return fs::is_directory(p) ? p / "lod-meta.json" : p;
+        }
+        size_t integer(const Json& j, const char* name) {
+            if (!j.is_number_integer() || j.get<double>() < 0 ||
+                j.get<double>() > static_cast<double>(INT_MAX))
+                throw std::runtime_error(std::string("Invalid lod-meta.json ") + name);
+            return j.get<size_t>();
+        }
+        fs::path related(const fs::path& base, const std::string& name) {
+            const auto p = core::utf8_to_path(name);
+            const auto root = fs::weakly_canonical(base);
+            const auto resolved = fs::weakly_canonical(base / p);
+            const auto rel = resolved.lexically_relative(root);
+            if (rel.empty() || *rel.begin() == "..")
+                throw std::runtime_error("Unit path escapes SSOG directory");
+            return base / p;
+        }
+        // One provider owns either a directory root or bounded in-memory ZIP entries.
+        class EntryProvider {
+            fs::path base_;
+            std::map<std::string, std::vector<uint8_t>> entries_;
+            bool bundled_;
+
+            static std::string safe_name(const std::string& name) {
+                const auto p = core::utf8_to_path(name);
+                if (p.empty() || p.is_absolute() || p.has_root_name() || name.find('\\') != std::string::npos || name.find(':') != std::string::npos)
+                    throw std::runtime_error("Invalid SSOG entry path");
+                for (const auto& part : p)
+                    if (part == "..")
+                        throw std::runtime_error("SSOG entry escapes archive root");
+                return p.lexically_normal().generic_string();
+            }
+
+        public:
+            explicit EntryProvider(const fs::path& path) : bundled_(core::path_to_utf8(path.extension()) == ".ssog" && !fs::is_directory(path)) {
+                if (!bundled_) {
+                    base_ = fs::absolute(manifest_path(path)).parent_path();
+                    return;
+                }
+                const auto size = fs::file_size(path);
+                if (size < 4 || size > MAX_ARCHIVE_BYTES || size > std::numeric_limits<size_t>::max())
+                    throw std::runtime_error("Invalid SSOG archive size (limit 4 GiB)");
+                std::ifstream file(path, std::ios::binary);
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+                    throw std::runtime_error("Cannot read complete SSOG archive");
+                if (bytes[0] != 'P' || bytes[1] != 'K' || bytes[2] != 3 || bytes[3] != 4)
+                    throw std::runtime_error("Invalid SSOG ZIP magic");
+                std::unique_ptr<archive, decltype(&archive_read_free)> reader(archive_read_new(), archive_read_free);
+                if (!reader || archive_read_support_format_zip(reader.get()) != ARCHIVE_OK ||
+                    archive_read_open_memory(reader.get(), bytes.data(), bytes.size()) != ARCHIVE_OK)
+                    throw std::runtime_error("Cannot open SSOG ZIP archive");
+                archive_entry* entry = nullptr;
+                uint64_t total = 0;
+                size_t count = 0;
+                int status;
+                while ((status = archive_read_next_header(reader.get(), &entry)) == ARCHIVE_OK) {
+                    if (++count > 1000000)
+                        throw std::runtime_error("Too many SSOG archive entries");
+                    const auto* raw_name = archive_entry_pathname(entry);
+                    if (!raw_name)
+                        throw std::runtime_error("Missing SSOG archive entry name");
+                    const auto name = safe_name(raw_name);
+                    if (archive_entry_filetype(entry) == AE_IFDIR) {
+                        if (archive_read_data_skip(reader.get()) != ARCHIVE_OK)
+                            throw std::runtime_error("Invalid SSOG directory entry");
+                        continue;
+                    }
+                    if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry))
+                        throw std::runtime_error("SSOG archive entries must be regular files");
+                    const auto n = archive_entry_size(entry);
+                    const uint64_t limit = fs::path(name).extension() == ".json" ? MAX_METADATA_BYTES : MAX_ENCODED_IMAGE_BYTES;
+                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > MAX_ARCHIVE_BYTES - total)
+                        throw std::runtime_error("SSOG archive entry exceeds size limit");
+                    total += uint64_t(n);
+                    auto [it, inserted] = entries_.try_emplace(name);
+                    if (!inserted)
+                        throw std::runtime_error("Duplicate SSOG archive entry");
+                    auto& data = it->second;
+                    data.resize(static_cast<size_t>(n));
+                    size_t offset = 0;
+                    while (offset < data.size()) {
+                        const auto got = archive_read_data(reader.get(), data.data() + offset, data.size() - offset);
+                        if (got <= 0)
+                            throw std::runtime_error("Truncated SSOG archive entry");
+                        offset += static_cast<size_t>(got);
+                    }
+                }
+                if (status != ARCHIVE_EOF)
+                    throw std::runtime_error("Invalid SSOG archive headers");
+            }
+            Result<std::vector<uint8_t>> read(const std::string& raw_name, size_t limit) const {
+                try {
+                    const auto name = safe_name(raw_name);
+                    if (bundled_) {
+                        const auto it = entries_.find(name);
+                        if (it == entries_.end())
+                            return make_error(ErrorCode::MISSING_REQUIRED_FILES, "Missing SSOG entry: " + name);
+                        if (it->second.size() > limit)
+                            return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SSOG entry size: " + name);
+                        return it->second;
+                    }
+                    const auto path = related(base_, name);
+                    const auto size = fs::file_size(path);
+                    if (!size || size > limit)
+                        return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SSOG entry size", path);
+                    std::vector<uint8_t> data(static_cast<size_t>(size));
+                    std::ifstream file(path, std::ios::binary);
+                    if (!file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)))
+                        return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SSOG entry", path);
+                    return data;
+                } catch (const std::exception& e) { return make_error(ErrorCode::READ_FAILURE, e.what()); }
+            }
+            Json json(const std::string& name) const {
+                auto bytes = read(name, MAX_METADATA_BYTES);
+                if (!bytes)
+                    throw std::runtime_error(bytes.error().message);
+                return Json::parse(bytes->begin(), bytes->end());
+            }
+            Result<SogDirectoryReconstruct> prepare(const std::string& manifest) const {
+                auto prefix = fs::path(manifest).parent_path().generic_string();
+                if (!prefix.empty())
+                    prefix += '/';
+                return prepare_sog_entries([this](const std::string& name, size_t limit) { return read(name, limit); }, prefix);
+            }
+        };
+
+        // Unit workers encode concurrently; only complete entry writes share a lock.
+        class UnitArchiveSink final : public SogSink {
+            SogSink& archive_;
+            std::mutex& mutex_;
+            std::string prefix_;
+
+        public:
+            UnitArchiveSink(SogSink& archive, std::mutex& mutex, std::string prefix)
+                : archive_(archive), mutex_(mutex), prefix_(std::move(prefix)) {}
+            Result<void> add_file(const std::string& name, const void* data, size_t size) override {
+                std::lock_guard lock(mutex_);
+                return archive_.add_file(prefix_ + name, data, size);
+            }
+        };
+        struct Manifest {
+            Json json;
+            std::shared_ptr<EntryProvider> entries;
+            std::vector<std::map<size_t, size_t>> files;
+        };
+        Manifest parse_manifest(const fs::path& path) {
+            auto entries = std::make_shared<EntryProvider>(path);
+            Manifest m{entries->json("lod-meta.json"), entries, {}};
+            const auto& j = m.json;
+            if (!j.is_object())
+                throw std::runtime_error("Invalid lod-meta.json object");
+            if (j.contains("version") && j.at("version") != 1)
+                throw std::runtime_error("Unsupported lod-meta.json version");
+            const auto levels = integer(j.at("lodLevels"), "lodLevels");
+            if (!levels || levels > 1024)
+                throw std::runtime_error("Invalid lod-meta.json lodLevels");
+            if (!j.at("filenames").is_array())
+                throw std::runtime_error("Invalid lod-meta.json filenames");
+            std::vector<size_t> unit_counts;
+            std::set<fs::path> unique;
+            for (const auto& name : j.at("filenames")) {
+                const auto unit = core::utf8_to_path(name.get<std::string>()).lexically_normal();
+                if (!unique.insert(unit).second)
+                    throw std::runtime_error("Duplicate SOG unit filename");
+                unit_counts.push_back(integer(m.entries->json(unit.generic_string()).at("count"), "unit count"));
+            }
+            m.files.resize(levels);
+            std::vector<size_t> counts(levels);
+            using Range = std::pair<size_t, size_t>;
+            std::vector<std::vector<Range>> ranges(unit_counts.size());
+            std::vector<int> owner(unit_counts.size(), -1);
+            const auto visit = [&](auto&& self, const Json& node, int depth) -> void {
+                if (depth > 64 || !node.is_object())
+                    throw std::runtime_error("Invalid lod-meta.json tree");
+                const auto& bound = node.at("bound");
+                for (const char* side : {"min", "max"}) {
+                    if (!bound.at(side).is_array() || bound.at(side).size() != 3)
+                        throw std::runtime_error("Invalid tree bound");
+                    for (const auto& v : bound.at(side))
+                        if (!v.is_number() || !std::isfinite(v.get<double>()))
+                            throw std::runtime_error("Invalid tree bound");
+                }
+                for (int a = 0; a < 3; ++a)
+                    if (bound["min"][a].get<double>() > bound["max"][a].get<double>())
+                        throw std::runtime_error("Inverted tree bound");
+                if (node.contains("errors")) {
+                    const auto& errors = node["errors"];
+                    if (!errors.is_array() || errors.size() != levels)
+                        throw std::runtime_error("Invalid LOD errors");
+                    for (const auto& e : errors)
+                        if (!e.is_number() || !std::isfinite(e.get<double>()) || e.get<double>() < 0)
+                            throw std::runtime_error("Invalid LOD errors");
+                }
+                if (node.contains("children")) {
+                    if (node.contains("lods") || !node["children"].is_array() || node["children"].size() != 2)
+                        throw std::runtime_error("Invalid tree children");
+                    for (const auto& child : node["children"])
+                        self(self, child, depth + 1);
+                } else {
+                    if (!node.at("lods").is_object())
+                        throw std::runtime_error("Invalid tree lods");
+                    for (const auto& [key, ref] : node["lods"].items()) {
+                        size_t l = 0;
+                        const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), l);
+                        if (ec != std::errc{} || end != key.data() + key.size() || l >= levels)
+                            throw std::runtime_error("Invalid LOD level reference");
+                        const size_t f = integer(ref.at("file"), "file index");
+                        const size_t off = integer(ref.at("offset"), "offset");
+                        const size_t n = integer(ref.at("count"), "count");
+                        if (f >= unit_counts.size())
+                            throw std::runtime_error("LOD file index out of range");
+                        if (off > unit_counts[f] || n > unit_counts[f] - off)
+                            throw std::runtime_error("LOD offset/count beyond unit count");
+                        if (owner[f] != -1 && owner[f] != static_cast<int>(l))
+                            throw std::runtime_error("SOG unit shared by different LODs");
+                        owner[f] = static_cast<int>(l);
+                        ranges[f].emplace_back(off, n);
+                        m.files[l][f] += n;
+                        counts[l] += n;
+                    }
+                }
+            };
+            visit(visit, j.at("tree"), 0);
+            for (size_t f = 0; f < ranges.size(); ++f) {
+                if (ranges[f].empty())
+                    continue;
+                std::sort(ranges[f].begin(), ranges[f].end());
+                size_t end = 0;
+                for (auto [off, n] : ranges[f]) {
+                    if (off != end)
+                        throw std::runtime_error("LOD unit ranges overlap or contain gaps");
+                    end += n;
+                }
+                if (end != unit_counts[f])
+                    throw std::runtime_error("LOD unit count mismatch");
+            }
+            if (j.contains("counts")) {
+                if (!j["counts"].is_array() || j["counts"].size() != levels)
+                    throw std::runtime_error("Invalid lod-meta.json counts");
+                for (size_t l = 0; l < levels; ++l)
+                    if (integer(j["counts"][l], "counts") != counts[l])
+                        throw std::runtime_error("LOD count mismatch");
+            }
+            if (j.contains("count") && integer(j["count"], "count") != std::accumulate(counts.begin(), counts.end(), size_t{0}))
+                throw std::runtime_error("Total LOD count mismatch");
+            if (j.contains("environment"))
+                (void)m.entries->json(j["environment"].get<std::string>());
+            return m;
+        }
+
+        // Keep partition attributes on the host. Memory-budgeted exports also
+        // retain immutable CUDA attributes for device row gathers.
+        struct HostSplats {
+            int degree = 0;
+            float scale = 1;
+            Tensor means, sh0, shN, scaling, rotation, opacity;
+            Tensor device_means, device_sh0, device_shN, device_scaling, device_rotation, device_opacity;
+            size_t size() const { return means.is_valid() ? means.size(0) : 0; }
+            explicit HostSplats(const SplatData& s, bool resident = false)
+                : degree(s.get_max_sh_degree()), scale(s.get_scene_scale()), means(s.means().to_pageable_host()), sh0(resident ? Tensor{} : s.sh0().to_pageable_host()), shN(resident ? Tensor{} : s.shN_canonical_cpu()), scaling(s.scaling_raw().to_pageable_host()), rotation(s.rotation_raw().to_pageable_host()), opacity(resident ? Tensor{} : s.opacity_raw().to_pageable_host()) {
+                if (resident) {
+                    const auto borrow_cuda = [](const Tensor& t) {
+                        return t.device() == Device::CUDA ? t : t.cuda();
+                    };
+                    device_means = borrow_cuda(s.means());
+                    device_sh0 = borrow_cuda(s.sh0());
+                    device_shN = borrow_cuda(s.shN_canonical());
+                    device_scaling = borrow_cuda(s.scaling_raw());
+                    device_rotation = borrow_cuda(s.rotation_raw());
+                    device_opacity = borrow_cuda(s.opacity_raw());
+                }
+            }
+            HostSplats() = default;
+            SplatData materialize(const std::vector<int>& rows) const {
+                const bool resident = device_means.is_valid();
+                const auto indices = Tensor::from_vector(rows, {rows.size()}, resident ? Device::CUDA : Device::CPU);
+                const auto gather = [&](const Tensor& host, const Tensor& device) {
+                    auto selected = (resident ? device : host).index_select(0, indices);
+                    return resident ? selected : selected.cuda();
+                };
+                auto rest = degree ? gather(shN, device_shN) : Tensor::empty({rows.size(), 0, 3}, Device::CUDA);
+                return SplatData(degree, gather(means, device_means), gather(sh0, device_sh0), std::move(rest), gather(scaling, device_scaling), gather(rotation, device_rotation), gather(opacity, device_opacity), scale);
+            }
+            void filter(const Tensor& keep) {
+                for (auto* t : {&means, &sh0, &scaling, &rotation, &opacity})
+                    if (t->is_valid())
+                        *t = t->index_select(0, keep);
+                if (degree && shN.is_valid())
+                    shN = shN.index_select(0, keep);
+                if (device_means.is_valid()) {
+                    const auto ids = keep.cuda();
+                    for (auto* t : {&device_means, &device_sh0, &device_scaling, &device_rotation, &device_opacity})
+                        *t = t->index_select(0, ids);
+                    if (degree)
+                        device_shN = device_shN.index_select(0, ids);
+                }
+            }
+        };
+        SplatData concatenate(std::vector<HostSplats>& parts) {
+            int degree = 0;
+            size_t count = 0;
+            for (const auto& p : parts) {
+                degree = std::max(degree, p.degree);
+                count += p.size();
+            }
+            const size_t k = (degree + 1) * (degree + 1) - 1;
+            std::vector<Tensor> means, sh0, scaling, rotation, opacity;
+            auto shN = Tensor::zeros({count, k, 3}, Device::CPU);
+            size_t offset = 0;
+            auto* rest = shN.ptr<float>();
+            for (const auto& p : parts) {
+                means.push_back(p.means);
+                sh0.push_back(p.sh0.reshape({static_cast<int>(p.size()), 1, 3}));
+                scaling.push_back(p.scaling);
+                rotation.push_back(p.rotation);
+                opacity.push_back(p.opacity.reshape({static_cast<int>(p.size()), 1}));
+                const size_t pk = (p.degree + 1) * (p.degree + 1) - 1;
+                if (pk) {
+                    const auto* source = p.shN.ptr<float>();
+                    for (size_t i = 0; i < p.size(); ++i)
+                        std::copy_n(source + i * pk * 3, pk * 3, rest + (offset + i) * k * 3);
+                }
+                offset += p.size();
+            }
+            if (!count)
+                return SplatData(0, Tensor::empty({0, 3}, Device::CUDA), Tensor::empty({0, 1, 3}, Device::CUDA), Tensor::empty({0, 0, 3}, Device::CUDA), Tensor::empty({0, 3}, Device::CUDA), Tensor::empty({0, 4}, Device::CUDA), Tensor::empty({0, 1}, Device::CUDA), 1);
+            return SplatData(degree, Tensor::cat(means).cuda(), Tensor::cat(sh0).cuda(), shN.cuda(), Tensor::cat(scaling).cuda(), Tensor::cat(rotation).cuda(), Tensor::cat(opacity).cuda(), 1);
+        }
+        struct Bound {
+            std::array<double, 3> min{INFINITY, INFINITY, INFINITY}, max{-INFINITY, -INFINITY, -INFINITY};
+            void add(const Bound& b) {
+                for (int a = 0; a < 3; ++a) {
+                    min[a] = std::min(min[a], b.min[a]);
+                    max[a] = std::max(max[a], b.max[a]);
+                }
+            }
+            Json json() const { return {{"min", min}, {"max", max}}; }
+            int axis() const {
+                int a = 0;
+                for (int b = 1; b < 3; ++b)
+                    if (max[b] - min[b] > max[a] - min[a])
+                        a = b;
+                return a;
+            }
+        };
+        Bound splat_bound(const float* means, const float* rotation, const float* scaling, size_t i) {
+            const float* q = rotation + i * 4;
+            const double len = std::sqrt(double(q[0]) * q[0] + double(q[1]) * q[1] + double(q[2]) * q[2] + double(q[3]) * q[3]);
+            if (!std::isfinite(len) || len == 0)
+                throw std::runtime_error("Invalid quaternion in SSOG input");
+            const double w = q[0] / len, x = q[1] / len, y = q[2] / len, z = q[3] / len;
+            const double r[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)}, {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)}, {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
+            std::array<double, 3> scales;
+            for (int c = 0; c < 3; ++c)
+                scales[c] = std::exp(double(scaling[i * 3 + c]));
+            Bound b;
+            for (int a = 0; a < 3; ++a) {
+                double extent = 0;
+                for (int c = 0; c < 3; ++c)
+                    extent += std::abs(r[a][c]) * scales[c];
+                const double p = means[i * 3 + a];
+                b.min[a] = p - extent;
+                b.max[a] = p + extent;
+                if (!std::isfinite(b.min[a]) || !std::isfinite(b.max[a]))
+                    throw std::runtime_error("Non-finite geometry in SSOG input");
+            }
+            return b;
+        }
+        struct TreeNode {
+            size_t begin, end;
+            Bound centroids;
+            int left = -1, right = -1;
+        };
+        struct Unit {
+            int level, index;
+            std::vector<int> rows;
+            std::vector<size_t> bins;
+        };
+        struct TempDirectory {
+            fs::path path;
+            ~TempDirectory() {
+                std::error_code ec;
+                fs::remove_all(path, ec);
+            }
+        };
+        // Match the reference's JSON number rounding without altering provenance strings.
+        void round_numbers(Json& j) {
+            if (j.is_number_float()) {
+                const double v = j.get<double>();
+                if (std::trunc(v) == v && std::abs(v) < 9e18) {
+                    j = static_cast<int64_t>(v);
+                    return;
+                }
+                char buf[64];
+                const auto [end, ec] = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::general, 7);
+                if (ec != std::errc{})
+                    throw std::runtime_error("Cannot encode manifest number");
+                double rounded;
+                std::from_chars(buf, end, rounded);
+                if (std::trunc(rounded) == rounded && std::abs(rounded) < 9e18)
+                    j = static_cast<int64_t>(rounded);
+                else
+                    j = rounded;
+            } else if (j.is_structured())
+                for (auto& value : j)
+                    round_numbers(value);
+        }
+    } // namespace
+
+    Result<void> validate_ssog(const std::filesystem::path& p) {
+        try {
+            (void)parse_manifest(p);
+            return {};
+        } catch (const std::exception& e) { return make_error(ErrorCode::INVALID_HEADER, std::string("Invalid SSOG: ") + e.what(), p); }
+    }
+    Result<SplatData> load_ssog(const std::filesystem::path& p, const SsogLoadOptions& options) {
+        try {
+            const auto m = parse_manifest(p);
+            const int level = options.lod_level < 0 ? static_cast<int>(m.files.size()) + options.lod_level : options.lod_level;
+            if (level < 0 || level >= static_cast<int>(m.files.size()))
+                throw std::runtime_error("Requested LOD level out of range");
+            std::vector<HostSplats> parts;
+            // Read and WebP-decode one unit ahead, but reconstruct CUDA tensors only
+            // on this thread. The queued work owns CPU buffers and uses no CUDA state.
+            std::vector<std::pair<std::string, size_t>> files;
+            for (auto [file, expected] : m.files[level])
+                files.emplace_back(m.json["filenames"][file].get<std::string>(), expected);
+            const auto prepare = [&](size_t i) {
+                return std::async(std::launch::async, [entries = m.entries, name = files[i].first] { return entries->prepare(name); });
+            };
+            std::future<Result<SogDirectoryReconstruct>> next;
+            if (!files.empty())
+                next = prepare(0);
+            for (size_t i = 0; i < files.size(); ++i) {
+                auto ready = next.get();
+                if (!ready)
+                    throw std::runtime_error(ready.error().message);
+                if (i + 1 < files.size())
+                    next = prepare(i + 1);
+                auto unit = (*ready)();
+                if (!unit)
+                    throw std::runtime_error(unit.error().message);
+                if (unit->size() != files[i].second)
+                    throw std::runtime_error("Decoded SOG unit count mismatch");
+                parts.emplace_back(*unit);
+            }
+            if (m.json.contains("environment")) {
+                auto ready = m.entries->prepare(m.json["environment"].get<std::string>());
+                if (!ready)
+                    throw std::runtime_error(ready.error().message);
+                auto env = (*ready)();
+                if (!env)
+                    throw std::runtime_error(env.error().message);
+                parts.emplace_back(*env);
+            }
+            return concatenate(parts);
+        } catch (const std::exception& e) { return make_error(ErrorCode::DECODING_FAILED, std::string("Failed to load SSOG: ") + e.what(), p); }
+    }
+
+    Result<void> save_ssog(const SplatData& input, const SsogSaveOptions& o) {
+        try {
+            const auto started = Clock::now();
+            if (o.output_path.empty() || !o.validate())
+                return make_error(ErrorCode::INVALID_DATASET, "Invalid SSOG export options", o.output_path);
+            if (!input.size())
+                return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", o.output_path);
+            auto requested = o.output_path.filename() == "lod-meta.json" ? o.output_path.parent_path() : o.output_path;
+            auto out = fs::absolute(requested.empty() ? fs::path(".") : requested).lexically_normal();
+            if (out != out.root_path() && out.filename().empty())
+                out = out.parent_path();
+            if (out == out.root_path())
+                return make_error(ErrorCode::PATH_NOT_WRITABLE, "Cannot export to filesystem root", out);
+            fs::create_directories(out.parent_path());
+            static std::atomic_uint64_t sequence{0};
+#ifdef _WIN32
+            const auto pid = _getpid();
+#else
+            const auto pid = getpid();
+#endif
+            const bool bundled = out.extension() == ".ssog";
+            std::unique_ptr<ScopedAtomicOutputFile> atomic_output;
+            std::unique_ptr<SogSink> archive;
+            std::mutex archive_mutex;
+            if (bundled) {
+                atomic_output = std::make_unique<ScopedAtomicOutputFile>(out);
+                archive = make_sog_archive(atomic_output->temp_path());
+                if (auto opened = archive->open(); !opened)
+                    return opened;
+            }
+            TempDirectory temp{bundled ? fs::path{} : fs::path(out.string() + std::format(".tmp-{}-{}", pid, sequence++))};
+            if (!bundled && !fs::create_directory(temp.path))
+                throw std::runtime_error("Temporary export directory already exists");
+            progress(o, 0, "Preparing SSOG");
+            std::vector<HostSplats> levels;
+            size_t free_cuda = 0, total_cuda = 0;
+            const bool memory_known = cudaMemGetInfo(&free_cuda, &total_cuda) == cudaSuccess;
+            const double level_rows = input.size() * (1.0 - std::pow(double(o.lod_ratio), o.lod_levels)) / (1.0 - o.lod_ratio);
+            const double resident_bytes = level_rows * (14 + 3 * input.max_sh_coeffs_rest()) * sizeof(float);
+            // Leave most free VRAM for decimation and bounded unit workspaces.
+            // Larger resident exports avoid full SH downloads and host gathers.
+            const bool resident = memory_known && resident_bytes < std::min<double>(6.0 * 1024 * 1024 * 1024, free_cuda * 0.45);
+            LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
+            levels.emplace_back(input, resident);
+            if (input.has_deleted_mask())
+                levels[0].filter(input.deleted().logical_not().to_pageable_host());
+            const auto n0 = levels[0].size();
+            if (!n0)
+                return make_error(ErrorCode::EMPTY_DATASET, "No visible splats to write", out);
+            if (n0 > INT_MAX)
+                return make_error(ErrorCode::INVALID_DATASET, "Too many splats", out);
+            const auto prepared = Clock::now();
+            std::optional<SplatData> previous_level;
+            for (int l = 1; l < o.lod_levels; ++l) {
+                const size_t target = static_cast<size_t>(std::round(n0 * std::pow(double(o.lod_ratio), l)));
+                progress(o, 0.05f + 0.25f * (l - 1) / o.lod_levels, "Decimating LOD " + std::to_string(l));
+                if (!target) {
+                    levels.emplace_back();
+                    continue;
+                }
+                const auto& previous = previous_level ? *previous_level : input;
+                DecimateOptions decimate;
+                decimate.target_count = target;
+                decimate.use_gpu = o.use_gpu;
+                bool cancelled = false;
+                decimate.progress = [&](float p, const std::string& stage) {
+                    if (o.progress_callback && !o.progress_callback(0.05f + 0.25f * (l - 1 + p) / o.lod_levels, stage))
+                        cancelled = true;
+                    return !cancelled;
+                };
+                auto result = decimate_splats(previous, decimate);
+                if (cancelled)
+                    throw Cancelled{};
+                if (!result)
+                    return std::unexpected(result.error());
+                previous_level.emplace(std::move(*result));
+                levels.emplace_back(*previous_level, resident);
+            }
+            previous_level.reset();
+            const auto decimated = Clock::now();
+            progress(o, 0.30f, "Partitioning SSOG");
+            std::vector<size_t> cum{0}, counts;
+            std::vector<std::array<float, 3>> positions;
+            std::vector<Bound> bounds;
+            const auto total = std::accumulate(levels.begin(), levels.end(), size_t{0}, [](size_t n, const auto& l) { return n + l.size(); });
+            if (total > INT_MAX)
+                throw std::runtime_error("Too many total LOD rows");
+            positions.resize(total);
+            bounds.resize(total);
+            for (const auto& l : levels) {
+                const auto base = cum.back();
+                counts.push_back(l.size());
+                cum.push_back(base + l.size());
+                if (!l.size())
+                    continue;
+                const auto* means = l.means.ptr<float>();
+                const auto* rotation = l.rotation.ptr<float>();
+                const auto* scaling = l.scaling.ptr<float>();
+                tbb::parallel_for(size_t{0}, l.size(), [&](size_t i) {
+                    const auto* p = means + i * 3;
+                    positions[base + i] = {p[0], p[1], p[2]};
+                    bounds[base + i] = splat_bound(means, rotation, scaling, i);
+                });
+            }
+            std::vector<int> indices(cum.back());
+            std::iota(indices.begin(), indices.end(), 0);
+            size_t tree_leaves = 1;
+            while ((total + tree_leaves - 1) / tree_leaves > 256)
+                tree_leaves *= 2;
+            // Fixed heap slots let disjoint median partitions run concurrently.
+            // Each partition retains the same nth_element input and tie order.
+            std::vector<TreeNode> tree(tree_leaves * 2 - 1);
+            const auto split = [&](auto&& self, size_t begin, size_t end, int node) -> void {
+                Bound box;
+                for (size_t i = begin; i < end; ++i)
+                    for (int a = 0; a < 3; ++a) {
+                        box.min[a] = std::min(box.min[a], double(positions[indices[i]][a]));
+                        box.max[a] = std::max(box.max[a], double(positions[indices[i]][a]));
+                    }
+                tree[node] = {begin, end, box};
+                if (end - begin > 256) {
+                    const auto mid = begin + (end - begin) / 2;
+                    const int a = box.axis();
+                    std::nth_element(indices.begin() + begin, indices.begin() + mid, indices.begin() + end, [&](int i, int j) { return positions[i][a] < positions[j][a]; });
+                    const int left = node * 2 + 1, right = left + 1;
+                    tree[node].left = left;
+                    tree[node].right = right;
+                    if (end - begin >= 16384) {
+                        tbb::parallel_invoke([&] { self(self, begin, mid, left); },
+                                             [&] { self(self, mid, end, right); });
+                    } else {
+                        self(self, begin, mid, left);
+                        self(self, mid, end, right);
+                    }
+                }
+            };
+            split(split, 0, indices.size(), 0);
+            const size_t bin_size = size_t(o.chunk_count_k) * 1024, bin_min = size_t(o.chunk_min_k) * 1024;
+            std::vector<Unit> units;
+            std::vector<int> current(o.lod_levels, -1), next(o.lod_levels, 0);
+            std::vector<std::string> filenames;
+            const auto splits_node = [&](const TreeNode& node) {
+                const int a = node.centroids.axis();
+                return node.left >= 0 && (node.end - node.begin > bin_size ||
+                                          (node.centroids.max[a] - node.centroids.min[a] > o.chunk_extent && node.end - node.begin > bin_min));
+            };
+            std::vector<int> leaf_ids;
+            const auto collect_leaves = [&](auto&& self, int id) -> void {
+                if (splits_node(tree[id])) {
+                    self(self, tree[id].left);
+                    self(self, tree[id].right);
+                } else {
+                    leaf_ids.push_back(id);
+                }
+            };
+            collect_leaves(collect_leaves, 0);
+            struct LeafData {
+                std::vector<std::vector<int>> bins;
+                Bound bound;
+            };
+            std::vector<LeafData> leaf_data(leaf_ids.size());
+            // Row membership and bounds are independent per leaf. Preserve the
+            // original row traversal within each leaf and assemble files below
+            // in depth-first order so offsets, ties and filenames stay exact.
+            tbb::parallel_for(size_t{0}, leaf_ids.size(), [&](size_t leaf) {
+                const auto& node = tree[leaf_ids[leaf]];
+                auto& data = leaf_data[leaf];
+                data.bins.resize(o.lod_levels);
+                for (size_t i = node.begin; i < node.end; ++i) {
+                    const int flat = indices[i];
+                    const int l = static_cast<int>(std::upper_bound(cum.begin(), cum.end(), flat) - cum.begin() - 1);
+                    data.bins[l].push_back(static_cast<int>(flat - cum[l]));
+                    data.bound.add(bounds[flat]);
+                }
+            });
+            size_t next_leaf = 0;
+            const auto build = [&](auto&& self, int id) -> std::pair<Json, Bound> {
+                const auto& node = tree[id];
+                if (splits_node(node)) {
+                    auto [left, lb] = self(self, node.left);
+                    auto [right, rb] = self(self, node.right);
+                    lb.add(rb);
+                    return {Json{{"bound", lb.json()}, {"children", Json::array({std::move(left), std::move(right)})}}, lb};
+                }
+                auto& data = leaf_data[next_leaf++];
+                const auto bound = data.bound;
+                Json lods = Json::object();
+                for (int l = 0; l < o.lod_levels; ++l) {
+                    const auto& rows = data.bins[l];
+                    if (rows.empty())
+                        continue;
+                    if (current[l] < 0) {
+                        current[l] = static_cast<int>(units.size());
+                        const int index = next[l]++;
+                        units.push_back({l, index, {}, {}});
+                        filenames.push_back(std::format("{}_{}/meta.json", l, index));
+                    }
+                    const int f = current[l];
+                    auto& unit = units[f];
+                    lods[std::to_string(l)] = {{"file", f}, {"offset", unit.rows.size()}, {"count", rows.size()}};
+                    unit.rows.insert(unit.rows.end(), rows.begin(), rows.end());
+                    unit.bins.push_back(rows.size());
+                    if (unit.rows.size() > bin_size)
+                        current[l] = -1;
+                }
+                return {Json{{"bound", bound.json()}, {"lods", std::move(lods)}}, bound};
+            };
+            auto [root, bound] = build(build, 0);
+            leaf_data.clear();
+            leaf_data.shrink_to_fit();
+            tree.clear();
+            tree.shrink_to_fit();
+            positions.clear();
+            positions.shrink_to_fit();
+            bounds.clear();
+            bounds.shrink_to_fit();
+            indices.clear();
+            indices.shrink_to_fit();
+            const auto partitioned = Clock::now();
+            double morton_ms = 0, encode_ms = 0;
+            auto stamp = o.provenance.value_or(core::make_minimal_provenance_stamp());
+            // Pageable scenes retain two workspaces. Resident scenes may overlap
+            // more units within the budget for gathers, SH, prepared half inputs,
+            // labels and palettes in addition to retained LODs.
+            const auto largest_unit = std::max_element(units.begin(), units.end(), [](const auto& a, const auto& b) {
+                return a.rows.size() < b.rows.size();
+            });
+            const double workspace_bytes = largest_unit->rows.size() *
+                                               (56.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
+                                           128.0 * 1024 * 1024;
+            const size_t resident_workers = resident
+                                                ? std::max<size_t>(1, (free_cuda - resident_bytes) / workspace_bytes)
+                                                : 1;
+            const size_t cpu_workers = units.size() > 6
+                                           ? std::clamp<size_t>(std::thread::hardware_concurrency() / 4, 1, 6)
+                                           : std::clamp<size_t>(std::thread::hardware_concurrency() / 6, 1, 4);
+            const size_t workers = std::min(units.size(), resident
+                                                              ? std::min(resident_workers, cpu_workers)
+                                                              : size_t{2});
+            struct UnitTiming {
+                double morton, encode;
+            };
+            std::mutex progress_mutex;
+            std::vector<float> unit_progress(units.size());
+            bool cancelled = false;
+            const auto encode_unit = [&](size_t f) -> Result<UnitTiming> {
+                auto& u = units[f];
+                const auto& l = levels[u.level];
+                const auto sort_start = Clock::now();
+                std::vector<size_t> offsets{0};
+                for (const auto n : u.bins)
+                    offsets.push_back(offsets.back() + n);
+                const auto* positions = l.means.ptr<float>();
+                tbb::parallel_for(size_t{0}, u.bins.size(), [&](size_t bin) {
+                    sort_ssog_leaf(positions, std::span<int>(u.rows).subspan(offsets[bin], u.bins[bin]));
+                });
+                const double sort_ms = std::chrono::duration<double, std::milli>(Clock::now() - sort_start).count();
+                const auto encode_start = Clock::now();
+                auto data = l.materialize(u.rows);
+                const auto gathered = Clock::now();
+                SogEncodeOptions encode;
+                encode.output_path = temp.path / fs::path(filenames[f]).parent_path();
+                encode.kmeans_iterations = o.kmeans_iterations;
+                encode.use_gpu = o.use_gpu;
+                encode.provenance = stamp;
+                encode.presorted = true;
+                encode.fast_webp = true;
+                encode.progress_callback = [&](float p, const std::string& stage) {
+                    std::lock_guard lock(progress_mutex);
+                    if (cancelled)
+                        return false;
+                    unit_progress[f] = std::max(unit_progress[f], p);
+                    const float total = std::accumulate(unit_progress.begin(), unit_progress.end(), 0.0f);
+                    if (o.progress_callback && !o.progress_callback(0.4f + 0.59f * total / units.size(), stage))
+                        cancelled = true;
+                    return !cancelled;
+                };
+                Result<void> result;
+                if (bundled) {
+                    UnitArchiveSink sink(*archive, archive_mutex, std::format("{}_{}/", u.level, u.index));
+                    result = encode_sog(data, encode, sink);
+                } else {
+                    result = encode_sog_directory(data, encode);
+                }
+                if (!result)
+                    return std::unexpected(result.error());
+                LOG_DEBUG("SSOG unit: file={} level={} rows={} leaves={} morton_ms={:.3f} gather_ms={:.3f} encode_ms={:.3f}", filenames[f], u.level, u.rows.size(), u.bins.size(), sort_ms, std::chrono::duration<double, std::milli>(gathered - encode_start).count(), std::chrono::duration<double, std::milli>(Clock::now() - gathered).count());
+                return UnitTiming{sort_ms, std::chrono::duration<double, std::milli>(Clock::now() - encode_start).count()};
+            };
+            std::atomic_size_t next_unit{0};
+            std::atomic_bool failed{false};
+            std::vector<std::future<Result<UnitTiming>>> pending;
+            for (size_t worker = 0; worker < std::min(workers, units.size()); ++worker) {
+                pending.push_back(std::async(std::launch::async, [&]() -> Result<UnitTiming> {
+                    UnitTiming timing{};
+                    while (!failed.load()) {
+                        const size_t task = next_unit.fetch_add(1);
+                        if (task >= units.size())
+                            break;
+                        auto result = encode_unit(task);
+                        if (!result) {
+                            failed.store(true);
+                            return std::unexpected(result.error());
+                        }
+                        timing.morton += result->morton;
+                        timing.encode += result->encode;
+                    }
+                    return timing;
+                }));
+            }
+            for (auto& worker : pending) {
+                auto result = worker.get();
+                if (!result)
+                    return std::unexpected(result.error());
+                morton_ms += result->morton;
+                encode_ms += result->encode;
+            }
+            Json manifest{{"version", 1}, {"asset", {{"generator", "LichtFeld Studio"}, {"chunkGaussians", bin_size}, {"chunkExtent", o.chunk_extent}, {"chunkMinGaussians", bin_min}}}, {"count", cum.back()}, {"counts", counts}, {"lodLevels", o.lod_levels}, {"lodErrors", false}, {"filenames", filenames}, {"tree", std::move(root)}};
+            round_numbers(manifest);
+            manifest["asset"]["lichtfeld_provenance"] = Json::parse(core::provenance_to_json(stamp));
+            if (bundled) {
+                const auto json = manifest.dump();
+                if (auto added = archive->add_file("lod-meta.json", json.data(), json.size()); !added)
+                    return added;
+                if (auto closed = archive->close(); !closed)
+                    return closed;
+            } else {
+                std::ofstream file(temp.path / "lod-meta.json", std::ios::binary);
+                file << manifest.dump();
+                file.close();
+                if (!file)
+                    throw std::runtime_error("Failed to write lod-meta.json");
+            }
+            progress(o, 1, "Complete");
+            const auto encoded = Clock::now();
+            // Preserve unrelated user files. Move all format-owned old paths to a rollback
+            // directory before installing units, then publish the completed manifest last.
+            if (bundled) {
+                if (auto committed = atomic_output->commit(); !committed)
+                    return committed;
+            } else {
+                fs::create_directories(out);
+                TempDirectory backup{fs::path(temp.path.string() + ".backup")};
+                fs::create_directory(backup.path);
+                std::vector<fs::path> old_paths, installed;
+                const bool replacing = fs::exists(out / "lod-meta.json");
+                const std::regex unit_name("[0-9]+_[0-9]+");
+                for (const auto& e : fs::directory_iterator(out)) {
+                    const auto name = e.path().filename();
+                    const bool owned = name == "lod-meta.json" || name == "env" || std::regex_match(name.string(), unit_name);
+                    if (owned && replacing)
+                        old_paths.push_back(name);
+                }
+                for (const auto& u : units) {
+                    const auto name = fs::path(std::format("{}_{}", u.level, u.index));
+                    if (fs::exists(out / name) && !replacing)
+                        throw std::runtime_error("Output unit already exists in unrelated directory");
+                }
+                std::vector<fs::path> moved;
+                try {
+                    for (const auto& name : old_paths) {
+                        fs::rename(out / name, backup.path / name);
+                        moved.push_back(name);
+                    }
+                    for (const auto& u : units) {
+                        const auto name = fs::path(std::format("{}_{}", u.level, u.index));
+                        fs::rename(temp.path / name, out / name);
+                        installed.push_back(name);
+                    }
+                    fs::rename(temp.path / "lod-meta.json", out / "lod-meta.json");
+                } catch (...) {
+                    std::error_code ec;
+                    for (const auto& name : installed)
+                        fs::remove_all(out / name, ec);
+                    for (const auto& name : moved)
+                        fs::rename(backup.path / name, out / name, ec);
+                    // Retain a backup if rollback itself fails, rather than deleting recoverable data.
+                    if (!fs::is_empty(backup.path))
+                        backup.path.clear();
+                    throw;
+                }
+            }
+            const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+            LOG_DEBUG("SSOG export stages: prepare_ms={:.3f} decimate_ms={:.3f} partition_ms={:.3f} morton_ms={:.3f} encode_ms={:.3f} unit_wall_ms={:.3f} commit_ms={:.3f} total_ms={:.3f} units={} workers={}", ms(started, prepared), ms(prepared, decimated), ms(decimated, partitioned), morton_ms, encode_ms, ms(partitioned, encoded), ms(encoded, Clock::now()), ms(started, Clock::now()), units.size(), workers);
+            return {};
+        } catch (const Cancelled&) { return make_error(ErrorCode::CANCELLED, "Export cancelled by user", o.output_path); } catch (const std::exception& e) {
+            return make_error(ErrorCode::ENCODING_FAILED, std::string("Failed to save SSOG: ") + e.what(), o.output_path);
+        }
+    }
+} // namespace lfs::io

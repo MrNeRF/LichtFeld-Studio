@@ -109,6 +109,13 @@ namespace lfs::vis::tools {
         if (auto* const sm = ctx.getSceneManager()) {
             if (auto* const service = sm->getSelectionService()) {
                 auto* const rm = ctx.getRenderingManager();
+                if (const auto* input = InputController::instance();
+                    rm && input && input->isCameraNavigating() &&
+                    !service->isInteractiveSelectionActive()) {
+                    rm->clearCursorPreviewState();
+                    rm->clearPreviewSelection();
+                    return;
+                }
                 const bool passive_hover =
                     mouse_buttons == 0 &&
                     !gui::guiFocusState().want_capture_mouse &&

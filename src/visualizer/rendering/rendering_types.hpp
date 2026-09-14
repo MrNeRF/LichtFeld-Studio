@@ -10,11 +10,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis {
 
@@ -68,6 +70,26 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesPLYComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::PLYComparison;
+    }
+
+    // Ordered pair of visible splat-node indices for a PLY-comparison offset.
+    // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
+    [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>
+    plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
+        if (node_count < 2) {
+            return std::nullopt;
+        }
+
+        size_t remaining = offset % ((node_count * (node_count - 1)) / 2);
+        for (size_t left = 0; left + 1 < node_count; ++left) {
+            const size_t row_count = node_count - left - 1;
+            if (remaining < row_count) {
+                return std::pair<size_t, size_t>{left, left + 1 + remaining};
+            }
+            remaining -= row_count;
+        }
+
+        return std::nullopt;
     }
 
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {

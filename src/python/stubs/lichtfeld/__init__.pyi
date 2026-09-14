@@ -282,8 +282,11 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
-def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False, overwrite: bool = False) -> bool:
     """Create and bind a new .licht project at path"""
+
+def project_create_pending() -> bool:
+    """Whether a stop-then-create is queued and has not bound yet"""
 
 def project_embed_dataset() -> None:
     """Embed the active project's external dataset verbatim"""
@@ -397,9 +400,9 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:

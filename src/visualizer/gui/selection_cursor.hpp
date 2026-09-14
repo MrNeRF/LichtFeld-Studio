@@ -10,6 +10,8 @@
 #include <span>
 #include <vector>
 
+struct SDL_Cursor;
+
 namespace lfs::vis::gui {
 
     enum class SelectionCursorOperation : uint8_t {
@@ -48,6 +50,11 @@ namespace lfs::vis::gui {
     [[nodiscard]] constexpr int selectionCursorMaxSize() {
         return 256;
     }
+
+    // Cursor identity is independent of pointer position and preview eligibility.
+    // A retiring ring can remain current until its replacement is installed.
+    [[nodiscard]] LFS_VIS_API bool isSelectionRingCursorCurrent(
+        const SDL_Cursor* current, const SDL_Cursor* ring, const SDL_Cursor* retiring_ring);
 
     [[nodiscard]] LFS_VIS_API bool useHardwareSelectionRing(bool preview_active,
                                                             SelectionPreviewMode mode,

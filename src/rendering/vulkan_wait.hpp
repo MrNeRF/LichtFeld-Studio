@@ -150,6 +150,7 @@ namespace lfs::rendering {
         PFN_vkCmdPipelineBarrier2 cmd_pipeline_barrier2 = nullptr;
         PFN_vkCmdResetQueryPool cmd_reset_query_pool = nullptr;
         PFN_vkCmdWriteTimestamp cmd_write_timestamp = nullptr;
+        PFN_vkGetQueryPoolResults get_query_pool_results = nullptr;
         PFN_vkQueueSubmit queue_submit = nullptr;
         PFN_vkQueueWaitIdle queue_wait_idle = nullptr;
 

@@ -110,6 +110,7 @@ namespace lfs::vis::gui {
         switch (format) {
         case ExportFormat::PLY: return "PLY";
         case ExportFormat::SOG: return "SOG";
+        case ExportFormat::SSOG: return "SSOG";
         case ExportFormat::SPZ: return "SPZ";
         case ExportFormat::HTML_VIEWER: return "HTML";
         case ExportFormat::USD: return "USD";
@@ -1327,7 +1328,8 @@ namespace lfs::vis::gui {
                                          bool rad_flip_y,
                                          bool rad_streamable,
                                          int spz_version,
-                                         bool include_provenance) {
+                                         bool include_provenance,
+                                         int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (isExporting())
             return;
 
@@ -1415,7 +1417,7 @@ namespace lfs::vis::gui {
                          rad_flip_y,
                          rad_streamable,
                          spz_version,
-                         std::move(provenance));
+                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -1541,7 +1543,8 @@ namespace lfs::vis::gui {
                                             bool rad_flip_y,
                                             bool rad_streamable,
                                             int spz_version,
-                                            core::ProvenanceStamp provenance) {
+                                            core::ProvenanceStamp provenance,
+                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -1575,7 +1578,7 @@ namespace lfs::vis::gui {
              rad_flip_y,
              rad_streamable,
              spz_version,
-             provenance](
+             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -1686,6 +1689,25 @@ namespace lfs::vis::gui {
                                 .progress_callback = update_progress,
                                 .provenance = provenance};
                             if (auto result = lfs::io::save_sog(*splat_data, options); result) {
+                                success = true;
+                            } else {
+                                error_msg = result.error().message;
+                                cancelled = result.error().code == lfs::io::ErrorCode::CANCELLED;
+                            }
+                            break;
+                        }
+                        case ExportFormat::SSOG: {
+                            const lfs::io::SsogSaveOptions options{
+                                .output_path = path,
+                                .lod_levels = lod_levels,
+                                .lod_ratio = lod_ratio,
+                                .chunk_count_k = chunk_count_k,
+                                .chunk_extent = chunk_extent,
+                                .chunk_min_k = chunk_min_k,
+                                .kmeans_iterations = kmeans_iterations,
+                                .progress_callback = update_progress,
+                                .provenance = provenance};
+                            if (auto result = lfs::io::save_ssog(*splat_data, options); result) {
                                 success = true;
                             } else {
                                 error_msg = result.error().message;

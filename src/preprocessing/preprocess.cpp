@@ -744,6 +744,13 @@ namespace {
                                          path_to_string(lfw_path) + ": " +
                                          std::string(loaded.error().detail()));
             model_ = std::move(*loaded);
+            int device = 0;
+            cudaDeviceProp properties{};
+            if (cudaGetDevice(&device) != cudaSuccess ||
+                cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+                throw std::runtime_error("Failed to query native MoGe CUDA device");
+            }
+            LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
         }
 
         HeadMaps run(const Image& image, int64_t num_tokens) {
@@ -1247,6 +1254,9 @@ namespace lfs::preprocessing {
     }
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        // The standalone CLI bypasses training's logger setup.
+        if (!lfs::core::Logger::get().is_ready())
+            lfs::core::Logger::get().init();
         const auto result = run_preprocess_ex(params, {});
         if (!result.ok) {
             std::cerr << "preprocess: " << result.error << "\n";

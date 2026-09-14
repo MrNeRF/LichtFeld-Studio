@@ -5,12 +5,17 @@
 #include "core/export.hpp"
 
 #include <functional>
+#include <string_view>
 
 namespace lfs::core {
 
     // Installs process-wide last-resort diagnostics. Call only after the ABI
     // tripwire: a stale core must never execute current-core startup hooks.
     LFS_CORE_API void install_crash_handlers();
+
+    // Appends a handled failure to the non-rotating crash log. No-op until
+    // crash handlers are installed; never throws or calls the regular logger.
+    LFS_CORE_API void write_crash_diagnostic(std::string_view text) noexcept;
 
     // Flushes the logger and any other flushable diagnostic sink. Swallows
     // all exceptions; safe to call before the logger has been initialized.

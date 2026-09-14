@@ -136,7 +136,7 @@ namespace lfs::core::compile_check {
             }
 
         private:
-            [[nodiscard]] bool setVkFailure(std::string) { return false; }
+            [[nodiscard]] bool setVkFailure(std::string, VkResult) { return false; }
         };
 
         void compile_vk_debug_assert_arities(const int value) {

@@ -272,6 +272,19 @@ class ImportPlyOperator(Operator):
         return {"FINISHED"}
 
 
+class ImportSsogOperator(Operator):
+    label = "menu.file.import_ssog"
+    description = "Import a SSOG folder containing lod-meta.json"
+
+    def execute(self, context) -> set:
+        path = lf.ui.open_folder_dialog()
+        if not path:
+            return {"CANCELLED"}
+        if not _run_import(path, lambda: lf.load_file(path, is_dataset=False)):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class ImportMeshOperator(Operator):
     label = "menu.file.import_mesh"
     description = "Import a 3D mesh file"
@@ -417,12 +430,16 @@ def _show_project_switch_confirmation(
     path: str,
     keep_asset_manager_open: bool = False,
     create_path: str = "",
+    overwrite: bool = False,
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
         if create_path:
             callback = lambda stop_training: lf.project_create(
-                create_path, discard_changes=True, stop_training=stop_training
+                create_path,
+                discard_changes=True,
+                stop_training=stop_training,
+                overwrite=overwrite,
             )
         else:
             callback = lambda stop_training: _new_project(True, stop_training)
@@ -440,6 +457,7 @@ def _show_stop_training_confirmation(
     discard_changes: bool = False,
     keep_asset_manager_open: bool = False,
     create_path: str = "",
+    overwrite: bool = False,
 ) -> None:
     tr = lf.ui.tr
     yes_label = tr("common.yes")
@@ -449,7 +467,12 @@ def _show_stop_training_confirmation(
         if button != yes_label:
             return
         if new_project and create_path:
-            lf.project_create(create_path, discard_changes=True, stop_training=True)
+            lf.project_create(
+                create_path,
+                discard_changes=True,
+                stop_training=True,
+                overwrite=overwrite,
+            )
         elif new_project:
             _new_project(discard_changes, True)
         else:
@@ -570,6 +593,7 @@ class FileMenu:
                 [
                     menu_operator(ImportDatasetOperator),
                     menu_operator(ImportPlyOperator),
+                    menu_operator(ImportSsogOperator),
                     menu_operator(ImportMeshOperator),
                     menu_operator(ImportCheckpointOperator),
                     menu_separator(),
@@ -595,6 +619,7 @@ _operator_classes = [
     CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
+    ImportSsogOperator,
     ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,

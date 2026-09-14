@@ -798,17 +798,18 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
         "--output",
         output_str.c_str(),
         "--format",
-        "ply,spz,html"};
+        ".ply,.spz,.html,.ssog"};
 
     auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     auto* mode = std::get_if<lfs::core::args::Mesh2SplatMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
-    ASSERT_EQ(mode->params.formats.size(), 3u);
+    ASSERT_EQ(mode->params.formats.size(), 4u);
     EXPECT_EQ(mode->params.formats[0], lfs::core::param::OutputFormat::PLY);
     EXPECT_EQ(mode->params.formats[1], lfs::core::param::OutputFormat::SPZ);
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
+    EXPECT_EQ(mode->params.formats[3], lfs::core::param::OutputFormat::SSOG);
 }
 
 TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {

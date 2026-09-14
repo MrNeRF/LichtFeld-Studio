@@ -57,7 +57,9 @@ namespace lfs::vis {
                                bool rad_flip_y = false,
                                bool rad_streamable = true,
                                int spz_version = 4,
-                               bool include_provenance = true);
+                               bool include_provenance = true,
+                               int lod_levels = 4, float lod_ratio = 0.5f, int chunk_count_k = 512,
+                               float chunk_extent = 16.0f, int chunk_min_k = 8, int kmeans_iterations = 10);
             [[nodiscard]] bool isExporting() const {
                 return jobs_.anyRunning(JobType::Export);
             }
@@ -219,7 +221,8 @@ namespace lfs::vis {
                                   bool rad_flip_y,
                                   bool rad_streamable,
                                   int spz_version,
-                                  lfs::core::ProvenanceStamp provenance);
+                                  lfs::core::ProvenanceStamp provenance,
+                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);

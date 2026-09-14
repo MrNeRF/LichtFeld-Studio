@@ -19,6 +19,7 @@ namespace lfs::training::sh_value {
     class ShNMutationBatch;
 }
 
+class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -110,10 +111,12 @@ namespace lfs::training {
         void reserve_optimizer_capacity(size_t capacity) override;
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override;
+        std::shared_ptr<CameraDataset> get_training_dataset() const override { return _views; }
         lfs::core::Tensor edge_score_scratch(int iter) override;
         void on_edge_score_accumulated(int iter) override;
 
     private:
+        friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;

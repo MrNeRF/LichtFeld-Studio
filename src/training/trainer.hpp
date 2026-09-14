@@ -84,6 +84,7 @@ namespace lfs::vis::project {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct TrainerBilateralGridTestAccess;
     struct TrainerRetryTestAccess;
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
@@ -461,6 +462,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::project::ProjectLifecycle;
+        friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -572,6 +574,7 @@ namespace lfs::training {
             lfs::core::Tensor grad_corrected;
             lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
+            lfs::core::Tensor normal_pixel_weight;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -720,7 +723,6 @@ namespace lfs::training {
             std::string_view reason);
 
         lfs::core::Scene* scene_ = nullptr;
-        std::shared_ptr<CameraDataset> base_dataset_;
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
@@ -731,7 +733,6 @@ namespace lfs::training {
         lfs::core::param::TrainingParameters params_;
         std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
-        std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
@@ -749,7 +750,6 @@ namespace lfs::training {
         lfs::core::Tensor random_bg_buffer_{}; // Reusable buffer for random background
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
-        size_t total_cameras_count_ = 0;
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)

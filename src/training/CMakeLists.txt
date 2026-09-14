@@ -110,6 +110,7 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     components/popspa_controller.cpp
     control/command_api.cpp
+    metrics/eval_mask.cpp
     metrics/metrics.cpp
         checkpoint.cpp
         project_snapshot_chapters.cpp

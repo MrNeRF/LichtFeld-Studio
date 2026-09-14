@@ -882,6 +882,67 @@ namespace lfs::core {
         return single_node_model_ ? single_node_model_ : cached_combined_.get();
     }
 
+    bool Scene::hasPreparedCombinedModel() const {
+        return peekCombinedModel() != nullptr;
+    }
+
+    const lfs::core::SplatData* Scene::peekCombinedModel() const {
+        return single_node_model_ ? single_node_model_ : cached_combined_.get();
+    }
+
+    void Scene::discardUnconsolidatedModelCache() const {
+        if (consolidated_ || combined_model_build_running_.load(std::memory_order_acquire)) {
+            return;
+        }
+        // Poll only a finished worker, so mode changes never block on a large
+        // allocation. Its result is released together with any older aggregate.
+        pollCombinedModelBuild();
+        if (!cached_combined_) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        cached_combined_.reset();
+        cached_combined_includes_hidden_ = false;
+        cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
+        model_cache_valid_.store(false, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
+    }
+
+    std::shared_ptr<lfs::core::Tensor> Scene::peekTransformIndices() const {
+        return cached_transform_indices_;
+    }
+
+    std::shared_ptr<lfs::core::Tensor>
+    Scene::selectionMaskSliceForNode(const NodeId node_id) const {
+        if (node_id == NULL_NODE) {
+            return nullptr;
+        }
+
+        const auto mask = getSelectionMask(SelectionDomain::Splat);
+        const size_t expected_size = currentSelectionCapacity(SelectionDomain::Splat);
+        if (!mask || !mask->is_valid() || mask->ndim() != 1 ||
+            mask->numel() != expected_size) {
+            return nullptr;
+        }
+
+        size_t offset = 0;
+        for (const auto& node : nodes_) {
+            const size_t node_capacity =
+                nodeSelectionCapacity(*node, SelectionDomain::Splat);
+            if (node->id == node_id) {
+                if (node_capacity == 0 || offset + node_capacity > expected_size) {
+                    return nullptr;
+                }
+                return std::make_shared<lfs::core::Tensor>(
+                    mask->slice(0, offset, offset + node_capacity));
+            }
+            offset += node_capacity;
+        }
+        return nullptr;
+    }
+
     Scene::CombinedModelBuild Scene::captureCombinedModelBuild(
         const bool include_hidden_splats) const {
         CombinedModelBuild build;
@@ -5472,11 +5533,14 @@ namespace lfs::core {
             return getTrainingModelGaussianCount();
         }
 
-        const auto* model = getCombinedModel();
-        if (!model) {
-            return 0;
+        size_t total = 0;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::SPLAT && node->model &&
+                isNodeEffectivelyVisible(node->id)) {
+                total += node->model->visible_count();
+            }
         }
-        return model->visible_count();
+        return total;
     }
 
     std::unordered_map<NodeId, size_t> Scene::getActiveGaussianCountsByNode() const {

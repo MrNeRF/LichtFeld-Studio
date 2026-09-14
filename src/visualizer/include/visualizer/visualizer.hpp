@@ -217,7 +217,8 @@ namespace lfs::vis {
         projectCreateAt(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
-                ProjectSwitchDisposition::RequireClean) = 0;
+                ProjectSwitchDisposition::RequireClean,
+            bool allow_existing_destination_replacement = false) = 0;
         virtual lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
@@ -248,6 +249,15 @@ namespace lfs::vis {
         // True when the last ProjectSave or ProjectSaveAs command
         // started a write. A cancelled save dialog returns false.
         [[nodiscard]] virtual bool consumeProjectSaveStarted() {
+            return false;
+        }
+        // True only when the last ProjectCreate command bound a new project.
+        // Confirmation prompts and deferred stop/create are not success.
+        [[nodiscard]] virtual bool consumeProjectCreateSucceeded() {
+            return false;
+        }
+        // True while a stop-then-create is queued and has not bound yet.
+        [[nodiscard]] virtual bool projectCreatePending() const {
             return false;
         }
         virtual void projectWaitWrite() {}

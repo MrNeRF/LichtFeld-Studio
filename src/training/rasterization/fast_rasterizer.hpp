@@ -158,6 +158,10 @@ namespace lfs::training {
     // The caller zeros these bytes once; each call adds a view without clearing them.
     lfs::Status fast_accumulate_pop_scores(const FastRasterizeContext& ctx, lfs::core::Tensor& scores);
 
+    [[nodiscard]] fast_lfs::rasterization::FusedAdamSettings make_fastgs_fused_adam_settings(
+        const FastGSFusedAdamState& optimizer_fused,
+        const FastGSFusedExtraGradients& fused_extra_gradients = {});
+
     // Explicit forward pass - returns render output and context for backward
     // Optional tile parameters for memory-efficient training (tile_width/height=0 means full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color

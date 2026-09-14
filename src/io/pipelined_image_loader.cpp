@@ -1387,7 +1387,7 @@ namespace lfs::io {
             decoded.ptr<float>(), normal.ptr<float>(), height, width,
             static_cast<cudaStream_t>(cuda_stream));
         normal.set_stream(static_cast<cudaStream_t>(cuda_stream));
-        return normal;
+        return lfs::core::resize_normal_prior(normal, height, width, static_cast<cudaStream_t>(cuda_stream));
     }
 
     cudaEvent_t PipelinedImageLoader::record_sidecar_ready_event(cudaStream_t stream) {
@@ -1414,6 +1414,8 @@ namespace lfs::io {
         const PrefetchedImage& item,
         const int src_w,
         const int src_h) const {
+        if (!item.is_mask && item.aux_target_width > 0 && item.aux_target_height > 0)
+            return {item.aux_target_width, item.aux_target_height};
         int target_w = src_w;
         int target_h = src_h;
         if (item.params.resize_factor > 1) {
@@ -2798,7 +2800,11 @@ namespace lfs::io {
 
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
 
-                        if (target_w != src_w || target_h != src_h) {
+                        if (item.is_depth) {
+                            if (gpu_gray.dtype() == lfs::core::DataType::UInt8)
+                                gpu_gray = gpu_gray.to(lfs::core::DataType::Float32).div(255.0f);
+                            aux_tensor = lfs::core::resize_depth_prior(gpu_gray, target_h, target_w, aux_stream);
+                        } else if (target_w != src_w || target_h != src_h) {
                             aux_tensor = lfs::core::lanczos_resize_grayscale(gpu_gray, target_h, target_w, 2, aux_stream);
                         } else if (gpu_gray.dtype() == lfs::core::DataType::Float32) {
                             aux_tensor = std::move(gpu_gray);
@@ -2855,8 +2861,8 @@ namespace lfs::io {
                             aux_tensor.ndim() == 2 &&
                             (static_cast<int>(aux_tensor.shape()[1]) != item.aux_target_width ||
                              static_cast<int>(aux_tensor.shape()[0]) != item.aux_target_height)) {
-                            aux_tensor = lfs::core::lanczos_resize_grayscale(
-                                aux_tensor, item.aux_target_height, item.aux_target_width, 2, aux_stream);
+                            aux_tensor = lfs::core::resize_depth_prior(
+                                aux_tensor, item.aux_target_height, item.aux_target_width, aux_stream);
                         }
                         aux_tensor = aux_tensor.contiguous();
                     }
@@ -2945,9 +2951,7 @@ namespace lfs::io {
                     }
 
                     const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
-                    if (target_w != src_w || target_h != src_h) {
-                        normal_tensor = lfs::core::lanczos_resize_float_chw(normal_tensor, target_h, target_w, 2, sidecar_stream);
-                    }
+                    normal_tensor = lfs::core::resize_normal_prior(normal_tensor, target_h, target_w, sidecar_stream);
 
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
                         throw std::runtime_error("Normal preprocessing produced an invalid tensor");
@@ -2958,14 +2962,15 @@ namespace lfs::io {
                             static_cast<int>(normal_tensor.shape()[2]),
                             static_cast<int>(normal_tensor.shape()[1]));
                         normal_tensor = lfs::core::undistort_image(normal_tensor, scaled, sidecar_stream);
+                        normal_tensor = lfs::core::resize_normal_prior(normal_tensor.contiguous(), normal_tensor.shape()[1], normal_tensor.shape()[2], sidecar_stream);
                     }
 
                     if (item.aux_target_width > 0 && item.aux_target_height > 0 &&
                         normal_tensor.ndim() == 3 &&
                         (static_cast<int>(normal_tensor.shape()[2]) != item.aux_target_width ||
                          static_cast<int>(normal_tensor.shape()[1]) != item.aux_target_height)) {
-                        normal_tensor = lfs::core::lanczos_resize_float_chw(
-                            normal_tensor, item.aux_target_height, item.aux_target_width, 2, sidecar_stream);
+                        normal_tensor = lfs::core::resize_normal_prior(
+                            normal_tensor, item.aux_target_height, item.aux_target_width, sidecar_stream);
                     }
                     normal_tensor = normal_tensor.contiguous();
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {

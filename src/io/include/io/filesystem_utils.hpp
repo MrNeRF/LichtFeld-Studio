@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <span>
@@ -98,26 +99,18 @@ namespace lfs::io {
         ".tiff",
     };
 
-    // Depth/normal sidecars are accepted at the COLMAP original image size, or at
-    // any integer multiple of the currently loaded training image. Original-size
-    // maps therefore work for every --images folder (images_2, images_8, ...).
+    // Priors may use any resolution, with up to 1% aspect-ratio rounding error.
     [[nodiscard]] inline bool sidecar_dimensions_match_contract(
         const int sidecar_width,
         const int sidecar_height,
         const int requested_width,
-        const int requested_height,
-        const int original_width,
-        const int original_height) noexcept {
-        if (sidecar_width == original_width && sidecar_height == original_height) {
-            return true;
-        }
+        const int requested_height) noexcept {
         if (requested_width <= 0 || requested_height <= 0 || sidecar_width <= 0 || sidecar_height <= 0) {
             return false;
         }
-        if (sidecar_width % requested_width != 0 || sidecar_height % requested_height != 0) {
-            return false;
-        }
-        return sidecar_width / requested_width == sidecar_height / requested_height;
+        const double ratio = (static_cast<double>(sidecar_width) * requested_height) /
+                             (static_cast<double>(sidecar_height) * requested_width);
+        return std::abs(ratio - 1.0) <= 0.01;
     }
 
     // Safe filesystem operations that don't throw
