@@ -41,6 +41,15 @@ def test_closed_file_operations(native_io, tmp_path):
     verified = native_io.verify_project_file(path)
     assert verified.status is native_io.ProjectVerificationStatus.VERIFIED
 
+    plan = native_io.plan_reduce_size(path)
+    assert plan.physical_size > 0
+    assert plan.input_commit_uuid
+    reduced = native_io.reduce_size(
+        path, {"drop_unbound_checkpoints": False, "drop_embedded_dataset": False}
+    )
+    assert reduced.card.physical_file_size > 0
+    assert reduced.recovery_copy.is_file()
+
     restored = native_io.restore_save(path, 1, tmp_path / "restored.licht")
     assert restored.project_uuid != native_io.inspect_project_card(path).project_uuid
 

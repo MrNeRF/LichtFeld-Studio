@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace lfs::io::project {
 
@@ -31,6 +32,84 @@ namespace lfs::io::project {
         std::optional<std::string> first_mismatch;
     };
 
+    struct LFS_IO_API ProjectReduceCheckpoint {
+        lfs::core::Uuid instance_uuid;
+        std::int32_t iteration = 0;
+        std::uint64_t bytes = 0;
+        bool scng_bound = false;
+    };
+
+    struct LFS_IO_API ProjectReduceDatasetPayload {
+        lfs::core::Uuid chunk_uuid;
+        std::string rel_path;
+        std::string kind;
+        std::uint64_t bytes = 0;
+        bool external_replacement_validated = false;
+    };
+
+    struct LFS_IO_API ProjectReduceProjection {
+        bool enabled = false;
+        bool allowed = false;
+        std::uint64_t reclaimable_bytes = 0;
+        std::uint64_t projected_size = 0;
+    };
+
+    struct LFS_IO_API ProjectReducePlan {
+        std::filesystem::path path;
+        lfs::core::Uuid input_commit_uuid;
+        std::uint64_t physical_size = 0;
+        std::uint64_t tombstone_bytes = 0;
+        std::uint64_t superseded_rows = 0;
+        std::vector<ProjectReduceCheckpoint> retained_checkpoints;
+        std::vector<ProjectReduceDatasetPayload> embedded_dataset;
+        ProjectReduceProjection drop_checkpoints;
+        ProjectReduceProjection drop_embedded_dataset;
+        ProjectReduceProjection compact;
+    };
+
+    struct LFS_IO_API ProjectReduceResult {
+        ProjectInspectorCard card;
+        std::uint64_t checkpoints_removed = 0;
+        std::uint64_t dataset_images_removed = 0;
+        std::uint64_t dataset_normals_removed = 0;
+        std::uint64_t dataset_sparse_removed = 0;
+        std::uint64_t bytes_reclaimed = 0;
+        std::filesystem::path recovery_copy;
+    };
+
+    struct LFS_IO_API DatasetEmbedResult {
+        ProjectInspectorCard card;
+        std::uint64_t images_embedded = 0;
+        std::uint64_t normals_embedded = 0;
+        std::uint64_t sparse_embedded = 0;
+        std::uint64_t bytes_embedded = 0;
+    };
+
+    struct LFS_IO_API DatasetReferenceResult {
+        ProjectInspectorCard card;
+        lfs::core::Uuid reference_uuid;
+        bool content_replaced = false;
+    };
+
+    enum class ProjectExportFormat {
+        Ply,
+        Sog,
+        Ssog,
+        Spz,
+    };
+
+    struct LFS_IO_API ProjectExportResult {
+        std::filesystem::path destination;
+        ProjectExportFormat format = ProjectExportFormat::Ply;
+        std::uint64_t gaussian_count = 0;
+        std::uint64_t bytes_written = 0;
+    };
+
+    struct LFS_IO_API ProjectRepairResult {
+        ProjectInspectorCard card;
+        std::uint64_t saves_recovered = 0;
+    };
+
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     restore_save(const std::filesystem::path& path,
                  std::uint64_t generation,
@@ -44,6 +123,37 @@ namespace lfs::io::project {
     compact_project_file(const std::filesystem::path& path,
                          ProjectOperationProgress progress = {},
                          ProjectOperationCancel cancel = {});
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectReducePlan>
+    plan_reduce_size(const std::filesystem::path& path);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectReduceResult>
+    reduce_size(const std::filesystem::path& path,
+                bool drop_unbound_checkpoints,
+                bool drop_embedded_dataset,
+                ProjectOperationProgress progress = {},
+                ProjectOperationCancel cancel = {});
+
+    [[nodiscard]] LFS_IO_API lfs::Result<DatasetEmbedResult>
+    embed_dataset_file(const std::filesystem::path& path,
+                       ProjectOperationProgress progress = {},
+                       ProjectOperationCancel cancel = {});
+
+    [[nodiscard]] LFS_IO_API lfs::Result<DatasetReferenceResult>
+    set_dataset_reference(const std::filesystem::path& path,
+                          const std::filesystem::path& dataset_dir,
+                          bool accept_content_change = false);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectExportResult>
+    export_project_as(const std::filesystem::path& path,
+                      ProjectExportFormat format,
+                      const std::filesystem::path& destination,
+                      ProjectOperationProgress progress = {},
+                      ProjectOperationCancel cancel = {});
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectRepairResult>
+    repair_project(const std::filesystem::path& path,
+                   const std::filesystem::path& destination);
 
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectVerificationResult>
     verify_project_file(const std::filesystem::path& path,

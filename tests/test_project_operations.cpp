@@ -7,6 +7,7 @@
 #include "licht_test_support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -117,6 +118,119 @@ namespace {
         ASSERT_EQ(after.retained_checkpoints.size(), before.retained_checkpoints.size());
         EXPECT_EQ(after.card.commit_kind, CommitKind::Compaction);
         EXPECT_EQ(after.save_history.size(), 1u);
+    }
+
+    TEST(ProjectOperations, ReduceSizeDropsOnlyUnboundCheckpoints) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "reduce.licht";
+        auto document = require_result(ProjectDocument::create(fixed_uuid(1250),
+                                                               1'700'000'000'000'000'000));
+        const auto bound_uuid = fixed_uuid(1251);
+        const auto old_uuid = fixed_uuid(1252);
+        require_status(document.set_checkpoint(
+            bound_uuid, require_result(LazyChunkValue::from_owned(
+                            checkpoint_payload(20), bound_uuid))));
+        require_status(document.set_checkpoint(
+            old_uuid, require_result(LazyChunkValue::from_owned(
+                          checkpoint_payload(10), old_uuid))));
+        const auto node_uuid = fixed_uuid(1253);
+        require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = node_uuid,
+            .type = "splat",
+            .name = "Training model",
+            .payload = PayloadBinding{
+                .fourcc = "CKPT",
+                .instance_uuid = bound_uuid,
+                .source_kind = "checkpoint",
+            },
+        }));
+        require_status(document.edit_scene_graph().set_training_model_uuid(node_uuid));
+        static_cast<void>(require_result(save_document(document, path, fixed_uuid(1254))));
+
+        const auto plan = require_result(plan_reduce_size(path));
+        ASSERT_EQ(plan.retained_checkpoints.size(), 2u);
+        EXPECT_TRUE(plan.drop_checkpoints.enabled);
+        const auto reduced = require_result(reduce_size(path, true, false));
+        EXPECT_EQ(reduced.checkpoints_removed, 1u);
+        EXPECT_TRUE(fs::is_regular_file(reduced.recovery_copy));
+        const auto details = require_result(inspect_project_details(path));
+        ASSERT_EQ(details.retained_checkpoints.size(), 1u);
+        EXPECT_TRUE(details.retained_checkpoints.front().binds_scene_graph);
+        EXPECT_EQ(details.retained_checkpoints.front().instance_uuid, bound_uuid);
+    }
+
+    TEST(ProjectOperations, ExportVisibleWriterFixtureAndRejectTruncatedRepair) {
+#ifndef LFS_FORMAT_TEST_TARGET
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "export.licht";
+        auto document = require_result(ProjectDocument::create(fixed_uuid(1260),
+                                                               1'700'000'000'000'000'000));
+        const auto node_uuid = fixed_uuid(1261);
+        require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = node_uuid,
+            .type = "splat",
+            .name = "Visible splat",
+            .payload = PayloadBinding{
+                .fourcc = "SPLT",
+                .instance_uuid = node_uuid,
+                .source_kind = "ply",
+            },
+        }));
+        auto splat = require_result(SplatChapterPayload::capture(
+            *make_splat(4), SplatSourceKind::ImportedPly, false));
+        require_status(document.set_splat(node_uuid, std::move(splat)));
+        static_cast<void>(require_result(save_document(document, path, fixed_uuid(1262))));
+
+        const auto output = temporary.path / "visible.sog";
+        const auto exported = require_result(export_project_as(
+            path, ProjectExportFormat::Sog, output));
+        EXPECT_EQ(exported.gaussian_count, 4u);
+        EXPECT_TRUE(fs::is_regular_file(output));
+        EXPECT_GT(exported.bytes_written, 0u);
+#else
+        GTEST_SKIP() << "Export requires the full I/O test composition";
+#endif
+
+#ifndef LFS_FORMAT_TEST_TARGET
+        const char* fixture_root = std::getenv("LFS_PROJECT_INSPECT_FIXTURES");
+        if (!fixture_root) {
+            GTEST_SKIP() << "LFS_PROJECT_INSPECT_FIXTURES is not set";
+        }
+        const auto truncated = fs::path(fixture_root) / "truncated_tail.licht";
+        if (!fs::is_regular_file(truncated)) {
+            GTEST_SKIP() << "truncated_tail.licht fixture is unavailable";
+        }
+        const auto repaired = temporary.path / "repaired.licht";
+        const auto result = repair_project(truncated, repaired);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_FALSE(fs::exists(repaired));
+#endif
+    }
+
+    TEST(ProjectOperations, CoversCopiedInspectFixtures) {
+        const char* fixture_root = std::getenv("LFS_PROJECT_INSPECT_FIXTURES");
+        if (!fixture_root) {
+            GTEST_SKIP() << "LFS_PROJECT_INSPECT_FIXTURES is not set";
+        }
+        const auto root = fs::path(fixture_root);
+        constexpr std::array names{
+            "blank_heads.licht", "both_heads_crc.licht", "corrupt_head_crc.licht",
+            "heads_only.licht", "missing_preview.licht", "newer_reader_version.licht",
+            "role_sidecar.licht", "truncated_tail.licht", "user_gen1.licht"};
+        TemporaryDirectory temporary;
+        for (const auto name : names) {
+            const auto path = root / name;
+            ASSERT_TRUE(fs::is_regular_file(path)) << path;
+            const auto card = require_result(inspect_project_card(path));
+            EXPECT_FALSE(card.path.empty()) << name;
+        }
+        const auto truncated = root / "truncated_tail.licht";
+        const auto destination = temporary.path / "truncated-repaired.licht";
+        const auto repaired = repair_project(truncated, destination);
+        ASSERT_FALSE(repaired);
+        EXPECT_EQ(repaired.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_FALSE(fs::exists(destination));
     }
 
     TEST(ProjectOperations, VerifyCanBeCanceledAndPreviewLicenseTitleAreExplicitSaves) {
