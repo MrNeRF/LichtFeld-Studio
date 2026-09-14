@@ -29,6 +29,7 @@
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_inspector.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "io/splat_path.hpp"
 #include "training/dataset.hpp"
@@ -36,6 +37,7 @@
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <span>
 
 namespace lfs::python {
 
@@ -125,12 +127,28 @@ namespace lfs::python {
 
             void operator()(float progress, const std::string& message) const {
                 nb::gil_scoped_acquire gil;
-                if (!callback)
+                if (!callback || callback.is_none())
                     return;
                 try {
                     callback(progress, message);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Python progress callback error: {}", e.what());
+                }
+            }
+        };
+
+        struct PyCancelCallback {
+            nb::object callback;
+
+            bool operator()() const {
+                nb::gil_scoped_acquire gil;
+                if (!callback || callback.is_none())
+                    return false;
+                try {
+                    return nb::cast<bool>(callback());
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Python cancellation callback error: {}", e.what());
+                    return true;
                 }
             }
         };
@@ -517,6 +535,7 @@ namespace lfs::python {
             .def_ro("validation_scope", &project::ProjectInspectorCard::validation_scope)
             .def_ro("has_preview", &project::ProjectInspectorCard::has_preview)
             .def_ro("preview_bytes", &project::ProjectInspectorCard::preview_bytes)
+            .def_ro("title", &project::ProjectInspectorCard::title)
             .def_ro("min_reader_version", &project::ProjectInspectorCard::min_reader_version)
             .def_ro("min_safe_writer_version", &project::ProjectInspectorCard::min_safe_writer_version)
             .def_ro("commit_kind", &project::ProjectInspectorCard::commit_kind)
@@ -609,6 +628,16 @@ namespace lfs::python {
             .def_ro("autosave_sidecar_present", &project::ProjectInspectorDetails::autosave_sidecar_present)
             .def_ro("chapters_requiring_full_read", &project::ProjectInspectorDetails::chapters_requiring_full_read);
 
+        nb::enum_<project::ProjectVerificationStatus>(m, "ProjectVerificationStatus")
+            .value("VERIFIED", project::ProjectVerificationStatus::Verified)
+            .value("CANCELED", project::ProjectVerificationStatus::Canceled)
+            .value("FAILED", project::ProjectVerificationStatus::Failed);
+
+        nb::class_<project::ProjectVerificationResult>(m, "ProjectVerificationResult")
+            .def_ro("status", &project::ProjectVerificationResult::status)
+            .def_ro("verified_chunks", &project::ProjectVerificationResult::verified_chunks)
+            .def_ro("first_mismatch", &project::ProjectVerificationResult::first_mismatch);
+
         m.def("classify_project", [](const std::filesystem::path& path) {
             std::optional<project::OpenClassification> result;
             {
@@ -651,6 +680,108 @@ namespace lfs::python {
             }
             const auto bytes = unwrap(std::move(*result));
             return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
+        m.def("restore_save", [](const std::filesystem::path& path, const std::uint64_t generation, const std::filesystem::path& destination) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::restore_save(path, generation, destination);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("generation"), nb::arg("destination"));
+
+        m.def("rebind_checkpoint", [](const std::filesystem::path& path, const std::string& checkpoint_instance_uuid) {
+            const auto uuid = parse_reference_uuid(checkpoint_instance_uuid);
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::rebind_checkpoint(path, uuid);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_instance_uuid"));
+
+        m.def("compact_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::compact_project_file(
+                    path,
+                    progress_callback.callback && !progress_callback.callback.is_none()
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.callback && !cancel_callback.callback.is_none()
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("verify_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectVerificationResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::verify_project_file(
+                    path,
+                    progress_callback.callback && !progress_callback.callback.is_none()
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.callback && !cancel_callback.callback.is_none()
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("set_project_preview", [](const std::filesystem::path& path, const nb::bytes& png) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_preview(
+                    path,
+                    std::span<const std::byte>(
+                        static_cast<const std::byte*>(png.data()), png.size()));
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("png_bytes"));
+
+        m.def("preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_first_dataset_image(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_first_embedded_image(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("set_project_license", [](const std::filesystem::path& path, const std::string& identifier, const std::string& notice) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_license(path, identifier, notice);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("identifier"), nb::arg("notice") = "");
+
+        m.def("clear_project_license", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::clear_project_license(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("set_project_title", [](const std::filesystem::path& path, const std::string& title) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_title(path, title);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("title"));
 
         m.def(
             "inspect_project",

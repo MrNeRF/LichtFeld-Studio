@@ -2773,6 +2773,53 @@ namespace lfs::io::project {
         return std::move(*parsed->error);
     }
 
+    lfs::Result<ProjectReader>
+    ProjectReader::open_generation(const std::filesystem::path& path,
+                                   const std::uint64_t generation,
+                                   const ReaderOptions& options) {
+        auto parsed = parse_path(path, options);
+        if (!parsed) {
+            return std::move(parsed).error();
+        }
+        if (!parsed->reader || parsed->state != OpenState::Open) {
+            return parsed->error.has_value()
+                       ? std::move(*parsed->error)
+                       : detail::project_error(
+                             lfs::ErrorCode::Unsupported,
+                             "This project generation cannot be opened.",
+                             "open_generation requires a supported project",
+                             path);
+        }
+        auto state = parsed->reader;
+        const auto found = std::ranges::find_if(
+            state->selected.lineage,
+            [generation](const ParsedCommit& commit) {
+                return commit.info.generation == generation;
+            });
+        if (found == state->selected.lineage.end()) {
+            return detail::project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "The requested save generation does not exist.",
+                std::format("generation {} is outside the native lineage", generation),
+                path, std::nullopt, "generation");
+        }
+        auto index = parse_index(*state->file, state->physical_size,
+                                 state->superblock, *found,
+                                 state->selected.lineage);
+        if (!index) {
+            return std::move(index).error();
+        }
+        state->selected.commit = *found;
+        state->selected.chunks = std::move(index->chunks);
+        state->selected.info.generation = found->info.generation;
+        state->selected.info.commit_uuid = found->info.commit_uuid;
+        state->selected.info.commit_offset = found->info.offset;
+        state->selected.info.committed_file_end = found->info.committed_file_end;
+        state->selected.info.commit_crc32c_echo = found->info.crc32c;
+        state->selected.info.preview.reset();
+        return ProjectReader(std::make_shared<Impl>(std::move(state)));
+    }
+
     OpenClassification
     ProjectReader::classify(const std::filesystem::path& path,
                             const ReaderOptions& options) {

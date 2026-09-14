@@ -398,6 +398,10 @@ namespace lfs::io::project {
     public:
         [[nodiscard]] static lfs::Result<ProjectReader>
         open(const std::filesystem::path& path, const ReaderOptions& options = {});
+        [[nodiscard]] static lfs::Result<ProjectReader>
+        open_generation(const std::filesystem::path& path,
+                        std::uint64_t generation,
+                        const ReaderOptions& options = {});
         [[nodiscard]] static OpenClassification
         classify(const std::filesystem::path& path, const ReaderOptions& options = {});
 
@@ -582,6 +586,8 @@ namespace lfs::io::project {
         // must complete the final append, full CRC verification, and durable
         // publication before exposing it as the destination.
         bool private_staging = false;
+        std::function<void(float, const std::string&)> progress;
+        std::function<bool()> cancel;
     };
 
     class LFS_IO_API ProjectWriter {

@@ -308,6 +308,19 @@ namespace lfs::io::project {
 
         ProjectInspectorCard card_from_reader(const ProjectReader& reader) {
             const auto preview = reader.preview();
+            std::optional<std::string> title;
+            if (const auto* row = reader.find(FOURCC_PROJ,
+                                              reader.superblock().project_uuid);
+                row != nullptr && row->row_kind == RowKind::Live) {
+                if (auto bytes = reader.read_chunk(*row); bytes) {
+                    if (auto project = ProjectChapter::from_bytes(*bytes); project) {
+                        const auto value = project->dom().get_json("title");
+                        if (value && value->is_string() && !value->get<std::string>().empty()) {
+                            title = value->get<std::string>();
+                        }
+                    }
+                }
+            }
             ProjectInspectorCard result{
                 .path = reader.path(),
                 .project_uuid = reader.superblock().project_uuid,
@@ -322,6 +335,7 @@ namespace lfs::io::project {
                 .validation_scope = "head",
                 .has_preview = preview.has_value(),
                 .preview_bytes = preview ? preview->bytes : 0,
+                .title = std::move(title),
                 .min_reader_version = reader.commit().min_reader_version,
                 .min_safe_writer_version = reader.commit().min_safe_writer_version,
                 .commit_kind = reader.commit().kind,
@@ -445,7 +459,18 @@ namespace lfs::io::project {
 
     lfs::Result<ProjectInspectorCard>
     inspect_project_card(const std::filesystem::path& path) {
-        if (const auto card = inspect_project_card_headers(path)) {
+        if (auto card = inspect_project_card_headers(path)) {
+            if (card->open_state == OpenState::Open) {
+                auto reader = ProjectReader::open(path);
+                if (reader) {
+                    auto full_card = card_from_reader(*reader);
+                    full_card.validation_scope = card->validation_scope;
+                    if (!card->diagnostic.empty()) {
+                        full_card.diagnostic = card->diagnostic;
+                    }
+                    return full_card;
+                }
+            }
             return *card;
         }
         ReaderOptions options;
@@ -654,10 +679,21 @@ namespace lfs::io::project {
                 return std::move(training).error();
             }
             result.scene_graph.training_node_id = *training;
+            std::optional<lfs::core::Uuid> bound_checkpoint;
+            if (*training) {
+                const auto training_node = std::ranges::find_if(
+                    *nodes, [&](const auto& node) {
+                        return node.uuid == **training;
+                    });
+                if (training_node != nodes->end() && training_node->payload &&
+                    training_node->payload->fourcc == "CKPT") {
+                    bound_checkpoint = training_node->payload->instance_uuid;
+                }
+            }
             for (auto& checkpoint : result.retained_checkpoints) {
                 checkpoint.binds_scene_graph =
-                    result.scene_graph.training_node_id.has_value() &&
-                    checkpoint.instance_uuid == *result.scene_graph.training_node_id;
+                    bound_checkpoint.has_value() &&
+                    checkpoint.instance_uuid == *bound_checkpoint;
             }
         }
 
