@@ -134,6 +134,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }
         self._layout_class = ""
         self._content_width = 0.0
+        self._last_ui_scale = 0.0
         self._layout_signature = None
         self._main_min_height = 0.0
         self._folder_layout_initialized = False
@@ -222,6 +223,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             value = payload.get("bottom_panel_height")
             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
                 self._info_preferred_height = min(500.0, float(value))
+                self._inspector_preferred_height = self._info_preferred_height
             for key, low, high, default in (
                 ("navigator_width", 120.0, 240.0, 200.0),
                 ("inspector_width", 240.0, 420.0, 280.0),
@@ -578,6 +580,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._layout_class == "wide":
             return "auto"
         return f"{self._inspector_preferred_height:.1f}dp"
+
+    def _dirty_layout_fields(self) -> None:
+        self._dirty_fields(
+            "is_compact", "is_narrow", "is_medium", "is_wide",
+            "is_floating", "navigator_width", "navigator_style_width",
+            "inspector_width", "inspector_style_width", "inspector_height",
+            "inspector_style_height", "thumbnail_size", "asset_card_slot_width",
+            "asset_card_thumbnail_height", "tray_height", "bottom_panel_height",
+            "sidebar_height", "main_min_height",
+        )
 
     def set_thumbnail_size(self, value: Any) -> None:
         try:
@@ -2005,6 +2017,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not popup:
             return False
         scale = self._ui_scale()
+        scale_changed = abs(scale - self._last_ui_scale) > 0.001
+        self._last_ui_scale = scale
         height = float(popup.client_height or 0) / scale
         if height <= 0:
             return False
@@ -2016,6 +2030,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             layout_changed = (
                 layout_metrics["breakpoint"] != self._layout_class
                 or abs(width - self._content_width) > 0.5
+                or scale_changed
             )
             if layout_changed:
                 self._layout_class = layout_metrics["breakpoint"]
@@ -2032,12 +2047,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     layout_metrics["inspector_max"],
                     max(layout_metrics["inspector_min"], self._inspector_preferred_height),
                 )
-                self._dirty_fields(
-                    "is_compact", "is_narrow", "is_medium", "is_wide",
-                    "navigator_width", "navigator_style_width", "inspector_width",
-                    "inspector_style_width", "inspector_height", "inspector_style_height",
-                    "thumbnail_size",
-                )
+                self._dirty_layout_fields()
             elif abs(width - self._content_width) > 0.5:
                 self._content_width = width
         if not self._folder_layout_initialized:
@@ -2053,7 +2063,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         content = 16.0 + measured("asset-sidebar-local-content", local, content=True) + measured("asset-sidebar-gallery", 132.0) + 8.0
         toolbar = measured("asset-popup-toolbar", 114.0) + 1.0
         header = measured("asset-results-header", 48.0) + 1.0
-        signature = (height, content, toolbar, header, self._info_preferred_height, self._folders_collapsed)
+        signature = (scale, height, content, toolbar, header,
+                     self._info_preferred_height, self._folders_collapsed)
         if signature == self._layout_signature:
             return False
         self._layout_signature = signature
@@ -2063,6 +2074,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._bottom_panel_height = layout["info"]
         self._main_min_height = layout["main_min_height"]
         self._dirty_fields("sidebar_height", "bottom_panel_height", "main_min_height")
+        if scale_changed:
+            self._dirty_layout_fields()
         return True
 
     def _sync_asset_window_viewport(self, doc=None) -> bool:
@@ -2573,9 +2586,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._dirty_fields("inspector_width")
         elif region == "inspector-height":
             self._inspector_preferred_height = defaults["inspector_default"]
-            self._dirty_fields("inspector_height")
+            self._info_preferred_height = self._inspector_preferred_height
+            self._sync_panel_layout()
+            self._dirty_fields("inspector_height", "bottom_panel_height")
         elif region == "tray":
-            self._tray_height = 32.0
+            self._tray_height = 120.0
             self._dirty_fields("tray_height")
 
     def _on_resize_mousemove(self, event) -> None:
@@ -2593,10 +2608,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._inspector_width = min(420.0, max(240.0, self._resize_start_inspector - delta_x))
             self._dirty_fields("inspector_width")
         elif region == "tray":
-            self._tray_height = min(450.0, max(32.0, self._resize_start_tray - delta_y))
+            popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
+            panel_height = native_to_dp(
+                getattr(popup, "client_height", 0), self._ui_scale()
+            ) if popup else 0.0
+            maximum = max(120.0, min(450.0, panel_height * 0.5))
+            self._tray_height = min(maximum, max(120.0, self._resize_start_tray - delta_y))
             self._dirty_fields("tray_height")
         elif region == "inspector-height" or self._bottom_panel_dragging:
-            self._inspector_preferred_height = min(450.0, max(120.0, self._resize_start_height - delta_y))
+            popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
+            panel_height = native_to_dp(
+                getattr(popup, "client_height", 0), self._ui_scale()
+            ) if popup else 0.0
+            maximum = max(120.0, min(450.0, panel_height * 0.5))
+            self._inspector_preferred_height = min(
+                maximum, max(120.0, self._resize_start_height - delta_y)
+            )
             self._info_preferred_height = self._inspector_preferred_height
             self._sync_panel_layout()
             self._dirty_fields("bottom_panel_height", "inspector_height")
@@ -2656,6 +2683,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         changed = panel_space != self._panel_space or is_floating != self._is_floating
         self._panel_space = panel_space
         self._is_floating = is_floating
+        if changed:
+            self._dirty_layout_fields()
         return changed
 
     def _refresh_after_project_write(self) -> bool:

@@ -1726,8 +1726,8 @@ apply_registered_chrome:
                             interaction.x = NAN;
                             interaction.y = NAN;
                             interaction.auto_center = true;
-                            resetFloatingPanelSize(
-                                p, interaction, floatingUiScale());
+                            // initial_width/height retain the last floating
+                            // size while a panel is temporarily hidden.
                             bring_floating_panel_to_front_locked(p);
                         }
                     } else if (!enabled) {
@@ -2085,12 +2085,13 @@ apply_registered_chrome:
                     interaction.x = NAN;
                     interaction.y = NAN;
                     interaction.auto_center = true;
-                    resetFloatingPanelSize(p, interaction, floatingUiScale());
+                    // Keep a user's floating width when the panel is docked and
+                    // opened again. The original size is already present for a
+                    // panel that has never been resized.
+                    interaction.user_height = 0.0f;
                     writeProvisionalFloatingBounds(p, interaction);
                     bring_floating_panel_to_front_locked(p);
                 } else if (was_floating && new_space != PanelSpace::Floating) {
-                    p.initial_width = p.original_width;
-                    p.initial_height = p.original_height;
                     floating_interactions_.erase(p.id);
                 }
                 return true;

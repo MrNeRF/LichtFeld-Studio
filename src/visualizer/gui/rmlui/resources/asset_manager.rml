@@ -312,11 +312,11 @@
         </div>
       </div>
 
-      <div class="asset-tray" data-if="has_gallery_transfers" data-style-height="tray_height">
+        <div class="asset-tray" data-if="has_gallery_transfers" data-style-height="tray_height">
         <span class="asset-tray-label">{{gallery_overlay}}</span><span class="asset-tray-progress"><span></span></span>
         <span class="asset-tray-detail">{{gallery_tooltip}}</span><span class="asset-tray-spacer"></span>
         <button class="btn btn--secondary">{{g_action_pause}}</button><button class="btn btn--secondary" data-event-click="open_gallery">{{g_action_open}}</button>
-        <div class="asset-resize-handle asset-resize-handle--horizontal" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
+        <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
       </div>
     </div>
   </div>
