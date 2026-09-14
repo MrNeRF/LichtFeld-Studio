@@ -7,6 +7,27 @@ GALLERY_SECTION_HEIGHT = 140.0
 LOCAL_SECTION_HEIGHT = 77.0
 FOLDER_ROW_HEIGHT = 34.0
 RESIZE_HANDLES_HEIGHT = 20.0
+GALLERY_CARD_GAP = 10.0
+GALLERY_CARD_PREFERRED_WIDTH = 208.0
+GALLERY_HORIZONTAL_CHROME = 48.0
+
+
+def native_to_dp(value, scale):
+    return max(0.0, float(value or 0.0)) / max(0.1, float(scale or 1.0))
+
+
+def gallery_columns(width, *, preferred=GALLERY_CARD_PREFERRED_WIDTH,
+                    horizontal_chrome=GALLERY_HORIZONTAL_CHROME, gap=GALLERY_CARD_GAP):
+    content_width = max(preferred, float(width) - horizontal_chrome)
+    return max(1, int((content_width + gap) // (preferred + gap)))
+
+
+def gallery_slot_width(width, *, preferred=GALLERY_CARD_PREFERRED_WIDTH,
+                       horizontal_chrome=GALLERY_HORIZONTAL_CHROME, gap=GALLERY_CARD_GAP):
+    content_width = max(preferred, float(width) - horizontal_chrome)
+    columns = gallery_columns(width, preferred=preferred,
+                              horizontal_chrome=horizontal_chrome, gap=gap)
+    return max(1.0, (content_width - gap * (columns - 1)) / columns)
 
 
 def panel_layout(height, *, folder_count=0, folders_collapsed=False, info_height=220.0,

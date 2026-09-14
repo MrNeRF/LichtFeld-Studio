@@ -17,7 +17,7 @@ import lichtfeld as lf
 
 from .asset_gallery_ui import GalleryAssetMixin, GALLERY_SCOPES, SCOPE_PUBLISHED, SCOPE_ATTENTION, SCOPE_TRANSFERS
 from . import rml_widgets
-from .asset_layout import panel_layout, list_columns
+from .asset_layout import gallery_columns, gallery_slot_width, native_to_dp, panel_layout, list_columns
 from .asset_format import format_size
 from .asset_watch import (
     AssetFolderScanProgress,
@@ -724,12 +724,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         scroll_top = self._asset_window_scroll_top
         client_height = self._asset_window_client_height
         if self._view_mode == "gallery":
-            available_width = max(
-                ASSET_CARD_PREFERRED_WIDTH_DP,
-                self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
-            )
-            columns = max(1, int(available_width // ASSET_CARD_PREFERRED_WIDTH_DP))
-            self._asset_card_slot_width = max(1.0, available_width / columns)
+            columns = gallery_columns(self._asset_window_client_width)
+            self._asset_card_slot_width = gallery_slot_width(self._asset_window_client_width)
             start_row = max(0, int(scroll_top // ASSET_GALLERY_ROW_HEIGHT_DP) - ASSET_WINDOW_OVERSCAN_ROWS)
             visible_rows = (
                 math.ceil(client_height / ASSET_GALLERY_ROW_HEIGHT_DP)
@@ -1711,11 +1707,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not scroll:
             return False
         try:
-            values = (
-                max(0.0, float(scroll.scroll_top or 0.0)),
-                max(0.0, float(scroll.client_height or 0.0)),
-                max(0.0, float(getattr(scroll, "client_width", 0.0) or 0.0)),
-            )
+            scale = self._ui_scale()
+            values = tuple(native_to_dp(value, scale) for value in (
+                scroll.scroll_top,
+                scroll.client_height,
+                getattr(scroll, "client_width", 0.0),
+            ))
         except (TypeError, ValueError):
             return False
         old = (
@@ -1729,12 +1726,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _sync_gallery_card_width(self, doc=None) -> bool:
         old = self._asset_card_slot_width
         self._sync_asset_window_viewport(doc)
-        available = max(
-            ASSET_CARD_PREFERRED_WIDTH_DP,
-            self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
-        )
-        columns = max(1, int(available // ASSET_CARD_PREFERRED_WIDTH_DP))
-        self._asset_card_slot_width = max(1.0, available / columns)
+        self._asset_card_slot_width = gallery_slot_width(self._asset_window_client_width)
         return abs(old - self._asset_card_slot_width) > 0.5
 
     def _bind_dom_event_listeners(self, doc) -> None:
@@ -1776,7 +1768,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except (TypeError, ValueError):
             return
         maximum = max(0.0, float(scroll.scroll_height) - float(scroll.client_height))
-        new_top = min(max(float(scroll.scroll_top) + delta * PRECISE_SCROLL_STEP, 0.0), maximum)
+        new_top = min(max(float(scroll.scroll_top) + delta * PRECISE_SCROLL_STEP * self._ui_scale(), 0.0), maximum)
         if abs(new_top - float(scroll.scroll_top)) > 0.01:
             scroll.scroll_top = new_top
             self._asset_scroll_event_suppressed = True
@@ -1969,11 +1961,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             focus()
 
     def _gallery_columns(self) -> int:
-        available_width = max(
-            ASSET_CARD_PREFERRED_WIDTH_DP,
-            self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
-        )
-        return max(1, int(available_width // ASSET_CARD_PREFERRED_WIDTH_DP))
+        return gallery_columns(self._asset_window_client_width)
 
     def _scroll_cursor_into_view(self, index: int) -> None:
         scroll = self._asset_scroll_container()
@@ -1992,7 +1980,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             top = max(0.0, end - height)
         self._asset_window_scroll_top = top
         if scroll is not None:
-            scroll.scroll_top = top
+            scroll.scroll_top = top * self._ui_scale()
 
     def _navigate_selection(self, key: int) -> bool:
         rows = self._filtered_assets()

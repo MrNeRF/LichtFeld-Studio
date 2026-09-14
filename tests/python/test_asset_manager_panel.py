@@ -855,6 +855,29 @@ def test_info_thumbnail_uses_fixed_band_and_path_tooltip(panel_module):
     assert "flex: 0 0 160dp;" in rcss
     assert "height: 100dp;" in rcss
 
+@pytest.mark.parametrize("width,columns,slot", [(260, 1, 212.0), (320, 1, 272.0), (700, 3, (652 - 20) / 3), (1000, 4, (952 - 30) / 4)])
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+def test_gallery_grid_geometry_uses_dp_and_subtracts_column_gaps(panel_module, monkeypatch, width, columns, slot, scale):
+    from lfs_plugins.asset_layout import gallery_columns, gallery_slot_width
+    panel = panel_module.AssetManagerPanel()
+    scroll = _Element()
+    scroll.scroll_top = 150 * scale
+    scroll.client_height = 300 * scale
+    scroll.client_width = width * scale
+    panel._doc = _Document({"asset-gallery-scroll": scroll})
+    monkeypatch.setattr(panel_module.lf.ui, "get_ui_scale", lambda: scale, raising=False)
+    panel._view_mode = "gallery"
+
+    panel._sync_asset_window_viewport()
+
+    assert panel._asset_window_scroll_top == 150
+    assert panel._asset_window_client_width == width
+    assert gallery_columns(width) == columns
+    assert gallery_slot_width(width) == pytest.approx(slot)
+    assert panel._gallery_columns() == columns
+    panel._window_assets([_project(id=str(index), project_uuid=str(index)) for index in range(12)])
+    assert panel._asset_card_slot_width == pytest.approx(slot)
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
