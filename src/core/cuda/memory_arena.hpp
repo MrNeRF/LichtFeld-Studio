@@ -191,6 +191,9 @@ namespace lfs::core {
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
         uint64_t last_handoff_frame_id_ = 0;
+        uint64_t render_handoff_token_ = 0;
+        uint64_t next_render_handoff_token_ = 1;
+        std::chrono::steady_clock::time_point render_handoff_deadline_{};
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -248,6 +251,19 @@ namespace lfs::core {
         }
         std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, cudaStream_t stream,
                                                     bool from_rendering = false);
+        using RenderHandoffToken = uint64_t;
+        static constexpr uint32_t kRenderHandoffLeaseMs = 100;
+        // Keeps the next idle arena window for a renderer after an ordinary
+        // bounded timeout. The short lease survives the caller unwinding model
+        // locks, but expires on its own if the viewport is minimized, paused, or
+        // otherwise abandons the retry. Supplying the current token renews only
+        // that request; an old token can never replace or cancel a newer owner.
+        [[nodiscard]] RenderHandoffToken request_render_handoff(
+            RenderHandoffToken current_token = 0);
+        void cancel_render_handoff(RenderHandoffToken token);
+        [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
+        std::optional<uint64_t> try_begin_render_frame_for(
+            uint32_t timeout_ms, RenderHandoffToken token = 0);
         void end_frame(uint64_t frame_id, bool from_rendering = false) { end_frame(frame_id, nullptr, from_rendering); }
         void end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering = false);
 
@@ -326,7 +342,8 @@ namespace lfs::core {
         Arena& get_or_create_arena(int device);
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
-                                                 std::optional<uint32_t> wait_timeout_ms);
+                                                 std::optional<uint32_t> wait_timeout_ms,
+                                                 RenderHandoffToken render_handoff_token = 0);
         cudaError_t wait_for_previous_frame(cudaStream_t stream);
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena

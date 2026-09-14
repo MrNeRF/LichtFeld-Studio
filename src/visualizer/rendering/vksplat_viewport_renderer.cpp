@@ -224,7 +224,8 @@ namespace lfs::vis {
 
         class RasterizerArenaRenderGuard final {
         public:
-            RasterizerArenaRenderGuard() {
+            explicit RasterizerArenaRenderGuard(
+                lfs::core::RasterizerMemoryArena::RenderHandoffToken* const handoff_token) {
                 arena_ = &lfs::core::GlobalArenaManager::instance().get_arena();
                 arena_->set_rendering_active(true);
                 render_pending_ = true;
@@ -235,9 +236,16 @@ namespace lfs::vis {
                     // refining iterations, where the trainer holds the frame
                     // while blocked on the exclusive render lock our caller's
                     // shared lock excludes.
-                    auto frame_id = arena_->try_begin_frame_for(15, true);
+                    const auto token = handoff_token ? *handoff_token : 0;
+                    auto frame_id = arena_->try_begin_render_frame_for(15, token);
                     if (!frame_id) {
+                        if (handoff_token) {
+                            *handoff_token = arena_->request_render_handoff(token);
+                        }
                         throw std::runtime_error("rasterizer arena is busy");
+                    }
+                    if (handoff_token && token != 0) {
+                        *handoff_token = 0;
                     }
                     frame_id_ = *frame_id;
                     frame_active_ = true;
@@ -1987,6 +1995,29 @@ namespace lfs::vis {
         }
     }
 
+    void VksplatViewportRenderer::requestArenaHandoff() {
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
+    }
+
+    void VksplatViewportRenderer::cancelArenaHandoff() {
+        if (arena_handoff_token_ == 0) {
+            return;
+        }
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena->cancel_render_handoff(arena_handoff_token_);
+        }
+        arena_handoff_token_ = 0;
+    }
+
+    void VksplatViewportRenderer::renewArenaHandoff() {
+        if (arena_handoff_token_ == 0) {
+            return;
+        }
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
+    }
+
     void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot, const bool evict) {
         if (!context_) {
             return;
@@ -2127,6 +2158,9 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::reset() {
+        // Arena boundary callbacks take sync_mutex_ before readback_mutex_. Keep
+        // cancellation in that same order so reset cannot invert the pair.
+        cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         live_submit_callback_ = {};
         if (context_ && context_->device() != VK_NULL_HANDLE) {
@@ -4107,6 +4141,7 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared,
                                                        const bool allow_shared_reclaim) {
+        cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (context_ == nullptr) {
             return;
@@ -8295,7 +8330,8 @@ namespace lfs::vis {
         std::optional<RasterizerArenaRenderGuard> overlay_arena_guard;
         if (synchronize_input_read && shared_scratch_.block) {
             try {
-                overlay_arena_guard.emplace();
+                renewArenaHandoff();
+                overlay_arena_guard.emplace(&arena_handoff_token_);
             } catch (const std::exception& e) {
                 if (context_)
                     context_->noteFailure(e);
@@ -9076,10 +9112,14 @@ namespace lfs::vis {
                 estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
                                            sort_region_elems, image_width, image_height);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
+            // Refresh an owned lease at the actual admission point. Frame
+            // preparation can be variable, while the trainer pause remains
+            // bounded if this retry is abandoned before reaching here.
+            renewArenaHandoff();
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
                     if (!shared_arena_guard) {
-                        shared_arena_guard.emplace();
+                        shared_arena_guard.emplace(&arena_handoff_token_);
                     }
                     // Pause can detach after ensureSharedScratchArena checked
                     // installation but before this frame acquired ownership.

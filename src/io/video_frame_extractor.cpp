@@ -9,6 +9,7 @@
 #include "hdr_tonemap.hpp"
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
+#include "video/cuda_frame_handoff.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -771,6 +772,8 @@ namespace lfs::io {
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error) {
+            outcome_ = ExtractionOutcome::Failed;
+            error.clear();
             const auto extraction_started = std::chrono::steady_clock::now();
             AVFormatContext* fmt_ctx = nullptr;
             AVCodecContext* codec_ctx = nullptr;
@@ -788,6 +791,23 @@ namespace lfs::io {
             std::vector<uint8_t> rot_buf;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             bool using_hw_decode = false;
+
+            const auto cleanup = [&]() {
+                if (sws_ctx)
+                    sws_freeContext(sws_ctx);
+                av_frame_free(&frame);
+                av_frame_free(&sw_frame);
+                av_frame_free(&sparse_previous_frame);
+                av_packet_free(&packet);
+                avcodec_free_context(&codec_ctx);
+                av_buffer_unref(&hw_device_ctx);
+                avformat_close_input(&fmt_ctx);
+                delete[] cpu_contiguous_buffer;
+                cpu_contiguous_buffer = nullptr;
+                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
+                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
+                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
+            };
 
             try {
                 const std::string video_path_utf8 = lfs::core::path_to_utf8(params.video_path);
@@ -1185,7 +1205,7 @@ namespace lfs::io {
                             gpu_batch_buffer = nullptr;
                             jpeg_batch_size = 0;
                         }
-                    } else {
+                    } else if (memory_info_result == cudaSuccess) {
                         LOG_WARN(
                             "Insufficient CUDA memory headroom for JPEG batching; "
                             "falling back to CPU");
@@ -1540,6 +1560,7 @@ namespace lfs::io {
                     }
 
                     if (use_full_gpu_pipeline) {
+                        video::CudaFrameHandoff frame_handoff(hw_frame);
                         const uint8_t* y_plane = hw_frame->data[0];
                         const uint8_t* uv_plane = hw_frame->data[1];
                         const int y_pitch = hw_frame->linesize[0];
@@ -1609,6 +1630,7 @@ namespace lfs::io {
                             cudaMemcpy(dst_ptr, batch_src, frame_size,
                                        cudaMemcpyDeviceToDevice),
                             "CUDA JPEG batch copy failed");
+                        frame_handoff.finish();
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
@@ -2315,50 +2337,27 @@ namespace lfs::io {
                              cuda_upload_seconds, jpeg_encode_seconds, jpeg_write_seconds);
                 }
 
-                // Cleanup
-                if (sws_ctx)
-                    sws_freeContext(sws_ctx);
-                av_frame_free(&frame);
-                av_frame_free(&sw_frame);
-                av_frame_free(&sparse_previous_frame);
-                av_packet_free(&packet);
-                avcodec_free_context(&codec_ctx);
-                if (hw_device_ctx)
-                    av_buffer_unref(&hw_device_ctx);
-                avformat_close_input(&fmt_ctx);
-                delete[] cpu_contiguous_buffer;
-                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
-                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
-                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
+                cleanup();
 
+                outcome_ = ExtractionOutcome::Completed;
                 return true;
 
+            } catch (const ExtractionCancelled& e) {
+                cleanup();
+                outcome_ = ExtractionOutcome::Cancelled;
+                error = e.what();
+                return false;
             } catch (const std::exception& e) {
-                if (sws_ctx)
-                    sws_freeContext(sws_ctx);
-                if (frame)
-                    av_frame_free(&frame);
-                if (sw_frame)
-                    av_frame_free(&sw_frame);
-                if (sparse_previous_frame)
-                    av_frame_free(&sparse_previous_frame);
-                if (packet)
-                    av_packet_free(&packet);
-                if (codec_ctx)
-                    avcodec_free_context(&codec_ctx);
-                if (hw_device_ctx)
-                    av_buffer_unref(&hw_device_ctx);
-                if (fmt_ctx)
-                    avformat_close_input(&fmt_ctx);
-                delete[] cpu_contiguous_buffer;
-                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
-                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
-                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
-
+                cleanup();
                 error = e.what();
                 return false;
             }
         }
+
+        [[nodiscard]] ExtractionOutcome lastOutcome() const { return outcome_; }
+
+    private:
+        ExtractionOutcome outcome_ = ExtractionOutcome::Failed;
     };
 
     VideoFrameExtractor::VideoFrameExtractor() : impl_(new Impl()) {}
@@ -2366,6 +2365,10 @@ namespace lfs::io {
 
     bool VideoFrameExtractor::extract(const Params& params, std::string& error) {
         return impl_->extract(params, error);
+    }
+
+    ExtractionOutcome VideoFrameExtractor::lastOutcome() const {
+        return impl_->lastOutcome();
     }
 
 } // namespace lfs::io

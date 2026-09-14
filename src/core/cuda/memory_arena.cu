@@ -92,6 +92,10 @@ namespace lfs::core {
         pending_render_frames_ = other.pending_render_frames_;
         active_training_frames_ = other.active_training_frames_;
         last_handoff_frame_id_ = other.last_handoff_frame_id_;
+        render_handoff_token_ = other.render_handoff_token_;
+        next_render_handoff_token_ = other.next_render_handoff_token_;
+        render_handoff_deadline_ = other.render_handoff_deadline_;
+        other.render_handoff_token_ = 0;
         last_frame_event_ = other.last_frame_event_;
         last_frame_event_valid_ = other.last_frame_event_valid_;
         external_release_semaphore_ = other.external_release_semaphore_;
@@ -129,6 +133,10 @@ namespace lfs::core {
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
             last_handoff_frame_id_ = other.last_handoff_frame_id_;
+            render_handoff_token_ = other.render_handoff_token_;
+            next_render_handoff_token_ = other.next_render_handoff_token_;
+            render_handoff_deadline_ = other.render_handoff_deadline_;
+            other.render_handoff_token_ = 0;
             if (last_frame_event_) {
                 const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
                 if (destroy_status != cudaSuccess) {
@@ -239,6 +247,62 @@ namespace lfs::core {
                                                                        cudaStream_t stream,
                                                                        bool from_rendering) {
         return begin_frame_impl(stream, from_rendering, timeout_ms);
+    }
+
+    RasterizerMemoryArena::RenderHandoffToken
+    RasterizerMemoryArena::request_render_handoff(const RenderHandoffToken current_token) {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        const auto now = std::chrono::steady_clock::now();
+        if (render_handoff_token_ != 0 && render_handoff_deadline_ <= now) {
+            render_handoff_token_ = 0;
+        }
+        if (current_token != 0 && current_token == render_handoff_token_) {
+            render_handoff_deadline_ = now + std::chrono::milliseconds(kRenderHandoffLeaseMs);
+            sync_cv_.notify_all();
+            return current_token;
+        }
+        if (render_handoff_token_ != 0) {
+            return 0;
+        }
+        RenderHandoffToken token = next_render_handoff_token_++;
+        if (token == 0) {
+            token = next_render_handoff_token_++;
+        }
+        render_handoff_token_ = token;
+        render_handoff_deadline_ = now + std::chrono::milliseconds(kRenderHandoffLeaseMs);
+        sync_cv_.notify_all();
+        return token;
+    }
+
+    void RasterizerMemoryArena::cancel_render_handoff(const RenderHandoffToken token) {
+        if (token == 0) {
+            return;
+        }
+        bool cancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(sync_mutex_);
+            if (render_handoff_token_ == token) {
+                render_handoff_token_ = 0;
+                cancelled = true;
+            }
+        }
+        if (cancelled) {
+            sync_cv_.notify_all();
+        }
+    }
+
+    bool RasterizerMemoryArena::has_render_handoff(const RenderHandoffToken token) const {
+        if (token == 0) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        return render_handoff_token_ == token &&
+               render_handoff_deadline_ > std::chrono::steady_clock::now();
+    }
+
+    std::optional<uint64_t> RasterizerMemoryArena::try_begin_render_frame_for(
+        const uint32_t timeout_ms, const RenderHandoffToken token) {
+        return begin_frame_impl(nullptr, true, timeout_ms, token);
     }
 
     void RasterizerMemoryArena::note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value) {
@@ -364,26 +428,71 @@ namespace lfs::core {
         return cudaDeviceSynchronize();
     }
 
-    std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(cudaStream_t stream, bool from_rendering,
-                                                                    std::optional<uint32_t> wait_timeout_ms) {
+    std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(
+        cudaStream_t stream, const bool from_rendering,
+        const std::optional<uint32_t> wait_timeout_ms,
+        const RenderHandoffToken render_handoff_token) {
         LFS_CUDA_BREADCRUMB_STREAM("arena.begin_frame", stream);
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
-            const auto can_begin = [this, from_rendering]() {
-                return active_frames_ == 0 && (from_rendering || pending_render_frames_ == 0);
+            const auto handoff_active = [this]() {
+                return render_handoff_token_ != 0 &&
+                       render_handoff_deadline_ > std::chrono::steady_clock::now();
+            };
+            const auto expire_handoff = [this]() {
+                if (render_handoff_token_ != 0 &&
+                    render_handoff_deadline_ <= std::chrono::steady_clock::now()) {
+                    render_handoff_token_ = 0;
+                }
+            };
+            const auto can_begin = [this, from_rendering, render_handoff_token,
+                                    &handoff_active]() {
+                if (active_frames_ != 0) {
+                    return false;
+                }
+                if (!from_rendering) {
+                    return pending_render_frames_ == 0 && !handoff_active();
+                }
+                return !handoff_active() || render_handoff_token_ == render_handoff_token;
             };
             if (!wait_timeout_ms.has_value()) {
+                expire_handoff();
                 if (!can_begin()) {
                     return std::nullopt;
                 }
-            } else if (*wait_timeout_ms == 0u) {
-                sync_cv_.wait(sync_lock, can_begin);
-            } else if (!sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(*wait_timeout_ms), can_begin)) {
-                return std::nullopt;
+            } else {
+                const auto acquire_deadline =
+                    *wait_timeout_ms == 0u
+                        ? std::chrono::steady_clock::time_point::max()
+                        : std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(*wait_timeout_ms);
+                while (true) {
+                    expire_handoff();
+                    if (can_begin()) {
+                        break;
+                    }
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now >= acquire_deadline) {
+                        return std::nullopt;
+                    }
+                    auto wake_deadline = acquire_deadline;
+                    if (handoff_active()) {
+                        wake_deadline = std::min(wake_deadline, render_handoff_deadline_);
+                    }
+                    if (wake_deadline == std::chrono::steady_clock::time_point::max()) {
+                        sync_cv_.wait(sync_lock);
+                    } else {
+                        sync_cv_.wait_until(sync_lock, wake_deadline);
+                    }
+                }
             }
             ++active_frames_;
             if (!from_rendering) {
                 ++active_training_frames_;
+            }
+            if (from_rendering && render_handoff_token != 0 &&
+                render_handoff_token_ == render_handoff_token) {
+                render_handoff_token_ = 0;
             }
         }
 
