@@ -21,7 +21,7 @@
             <input id="asset-search-input" type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
           </div>
 
-          <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project"><span class="asset-button-text">{{import_project_label}}</span></button>
+          <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project" data-attr-title="import_project_tooltip"><span class="asset-button-text">{{import_project_label}}</span></button>
           <button class="asset-button asset-button--icon gallery-toolbar-button" data-event-click="open_gallery" data-attr-title="gallery_tooltip"><img src="../icon/gallery-cloud.png"/><span class="gallery-count-overlay">{{gallery_overlay}}</span></button>
           <button class="asset-button asset-button--icon asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close"><span class="asset-button-glyph">&#215;</span></button>
         </div>

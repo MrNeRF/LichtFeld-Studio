@@ -371,7 +371,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("panel_label", lambda: tr("asset_manager.panel_title"))
         labels = {
             "close_label": "common.close",
-            "import_project_label": "menu.file.open_project",
+            "import_project_label": "asset_manager.action.add_existing",
+            "import_project_tooltip": "asset_manager.tooltip.add_existing",
             "no_search_results_label": "asset_manager.status.no_search_results",
             "clear_search_label": "asset_manager.action.clear_search",
             "search_placeholder": "asset_manager.toolbar.search_placeholder",
@@ -976,7 +977,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def on_import_project(self, _handle=None, _ev=None, _args=None):
         if not self._asset_index:
             return
-        path = lf.ui.open_project_file_dialog("")
+        try:
+            path = lf.ui.open_project_file_dialog(
+                "", tr("asset_manager.dialog.choose_existing")
+            )
+        except TypeError:
+            path = lf.ui.open_project_file_dialog("")
         if not path:
             return
         if not is_supported_asset_path(path):

@@ -706,6 +706,27 @@ def test_import_registers_only_selected_licht_project(panel_module):
     assert calls == [(asset["path"], None)]
     assert panel.get_selected_asset_id() == asset["id"]
 
+
+def test_add_existing_uses_new_label_tooltip_and_chooser_title(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        register_licht_asset=lambda _path: (None, False),
+    )
+    calls = []
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "open_project_file_dialog",
+        lambda *args: calls.append(args) or "",
+    )
+
+    panel.on_import_project()
+
+    assert calls == [("", "asset_manager.dialog.choose_existing")]
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings["import_project_label"]() == "asset_manager.action.add_existing"
+    assert model.func_bindings["import_project_tooltip"]() == "asset_manager.tooltip.add_existing"
+
 def test_add_folder_uses_real_directory_picker(panel_module):
     panel = panel_module.AssetManagerPanel()
     selected = "/tmp/assets"
