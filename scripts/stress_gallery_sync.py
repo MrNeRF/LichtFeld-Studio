@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Adversarial LOCAL Studio/gallery integration harness. Never builds or commits."""
+"""Adversarial LOCAL LichtFeld Studio/gallery integration harness. Never builds or commits."""
 from __future__ import annotations
 
 import argparse
@@ -126,7 +126,7 @@ class StressRun(e2e.Run):
     def stop_app(self, *, crash=False):
         # Match the process object, so a later unexpected relaunch exit still fails.
         self.expected_exit = self.app
-        self.observe("expected Studio exit", dict(pid=self.app.pid, signal="SIGKILL" if crash else "SIGTERM"))
+        self.observe("expected LichtFeld Studio exit", dict(pid=self.app.pid, signal="SIGKILL" if crash else "SIGTERM"))
         self.stop(self.app, crash=crash)
 
     def observe(self, label, value):
@@ -151,7 +151,7 @@ class StressRun(e2e.Run):
         try:
             while time.monotonic() < self._wait_deadline:
                 if self.app and self.app is not getattr(self, 'expected_exit', None) and self.app.poll() is not None:
-                    raise AssertionError(f"{label}: Studio exited unexpectedly; last={last!r}")
+                    raise AssertionError(f"{label}: LichtFeld Studio exited unexpectedly; last={last!r}")
                 if self.worker and self.worker.poll() is not None:
                     raise AssertionError(f"{label}: Processing loop exited; last={last!r}")
                 last = callback()
@@ -178,7 +178,7 @@ class StressRun(e2e.Run):
         return shell_json(output)
 
     def api(self, method, path, payload=None):
-        # The oracle must remain available when Studio traffic is fault-injected.
+        # The oracle must remain available when LichtFeld Studio traffic is fault-injected.
         request = urllib.request.Request(self.backend + "/api/gallery/v1" + path, method=method,
             data=json.dumps(payload).encode() if payload is not None else None,
             headers={"Authorization": "Bearer local-test-access", "Content-Type": "application/json",
@@ -253,7 +253,7 @@ class StressRun(e2e.Run):
     def begin_refresh(self):
         self.wait_value("new.busy", "idle before refresh", accept=lambda busy: not busy)
         previous_label = self.value(PANEL_REFRESH)["checked"]
-        # Capture on Studio's clock immediately before starting the request.
+        # Capture on LichtFeld Studio's clock immediately before starting the request.
         self.rpc("_stress_refresh_t0 = time.time()\np._controller().refresh()")
         return previous_label
 
@@ -519,7 +519,7 @@ p._gallery_command('publish')
                 assert frames[2]["position"] == portal["keyframes"][0]["position"], frames
 
     def second_upload(self, fixture, metadata):
-        # Genuine second API client in a host thread, not on Studio's UI thread.
+        # Genuine second API client in a host thread, not on LichtFeld Studio's UI thread.
         import threading
         result = {}
         def work():
@@ -581,9 +581,9 @@ p._gallery_command('publish')
             if any(e['status'] == 409 for e in self.proxy.snapshot()[marker:]):
                 return 'HTTP 409'
             return self.value(f"p._gallery_facts(p._asset_dict({self.asset_id!r}))['freshness'] == 'diverged'")
-        rejection = self.until(refused_or_reviewing, "Studio conflict/review path")
-        self.observe("Studio stale update", dict(path=rejection, requests=self.proxy.snapshot()[marker:]))
-        assert self.remote()["contentRevision"] == replacement["contentRevision"], "Studio silently overwrote replacement"
+        rejection = self.until(refused_or_reviewing, "LichtFeld Studio conflict/review path")
+        self.observe("LichtFeld Studio stale update", dict(path=rejection, requests=self.proxy.snapshot()[marker:]))
+        assert self.remote()["contentRevision"] == replacement["contentRevision"], "LichtFeld Studio silently overwrote replacement"
         # Dismiss an already-open review before requesting the explicit Pull-first review.
         if self.value("lf.ui.modal_get() is not None"):
             self.press_modal("Cancel")
@@ -604,7 +604,7 @@ p._gallery_command('publish')
             self.wait_value("dict(write=lf.project_poll_write(), importing=lf.ui.get_import_state())", "open large fixture",
                 accept=lambda value: value['write'].get('path') == str(path) and not value['importing'].get('active'))
         else:
-            # Build a saved project in Studio; the publish command below prepares
+            # Build a saved project in LichtFeld Studio; the publish command below prepares
             # its embedded data into the portal's publication format.
             ply = self.root / "large.ply"
             names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
@@ -867,7 +867,7 @@ assert not list((new.root/'posters').glob('*.png'))
         other.wait_value("sorted(p._asset_index_assets())", "B shared catalog", accept=lambda ids: self.asset_id in ids)
         other.refresh()
         assert other.link()["sceneId"] == self.scene_id
-        self.observe("second Studio", dict(home=str(other.home), display=other.args.display,
+        self.observe("second LichtFeld Studio", dict(home=str(other.home), display=other.args.display,
                                            mcp=other.mcp.url, backend=other.backend, artifacts=str(other.artifacts)))
         return other
 
@@ -1182,7 +1182,7 @@ def main(argv=None):
                                      last.get('facts', {}).get('reason', '')]
                     row['message'] = '\n'.join(dict.fromkeys(m for m in messages if m)) or 'No job message available: ' + row['reason']
                     if not row['log_excerpt']:
-                        row.setdefault('log_excerpt_error', 'No Studio log lines available (Studio may not have started).')
+                        row.setdefault('log_excerpt_error', 'No LichtFeld Studio log lines available (LichtFeld Studio may not have started).')
                 row["seconds"] = time.monotonic() - started
                 Path(row["json"]).write_text(json.dumps(row, indent=2, default=str) + "\n")
                 rows.append(row)

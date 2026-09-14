@@ -1077,7 +1077,7 @@ class GalleryController:
             self._prepared_commit = None
             self._export_pending = None
             self._remove_preparation(export)
-            self._message = "Studio could not prepare the scene. Check the export status and try again."
+            self._message = "LichtFeld Studio could not prepare the scene. Check the export status and try again."
             self._refresh_model()
 
     def _action_resume(self, job_id):
@@ -1387,7 +1387,7 @@ class GalleryController:
         if update["phase"] == "importing":
             if incoming is None:
                 if lf.ui.get_import_state().get("error") or time.monotonic() - self._import_started > 60:
-                    raise ValueError("Studio could not open the gallery update. Your local splats remain.")
+                    raise ValueError("LichtFeld Studio could not open the gallery update. Your local splats remain.")
                 return
             lf.ui.dismiss_import()
             update["incoming"] = incoming.uuid

@@ -1918,7 +1918,7 @@ NB_MODULE(lichtfeld, m) {
                                 : payload_format == "sog"                               ? ExportFormat::GALLERY_SOG
                                 : payload_format == "ssog"                              ? ExportFormat::GALLERY_SSOG
                                 : payload_format == "spz"                               ? ExportFormat::GALLERY_SPZ
-                                                                                        : throw std::invalid_argument("Choose Studio, SOG, SSOG or SPZ compression.");
+                                                                                        : throw std::invalid_argument("Choose .licht, SOG, SSOG or SPZ.");
             if (!expected_commit_uuid.empty() && !lfs::core::Uuid::from_string(expected_commit_uuid))
                 throw std::invalid_argument("Invalid expected project commit UUID.");
             lfs::core::events::cmd::PrepareGalleryProject command{

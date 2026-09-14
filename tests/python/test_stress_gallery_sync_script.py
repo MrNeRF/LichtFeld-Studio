@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Harness contract tests. No Studio, Django, display, build, or GPU required."""
+"""Harness contract tests. No LichtFeld Studio, Django, display, build, or GPU required."""
 import importlib.util
 import json
 from pathlib import Path
@@ -433,7 +433,7 @@ def test_intentional_kill_does_not_hide_a_relaunch_crash(waiting_run):
     assert run.until(lambda: True, 'killed socket closed')
     assert run.observations[-1]['value'] == dict(pid=12, signal='SIGKILL')
     run.app = SimpleNamespace(poll=lambda: -11)
-    with pytest.raises(AssertionError, match='Studio exited unexpectedly'):
+    with pytest.raises(AssertionError, match='LichtFeld Studio exited unexpectedly'):
         run.until(lambda: True, 'relaunch')
 
 @pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
@@ -819,7 +819,7 @@ def test_log_excerpt_keeps_last_twenty_relevant_lines_over_frame_noise(tmp_path)
     lines = [f'\x1b[31m[error] gallery upload reason {i}\x1b[0m' for i in range(30)]
     lines += ['[perf] gallery frame took 0.01ms'] * 300
     (tmp_path / 'studio-0.log').write_text('\n'.join(lines))
-    (tmp_path / 'portal-server.log').write_text('portal error should not replace Studio lines')
+    (tmp_path / 'portal-server.log').write_text('portal error should not replace LichtFeld Studio lines')
     excerpt = common.studio_log_excerpt(tmp_path)
     assert len(excerpt) == 20
     assert excerpt[0].endswith('reason 10') and excerpt[-1].endswith('reason 29')

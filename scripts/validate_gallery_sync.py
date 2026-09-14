@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Opt-in Linux Studio/portal E2E; uses an existing build and private profile/display.
+"""Opt-in Linux LichtFeld Studio/portal E2E; uses an existing build and private profile/display.
 
 No app or Django imports at module scope: pure helpers are usable in ordinary CI.
 See docs/docs/development/mcp/recipes/gallery-sync-e2e.md.
@@ -275,7 +275,7 @@ from gallery.models import Gallery
 now = timezone.now()
 owner = get_user_model().objects.create_user(email='native-sync@example.com', payment_status='paid',
     email_verified_at=now, access_activated_at=now-timedelta(days=1))
-DesktopSession.objects.create(scope='desktop.basic gallery.sync', user=owner, device_name='E2E Studio',
+DesktopSession.objects.create(scope='desktop.basic gallery.sync', user=owner, device_name='E2E LichtFeld Studio',
     platform='Linux', client_version='test', access_token_hash=hashlib.sha256(b'local-test-access').hexdigest(),
     access_expires_at=now+timedelta(hours=12), refresh_token_hash=hashlib.sha256(b'local-test-refresh').hexdigest(),
     refresh_expires_at=now+timedelta(days=1))
@@ -458,14 +458,14 @@ class Run:
         deadline = time.monotonic() + 90
         while True:
             if self.app.poll() is not None:
-                raise RuntimeError("Owned Studio exited; inspect Studio log")
+                raise RuntimeError("Owned LichtFeld Studio exited; inspect LichtFeld Studio log")
             try:
                 self.mcp.call("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                     "clientInfo": {"name": "gallery-sync-e2e", "version": "1"}}, timeout=1)
                 break
             except (OSError, RuntimeError, ValueError):
                 if time.monotonic() >= deadline:
-                    raise TimeoutError("Studio MCP did not initialize")
+                    raise TimeoutError("LichtFeld Studio MCP did not initialize")
                 time.sleep(.2)
         tools = self.mcp.call("tools/list")
         self.mcp.call("resources/list")
@@ -544,7 +544,7 @@ account = get_portal_account_service()
                 self.mcp.rpc("account.start_device_flow()")
                 self.wait("bool(account.snapshot().user_code)", "Device code", timeout=60)
                 approval = self.mcp.value("dict(code=account.snapshot().user_code, url=account.snapshot().verification_uri_complete)")
-                print(f"Approve Studio sign-in in your browser: {approval['url']}\nCode: {approval['code']}", flush=True)
+                print(f"Approve LichtFeld Studio sign-in in your browser: {approval['url']}\nCode: {approval['code']}", flush=True)
                 self.wait("account.snapshot().signed_in", "Browser approval", timeout=self.args.auth_timeout)
             self.mcp.rpc("new = GallerySync(account, resolve_asset_manager_storage_path()/'gallery')")
         if restart:
@@ -654,7 +654,7 @@ cleanup_journal = GallerySync(account, resolve_asset_manager_storage_path()/'gal
             row["detail"] = f"Removed {len(owned)} scenes owned by this run; none remain"
 
     def workflow(self):
-        with self.step("Launch private portal and Studio"):
+        with self.step("Launch private portal and LichtFeld Studio"):
             if not self.origin:
                 self.start_portal()
             projects = self.home / "projects"
@@ -789,7 +789,7 @@ for element, row in zip(visible_rows, rows):
 """)
 
     def check_logs(self):
-        with self.step("Studio and portal log scan") as row:
+        with self.step("LichtFeld Studio and portal log scan") as row:
             failures = []
             for path in sorted(self.artifacts.glob("*.log")):
                 failures.extend(f"{path.name}: {line}" for line in scan_logs(path.read_text(errors="replace")))
@@ -805,7 +805,7 @@ for element, row in zip(visible_rows, rows):
         # Include errors written during screenshots or process shutdown after the live scan.
         late = [f"{path.name}: {line}" for path in sorted(self.artifacts.glob('*.log'))
                 for line in scan_logs(path.read_text(errors='replace'))]
-        log_step = next((s for s in self.steps if s['name'] == 'Studio and portal log scan'), None)
+        log_step = next((s for s in self.steps if s['name'] == 'LichtFeld Studio and portal log scan'), None)
         if late and log_step:
             log_step.update(status='FAIL', detail='\n'.join(late[-30:]))
         if self.args.keep:

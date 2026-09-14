@@ -31,7 +31,7 @@ MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 
 
 def shared_fields(scene):
-    """Fields shared with Studio; cover, highlights and broad revision excluded."""
+    """Fields shared with LichtFeld Studio; cover, highlights and broad revision excluded."""
     return copy.deepcopy({key: scene.get(key, {} if key == "viewerSettings" else "")
                           for key in ("title", "description", "visibility", "viewerSettings")})
 

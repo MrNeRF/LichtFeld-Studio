@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Pure validator helpers; no Studio, Django, display, network or native module."""
+"""Pure validator helpers; no LichtFeld Studio, Django, display, network or native module."""
 import argparse
 import base64
 from contextlib import redirect_stderr, redirect_stdout
@@ -387,7 +387,7 @@ class MainTests(unittest.TestCase):
                 run.record_diagnostics('unrelated editor diagnostic')
 
         def clean_logs(run):
-            with run.step('Studio and portal log scan'):
+            with run.step('LichtFeld Studio and portal log scan'):
                 pass
 
         roots = []
@@ -426,7 +426,7 @@ class MainTests(unittest.TestCase):
         code, report, junit = self.run_main(workflow=workflow)
         self.assertEqual(code, 1)
         self.assertIn('| Publish closed portable-multi | FAIL |', report)
-        self.assertIn('| Studio and portal log scan | PASS |', report)
+        self.assertIn('| LichtFeld Studio and portal log scan | PASS |', report)
         self.assertEqual(junit.attrib['failures'], '1')
 
     def test_failed_row_without_exception_still_fails(self):
@@ -466,7 +466,7 @@ class MainTests(unittest.TestCase):
 
         code, report, junit = self.run_main(workflow=workflow)
         self.assertEqual(code, 1)
-        self.assertIn('| Studio and portal log scan | FAIL |', report)
+        self.assertIn('| LichtFeld Studio and portal log scan | FAIL |', report)
         self.assertEqual(junit.attrib['failures'], '1')
 
     def test_setup_exception_returns_nonzero(self):
