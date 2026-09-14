@@ -328,6 +328,7 @@ add_library(lfs_io STATIC
         project/project_document.cpp
         project/project_preview.cpp
         project/project_recovery.cpp
+        project/project_inspector.cpp
         project/splat_chapter.cpp
         project/scene_chapter_adapter.cpp
         project/geometry_payload.cpp

@@ -2829,8 +2829,50 @@ namespace lfs::io::project {
         return impl_->state->selected.commit.info;
     }
 
+    std::vector<CommitInfo> ProjectReader::lineage() const {
+        std::vector<CommitInfo> result;
+        if (!impl_) {
+            return result;
+        }
+        result.reserve(impl_->state->selected.lineage.size());
+        for (const auto& commit : impl_->state->selected.lineage) {
+            result.push_back(commit.info);
+        }
+        return result;
+    }
+
     const std::vector<ChunkInfo>& ProjectReader::chunks() const noexcept {
         return impl_->state->selected.chunks;
+    }
+
+    lfs::Result<std::vector<std::vector<ChunkInfo>>>
+    ProjectReader::lineage_chunks() const {
+        if (!impl_) {
+            return detail::project_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project reader is not initialized.",
+                "lineage_chunks requires an initialized ProjectReader");
+        }
+        if (impl_->state->open_state != OpenState::Open) {
+            return detail::project_error(
+                lfs::ErrorCode::Unsupported,
+                "Structural project details are unavailable for this project.",
+                "lineage index access requires a fully supported project",
+                impl_->state->path);
+        }
+        std::vector<std::vector<ChunkInfo>> result;
+        result.reserve(impl_->state->selected.lineage.size());
+        for (const auto& commit : impl_->state->selected.lineage) {
+            auto parsed = parse_index(
+                *impl_->state->file, impl_->state->physical_size,
+                impl_->state->superblock, commit,
+                impl_->state->selected.lineage);
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            result.push_back(std::move(parsed->chunks));
+        }
+        return result;
     }
 
     const std::vector<std::string>& ProjectReader::warnings() const noexcept {
