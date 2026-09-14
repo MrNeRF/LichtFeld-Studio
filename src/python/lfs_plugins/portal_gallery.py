@@ -316,6 +316,17 @@ class PortalGalleryClient:
                     current_tag = response_headers.get('ETag')
                     pinned = (isinstance(current_tag, str) and re.fullmatch(r'"[^"\r\n]+"', current_tag)
                               and response_headers.get('Accept-Ranges', '').lower() == 'bytes')
+                    # Establish size consistency before opening staging or reading
+                    # any body bytes. A later short stream is a lost connection.
+                    content_range = response_headers.get('Content-Range', '')
+                    range_match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', content_range)
+                    content_length = response_headers.get('Content-Length')
+                    if content_length is not None and not re.fullmatch(r'\d+', str(content_length)):
+                        raise GalleryTransferInvalid('Invalid gallery download Content-Length')
+                    if ((status == 206 and range_match and int(range_match[3]) != total)
+                            or (content_length is not None and int(content_length) !=
+                                (total - offset if status == 206 else total))):
+                        raise GalleryTransferInvalid('Gallery download is incomplete or larger than the portal declared')
                     if offset and status == 200:
                         on_message('The portal restarted this download from zero because its representation changed.')
                         offset = 0
@@ -354,10 +365,7 @@ class PortalGalleryClient:
                             while True:
                                 if cancel.is_set():
                                     raise GalleryTransferCanceled('Download paused')
-                                try:
-                                    chunk = response.read(min(1024 * 1024, total - completed + 1))
-                                except IncompleteRead as exc:
-                                    raise GalleryTransferInvalid('Gallery download was incomplete') from exc
+                                chunk = response.read(min(1024 * 1024, total - completed + 1))
                                 if not chunk:
                                     break
                                 completed += len(chunk)
@@ -367,12 +375,13 @@ class PortalGalleryClient:
                                 digest.update(chunk)
                                 on_progress(completed, total)
                             if completed != total:
-                                raise GalleryTransferInvalid('Gallery download was incomplete')
+                                raise ConnectionError('Gallery download connection closed before completion')
                         finally:
                             output.flush()
                             os.fsync(output.fileno())
                     return digest.hexdigest()
-            checksum = retry_call(transfer, idempotent=True)
+            # Only an explicit Resume may continue or restart a download.
+            checksum = retry_call(transfer, idempotent=False)
             try:
                 validate_download(partial, destination.suffix.lower(), cancel)
             except (ValueError, PortalProtocolError) as exc:
@@ -384,15 +393,11 @@ class PortalGalleryClient:
             on_checkpoint(dict(saved))
             os.replace(partial, destination)
             return scene
-        except RemoteDisconnected as exc:
-            partial.unlink(missing_ok=True)
-            raise GalleryTransferInvalid('Gallery download was incomplete') from exc
-        except (GalleryTransferCanceled, TimeoutError, ConnectionError, urllib.error.URLError) as exc:
-            if isinstance(getattr(exc, 'reason', exc), RemoteDisconnected):
-                partial.unlink(missing_ok=True)
-                raise GalleryTransferInvalid('Gallery download was incomplete') from exc
+        except (GalleryTransferCanceled, IncompleteRead, TimeoutError, ConnectionError, urllib.error.URLError) as exc:
             if not keep_partial:
                 partial.unlink(missing_ok=True)
+            if isinstance(getattr(exc, 'reason', exc), (IncompleteRead, RemoteDisconnected)):
+                raise ConnectionError('Gallery download connection closed before completion') from exc
             raise
         except Exception:
             partial.unlink(missing_ok=True)

@@ -810,8 +810,9 @@ class GallerySync:
                     self._save()
                     return
                 if isinstance(getattr(exc, 'reason', exc), (IncompleteRead, RemoteDisconnected)):
-                    exc = GalleryTransferInvalid("Gallery download was incomplete" if job.get("kind") == "download"
-                        else "The portal closed the upload without acknowledging it. Start a new upload.")
+                    exc = (ConnectionError("Gallery download connection closed before completion")
+                        if job.get("kind") == "download" else GalleryTransferInvalid(
+                            "The portal closed the upload without acknowledging it. Start a new upload."))
                 elif isinstance(exc, PortalHTTPError) and exc.status == 400 and exc.error in (
                         "Invalid portable LichtFeld project.", "Project checksum failed.",
                         "Embedded project asset checksum failed."):

@@ -190,6 +190,48 @@ def test_oversized_declared_download_rejected_before_writing(tmp_path, monkeypat
         client.download(scene['id'], tmp_path / 'absent' / 'scene.licht')
     assert list(tmp_path.iterdir()) == []
 
+@pytest.mark.parametrize('response_kind', ['initial', 'range_total', 'range_length', 'restart'])
+@pytest.mark.parametrize('storage_size', [126016, 1174593])
+def test_storage_header_mismatch_rejected_before_streaming(tmp_path, monkeypatch, response_kind, storage_size):
+    total, offset = 1174592, 64
+    client, scene = _download_client(total)
+    destination = tmp_path / 'scene.licht'
+    destination.write_bytes(b'existing project')
+    partial = tmp_path / '.scene.licht.part'
+    checkpoint = None
+    if response_kind != 'initial':
+        partial.write_bytes(b'x' * offset)
+        checkpoint = dict(representationId='"pinned"', scene={key: scene.get(key)
+            for key in ('id', 'contentRevision', 'metadataRevision', 'contentLength')})
+    headers = {'ETag': '"pinned"', 'Accept-Ranges': 'bytes'}
+    if response_kind.startswith('range_'):
+        range_total = storage_size if response_kind == 'range_total' else total
+        headers['Content-Range'] = f'bytes {offset}-{range_total-1}/{range_total}'
+        if response_kind == 'range_length':
+            headers['Content-Length'] = str(storage_size - offset)
+    else:
+        headers['Content-Length'] = str(storage_size)
+
+    class UnreadResponse(io.BytesIO):
+        def read(self, *args):
+            pytest.fail('A header mismatch must fail before any body read')
+
+    calls, checkpoints, progress = [], [], []
+    def opened(request, **kwargs):
+        calls.append(request)
+        assert request.get_header('Range') == (None if response_kind == 'initial' else f'bytes={offset}-')
+        response = UnreadResponse()
+        response.status = 206 if response_kind.startswith('range_') else 200
+        response.headers = headers
+        return response
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    with pytest.raises(portal_gallery.GalleryTransferInvalid, match='incomplete or larger than the portal declared'):
+        client.download(scene['id'], destination, checkpoint=checkpoint,
+            on_checkpoint=checkpoints.append, on_progress=lambda *args: progress.append(args))
+    assert len(calls) == 1 and not progress and not checkpoints
+    assert destination.read_bytes() == b'existing project'
+    assert not partial.exists()
+
 def test_download_disk_preflight_includes_staging_backup_and_destination(tmp_path, monkeypatch):
     client, scene = _download_client(100)
     monkeypatch.setattr(portal_gallery.shutil, 'disk_usage', lambda _: SimpleNamespace(free=299))
@@ -485,6 +527,11 @@ def test_timeout_mid_read_restarts_unpinned_without_appending(tmp_path, monkeypa
         requests.append(request)
         return Interrupted(b'old!') if len(requests) == 1 else _response(b'data')
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    with pytest.raises(TimeoutError):
+        client.download(scene['id'], tmp_path/'file.licht')
+    assert len(requests) == 1
+    assert not (tmp_path/'.file.licht.part').exists()
+    # Manual Resume performs the second request, restarting without a pin.
     client.download(scene['id'], tmp_path/'file.licht')
     assert (tmp_path/'file.licht').read_bytes() == b'data'
     assert len(requests) == 2 and all(r.get_header('Range') is None for r in requests)

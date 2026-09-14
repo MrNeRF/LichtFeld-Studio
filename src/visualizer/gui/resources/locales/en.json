@@ -6,7 +6,7 @@
   "asset_manager.gallery.state.connection_lost": "Paused (connection lost)",
   "asset_manager.gallery.error.portal_version": "This portal version does not support gallery sync",
     "asset_manager.gallery.error.download_damaged": "The downloaded file is damaged or was changed on the portal.",
-    "asset_manager.gallery.error.download_size": "The downloaded file is larger than the portal declared.",
+    "asset_manager.gallery.error.download_size": "The downloaded file is incomplete or larger than the portal declared.",
   "_language_name": "English",
   "menu": {
     "file": "File",

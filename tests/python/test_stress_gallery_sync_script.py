@@ -886,7 +886,7 @@ def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, 
         run.stale = False
         run.refreshed += 1
     run.refresh = refresh
-    run.link = lambda: dict(sceneId='scene', revision=run.loaded, checkedAt=10)
+    run.link = lambda: dict(sceneId='scene', metadataRevision=run.loaded, contentRevision='content', checkedAt=10)
     run.remote = lambda: dict(title='B title')
     run.assert_link = lambda: None
     def b_update(): run.disk = 'after'
@@ -895,7 +895,7 @@ def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, 
         if expression == "list(new.snapshot()['links'])": return ['asset']
         raise AssertionError(expression)
     other = SimpleNamespace(open_save=lambda **kw: None, update=b_update, value=b_value,
-        link=lambda: dict(sceneId='scene', revision='after', checkedAt=5))
+        link=lambda: dict(sceneId='scene', metadataRevision='after', contentRevision='content', checkedAt=5))
     run.launch_second_studio = lambda: other
     def value(expression):
         return {'new._disk_digest': run.loaded, 'new._journal_digest()': run.disk,
@@ -903,7 +903,7 @@ def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, 
                 "list(new.snapshot()['links'])": ['asset']}[expression]
     run.value = value
     def stale_write(code):
-        assert "'must not clobber'" in code
+        assert code == "new.edit('scene', 'before', {'title': 'must not clobber'})"
         run.stale = True
         if clobber:
             run.disk = 'clobbered'
@@ -1001,16 +1001,16 @@ def test_account_switch_asserts_public_transfer_rows(waiting_run, panel_module, 
     else:
         run.account_switch()
 
-@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'declared_size', 'extra_text', 'registered',
+@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'opposite_reason', 'extra_text', 'registered',
                                      'staging', 'paused', 'resume', 'download_file', 'partial'])
-@pytest.mark.parametrize('failed_mode', ['over_length', 'truncated'])
+@pytest.mark.parametrize('failed_mode', ['over_length', 'corrupted'])
 def test_bad_downloads_requires_localized_reason_and_cleanup(
         waiting_run, panel_module, tmp_path, monkeypatch, failure, failed_mode):
     run = waiting_run
     locale = json.loads((SCRIPTS.parent / 'src/visualizer/gui/resources/locales/en.json').read_text(encoding='utf-8'))
     expected = {
-        'over_length': locale['asset_manager.gallery.error.download_damaged'],
-        'truncated': locale['asset_manager.gallery.error.download_damaged'],
+        'over_length': locale['asset_manager.gallery.error.download_size'],
+        'corrupted': locale['asset_manager.gallery.error.download_damaged'],
     }
     run.asset_id, run.scene_id = 'asset', 'scene'
     run.proxy = SimpleNamespace(inflate_download=0)
@@ -1032,7 +1032,7 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
     def pull(remote_only):
         nonlocal current
         assert remote_only
-        current = 'over_length' if run.proxy.inflate_download else 'truncated'
+        current = 'over_length' if run.proxy.inflate_download else 'corrupted'
         return current
     run.pull = pull
     def value(expression):
@@ -1044,12 +1044,13 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
         if identifier == failed_mode:
             if failure == 'legacy': message = 'Invalid download checksum'
             if failure == 'wrong_reason': message = locale['asset_manager.gallery.state.connection_lost']
-            if failure == 'declared_size': message = locale['asset_manager.gallery.error.download_size']
+            if failure == 'opposite_reason':
+                message = expected['corrupted' if identifier == 'over_length' else 'over_length']
             if failure == 'extra_text': message += ' Unexpected diagnostic'
             if failure == 'staging': stage.write_bytes(b'leftover')
         job = dict(id=identifier, status='error', message=message, retryable=False,
                    path=str(tmp_path / (identifier + '.licht')))
-        if identifier == 'truncated':
+        if identifier == 'corrupted':
             job.update(message='Download failed', stagedImport=dict(state='failed', message=message, path=str(stage)))
         elif failure == 'staging':
             job['stagedImport'] = dict(path=str(stage))
@@ -1074,9 +1075,22 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
             run.bad_downloads()
     else:
         run.bad_downloads()
-        assert [row['label'] for row in run.observations] == ['over_length', 'truncated']
+        assert [row['label'] for row in run.observations] == ['over_length', 'corrupted']
         assert calls.count("assert not list(new.root.rglob('.gallery-*'))") == 2
-        assert "new.discard('over_length')" in calls and "new.discard('truncated')" in calls
+        assert "new.discard('over_length')" in calls and "new.discard('corrupted')" in calls
+        # Execute the actual injected mutation: it must damage a native project
+        # without introducing a second transport-size mismatch.
+        from lfs_plugins.portal_gallery import validate_download
+        data = (SCRIPTS.parent / 'tests/data/portable-ply.licht').read_bytes()
+        stored = tmp_path / 'storage.licht'
+        stored.write_bytes(data)
+        mutation = next(code for code in calls if code.startswith('s=Scene.objects.get'))
+        exec(mutation, dict(Scene=SimpleNamespace(objects=SimpleNamespace(
+            get=lambda **kwargs: SimpleNamespace(object_key='key'))),
+            storage=SimpleNamespace(local_path=lambda key: stored)))
+        assert stored.stat().st_size == len(data) and stored.read_bytes() != data
+        with pytest.raises(ValueError, match='damaged or was changed'):
+            validate_download(stored, '.licht')
 
 def test_constructor_failure_has_explicit_unavailable_diagnostics(tmp_path, monkeypatch):
     def failed(*args): raise PermissionError('loopback socket unavailable')

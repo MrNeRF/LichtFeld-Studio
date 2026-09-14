@@ -885,7 +885,7 @@ assert not list((new.root/'posters').glob('*.png'))
         assert before != after, "B did not write shared journal"
         assert self.value("new._disk_digest") == before, "A unexpectedly reloaded B's edit"
         assert self.value("new._journal_digest()") == after, "B's digest does not match disk"
-        self.rpc(f"new.edit({self.scene_id!r}, {self.link()['revision']!r}, {{'title': 'must not clobber'}})")
+        self.rpc(f"new.edit({self.scene_id!r}, {self.link()['metadataRevision']!r}, {{'title': 'must not clobber'}})")
         self.wait_value("dict(busy=new.busy, message=new.snapshot()['message'])", "A stale write refused",
                         accept=lambda value: not value['busy'] and 'Another LichtFeld Studio' in value['message'])
         assert self.value("new._stale"), "A did not detect changed journal digest"
@@ -1007,20 +1007,23 @@ Scene.objects.bulk_create(rows)
         locale = json.loads((Path(__file__).resolve().parents[1] /
             "src/visualizer/gui/resources/locales/en.json").read_text(encoding="utf-8"))
         expected_messages = {
-            "over_length": locale["asset_manager.gallery.error.download_damaged"],
-            "truncated": locale["asset_manager.gallery.error.download_damaged"],
+            "over_length": locale["asset_manager.gallery.error.download_size"],
+            "corrupted": locale["asset_manager.gallery.error.download_damaged"],
         }
         self.publish()
         self.rpc(f"new.unlink({self.asset_id!r})")
         self.refresh()
         baseline = self.value("sorted(p._asset_index_assets())")
-        for mode in ("over_length", "truncated"):
+        for mode in ("over_length", "corrupted"):
             if mode == "over_length":
                 self.proxy.inflate_download = 1024 * 1024
             else:
                 self.proxy.inflate_download = 0
+                # Preserve the transport length so this exercises container
+                # validation independently of the storage-header size check.
                 self.db(f"s=Scene.objects.get(pk={self.scene_id!r})\np=storage.local_path(s.object_key)\n"
-                        "with p.open('r+b') as stream:\n    stream.truncate(max(1, p.stat().st_size//2))")
+                        "with p.open('r+b') as stream:\n    stream.seek(-1, 2)\n    tail=stream.read(1)\n"
+                        "    stream.seek(-1, 2)\n    stream.write(bytes([tail[0] ^ 1]))")
             identifier = self.pull(remote_only=True)
             job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}
                 or j.get('stagedImport', {}).get('state') == 'failed', "specific bad-download failure")

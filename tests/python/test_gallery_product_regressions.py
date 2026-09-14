@@ -581,7 +581,7 @@ def test_bad_download_transport_reports_specific_localized_reason(panel_module, 
         request_json_authenticated=request, _client_version='test'))
     def opened(*args, **kwargs):
         response = io.BytesIO(data)
-        response.status, response.headers = 200, {}
+        response.status, response.headers = 200, {'Content-Length': str(len(data))}
         return response
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
     destination = tmp_path/'download.licht'
@@ -713,7 +713,7 @@ def connection_clock(monkeypatch):
     return now, timers
 
 @pytest.mark.parametrize('pinned', [False, True], ids=['restart', 'range'])
-@pytest.mark.parametrize('failure', ['socket', 'timeout', 'eof', 'incomplete_read', 'server_closed', 'server_closed_wrapped', 'oversized'])
+@pytest.mark.parametrize('failure', ['socket', 'timeout', 'eof', 'incomplete_read', 'server_closed', 'server_closed_wrapped', 'oversized', 'header_short', 'header_long'])
 def test_download_transport_failure_classification(tmp_path, monkeypatch, connection_clock, pinned, failure):
     import hashlib
     import io
@@ -735,12 +735,16 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
     remote = scene(sourceFormat='licht', contentLength=len(data))
     remote['id'] = '28d8880e-96d2-46a0-9226-bb62976392b2'
     reachable, requests, probes, messages, progress = [True], [], [], [], []
-    headers = {'ETag': '"pinned-v1"', 'Accept-Ranges': 'bytes'} if pinned else {}
+    headers = {'Content-Length': str(len(data))}
+    if pinned:
+        headers.update({'ETag': '"pinned-v1"', 'Accept-Ranges': 'bytes'})
 
     class Interrupted(io.BytesIO):
         status = 200
 
         def read(self, size=-1):
+            if failure.startswith('header_'):
+                pytest.fail('Read body before rejecting storage size mismatch')
             if not self.tell():
                 reachable[0] = False
                 return super().read(len(prefix))
@@ -770,7 +774,9 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
         assert kwargs['no_redirect'] and request.get_header('Authorization') is None
         if len(requests) == 1:
             response = Interrupted(data)
-            response.headers = headers
+            response.headers = dict(headers)
+            if failure.startswith('header_'):
+                response.headers['Content-Length'] = str(len(data) + (-1 if failure == 'header_short' else 1))
             return response
         if not reachable[0]:
             raise ConnectionRefusedError('Portal offline')
@@ -779,7 +785,7 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
         assert request.get_header('If-range') == ('"pinned-v1"' if pinned else None)
         response = Recovered(data[offset:])
         response.status = 206 if pinned else 200
-        response.headers = dict(headers)
+        response.headers = dict(headers, **{'Content-Length': str(len(data) - offset)})
         if pinned:
             response.headers['Content-Range'] = f'bytes {offset}-{len(data)-1}/{len(data)}'
         return response
@@ -797,17 +803,18 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
 
     monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_request', request)
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    # Exercise the real bounded retry loop without wall-clock backoff sleeps.
-    monkeypatch.setattr(portal_gallery, 'retry_call', lambda operation, **kwargs:
-                        portal_retry.retry_call(operation, sleep=lambda _: None, **kwargs))
+    # An interruption must never enter backoff or retry, even when reachable.
+    monkeypatch.setattr(portal_retry.time, 'sleep', lambda _: pytest.fail('Automatic download retry'))
     monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
     service.download(remote)
     finish(service)
     job = service.snapshot()['jobs'][0]
-    if failure in ('eof', 'incomplete_read', 'server_closed', 'server_closed_wrapped', 'oversized'):
+    if failure in ('oversized', 'header_short', 'header_long'):
         assert job['status'] == 'error' and job['retryable'] is False
         assert job['message'] == ('Gallery download exceeds its declared size' if failure == 'oversized'
-                                  else 'Gallery download was incomplete')
+            else 'Gallery download is incomplete or larger than the portal declared')
+        if failure.startswith('header_'):
+            assert job['completed'] == 0 and not job.get('checkpoint')
         assert len(requests) == 1 and not connection_clock[1]
         assert not list((tmp_path / 'downloads').iterdir())
         assert not service.snapshot()['links'] and service.snapshot()['completion'] is None
@@ -825,7 +832,7 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
         return
     assert job['status'] == 'paused', (job['message'], len(requests), probes)
     assert job['message'] == 'Paused (connection lost)'
-    assert job['completed'] == len(prefix) and len(requests) == 4
+    assert job['completed'] == len(prefix) and len(requests) == 1
     destination = Path(job['path'])
     partial = destination.with_name('.' + destination.name + '.part')
     assert not destination.exists()
@@ -840,14 +847,14 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
     assert 'storage' not in json.dumps(persisted)  # No signed URL in the journal.
     assert not connection_clock[1], "No outage retry timer may be scheduled"
     reachable[0] = True
-    assert not service.busy and len(requests) == 4
+    assert not service.busy and len(requests) == 1
     service.resume(job['id'])
     finish(service)
     job = service._job(job['id'])
     assert job['status'] == 'completed', job['message']
     assert destination.read_bytes() == data and not partial.exists()
     assert job['sha256'] == hashlib.sha256(data).hexdigest()
-    assert job['completed'] == len(data) and len(requests) == 5
+    assert job['completed'] == len(data) and len(requests) == 2
     assert probes == []
     if not pinned:
         assert 'Restarting from zero' in messages[0]
