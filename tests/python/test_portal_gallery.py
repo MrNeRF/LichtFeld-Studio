@@ -180,7 +180,11 @@ def _domain_client(version=1, changed=None, *, repeat=False):
             raise PortalHTTPError(409, "sync_conflict", detail={"changedDomains": changed,
                 "currentRevisions": {"content": "content-new", "metadata": "metadata-new", "presentation": "presentation-new"}})
         return scene
-    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
+    def response(method, path, *, body=None, **kwargs):
+        request(method, path, body, **kwargs)
+        return 204, {}, b""
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example",
+        request_json_authenticated=request, request_response_authenticated=response))
     return client, scene, calls
 
 

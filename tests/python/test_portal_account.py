@@ -39,8 +39,8 @@ class FakeResponse:
     def getcode(self):
         return self.status
 
-    def read(self):
-        return self._raw
+    def read(self, size=-1):
+        return self._raw if size < 0 else self._raw[:size]
 
 
 class StubUrlopen:
@@ -83,6 +83,27 @@ def test_gallery_request_rejects_different_session_before_network(tmp_path, monk
         account.request_json_authenticated("POST", "/api/gallery/v1/splats/uploads", {},
             expected_session=("different@example.com", "session"))
     assert network.requests == []
+
+
+def test_gallery_delete_preserves_revision_body_through_token_refresh(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from lfs_plugins.portal_gallery import PortalGalleryClient
+    path = tmp_path / 'credentials.json'
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    old = account._current_credentials()
+    network = StubUrlopen((401, {'error': 'invalid_token'}), (204, None))
+    monkeypatch.setattr(portal_account, 'urlopen', network)
+    def refresh(*args, **kwargs):
+        account._set_current_credentials(replace(old, access_token='replacement-token'))
+        return 'ok'
+    monkeypatch.setattr(account, '_refresh_tokens', refresh)
+    client = PortalGalleryClient(account, expected_session=(old.email, old.connected_since), revision_domains=0)
+    client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', 'reviewed-legacy')
+    assert len(network.requests) == 2
+    assert all(r.method == 'DELETE' and json.loads(r.data) == {'baseRevision': 'reviewed-legacy'}
+               for r in network.requests)
+    assert network.requests[-1].get_header('Authorization') == 'Bearer replacement-token'
 
 
 def test_gallery_request_does_not_retry_under_account_changed_during_refresh(tmp_path, monkeypatch):

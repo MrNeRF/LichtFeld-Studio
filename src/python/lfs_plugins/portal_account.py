@@ -359,10 +359,10 @@ class PortalAccountService:
         """Make one bearer request with the shared single-refresh ladder."""
         return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
-    def request_response_authenticated(self, method, path, *, headers=None, max_bytes=4 * 1024 * 1024,
+    def request_response_authenticated(self, method, path, *, body=None, headers=None, max_bytes=4 * 1024 * 1024,
                                        expected_session=None):
         """Bounded bytes and headers, using the same account/session refresh ladder."""
-        return self._authenticated_request(method, path, expected_session=expected_session,
+        return self._authenticated_request(method, path, body, expected_session=expected_session,
             response_options={"headers": headers or {}, "max_bytes": max_bytes})
 
     def _redaction_tokens(self) -> tuple[str, ...]:

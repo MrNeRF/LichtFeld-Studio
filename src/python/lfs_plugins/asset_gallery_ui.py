@@ -659,7 +659,12 @@ class GalleryAssetMixin:
             self._show_gallery_toast(tr("toast.pulled", title=asset.get("name", path.stem), folder=path.parent.name), path=str(path))
 
     def _confirm_gallery(self, key, continuation):
-        self._controller().confirm_action(key, self._gallery_title, continuation)
+        controller = self._controller()
+        if controller._decision_pending:
+            return
+        self._gallery_notice = ""
+        controller._message = ""
+        controller.confirm_action(key, self._gallery_title, continuation)
 
     def _set_gallery_undo(self, action, *, kind="visibility"):
         self._gallery_undo_kind = kind

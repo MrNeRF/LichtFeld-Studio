@@ -186,6 +186,7 @@ class GallerySync:
         self._persist_lock = threading.Lock()
         self._cancel = threading.Event()
         self._thread = None
+        self._operation = None
         self._connection_timer = None
         self._session = None
         self._origin = None
@@ -345,6 +346,10 @@ class GallerySync:
     def busy(self):
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def metadata_busy(self):
+        return self.busy and self._operation != "refresh"
+
     def snapshot(self):
         with self._lock:
             snap = self.account.snapshot()
@@ -384,14 +389,18 @@ class GallerySync:
         client.scene_tokens = {s["id"]: copy.deepcopy(s) for s in self.scenes}
         return client
 
-    def _launch(self, action, *, reload_journal=False):
+    def _launch(self, action, *, reload_journal=False, operation=None):
         with self._lock:
-            if self.busy:
+            previous = self._thread if self.busy else None
+            if previous and not (operation == "metadata" and self._operation == "refresh"):
                 raise ValueError("Wait for the current operation or pause it first.")
+            previous_operation, previous_cancel = self._operation, self._cancel
             self._cancel = threading.Event()
 
             def worker():
                 try:
+                    if previous:
+                        previous.join()
                     # Serialize across Studio processes without blocking the UI.
                     with _locked_sidecar(self.root / "sync.lock"):
                         try:
@@ -416,7 +425,23 @@ class GallerySync:
                     self._schedule_connection_retry()
 
             self._thread = threading.Thread(target=worker, daemon=True, name="GallerySync")
-            self._thread.start()
+            self._operation = operation
+            try:
+                self._thread.start()
+            except Exception:
+                self._thread, self._operation, self._cancel = previous, previous_operation, previous_cancel
+                raise
+
+    def _launch_metadata(self, action):
+        # Refresh may reload the journal. Resolve clients/buckets only after it
+        # finishes, and never apply a queued action to a newly signed-in account.
+        identity = self.identity()
+        self._client()
+        def checked():
+            if self.identity() != identity:
+                raise ValueError("The account changed. Refresh the gallery before continuing.")
+            action()
+        self._launch(checked, operation="metadata")
 
     def refresh(self):
         self._refresh_ok = False
@@ -463,7 +488,7 @@ class GallerySync:
             self._cache_posters(client, self.scenes, (origin, *session, True))
             # Refresh updates only the account-scoped listing cache. Migration
             # and recovered jobs are persisted by the next actual mutation.
-        self._launch(action, reload_journal=True)
+        self._launch(action, reload_journal=True, operation="refresh")
 
     def _check_poster_account(self, snap):
         identity = (self.account.base_url, snap.email, snap.connected_since, snap.signed_in)
@@ -1411,18 +1436,20 @@ class GallerySync:
         self._launch(action)
 
     def unlink(self, project_id):
-        with self._lock:
-            self._client()
-            if self.busy:
-                raise ValueError("Pause the transfer before unlinking.")
+        def check_pending():
             if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in self._bucket()["jobs"]):
                 raise ValueError("Discard the pending transfer before unlinking.")
-            bucket = self._bucket()
+        with self._lock:
+            self._client()
+            check_pending()
         def action():
+            self._client()
             with self._lock:
+                bucket = self._bucket()
+                check_pending()
                 bucket["links"].pop(project_id, None)
             self._save()
-        self._launch(action)
+        self._launch_metadata(action)
 
     def _write_revision(self, client, scene_id, revision):
         """Adopt cover/highlight-only revisions, keeping shared-field conflicts guarded."""
@@ -1443,9 +1470,10 @@ class GallerySync:
         return revision
 
     def edit(self, scene_id, revision, metadata, *, commit_uuid=None, content_stamp=None):
-        client = self._client()
-        bucket = self._bucket()
+        metadata = copy.deepcopy(metadata)
         def action():
+            client = self._client()
+            bucket = self._bucket()
             scene = client.update(scene_id, self._write_revision(client, scene_id, revision), **metadata)
             with self._lock:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
@@ -1464,7 +1492,7 @@ class GallerySync:
                         if content_stamp:
                             link["contentStamp"] = content_stamp
             self._save()
-        self._launch(action)
+        self._launch_metadata(action)
 
     def send_camera_track(self, scene_id, revision, camera_path):
         if camera_path is not None and not isinstance(camera_path, dict):
@@ -1530,21 +1558,27 @@ class GallerySync:
 
     def remove(self, scene_id, revision):
         title = next((s.get("title", "") for s in self.scenes if s["id"] == scene_id), "")
-        client = self._client()
-        bucket = self._bucket()
-        if any(j["metadata"].get("replaceSceneId") == scene_id and j["status"] not in ("completed", "canceled") for j in bucket["jobs"]):
-            raise ValueError("Discard the unfinished replacement before removing this gallery item.")
         def action():
-            client.delete(scene_id, self._write_revision(client, scene_id, revision) if self._revision_domains >= 1 else revision)
+            client = self._client()
+            bucket = self._bucket()
+            if any(j["metadata"].get("replaceSceneId") == scene_id and j["status"] not in ("completed", "canceled") for j in bucket["jobs"]):
+                raise ValueError("Discard the unfinished replacement before removing this gallery item.")
+            guard = self._write_revision(client, scene_id, revision) if self._revision_domains >= 1 else revision
+            try:
+                client.delete(scene_id, guard)
+            except PortalHTTPError as exc:
+                if exc.status != 404:
+                    raise
             with self._lock:
                 self.scenes = [s for s in self.scenes if s["id"] != scene_id]
+                self._list_etag = None
                 self.message = "Removed from gallery. Local projects are unchanged."
                 self._completion = {"id": str(uuid.uuid4()), "kind": "remove", "title": title}
                 for link in bucket["links"].values():
                     if link["sceneId"] == scene_id:
                         link["remoteDeleted"] = True
             self._save()
-        self._launch(action)
+        self._launch_metadata(action)
 
 
 _service = None

@@ -8,6 +8,280 @@ import pytest
 from test_gallery_controller import gallery, panel_module, scene
 
 
+@pytest.fixture
+def removal_sequence(gallery, tmp_path, monkeypatch):
+    """Real journal/controller/client; byte transfers and HTTP responses are controlled."""
+    import io
+    import json
+    import threading
+    from pathlib import Path
+    from test_asset_manager_panel import _gallery_fixture
+    from test_gallery_sync import finish
+    controller, _, _ = gallery
+    sync = import_module('lfs_plugins.gallery_sync')
+    portal = import_module('lfs_plugins.portal_gallery')
+    account_module = import_module('lfs_plugins.portal_account')
+    module = import_module('lfs_plugins.gallery_controller')
+    manager, local, remote = _gallery_fixture(import_module('lfs_plugins.asset_manager_panel'))
+    remote.update(id='7e812ba8-6cfb-4307-a0bc-da8e395bb721', revision='legacy-reviewed')
+    other = dict(remote, id='52dde335-aab0-412d-a788-de4a5b414d4f', sourceFormat='spz', contentLength=8)
+    remote_scenes = [other]
+    requests = []
+    reply = {'status': 204}
+    deleting, release_delete = threading.Event(), threading.Event()
+    release_delete.set()
+    class Account:
+        base_url = 'https://portal.lichtfeld.io'
+        _client_version, _timeout = 'test', 1
+        email = 'test@example.com'
+        def snapshot(self):
+            return SimpleNamespace(signed_in=True, email=self.email, connected_since='session')
+        def request_json_authenticated(self, method, path, body=None, **kwargs):
+            return account_module.PortalAccountService._request_json_once(self, method, path, body)
+        def request_response_authenticated(self, method, path, *, body=None, **kwargs):
+            return account_module.PortalAccountService._request_json_once(self, method, path, body,
+                response_options={'max_bytes': 1024 * 1024})
+    def opened(request, **kwargs):
+        body = json.loads(request.data) if request.data else None
+        requests.append((request.method, request.full_url, body))
+        status = 200
+        if request.method == 'DELETE':
+            assert request.full_url.endswith('/splats/' + remote['id'])
+            assert body == {'baseRevision': 'legacy-reviewed'}
+            deleting.set()
+            assert release_delete.wait(3)
+            status = reply['status']
+            if status == 'timeout':
+                raise TimeoutError('Timed out deleting scene')
+            if status in (200, 204, 404):
+                remote_scenes[:] = [s for s in remote_scenes if s['id'] != remote['id']]
+            payload = {} if status in (200, 204) else {'error': 'delete refused'}
+        elif request.full_url.endswith('/me'):
+            payload = {'id': 'owner', 'gallerySyncVersion': 1}  # Legacy: no revisionDomains.
+        else:
+            assert request.full_url.endswith('/splats')
+            payload = {'scenes': copy.deepcopy(remote_scenes), 'nextCursor': None}
+        response = io.BytesIO(b'' if status == 204 else json.dumps(payload).encode())
+        response.status, response.headers = status, {}
+        return response
+    monkeypatch.setattr(account_module, 'urlopen', opened)
+    service = sync.GallerySync(Account(), tmp_path / 'sync')
+    monkeypatch.setattr(service, '_cache_posters', lambda *a: None)
+    service.refresh()
+    finish(service)
+    source = tmp_path / 'prepared.ply'
+    source.write_bytes(b'payload!')
+    attempts = []
+    def upload(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise ValueError('Unsafe portal URL')
+        remote_scenes.append(copy.deepcopy(remote))
+        return {'scene': copy.deepcopy(remote)}
+    def download(_client, scene_id, destination, **kwargs):
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'payload!')
+        return copy.deepcopy(other)
+    monkeypatch.setattr(portal.PortalGalleryClient, 'upload', upload)
+    monkeypatch.setattr(portal.PortalGalleryClient, 'download', download)
+    upload_id = service.queue_upload(source, {'title': remote['title']}, local['id'])
+    finish(service)
+    assert service._job(upload_id)['status'] == 'error'
+    assert not service.snapshot()['links']
+    service.resume(upload_id)  # Retry the prepared snapshot of the closed project.
+    finish(service)
+    service.download(other)
+    finish(service)
+    assert [j['status'] for j in service.snapshot()['jobs']] == ['completed', 'completed']
+    controller.service = service
+    controller._identity = service.identity()
+    controller._state = service.snapshot()
+    controller._message = ''
+    monkeypatch.setattr(controller, '_schedule_tick', lambda: None)
+    monkeypatch.setattr(controller, '_schedule_phase_poll', lambda: None)
+    manager._gallery_controller = controller
+    manager._gallery_state = service.snapshot()
+    manager._select_asset_id(local['id'])
+    # Mimic a native guard awaiting its next phase poll after the completed pull.
+    controller._native_use = service.local_use(service.snapshot()['jobs'][-1]['id'])
+    controller._native_use.__enter__()
+    controller._phase_poll_scheduled = True
+    yield SimpleNamespace(service=service, manager=manager, controller=controller, local=local,
+        remote=remote, requests=requests, reply=reply, deleting=deleting, release_delete=release_delete,
+        remote_scenes=remote_scenes, dialogs=module.lf._test_state.confirm_dialogs, finish=lambda: finish(service))
+    release_delete.set()
+    finish(service)
+    controller._release_native_use()
+
+
+@pytest.mark.parametrize('status', [200, 204, 404, 202, 403, 409, 500, 'timeout'])
+def test_P5_publish_pull_other_confirm_remove_waits_for_delete_response(removal_sequence, status):
+    import json
+    run = removal_sequence
+    service, manager = run.service, run.manager
+    before = copy.deepcopy(service.snapshot()['links'])
+    journal = service._journal.read_bytes()
+    run.reply['status'] = status
+    run.release_delete.clear()
+    manager._gallery_notice = 'Wait for the current operation or pause it first.'
+    manager._gallery_command('remove')
+    assert len(run.dialogs) == 1 and run.controller._decision_pending
+    assert run.controller._native_use is None
+    manager._gallery_command('remove')
+    assert len(run.dialogs) == 1 and not manager._gallery_notice
+    assert not any(method == 'DELETE' for method, _, _ in run.requests)
+    _, _, buttons, callback = run.dialogs[0]
+    callback(buttons[-1])
+    assert run.deleting.wait(3)
+    assert service.snapshot()['links'] == before
+    assert service._journal.read_bytes() == journal
+    callback(buttons[-1])  # A duplicate native callback cannot issue another DELETE.
+    run.release_delete.set()
+    run.finish()
+    deletes = [r for r in run.requests if r[0] == 'DELETE']
+    assert deletes == [('DELETE', 'https://portal.lichtfeld.io/api/gallery/v1/splats/' + run.remote['id'],
+                        {'baseRevision': 'legacy-reviewed'})]
+    state = service.snapshot()
+    persisted = next(iter(json.loads(service._journal.read_bytes())['accounts'].values()))['links']
+    if status in (200, 204, 404):
+        assert state['links'][run.local['id']]['remoteDeleted'] is True
+        assert persisted == state['links']
+        assert all(s['id'] != run.remote['id'] for s in state['scenes'])
+        assert all(s['id'] != run.remote['id'] for s in run.remote_scenes)
+        assert state['completion']['kind'] == 'remove'
+    else:
+        assert state['links'] == before and persisted == before
+        assert service._journal.read_bytes() == journal
+        assert any(s['id'] == run.remote['id'] for s in state['scenes'])
+        assert state['completion']['kind'] != 'remove'
+        assert state['message'] and 'Removed' not in state['message']
+    assert not run.controller._message and not manager._gallery_notice
+
+
+@pytest.mark.parametrize('operation', ['remove', 'unlink', 'edit'])
+def test_P5_metadata_waits_for_listing_refresh_and_uses_reloaded_journal(removal_sequence, monkeypatch, operation):
+    import threading
+    run = removal_sequence
+    service = run.service
+    refreshing, release = threading.Event(), threading.Event()
+    def posters(*args):
+        refreshing.set()
+        assert release.wait(3)
+    monkeypatch.setattr(service, '_cache_posters', posters)
+    # Force refresh to replace the bucket, as it does after a peer journal write.
+    old_bucket = service._bucket()
+    service._disk_digest = None
+    service.refresh()
+    try:
+        assert refreshing.wait(3)
+        assert service.busy and not service.metadata_busy
+        assert service.message == 'Gallery is up to date.'
+        assert service._bucket() is not old_bucket
+        if operation == 'edit':
+            portal = import_module('lfs_plugins.portal_gallery')
+            monkeypatch.setattr(portal.PortalGalleryClient, 'scene', lambda *a: copy.deepcopy(run.remote))
+            monkeypatch.setattr(portal.PortalGalleryClient, 'update',
+                lambda *a, **k: dict(run.remote, title='Edited'))
+            run.controller.edit_scene(run.remote, {'title': 'Edited'})
+        else:
+            run.manager._gallery_command(operation)
+            assert len(run.dialogs) == 1
+            _, _, buttons, callback = run.dialogs[0]
+            callback(buttons[-1])
+        assert not run.controller._message and not run.manager._gallery_notice
+        assert service.metadata_busy
+        assert not run.deleting.is_set()
+    finally:
+        release.set()
+        run.finish()
+    links = service.snapshot()['links']
+    if operation == 'remove':
+        assert links[run.local['id']]['remoteDeleted'] is True
+    elif operation == 'unlink':
+        assert run.local['id'] not in links
+    else:
+        assert links[run.local['id']]['metadata']['title'] == 'Edited'
+    assert not old_bucket['links'][run.local['id']].get('remoteDeleted')
+
+
+@pytest.mark.parametrize('refusal', ['busy', 'launch', 'replacement', 'cancel'])
+def test_P5_refused_remove_keeps_link_and_explains(removal_sequence, monkeypatch, refusal):
+    import threading
+    run = removal_sequence
+    service = run.service
+    before = copy.deepcopy(service.snapshot()['links'])
+    journal = service._journal.read_bytes()
+    run.manager._gallery_command('remove')
+    assert len(run.dialogs) == 1
+    _, _, buttons, callback = run.dialogs[0]
+    release = threading.Event()
+    if refusal == 'busy':
+        service._launch(lambda: release.wait(3))
+    elif refusal == 'launch':
+        monkeypatch.setattr(service, '_launch', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('Worker unavailable')))
+    elif refusal == 'replacement':
+        job = service._bucket()['jobs'][0]
+        job.update(status='paused', metadata={'replaceSceneId': run.remote['id']})
+    try:
+        callback(buttons[0] if refusal == 'cancel' else buttons[-1])
+    finally:
+        release.set()
+        run.finish()
+    assert not any(r[0] == 'DELETE' for r in run.requests)
+    assert service.snapshot()['links'] == before
+    assert service._journal.read_bytes() == journal
+    if refusal != 'cancel':
+        assert run.controller._message or service.message == 'Discard the unfinished replacement before removing this gallery item.'
+
+
+def test_P5_queued_remove_cannot_cross_account_boundary(removal_sequence, monkeypatch):
+    import threading
+    run = removal_sequence
+    refreshing, release = threading.Event(), threading.Event()
+    def posters(*args):
+        refreshing.set()
+        assert release.wait(3)
+    monkeypatch.setattr(run.service, '_cache_posters', posters)
+    before = run.service._journal.read_bytes()
+    run.service.refresh()
+    try:
+        assert refreshing.wait(3)
+        run.service.remove(run.remote['id'], run.remote['revision'])
+        run.service.account.email = 'different@example.com'
+    finally:
+        release.set()
+        run.finish()
+    assert not any(r[0] == 'DELETE' for r in run.requests)
+    assert run.service._journal.read_bytes() == before
+    assert 'account changed' in run.service.message
+
+
+def test_P5_metadata_thread_start_failure_retains_refresh_ownership(removal_sequence, monkeypatch):
+    import threading
+    run = removal_sequence
+    refreshing, release = threading.Event(), threading.Event()
+    def posters(*args):
+        refreshing.set()
+        assert release.wait(3)
+    monkeypatch.setattr(run.service, '_cache_posters', posters)
+    before = run.service._journal.read_bytes()
+    run.service.refresh()
+    try:
+        assert refreshing.wait(3)
+        original = run.service._thread
+        with monkeypatch.context() as patch:
+            patch.setattr(threading.Thread, 'start', lambda self: (_ for _ in ()).throw(RuntimeError('Cannot start worker')))
+            with pytest.raises(RuntimeError, match='Cannot start worker'):
+                run.service.remove(run.remote['id'], run.remote['revision'])
+        assert run.service._thread is original and run.service.busy and not run.service.metadata_busy
+    finally:
+        release.set()
+        run.finish()
+    assert run.service._journal.read_bytes() == before
+    assert not any(r[0] == 'DELETE' for r in run.requests)
+
+
 @pytest.mark.parametrize('choice,content,expected', [('mine', True, 'upload'), ('portal', True, 'pull'), ('portal', False, 'patch')])
 def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, choice, content, expected):
     panel, state, actions = gallery

@@ -130,6 +130,11 @@ class PortalGalleryClient:
 
     def _request(self, method, path, body=None):
         kwargs = {"expected_session": self.expected_session} if self.expected_session is not None else {}
+        if method == "DELETE":
+            status, _, _ = self.account.request_response_authenticated(method, API + path, body=body, **kwargs)
+            if status not in (200, 204):
+                raise PortalProtocolError("The portal has not confirmed removal. Refresh the gallery and try again.")
+            return {}
         result = self.account.request_json_authenticated(method, API + path, body, **kwargs)
         if path == "/me":
             version = result.get("revisionDomains", 0)

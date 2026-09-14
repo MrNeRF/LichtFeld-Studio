@@ -346,7 +346,9 @@ class GalleryController:
     def edit_scene(self, scene, details, *, on_started=None):
         """The one metadata editor path for local links and gallery-only items."""
         self._check_identity()
-        if self._panel_busy():
+        if self._decision_pending:
+            return
+        if self._metadata_busy():
             raise ValueError(tr("error.busy"))
         metadata = copy.deepcopy(details)
         if ("title" in metadata and (not metadata["title"].strip() or len(metadata["title"].strip()) > 120)
@@ -364,9 +366,9 @@ class GalleryController:
             if on_started:
                 on_started()
             self._schedule_tick()
-        self._public_confirmation(scene, apply, details=metadata)
+        self._public_confirmation(scene, apply, details=metadata, metadata_only=True)
 
-    def _public_confirmation(self, scene, action, *, details=None, defer=False):
+    def _public_confirmation(self, scene, action, *, details=None, defer=False, metadata_only=False):
         """One public-visibility policy for PATCH and upload commands."""
         details = details or {}
         scene = scene or {}
@@ -377,7 +379,7 @@ class GalleryController:
             title = details.get("title", scene.get("title", ""))
             self._confirm = (tr(key, title=title), action, tr("action.update" if was_public else "action.submit"))
             if not defer:
-                self._show_confirmation()
+                self._show_confirmation(metadata_only=metadata_only)
         else:
             action()
 
@@ -523,12 +525,15 @@ class GalleryController:
     def confirm_action(self, key, title, continuation):
         """Native confirmation shared by Asset Manager actions."""
         self._check_identity()
-        if self._panel_busy():
+        if self._decision_pending:
+            return
+        metadata_only = key in ("confirm.remove", "confirm.unlink")
+        if self._metadata_busy() if metadata_only else self._panel_busy():
             raise ValueError(tr("error.busy"))
         self._confirm = (tr(key, title=title), continuation, tr("action.submit"))
-        self._show_confirmation()
+        self._show_confirmation(metadata_only=metadata_only)
 
-    def _show_confirmation(self):
+    def _show_confirmation(self, *, metadata_only=False):
         if not self._confirm:
             return
         message, action, label = self._confirm
@@ -536,13 +541,17 @@ class GalleryController:
         self._confirm = None
         self._decision_pending = True
         def selected(button):
+            nonlocal action
+            if action is None:
+                return
+            continuation, action = action, None
             self._decision_pending = False
             self._last_canceled = button != label
             if button == label and self.service.identity() == identity:
                 try:
-                    if self._panel_busy():
+                    if self._metadata_busy() if metadata_only else self._panel_busy():
                         raise ValueError(tr("error.busy"))
-                    action()
+                    continuation()
                 except Exception as exc:
                     from .gallery_messages import localize_message
                     self._message = localize_message(str(exc))
@@ -855,6 +864,11 @@ class GalleryController:
     def _panel_busy(self):
         return self.service.busy or self._decision_pending or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending)
 
+    def _metadata_busy(self):
+        self._release_native_use()
+        return (getattr(self.service, "metadata_busy", self.service.busy) or self._decision_pending
+                or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending))
+
     def _can_pause(self):
         if self._export_pending or self._save_pending or self._track_pull_pending:
             return True
@@ -944,7 +958,7 @@ class GalleryController:
     def _release_native_use(self):
         if self._native_use is None or self._import_pending:
             return
-        if self.service.busy or lf.ui.get_import_state().get("active"):
+        if getattr(self.service, "metadata_busy", self.service.busy) or lf.ui.get_import_state().get("active"):
             self._schedule_phase_poll()
             return
         guard, self._native_use = self._native_use, None
