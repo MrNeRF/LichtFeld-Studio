@@ -482,6 +482,23 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
     input::InputBindings::setPersistenceEnabled(true);
 }
 
+TEST_F(SelectionOperatorModalTest, DeleteSuppressesStationaryBrushHoverUntilMouseMoves) {
+    using namespace lfs::vis;
+    set_initial_selection({1, 0});
+    service().updatePassiveBrushHoverPreview({50, 50}, 20, SelectionMode::Replace);
+    ASSERT_TRUE(rendering_manager_->isCursorPreviewActive());
+
+    ASSERT_TRUE(scene_manager_->deleteSelectedGaussiansWithHistory().has_value());
+    EXPECT_FALSE(rendering_manager_->isCursorPreviewActive());
+    service().updatePassiveBrushHoverPreview({50, 50}, 20, SelectionMode::Replace);
+    EXPECT_FALSE(rendering_manager_->isCursorPreviewActive());
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+
+    service().updatePassiveBrushHoverPreview({51, 50}, 20, SelectionMode::Replace);
+    EXPECT_TRUE(rendering_manager_->isCursorPreviewActive());
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+}
+
 TEST_F(SelectionOperatorModalTest, CameraMotionClearsPassiveHoverWithoutChangingSelection) {
     using namespace lfs::vis;
     set_initial_selection({1, 0});

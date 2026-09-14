@@ -5962,8 +5962,11 @@ namespace lfs::vis {
         scene_.clearSelection();
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
+        if (selection_service_)
+            selection_service_->suppressPassiveHoverPreview();
         if (auto* rm = services().renderingOrNull()) {
             rm->clearCursorPreviewState();
+            rm->clearPreviewSelection();
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
         }
 

@@ -2130,6 +2130,36 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresen
                                  false, false, false, false, false, false, false, false}));
 }
 
+TEST_F(UndoHistoryTest, SceneSnapshotInvalidatesExistingDeletedMaskOnUndoAndRedo) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(16));
+    auto& model = *scene_manager->getScene().getMutableNode("model")->model;
+    // Training leaves a resident mask, even when no rows are currently deleted.
+    model.deleted() = Tensor::zeros({16}, Device::CUDA, DataType::Bool);
+    const auto* mask_ptr = model.deleted().data_ptr();
+    lfs::vis::op::SceneSnapshot snapshot(*scene_manager, "delete.existing_mask");
+    snapshot.captureTopology();
+    model.soft_delete(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}).to(DataType::Bool));
+    model.refresh_deleted_count();
+    snapshot.captureAfter();
+
+    for (int replay = 0; replay < 3; ++replay) {
+        const auto before_undo = model.deleted_mask_version();
+        snapshot.undo();
+        EXPECT_EQ(model.deleted().data_ptr(), mask_ptr);
+        EXPECT_EQ(model.visible_count(), 16u);
+        EXPECT_EQ(model.deleted_count(), 0u);
+        EXPECT_GT(model.deleted_mask_version(), before_undo);
+
+        const auto before_redo = model.deleted_mask_version();
+        snapshot.redo();
+        EXPECT_EQ(model.deleted().data_ptr(), mask_ptr);
+        EXPECT_EQ(model.visible_count(), 15u);
+        EXPECT_EQ(model.deleted_count(), 1u);
+        EXPECT_GT(model.deleted_mask_version(), before_redo);
+    }
+}
+
 TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

@@ -1756,6 +1756,7 @@ namespace lfs::vis {
 
         cancelInteractiveSelection();
 
+        passive_hover_suppressed_ = false;
         interactive_selection_ = {};
         interactive_selection_.active = true;
         interactive_selection_.shape = shape;
@@ -2017,6 +2018,8 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active) {
             return;
         }
+        if (!allowPassiveHoverPreview(cursor_pos))
+            return;
 
         const auto context = resolveViewerViewportContext(cursor_pos);
         if (!context || !context->valid()) {
@@ -2135,6 +2138,8 @@ namespace lfs::vis {
                                                           const SelectionMode mode) {
         if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active)
             return;
+        if (!allowPassiveHoverPreview(cursor_pos))
+            return;
 
         const auto context = resolveViewerViewportContext(cursor_pos);
         if (!context || !context->valid()) {
@@ -2149,6 +2154,21 @@ namespace lfs::vis {
         rendering_manager_->setCursorPreviewState(
             true, render_cursor.x, render_cursor.y, render_radius,
             mode != SelectionMode::Remove, nullptr, false, 0.0f, context->panel, -1, false);
+    }
+
+    void SelectionService::suppressPassiveHoverPreview() {
+        passive_hover_suppressed_ = last_passive_hover_position_.has_value();
+        if (rendering_manager_) {
+            rendering_manager_->clearCursorPreviewState();
+            rendering_manager_->clearPreviewSelection();
+        }
+    }
+
+    bool SelectionService::allowPassiveHoverPreview(const glm::vec2 cursor_pos) {
+        if (last_passive_hover_position_ != cursor_pos)
+            passive_hover_suppressed_ = false;
+        last_passive_hover_position_ = cursor_pos;
+        return !passive_hover_suppressed_;
     }
 
     void SelectionService::refreshInteractivePreview() {
