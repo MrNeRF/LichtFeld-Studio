@@ -515,11 +515,13 @@ namespace lfs::core {
                     }
                 } else if (result.dtype_ == DataType::Bool) {
                     unsigned char fill_val = (value != 0.0f) ? 1 : 0;
-                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                    LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, fill_val, result.bytes(),
+                                                       result.stream()),
                                        "constant Bool CUDA memset");
                 } else if (result.dtype_ == DataType::Int32) {
                     if (value == 0.0f) {
-                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, 0, result.bytes(),
+                                                           result.stream()),
                                            "constant Int32 CUDA memset");
                     } else {
                         std::vector<int> temp(result.numel(), static_cast<int>(value));
@@ -530,7 +532,8 @@ namespace lfs::core {
                     }
                 } else if (result.dtype_ == DataType::Int64) {
                     if (value == 0.0f) {
-                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, 0, result.bytes(),
+                                                           result.stream()),
                                            "constant Int64 CUDA memset");
                     } else {
                         std::vector<int64_t> temp(result.numel(), static_cast<int64_t>(value));
@@ -541,7 +544,8 @@ namespace lfs::core {
                     }
                 } else if (result.dtype_ == DataType::UInt8) {
                     const uint8_t fill_val = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
-                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                    LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, fill_val, result.bytes(),
+                                                       result.stream()),
                                        "constant UInt8 CUDA memset");
                 }
             } else {
