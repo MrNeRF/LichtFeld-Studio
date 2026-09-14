@@ -285,7 +285,7 @@ class GalleryAssetMixin:
             "gallery_toast": lambda: (self._gallery_toast or {}).get("text", ""),
             "gallery_toast_portal": lambda: bool((self._gallery_toast or {}).get("scene")),
             "gallery_toast_open": lambda: bool((self._gallery_toast or {}).get("path")),
-            "gallery_update_all_visible": lambda: self._selected_folder_id in GALLERY_SCOPES,
+            "gallery_update_all_visible": lambda: self._selected_folder_id in GALLERY_SCOPES and bool(self._gallery_update_candidates()),
             "gallery_update_all_label": lambda: tr("action.update_all", count=len(self._gallery_update_candidates())),
             "gallery_update_all_enabled": lambda: bool(self._gallery_update_candidates()) and not self._gallery_state.get("busy") and self._gallery_state.get("phase", "idle") == "idle",
             "gallery_empty": lambda: self._selected_folder_id == SCOPE_PUBLISHED and self._gallery_state.get("connected", False) and not self._gallery_state.get("scenes"),

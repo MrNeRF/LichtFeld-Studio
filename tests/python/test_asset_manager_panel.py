@@ -1966,6 +1966,15 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
 
+def test_update_all_visibility_matches_visible_candidates(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    panel.select_gallery_scope()
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings['gallery_update_all_visible']() is False
+    local['commit_uuid'] = 'local-edit'
+    assert model.func_bindings['gallery_update_all_visible']() is True
+
 def test_multi_selection_publish_and_update_are_disjoint(panel_module):
     panel,local,remote = _gallery_fixture(panel_module)
     ready=_project(id='ready',project_uuid='ready')
