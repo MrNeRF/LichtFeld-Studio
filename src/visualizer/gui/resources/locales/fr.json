@@ -2628,6 +2628,8 @@
   "preferences.gallery.invalid": "Enter a whole number: 1–4096 MiB for cache, or 1–1440 minutes for refresh.",
   "gallery.transfer.batch": "Update all: {count} waiting",
   "asset_manager.action.add_folder": "Add folder",
+  "asset_manager.action.clear_search": "Effacer",
+  "asset_manager.status.no_search_results": "Aucun projet correspondant",
   "preferences.gallery.shortcuts": "Asset Manager",
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "Le portail prend plus de temps que prévu.",

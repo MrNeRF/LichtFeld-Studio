@@ -93,6 +93,7 @@
                 <button class="asset-button asset-button--icon asset-view-button asset-view-icon-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')" data-tooltip="asset_manager.gallery.action.list"><span class="asset-icon-list"><span></span><span></span><span></span></span></button>
               </div>
               <span class="asset-gallery-subtitle" data-if="asset_results_summary_visible">{{asset_results_summary}}</span>
+              <span class="asset-gallery-empty-search" data-if="asset_search_empty">{{no_search_results_label}} <button class="btn btn--secondary" data-event-click="clear_search">{{clear_search_label}}</button></span>
             </div>
 
             <div class="asset-gallery-header-actions">

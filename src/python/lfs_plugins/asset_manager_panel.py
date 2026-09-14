@@ -164,10 +164,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._init_gallery()
 
     def capture_chrome(self) -> Dict[str, Any]:
+        folder_id = self._selected_folder_id if self._selected_folder_id in self._asset_index_folders() else SCOPE_ALL
         return {
             "folders_collapsed": self._folders_collapsed,
             "sidebar_height": self._sidebar_height,
             "bottom_panel_height": self._info_preferred_height,
+            "selected_folder_id": folder_id,
         }
 
     def apply_chrome(self, payload: Any) -> None:
@@ -179,6 +181,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             value = payload.get("bottom_panel_height")
             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
                 self._info_preferred_height = min(500.0, float(value))
+            folder_id = payload.get("selected_folder_id")
+            self._selected_folder_id = str(folder_id) if folder_id in self._asset_index_folders() else SCOPE_ALL
             # Old sidebar heights are superseded by content/viewport sizing.
             self._layout_signature = None
             self._sync_panel_layout()
@@ -313,6 +317,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("is_floating", lambda: self._is_floating)
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
+        model.bind_func("asset_search_empty", self.get_asset_search_empty)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
         model.bind_func("scan_active", self.get_scan_active)
@@ -362,6 +367,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         labels = {
             "close_label": "common.close",
             "import_project_label": "menu.file.open_project",
+            "no_search_results_label": "asset_manager.status.no_search_results",
+            "clear_search_label": "asset_manager.action.clear_search",
             "search_placeholder": "asset_manager.toolbar.search_placeholder",
             "search_icon_label": "asset_manager.toolbar.search_icon",
             "all_assets_label": "asset_manager.sidebar.all_assets",
@@ -404,6 +411,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_use_found_location", self.on_use_found_location),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
+            ("clear_search", lambda *_args: self.set_search_query("")),
         ):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
@@ -793,6 +801,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
         except Exception:
             return str(self._last_asset_match_count)
+
+    def get_asset_search_empty(self) -> bool:
+        return bool(self._search_query.strip()) and not self._filtered_assets()
 
     def get_catalog_notice(self) -> str:
         if self._catalog_load_failed:

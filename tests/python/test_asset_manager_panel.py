@@ -788,6 +788,27 @@ def test_published_sidebar_click_selects_gallery_scope(panel_module):
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     assert 'data-event-click="select_folder" data-class-is-active="selected_folder_id == \'__gallery__\'"' in rml
 
+def test_startup_keeps_local_folder_but_rejects_gallery_scope(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(folders={"default": {"id": "default", "name": "assets"}, "work": {"id": "work", "name": "Work"}})
+
+    panel.apply_chrome({"selected_folder_id": "__gallery_attention__"})
+    assert panel._selected_folder_id == panel_module.SCOPE_ALL
+    panel.apply_chrome({"selected_folder_id": "work"})
+    assert panel._selected_folder_id == "work"
+    assert panel.capture_chrome()["selected_folder_id"] == "work"
+
+def test_search_empty_state_can_clear_query(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={"one": _project(id="one", project_uuid="one")})
+    panel.set_search_query("does-not-exist")
+
+    assert panel.get_asset_search_empty() is True
+    panel.set_search_query("")
+    assert panel.get_asset_search_empty() is False
+    rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    assert 'data-if="asset_search_empty"' in rml
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
