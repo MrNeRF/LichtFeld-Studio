@@ -32,6 +32,7 @@ namespace lfs::io::project {
         std::string validation_scope = "head";
         bool has_preview = false;
         std::uint64_t preview_bytes = 0;
+        std::optional<std::string> title;
         Version min_reader_version;
         Version min_safe_writer_version;
         CommitKind commit_kind = CommitKind::Explicit;

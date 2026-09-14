@@ -97,6 +97,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_project_chapters.cpp
     test_project_container.cpp
     test_project_inspector.cpp
+    test_project_operations.cpp
     licht_format_test_runtime.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
@@ -110,6 +111,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_operations.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
 )
@@ -951,6 +953,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh2splat_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_properties.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_operations.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py

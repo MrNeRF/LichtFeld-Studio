@@ -3211,6 +3211,13 @@ namespace lfs::io::project {
                 "compaction creates a master COMPACTION root",
                 "superblock.container_role"));
         }
+        if (options.cancel && options.cancel()) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::Cancelled, path,
+                "Project compaction was canceled.",
+                "the caller requested cancellation before copying payloads",
+                "compaction.cancel"));
+        }
         auto bound_autosaves =
             detail::valid_bound_autosaves_locked(
                 path, *source_result);
@@ -3335,8 +3342,23 @@ namespace lfs::io::project {
             return preflight;
         }
 
+        const auto live_rows = std::ranges::count_if(
+            source_result->chunks(),
+            [](const ChunkInfo& row) { return row.row_kind == RowKind::Live; });
+        std::size_t copied_rows = 0;
+        if (options.progress) {
+            options.progress(0.0F, "Compacting project");
+        }
         for (const ChunkInfo& source_row : source_result->chunks()) {
             if (source_row.row_kind == RowKind::Live) {
+                if (options.cancel && options.cancel()) {
+                    return status_failure(writer_error(
+                        lfs::ErrorCode::Cancelled,
+                        path,
+                        "Project compaction was canceled.",
+                        "the caller requested cancellation while copying payloads",
+                        "compaction.cancel"));
+                }
                 auto copied =
                     writer.impl_->copy_stored_chunk(*source_result, source_row);
                 if (!copied) {
@@ -3359,6 +3381,15 @@ namespace lfs::io::project {
                 }
                 writer.impl_->rows[copied->key] = std::move(*copied);
                 writer.impl_->touched.insert(source_row.key);
+                ++copied_rows;
+                if (options.progress) {
+                    options.progress(
+                        live_rows == 0
+                            ? 1.0F
+                            : static_cast<float>(copied_rows) /
+                                  static_cast<float>(live_rows),
+                        "Compacting project");
+                }
             }
             // Tombstones are discarded on compaction (spec MAY; no keep_tombstones producer).
         }
@@ -3367,6 +3398,9 @@ namespace lfs::io::project {
         const auto commit_started = copy_finished;
         auto committed = writer.commit();
         if (committed) {
+            if (options.progress) {
+                options.progress(1.0F, "Compacting project");
+            }
             const auto finished = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
                 return std::chrono::duration<double, std::milli>(end - begin)
