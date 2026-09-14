@@ -775,6 +775,19 @@ def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     assert all(row["can_manage"] for row in folders)
     assert panel.get_all_assets_count() == 2
 
+def test_published_sidebar_click_selects_gallery_scope(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    shell = _Element()
+    row = _Element({"data-folder-id": "__gallery__"}, shell)
+    label = _Element({}, row)
+
+    panel._on_asset_manager_click(_Event(shell, label))
+
+    assert panel._selected_folder_id == "__gallery__"
+    rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    assert 'data-event-click="select_folder" data-class-is-active="selected_folder_id == \'__gallery__\'"' in rml
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
