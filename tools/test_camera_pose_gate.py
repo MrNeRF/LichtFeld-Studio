@@ -19,6 +19,7 @@ from check_camera_pose_gate import require_no_report_failures
 from check_camera_pose_gate import SPARSE_POINT_SUITE, SPARSE_POINT_TESTS, inspect_shared_points_gate
 from check_camera_pose_gate import JOINT_SESSION_SUITE, JOINT_SESSION_TESTS, inspect_joint_session_gate
 from check_camera_pose_gate import JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS, inspect_joint_integration_gate
+from check_camera_pose_gate import DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS, inspect_diagnostics_gate
 
 
 class ReportFailureTests(unittest.TestCase):
@@ -34,7 +35,8 @@ class ReportFailureTests(unittest.TestCase):
                                 (TRAINER_SUITE, TRAINER_TESTS), (REPROJECTION_SUITE, REPROJECTION_TESTS),
                                 (VIEW_SUITE, VIEW_TESTS), (ACTIVATION_SUITE, ACTIVATION_TESTS),
                                 (SPARSE_POINT_SUITE, SPARSE_POINT_TESTS), (JOINT_SESSION_SUITE, JOINT_SESSION_TESTS),
-                                (JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS)):
+                                (JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS),
+                                (DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS)):
             with self.subTest(suite=suite):
                 self.assertEqual(found.get(suite), expected)
 
@@ -342,6 +344,23 @@ class CameraPoseJointIntegrationGateReportTests(unittest.TestCase):
                 ET.SubElement(case, defect)
             with self.subTest(defect=defect), self.assertRaises(ValueError):
                 inspect_joint_integration_gate(root)
+
+
+class CameraPoseDiagnosticsGateTests(unittest.TestCase):
+    def test_diagnostics_require_complete_executed_inventory(self):
+        root = CameraPoseJointIntegrationGateReportTests().report()
+        with self.assertRaises(ValueError):
+            inspect_diagnostics_gate(root)
+        suite = ET.SubElement(root, "testsuite", name=DIAGNOSTICS_SUITE)
+        for name in sorted(DIAGNOSTICS_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        result = inspect_diagnostics_gate(root)
+        self.assertEqual(result["tests"], 68)
+        self.assertTrue(result["diagnostics_contracts"])
+        self.assertFalse(result["reconstruction_quality_validated"])
+        ET.SubElement(suite.find("testcase"), "skipped")
+        with self.assertRaises(ValueError):
+            inspect_diagnostics_gate(root)
 
 
 class CameraPoseActivationGateReportTests(unittest.TestCase):

@@ -454,4 +454,83 @@ namespace {
         session.configure_sparse_points(measurements);
         EXPECT_EQ(session.shared_point_count(), 0u);
     }
+    TEST(CameraPoseDiagnosticsTest, SeparatesConstraintAndImageRejectionsWithoutChangingCadence) {
+        PoseRefinementSession geometric(1, cameras(), config());
+        const auto rejected = geometric.visit(30, 10, 1, evaluate, loss, {},
+                                              [](const Matrix4&) { return false; });
+        EXPECT_EQ(rejected.accepted_steps, 0);
+        auto d = geometric.diagnostics();
+        EXPECT_EQ(d.visits, 1u);
+        EXPECT_GT(d.candidate_checks, 0u);
+        EXPECT_EQ(d.fixed_rejections, d.candidate_checks);
+        EXPECT_EQ(d.candidate_renders, 0u);
+        EXPECT_EQ(d.image_rejections, 0u);
+        EXPECT_FALSE(geometric.visit(30, 11, 2, evaluate, loss).scheduled);
+        EXPECT_EQ(geometric.diagnostics().visits, 1u);
+
+        PoseRefinementSession image(2, cameras(), config());
+        (void)image.visit(30, 10, 1, evaluate, [](const Matrix4&) { return 1.0; });
+        d = image.diagnostics();
+        EXPECT_GT(d.candidate_renders, 0u);
+        EXPECT_EQ(d.image_rejections, d.candidate_renders);
+        EXPECT_EQ(d.fixed_rejections + d.joint_rejections + d.invalid_losses + d.objective_rejections, 0u);
+        EXPECT_EQ(d.committed_steps, 0u);
+        EXPECT_GE(d.visit_ms, d.baseline_ms + d.candidate_ms);
+        PoseRefinementSession joint(3, cameras(), config());
+        joint.configure_sparse_points(shared_measurements());
+        (void)joint.visit(30, 10, 1, evaluate, loss);
+        d = joint.diagnostics();
+        EXPECT_GT(d.joint_rejections, 0u);
+        EXPECT_EQ(d.candidate_checks, d.fixed_rejections + d.joint_rejections + d.candidate_renders);
+        EXPECT_EQ(d.candidate_renders, d.invalid_losses + d.image_rejections + d.objective_rejections + d.accepted_candidates);
+        EXPECT_EQ(d.committed_steps, d.accepted_candidates);
+    }
+
+    TEST(CameraPoseDiagnosticsTest, MeasuresPointWorkAndDoesNotPersistDiagnostics) {
+        PoseRefinementSession session(1, cameras(), config());
+        session.configure_sparse_points(shared_measurements());
+        (void)session.visit(30, 10, 1, [](const Matrix4&) { return PoseImageEvaluation{1.0, {}}; }, [](const Matrix4&) { return 1.0; });
+        const auto d = session.diagnostics();
+        EXPECT_GE(d.point_solves, session.shared_point_count());
+        EXPECT_GT(d.point_proposals, 0u);
+        EXPECT_EQ(d.baseline_evaluations, 1u);
+        EXPECT_EQ(d.committed_steps, 0u);
+        EXPECT_GE(d.visit_ms, d.point_ms);
+        const auto saved = session.save_state();
+        EXPECT_FALSE(saved.contains("diagnostics"));
+        auto corrupt = saved;
+        corrupt["points"][0]["current"][0] = 1000;
+        EXPECT_THROW(session.restore_state(corrupt), std::invalid_argument);
+        EXPECT_EQ(session.diagnostics().point_solves, d.point_solves);
+        session.restore_state(saved);
+        EXPECT_EQ(session.diagnostics().visits, 0u);
+        EXPECT_EQ(session.diagnostics().point_ms, 0.0);
+        session.reset();
+        EXPECT_EQ(session.diagnostics().point_solves, 0u);
+    }
+
+    TEST(CameraPoseDiagnosticsTest, ExceptionsAndCancellationCountWorkWithoutCommitting) {
+        for (const bool cancel : {false, true}) {
+            PoseRefinementSession session(1, cameras(), config());
+            std::stop_source stop;
+            auto callback = [&](const Matrix4&) -> PoseImageEvaluation {
+                if (!cancel)
+                    throw std::runtime_error("Diagnostic exception");
+                stop.request_stop();
+                return {1, {}};
+            };
+            if (cancel) {
+                EXPECT_TRUE(session.visit(30, 10, 1, callback, loss, stop.get_token()).cancelled);
+            } else {
+                EXPECT_THROW((void)session.visit(30, 10, 1, callback, loss), std::runtime_error);
+            }
+            const auto d = session.diagnostics();
+            EXPECT_EQ(d.visits, 1u);
+            EXPECT_EQ(d.baseline_evaluations, 1u);
+            EXPECT_EQ(d.exceptions, cancel ? 0u : 1u);
+            EXPECT_EQ(d.cancellations, cancel ? 1u : 0u);
+            EXPECT_EQ(d.committed_steps, 0u);
+            EXPECT_EQ(session.current_pose(30), identity_transform());
+        }
+    }
 } // namespace

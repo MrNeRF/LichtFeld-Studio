@@ -368,6 +368,25 @@ without a restored Trainer remain integration work. Scene camera records still
 describe imported poses; corrected poses are restored through the matching
 training checkpoint, not by overwriting sources.
 
+## Runtime diagnostics
+
+The training log reports cumulative pose diagnostics every 64 scheduled visits
+and at the pose-freeze boundary. Counters distinguish fixed-source and joint
+geometry rejection, invalid candidate losses, insufficient image improvement,
+and rejection by the combined prior/Armijo objective after image improvement.
+Accepted candidates and committed steps are separate: cancellation may discard
+an accepted candidate. Point proposals count attempted solves, not unique points
+or committed geometry changes. Aborted callbacks can leave candidate accounting
+incomplete; exception and cancellation counters make that explicit.
+
+Wall-clock totals separate point solves/scoring, baseline image and gradient
+evaluation, candidate image evaluation, and geometric pose proposal construction.
+The remaining time includes preparation, fixed-source predicates and controller
+work. These are host elapsed times including existing callback waits, not CUDA
+event timings. No additional GPU synchronization is introduced. Counters are
+training-thread-only, reset on successful restore/reset, and are not persisted
+or used to select optimization steps. They do not measure reconstruction quality.
+
 ## Scope and limitations
 
 The activation control is in Training > Advanced and uses the shared property

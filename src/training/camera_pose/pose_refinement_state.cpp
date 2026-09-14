@@ -176,6 +176,7 @@ namespace lfs::training::camera_pose {
         const auto snapshot = make_snapshot(working, iteration, paused, sequence_ + 1);
         entries_ = std::move(working);
         sparse_positions_ = std::move(positions);
+        diagnostics_ = {};
         iteration_ = iteration;
         paused_ = paused;
         ++sequence_;

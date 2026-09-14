@@ -370,6 +370,30 @@ def inspect_joint_integration_gate(root: ET.Element) -> dict:
     return result
 
 
+DIAGNOSTICS_SUITE = "CameraPoseDiagnosticsTest"
+DIAGNOSTICS_TESTS = {
+    "SeparatesConstraintAndImageRejectionsWithoutChangingCadence",
+    "MeasuresPointWorkAndDoesNotPersistDiagnostics",
+    "ExceptionsAndCancellationCountWorkWithoutCommitting",
+}
+
+
+def inspect_diagnostics_gate(root: ET.Element) -> dict:
+    result = inspect_joint_integration_gate(root)
+    suites = [s for s in root.iter("testsuite") if s.get("name") == DIAGNOSTICS_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated diagnostics suite")
+    cases = suites[0].findall("testcase")
+    if len(cases) != len(DIAGNOSTICS_TESTS) or {c.get("name") for c in cases} != DIAGNOSTICS_TESTS:
+        raise ValueError("Wrong diagnostics test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Diagnostics test not successfully executed: {case.get('name')}")
+    result.update(tests=result["tests"] + len(cases), diagnostics_contracts=True)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -401,12 +425,13 @@ def main() -> int:
     parser.add_argument("--shared-points", action="store_true", help="Also require shared-point proposal contracts; not joint training validation")
     parser.add_argument("--joint-session", action="store_true", help="Also require joint session transactions and checkpoint contracts; not joint training validation")
     parser.add_argument("--joint-integration", action="store_true", help="Also require production joint evaluator and checkpoint envelope contracts; not reconstruction quality validation")
+    parser.add_argument("--diagnostics", action="store_true", help="Also require non-persistent diagnostics contracts")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
         require_no_report_failures(root)
-        result = inspect_joint_integration_gate(root) if args.joint_integration else inspect_joint_session_gate(root) if args.joint_session else inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
+        result = inspect_diagnostics_gate(root) if args.diagnostics else inspect_joint_integration_gate(root) if args.joint_integration else inspect_joint_session_gate(root) if args.joint_session else inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

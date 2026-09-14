@@ -74,6 +74,18 @@ namespace lfs::training::camera_pose {
         int candidate_renders = 0;
     };
 
+    // Training-thread wall-clock diagnostics, not GPU event timings. Counts
+    // include attempted work discarded on cancellation; not checkpoint state.
+    struct PoseDiagnostics {
+        std::uint64_t visits = 0, baseline_evaluations = 0, candidate_checks = 0;
+        std::uint64_t point_solves = 0, point_proposals = 0;
+        std::uint64_t fixed_rejections = 0, joint_rejections = 0;
+        std::uint64_t invalid_losses = 0, image_rejections = 0, objective_rejections = 0;
+        std::uint64_t candidate_renders = 0, accepted_candidates = 0, committed_steps = 0;
+        std::uint64_t no_descent = 0, exceptions = 0, cancellations = 0;
+        double visit_ms = 0, point_ms = 0, baseline_ms = 0, candidate_ms = 0, proposal_ms = 0;
+    };
+
     // Multi-camera owner, intended to be called at a Trainer safe point.
     // Mutating methods have one training-thread owner; published_snapshot()
     // is the only cross-thread API. It performs no GPU work and acquires no
@@ -87,6 +99,7 @@ namespace lfs::training::camera_pose {
         void configure_sparse_points(std::vector<SparseTrackMeasurement> measurements);
         [[nodiscard]] bool joint_geometry_enabled(int uid) const noexcept { return tracks_by_camera_.contains(uid); }
         [[nodiscard]] size_t shared_point_count() const noexcept { return sparse_tracks_.size(); }
+        [[nodiscard]] PoseDiagnostics diagnostics() const noexcept { return diagnostics_; }
         // Optional fixed-geometry predicate runs before candidate rendering.
         // A false result rejects the proposal without consuming a render count.
         [[nodiscard]] PoseVisitResult visit(
@@ -113,6 +126,7 @@ namespace lfs::training::camera_pose {
             std::uint64_t renders = 0;
         };
         [[nodiscard]] bool in_window() const noexcept;
+        void log_diagnostics() const;
         [[nodiscard]] std::shared_ptr<const PoseSessionSnapshot> make_snapshot(
             const std::vector<Entry>& entries, int iteration, bool paused, std::uint64_t sequence) const;
         PoseSessionConfig config_;
@@ -126,6 +140,7 @@ namespace lfs::training::camera_pose {
         std::vector<SparsePointTrack> sparse_tracks_;
         std::vector<SparsePointPosition> sparse_positions_;
         std::unordered_map<int, std::vector<size_t>> tracks_by_camera_;
+        PoseDiagnostics diagnostics_;
         std::chrono::steady_clock::time_point next_publish_{};
         std::atomic<std::shared_ptr<const PoseSessionSnapshot>> published_{};
     };
