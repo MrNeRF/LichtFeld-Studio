@@ -251,7 +251,9 @@ select:focus-visible,
 button:focus-visible,
 .btn:focus-visible,
 .context-menu-item:focus-visible,
-.section-header:focus-visible {
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
     border-color: #89b4fa;
     box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }

@@ -1761,7 +1761,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _bind_dom_event_listeners(self, doc) -> None:
         shell = doc.get_element_by_id("asset-shell")
         if shell:
-            shell.add_event_listener("keydown", self._on_gallery_shortcut)
+            shell.add_event_listener("keydown", self._on_asset_manager_keydown)
             shell.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             shell.add_event_listener("click", self._on_asset_manager_click)
             shell.add_event_listener("dblclick", self._on_asset_manager_double_click)
@@ -2094,6 +2094,24 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False
         self._stop_event(event)
         return True
+
+    def _on_asset_manager_keydown(self, event):
+        target = event.target()
+        container = event.current_target()
+        element = rml_widgets.find_ancestor_with_attribute(target, "data-folder-id", container)
+        action = rml_widgets.find_ancestor_with_attribute(target, "data-sidebar-action", container)
+        try:
+            key = int(event.get_parameter("key_identifier", "0"))
+        except (TypeError, ValueError):
+            key = 0
+        if key in (KI_RETURN, 32) and (element is not None or action is not None):
+            if action is not None and action.get_attribute("data-sidebar-action", "") == "toggle_folders":
+                self.toggle_folders_collapsed()
+            elif element is not None:
+                self._select_folder_id(element.get_attribute("data-folder-id", ""))
+            self._stop_event(event)
+            return True
+        return self._on_gallery_shortcut(event)
 
     def _on_asset_results_keydown(self, event) -> None:
         if self._on_gallery_shortcut(event):

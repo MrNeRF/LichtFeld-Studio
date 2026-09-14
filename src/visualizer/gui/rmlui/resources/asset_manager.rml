@@ -39,13 +39,13 @@
           <div class="asset-sidebar-inner">
           <div id="asset-sidebar-local-scroll"><div id="asset-sidebar-local-content">
           <div class="asset-sidebar-global">
-            <div class="asset-filter-row" data-class-is-active="all_assets_selected" data-folder-id="__all__">
+            <div class="asset-filter-row" tabindex="0" data-class-is-active="all_assets_selected" data-folder-id="__all__">
               <span class="asset-row-label">{{all_assets_label}}</span>
               <span class="asset-row-count">{{all_assets_count}}</span>
             </div>
           </div>
           <div class="asset-sidebar-section">
-            <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_folders_collapsed">
+            <div class="asset-sidebar-title" tabindex="0" data-sidebar-action="toggle_folders" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_folders_collapsed">
               <div style="display: flex; align-items: center; gap: 4dp;">
                 <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
                 <span>{{folders_title}}</span>
@@ -54,7 +54,7 @@
             </div>
             <div class="section-content collapsed" data-class-collapsed="!folders_expanded">
               <div data-for="folder : folders">
-                <div class="asset-filter-row" data-class-is-active="folder.id == selected_folder_id" data-attr-data-folder-id="folder.id">
+                <div class="asset-filter-row" tabindex="0" data-class-is-active="folder.id == selected_folder_id" data-attr-data-folder-id="folder.id">
                   <span class="asset-row-label">{{folder.name}}</span>
                   <div class="asset-folder-row-right">
                     <span class="asset-row-count">{{folder.project_count}}</span>
@@ -74,9 +74,9 @@
               <button class="btn btn--secondary gallery-refresh" data-event-click="gallery_refresh" data-tooltip="asset_manager.gallery.sidebar.refresh">↻</button>
             </div>
             <div class="text-muted gallery-checked">{{gallery_checked}}</div>
-            <div class="asset-filter-row" data-event-click="select_folder" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__"><span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span></div>
-            <div class="asset-filter-row" data-event-click="select_folder" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__"><span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span></div>
-            <div class="asset-filter-row" data-event-click="select_folder" data-folder-id="__gallery_transfers__"><span class="asset-row-label">{{g_sidebar_transfers}}</span><span class="asset-row-count">{{gallery_transfer_count}}</span></div>
+            <div class="asset-filter-row" tabindex="0" data-event-click="select_folder" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__"><span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span></div>
+            <div class="asset-filter-row" tabindex="0" data-event-click="select_folder" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__"><span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span></div>
+            <div class="asset-filter-row" tabindex="0" data-event-click="select_folder" data-folder-id="__gallery_transfers__"><span class="asset-row-label">{{g_sidebar_transfers}}</span><span class="asset-row-count">{{gallery_transfer_count}}</span></div>
           </div>
 
           </div>

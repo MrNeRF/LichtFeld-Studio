@@ -938,6 +938,21 @@ def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatc
     rcss = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
     assert "min-width: 96dp; max-width: 200dp" in rcss
 
+def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    shell = _Element()
+    row = _Element({"data-folder-id": "__gallery__"}, shell)
+    title = _Element({"data-sidebar-action": "toggle_folders"}, shell)
+    panel._on_asset_manager_keydown(_Event(shell, row, {"key_identifier": str(panel_module.KI_RETURN)}))
+    assert panel._selected_folder_id == "__gallery__"
+    panel._folders_collapsed = False
+    panel._on_asset_manager_keydown(_Event(shell, title, {"key_identifier": "32"}))
+    assert panel._folders_collapsed is True
+    rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    assert 'class="asset-filter-row" tabindex="0"' in rml
+    assert 'data-sidebar-action="toggle_folders"' in rml
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
