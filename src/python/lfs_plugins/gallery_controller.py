@@ -11,6 +11,7 @@ from pathlib import Path
 
 import lichtfeld as lf
 from .gallery_messages import tr
+from .gallery_transfer_ui import TransferEstimate, transfer_metrics, transfer_phase, transfer_rows
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
 from .gallery_view import capture_view, restore_view
@@ -38,10 +39,14 @@ class GalleryController:
         self._subscribers = {}
         self._timer = None
         self._last_snapshot = None
+        self._transfer_estimate = TransferEstimate()
+        self._job_transfer_estimates = {}
+        self._transfer_ui_epoch = 0
         self._refresh_pending = False
         self.checked_at = 0.0
         self.offline = False
         self._operation_project = None
+        self._operation_title = ""
         self._pull_requests = {}
         self._cancel_requests = set()
         self._resume_queue = []
@@ -166,6 +171,12 @@ class GalleryController:
             "message": localize_message(message), "batchFailure": True})
 
     def command(self, name, job_id=None):
+        if job_id and job_id.startswith("queue:"):
+            if name == "cancel":
+                identifier = job_id.removeprefix("queue:")
+                self._update_queue = [entry for entry in self._update_queue if entry["asset"]["id"] != identifier]
+                self._schedule_poll()
+            return
         if job_id and job_id.startswith("batch:"):
             if name in ("cancel", "resume"):
                 entry = self._batch_retries.get(job_id)
@@ -217,6 +228,7 @@ class GalleryController:
         if project != asset["id"] or Path(path).resolve() != Path(asset["path"]).resolve():
             raise ValueError(tr("error.project_changed"))
         self._operation_project = project
+        self._operation_title = details.get("title") or asset.get("name", "")
         self._reupload_reason = None
         self._last_canceled = False
         scene = None
@@ -264,6 +276,7 @@ class GalleryController:
         expected_commit = str(asset.get("commit_uuid") or getattr(info, "commit_uuid", ""))
         identity = self.service.identity()
         self._operation_project = project_id
+        self._operation_title = details.get("title") or asset.get("name", "")
         self._last_canceled = False
         self._reupload_reason = None
         self.upload_format = upload_format
@@ -423,6 +436,7 @@ class GalleryController:
             elif "content" in decisions:
                 metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
                 self._operation_project = asset["id"]
+                self._operation_title = metadata.get("title", "")
                 environment_source = str(lf.get_render_settings().environment_map_path) if view.get("environment") else None
                 restore_view(lf, view, environment_path=environment_source)
                 self._publish(metadata, expected_project=expected_project, environment_source=environment_source,
@@ -531,6 +545,7 @@ class GalleryController:
         job = self.service.snapshot()["jobs"][-1]
         self._pull_requests[job["id"]] = (dict(asset, _pull_open=bool(open_after)), self._identity)
         self._operation_project = asset["id"]
+        self._operation_title = scene.get("title", "")
         self._schedule_poll()
 
     def _finish_pulls(self):
@@ -578,8 +593,22 @@ class GalleryController:
         state = self.service.snapshot()
         state["jobs"] = list(state.get("jobs", [])) + copy.deepcopy(self._batch_rows)
         state["batchQueued"] = len(self._update_queue)
+        state["jobs"].extend({"id": "queue:" + entry["asset"]["id"], "project": entry["asset"]["id"],
+            "status": "queued", "kind": "upload", "batchQueued": True,
+            "metadata": {"title": entry["scene"].get("title") or entry["asset"].get("name", "")}}
+            for entry in self._update_queue)
+        operation = next((j for j in state["jobs"] if j.get("project") == self._operation_project), {})
+        state["operationTitle"] = self._operation_title or operation.get("metadata", {}).get("title", "")
+        measured_ids = set()
         for job in state.get("jobs", []):
             job["message"] = localize_message(job.get("message", ""))
+            stage = transfer_phase(job)
+            job["transferDetail"] = ""
+            if not job.get("retired") and stage in ("uploading", "downloading"):
+                measured_ids.add(job["id"])
+                estimate = self._job_transfer_estimates.setdefault(job["id"], TransferEstimate())
+                job["transferDetail"] = transfer_metrics(*estimate.sample([job], stage))
+        self._job_transfer_estimates = {key: value for key, value in self._job_transfer_estimates.items() if key in measured_ids}
         return dict(state, checkedAt=self.checked_at, offline=self.offline,
                     message=localize_message(self._message or state.get("message", "")),
                     accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
@@ -721,15 +750,18 @@ class GalleryController:
             self._refreshed_completion = completion["id"]
             self.refresh()
         snapshot = self.snapshot()
+        self._publish_runtime_state(snapshot)
         if snapshot != self._last_snapshot:
             self._last_snapshot = copy.deepcopy(snapshot)
-            self._publish_runtime_state(snapshot)
             for callback in tuple(self._subscribers):
                 if callback in self._subscribers:
                     try:
                         callback(copy.deepcopy(snapshot))
                     except Exception as exc:
                         lf.log.error(redact(f"Gallery subscriber failed: {exc}"))
+
+    def _transfer_speed_and_eta(self, jobs, stage):
+        return self._transfer_estimate.sample(jobs, stage)
 
     def _publish_runtime_state(self, snapshot):
         """Publish transfer status to the native UI."""
@@ -747,8 +779,8 @@ class GalleryController:
         up += phase == "preparing"
         down += phase == "applying"
         attention = sum(j["status"] in ("conflict", "error") for j in jobs)
-        total = sum(j.get("total", 0) for j in active)
-        done = sum(min(j.get("total", 0), max(0, j.get("completed", 0))) for j in active)
+        total = sum(j.get("total", 0) for j in running)
+        done = sum(min(j.get("total", 0), max(0, j.get("completed", 0))) for j in running)
         percent = min(100, int(100 * done / total)) if total > 0 and running else -1
         stage = "queued"
         if phase != "idle":
@@ -759,6 +791,8 @@ class GalleryController:
         elif running:
             if all(j.get("serverProcessing") for j in running):
                 stage, percent = "processing", -1
+            elif any(j.get("preparation") and not j.get("packaged") for j in running):
+                stage = "preparing"
             else:
                 stage = "downloading" if running[0].get("kind") == "download" else "uploading"
 
@@ -766,18 +800,25 @@ class GalleryController:
         label = stage_label if up or down else tr("sidebar.title")
         if percent >= 0 and (up or down):
             label = tr("gallery.status.progress", prefix="", stage=label, percent=percent)
-        details = [tr("sidebar.aggregate", uploads=up, downloads=down, attention=attention)]
+        speed, remaining = self._transfer_speed_and_eta(running, stage)
+        detail = transfer_metrics(speed, remaining) if stage in ("uploading", "downloading") else ""
+        details = [label, detail, tr("sidebar.aggregate", uploads=up, downloads=down, attention=attention)]
         if running:
             details.insert(0, running[0].get("metadata", {}).get("title", ""))
             details.append(tr("bytes", prefix="gallery.transfer.", done=format_size(done), total=format_size(total)))
         if snapshot.get("message"):
             details.append(snapshot["message"])
         tooltip = "\n".join(filter(None, details))
+        queue = dict(identity=snapshot.get("identity"), rows=transfer_rows(snapshot, history_limit=3),
+                     message=snapshot.get("message", ""))
+        if queue != RuntimeState.gallery_transfers.value:
+            RuntimeState.gallery_transfers.value = queue
+            self._transfer_ui_epoch += 1
         signal.value = dict(signed_in=snapshot.get("signed_in", False),
             active_uploads=up, active_downloads=down,
             paused=sum(j["status"] == "paused" for j in jobs), attention=attention,
-            percent=percent, label=label, tooltip=tooltip,
-            tone="busy" if up or down else "attention" if attention else "idle", epoch=snapshot.get("version", 0))
+            percent=percent, label=label, detail=detail, tooltip=tooltip,
+            tone="busy" if up or down else "attention" if attention else "idle", epoch=self._transfer_ui_epoch)
 
 
     def _dispatch(self, name, args):
@@ -1552,17 +1593,14 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         remote = any(scene[key] != link[key] for key in ("contentRevision", "metadataRevision"))
         freshness = "diverged" if local and remote else "local" if local else "remote" if remote else "equal"
     scene_id = (link or scene or {}).get("sceneId", (scene or {}).get("id"))
-    matching = [j for j in jobs if j.get("status") not in ("completed", "canceled") and
+    matching = [j for j in jobs if j.get("status") not in ("completed", "canceled") and not j.get("retired") and
                 ((identifier and j.get("project") == identifier) or (scene_id and
                 (j.get("sceneId") == scene_id or j.get("metadata", {}).get("replaceSceneId") == scene_id)))]
     job = matching[-1] if matching else {}
     activity = phase
     if job:
         status = job.get("status")
-        activity = ("processing" if job.get("serverProcessing") else
-                    "downloading" if job.get("kind") == "download" else "uploading") if status == "running" else (
-                    "interrupted" if job.get("interrupted") else "paused") if status == "paused" else (
-                    "error" if status in ("conflict", "error") else "queued")
+        activity = "error" if status in ("conflict", "error") else transfer_phase(job)
         if status == "conflict":
             freshness = "diverged"
     active = activity in ("preparing", "queued", "uploading", "processing", "downloading", "applying")

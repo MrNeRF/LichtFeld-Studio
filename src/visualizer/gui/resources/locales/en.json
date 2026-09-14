@@ -2674,5 +2674,14 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "Portal is taking longer than expected.",
   "asset_manager.gallery.action.keep_waiting": "Keep waiting",
-  "asset_manager.gallery.review.cover_kept": "The cover is kept. Review Story on portal after a substantial content change."
+  "asset_manager.gallery.review.cover_kept": "The cover is kept. Review Story on portal after a substantial content change.",
+  "gallery.status.estimating": "Estimating…",
+  "gallery.status.metrics": "{speed}/s · ~{remaining} left",
+  "portal.status.uploading": "Portal: Uploading",
+  "portal.status.downloading": "Portal: Downloading",
+  "portal.status.transferring": "Portal: Uploading / Downloading",
+  "gallery.transfer.queue_header": "{active} active · {queued} queued",
+  "gallery.transfer.action.collapse": "Minimize list",
+  "gallery.transfer.action.expand": "Expand list",
+  "gallery.transfer.action.details": "All transfers"
 }

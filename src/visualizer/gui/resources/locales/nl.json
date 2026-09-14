@@ -2671,5 +2671,14 @@
   "portal.status.connect": "Verbinden met portal",
   "portal.status.disconnect": "Verbinding met portal verbreken",
   "portal.status.cancel": "Verbinding annuleren",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "Berekenen…",
+  "gallery.status.metrics": "{speed}/s · nog ~{remaining}",
+  "portal.status.uploading": "Portal: Uploaden",
+  "portal.status.downloading": "Portal: Downloaden",
+  "portal.status.transferring": "Portal: Uploaden / Downloaden",
+  "gallery.transfer.queue_header": "{active} actief · {queued} in wachtrij",
+  "gallery.transfer.action.collapse": "Lijst verkleinen",
+  "gallery.transfer.action.expand": "Lijst uitklappen",
+  "gallery.transfer.action.details": "Alle overdrachten"
 }

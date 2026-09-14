@@ -400,6 +400,9 @@
     color: @{text_dim};
 }
 
+.gallery-card-metrics { color: @{text_dim}; }
+.gallery-progress { background-color: @{statusbar.progress_bg}; }
+.gallery-progress-fill { background-color: @{primary}; }
 .gallery-badge { background-color: @{surface}; }
 .gallery-remote { border-color: @{text_dim}; }
 .gallery-toolbar-button img { image-color: @{text}; }

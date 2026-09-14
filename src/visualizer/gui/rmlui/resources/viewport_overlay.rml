@@ -1193,6 +1193,35 @@
         </div>
     </div>
 
+    <div id="gallery-transfer-queue" class="viewport-transfer-queue hidden" data-class-hidden="!gallery_transfer_visible">
+        <div class="viewport-transfer-header">
+            <span class="viewport-transfer-heading">@tr:gallery.transfer.title</span>
+            <button class="btn btn--secondary viewport-transfer-toggle" data-event-click="gallery_transfer_action('toggle')" data-attr-title="gallery_transfer_toggle_label">{{gallery_transfer_toggle_icon}}</button>
+            <button class="btn btn--secondary viewport-transfer-toggle" data-event-click="gallery_transfer_action('close')" data-attr-title="gallery_transfer_close_label">×</button>
+        </div>
+        <span class="text-muted viewport-transfer-summary">{{gallery_transfer_header}}</span>
+        <div class="viewport-transfer-list" data-class-hidden="!gallery_transfer_expanded">
+            <span class="text-muted" data-if="gallery_transfer_empty">{{gallery_transfer_empty_label}}</span>
+            <div class="viewport-transfer-row" data-for="job : gallery_transfer_rows" data-attr-data-transfer-id="job.id">
+                <div class="viewport-transfer-title"><span>{{job.direction}}</span><span class="viewport-transfer-name" data-attr-title="job.title">{{job.title}}</span></div>
+                <div class="viewport-transfer-status"><span class="status-info">{{job.phase}}</span><span class="text-muted">{{job.bytes}}</span></div>
+                <div class="viewport-transfer-progress"><div class="viewport-transfer-fill" data-class-is-indeterminate="job.indeterminate" data-style-width="job.progress_width"></div></div>
+                <span class="viewport-transfer-detail" data-if="job.detail != ''">{{job.detail}}</span>
+                <span class="status-error" data-if="job.reason != ''">{{job.reason}}</span>
+                <div class="viewport-transfer-actions">
+                    <button class="btn btn--secondary" data-if="job.can_pause" data-event-click="gallery_transfer_action('pause', job.id)">{{gallery_transfer_pause_label}}</button>
+                    <button class="btn btn--success" data-if="job.can_resume" data-event-click="gallery_transfer_action('resume', job.id)">{{gallery_transfer_resume_label}}</button>
+                    <button class="btn btn--secondary" data-if="job.can_cancel" data-event-click="gallery_transfer_action('cancel', job.id)">{{gallery_transfer_cancel_label}}</button>
+                </div>
+            </div>
+        </div>
+        <div class="viewport-transfer-footer" data-class-hidden="!gallery_transfer_expanded">
+            <button class="btn btn--secondary" data-event-click="gallery_transfer_action('details')">{{gallery_transfer_details_label}}</button>
+            <button class="btn btn--secondary" data-event-click="gallery_transfer_action('clear_finished')">{{gallery_transfer_clear_finished_label}}</button>
+        </div>
+        <span class="status-error" data-if="gallery_transfer_message != ''">{{gallery_transfer_message}}</span>
+    </div>
+
     <div id="import-status-overlay"
          class="viewport-status-overlay hidden"
          data-class-hidden="!show_import_overlay">

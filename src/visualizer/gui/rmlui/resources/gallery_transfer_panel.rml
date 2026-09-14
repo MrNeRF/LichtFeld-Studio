@@ -9,6 +9,7 @@
       <div class="gallery-transfer-title"><span>{{job.direction}}</span><span>{{job.title}}</span><span class="text-muted">{{job.bytes}}</span></div>
       <span class="status-info">{{job.phase}}</span><span class="status-error">{{job.reason}}</span>
       <progress max="100" data-attr-value="job.progress"/>
+      <span class="text-muted" data-if="job.detail != ''">{{job.detail}}</span>
       <div class="gallery-actions"><button class="btn btn--secondary" data-if="job.can_pause" data-event-click="pause(job.id)">{{pause_label}}</button><button class="btn btn--success" data-if="job.can_resume" data-event-click="resume(job.id)">{{resume_label}}</button><button class="btn btn--secondary" data-if="job.can_cancel" data-event-click="cancel(job.id)">{{cancel_label}}</button></div>
     </div>
   </div>

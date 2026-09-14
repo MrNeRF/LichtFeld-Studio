@@ -435,6 +435,7 @@ namespace lfs::vis::gui {
         ctor.Bind("portal_connection_icon", &portal_connection_icon_);
         ctor.Bind("portal_connection_tone", &portal_connection_tone_);
         ctor.Bind("gallery_progress_label", &gallery_progress_label_);
+        ctor.Bind("gallery_progress_detail", &gallery_progress_detail_);
         ctor.Bind("gallery_progress_tooltip", &gallery_progress_tooltip_);
         ctor.Bind("gallery_progress_width", &gallery_progress_width_);
         ctor.Bind("gallery_has_progress", &gallery_has_progress_);
@@ -502,6 +503,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::suspend() {
+        portal_transfer_animation_active_ = false;
         wants_input_ = false;
         mouse_pos_valid_ = false;
         last_mouse_x_ = 0;
@@ -1049,11 +1051,17 @@ namespace lfs::vis::gui {
                                                                                                  : "disconnected";
         const bool connected = account.signed_in;
         const bool checking = account.linking || account.disconnecting;
+        const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
         const std::string tone = checking ? "connecting" : !account.error.empty() ? "error"
+                                                       : transferring             ? "transferring"
                                                        : connected                ? "connected"
                                                                                   : "disconnected";
-        const std::string icon = checking ? "ring" : connected ? "cloud-check"
-                                                               : "cloud-strike";
+        const std::string icon = checking       ? "ring"
+                                 : transferring ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
+                                                   : gallery.active_uploads > 0                               ? "cloud-up"
+                                                                                                              : "cloud-down")
+                                 : connected    ? "cloud-check"
+                                                : "cloud-strike";
         const auto set = [this](const char* name, auto& current, auto value) {
             if (current != value) {
                 current = std::move(value);
@@ -1061,7 +1069,12 @@ namespace lfs::vis::gui {
                 render_needed_ = true;
             }
         };
-        const auto connection_key = "portal.status." + connection;
+        const std::string activity = transferring && !checking
+                                         ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
+                                            : gallery.active_uploads > 0                              ? "uploading"
+                                                                                                      : "downloading")
+                                         : connection;
+        const auto connection_key = "portal.status." + activity;
         std::string label = localization.get(connection_key);
         if (account.linking && !account.label.empty())
             label += " " + account.label;
@@ -1071,6 +1084,8 @@ namespace lfs::vis::gui {
                                                                : "portal.status.connect");
         if (!account.tooltip.empty())
             tooltip += "\n" + account.tooltip;
+        if (transferring)
+            tooltip += "\n" + gallery.tooltip;
         if (!account.error.empty()) {
             const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
                                           : account.error == "sign_in_failed"    ? "account.error.generic"
@@ -1082,8 +1097,10 @@ namespace lfs::vis::gui {
         set("portal_connection_tooltip", portal_connection_tooltip_, std::move(tooltip));
         set("portal_connection_icon", portal_connection_icon_, "../icon/gallery-" + icon + ".png");
         set("portal_connection_tone", portal_connection_tone_, tone);
+        portal_transfer_animation_active_ = tone == "transferring";
         set("gallery_has_progress", gallery_has_progress_, gallery.active_uploads > 0 || gallery.active_downloads > 0);
         set("gallery_progress_label", gallery_progress_label_, gallery.label);
+        set("gallery_progress_detail", gallery_progress_detail_, gallery.detail);
         set("gallery_progress_tooltip", gallery_progress_tooltip_, gallery.tooltip);
         set("gallery_progress_indeterminate", gallery_progress_indeterminate_, gallery.percent < 0);
         set("gallery_progress_width", gallery_progress_width_,
@@ -1144,7 +1161,7 @@ namespace lfs::vis::gui {
         } else if (action == "portal_connection") {
             python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
         } else if (action == "gallery_transfers") {
-            PanelRegistry::instance().set_panel_enabled("lfs.gallery_transfer", true);
+            python::invoke_operator("lfs_plugins.help_menu.GalleryTransfersOperator");
         } else if (action == "window_toggle_ui") {
             lfs::core::events::ui::ToggleUI{}.emit();
         } else if (action == "window_minimize") {
@@ -1459,7 +1476,7 @@ namespace lfs::vis::gui {
 
         const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
         const bool refresh_cache = render_needed_ || theme_changed || size_changed ||
-                                   tooltip_changed || direct_cache_.texture == 0;
+                                   tooltip_changed || direct_cache_.texture == 0 || portal_transfer_animation_active_;
 
         if (refresh_cache) {
             rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));

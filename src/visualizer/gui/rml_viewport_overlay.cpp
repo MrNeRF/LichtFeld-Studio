@@ -60,6 +60,7 @@ namespace lfs::vis::gui {
                    element->IsClassSet("toolbar-drag-handle") ||
                    element->IsClassSet("viewport-transform-option") ||
                    element->IsClassSet("viewport-transform-action") ||
+                   element->IsClassSet("viewport-transfer-queue") ||
                    element->IsClassSet("vram-hud-tree-row") ||
                    element->IsClassSet("vram-hud-expand-toggle") ||
                    element->IsClassSet("vram-hud-tab") ||
@@ -554,6 +555,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(
             store.import_overlay_state.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.gallery_state.subscribe(mark_document_dirty));
     }
 
     void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {

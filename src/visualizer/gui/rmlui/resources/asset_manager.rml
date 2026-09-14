@@ -123,7 +123,7 @@
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-class-gallery-remote="asset.remote_only" data-style-decorator="asset.thumbnail_decorator">
-                        <span class="gallery-badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-data-tooltip="asset.gallery_label"><img data-attr-src="asset.gallery_icon"/></span>
+                        <span class="gallery-badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-data-tooltip="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
                         <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <div class="asset-card-body">
@@ -132,13 +132,17 @@
                         </div>
                         <div class="asset-card-meta">
                           <span>{{asset.gallery_label}}</span>
-                          <span>{{asset.size_label}}</span>
+                          <span data-if="asset.gallery_has_bytes">{{asset.gallery_bytes}}</span>
+                          <span data-if="!asset.gallery_has_bytes">{{asset.size_label}}</span>
                         </div>
-                        <div class="asset-card-actions">
+                        <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-data-tooltip="asset.gallery_tooltip">
+                          <div class="gallery-progress"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
+                          <span class="gallery-card-metrics">{{asset.gallery_detail}}</span>
+                        </div>
+                        <div class="asset-card-actions" data-if="!asset.gallery_active">
                           <button class="btn btn--primary gallery-card-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
                         </div>
                       </div>
-                      <div class="gallery-progress-slot"><progress class="gallery-progress" max="100" data-if="asset.gallery_active" data-attr-value="asset.gallery_progress"/></div>
                       <button class="asset-button asset-button--small-icon asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
                     </div>
                   </div>
@@ -161,12 +165,13 @@
                   <div data-for="asset : assets">
                     <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <span class="asset-col asset-col-name">
-                        <span class="asset-list-primary">{{asset.display_name}}</span><span class="asset-list-secondary text-muted">{{asset.gallery_label}}</span>
+                        <span class="asset-list-primary">{{asset.display_name}}</span><span class="asset-list-secondary text-muted" data-attr-data-tooltip="asset.gallery_tooltip">{{asset.gallery_label}} {{asset.gallery_detail}}</span>
                       </span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
                       <span class="asset-col asset-col-gallery"><img class="gallery-list-icon" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/><span>{{asset.gallery_label}}</span></span>
+                      <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
                     </div>
                   </div>
                 </div>

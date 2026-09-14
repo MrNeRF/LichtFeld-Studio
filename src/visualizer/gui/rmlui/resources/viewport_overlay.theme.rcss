@@ -497,6 +497,16 @@
     background-color: @{primary};
 }
 
+.viewport-transfer-queue {
+    background-color: @{surface};
+    border-color: @{border};
+    color: @{text};
+}
+.viewport-transfer-row, .viewport-transfer-footer { border-color: @{border}; }
+.viewport-transfer-detail { color: @{text_dim}; }
+.viewport-transfer-progress { background-color: @{statusbar.progress_bg}; }
+.viewport-transfer-fill { background-color: @{primary}; }
+
 .viewport-status-backdrop {
     background-color: @{viewport.status_backdrop};
 }

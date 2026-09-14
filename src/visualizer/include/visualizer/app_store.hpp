@@ -124,6 +124,7 @@ namespace lfs::vis {
             int attention = 0;
             int percent = -1;
             std::string label;
+            std::string detail;
             std::string tooltip;
             std::string tone{"idle"};
             std::uint64_t epoch = 0;

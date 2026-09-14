@@ -7,6 +7,7 @@ import lichtfeld as lf
 from ..ui import RuntimeState
 
 from .. import toolbar as viewport_toolbar
+from ..gallery_transfer_overlay import GalleryTransferOverlay
 
 try:
     from ..ui.store import native_value as _native_store_value
@@ -97,6 +98,7 @@ def _get_video_state():
 
 class _OverlayDocumentController:
     def __init__(self):
+        self.gallery_transfers = GalleryTransferOverlay()
         self.reset()
 
     def reset(self):
@@ -105,6 +107,7 @@ class _OverlayDocumentController:
         self._video_state = {}
         self._last_import_signature = None
         self._last_video_signature = None
+        self.gallery_transfers.reset()
         viewport_toolbar.reset_overlay_state()
 
     def update(self, doc=None):
@@ -178,6 +181,9 @@ class _OverlayDocumentController:
 
         toolbar_sources = viewport_toolbar.update_overlay(doc) or []
         dirty_sources.extend(f"toolbar.{source}" for source in toolbar_sources)
+        if self.gallery_transfers.update():
+            dirty_sources.append("gallery_transfers")
+            status_dirty = True
 
         if status_dirty:
             self._handle.dirty_all()
@@ -233,6 +239,7 @@ class _OverlayDocumentController:
         model.bind_func("video_cancel_label", lambda: lf.ui.tr("common.cancel"))
 
         viewport_toolbar.bind_overlay_model(model)
+        self.gallery_transfers.bind_model(model)
 
         model.bind_event("overlay_action", self._on_overlay_action)
         self._handle = model.get_handle()
@@ -577,6 +584,11 @@ def sync_document(doc=None):
     if not _hook_registered:
         return False
     return _sync_viewport_overlay_document(doc)
+
+
+def show_gallery_transfers():
+    _sync_viewport_overlay_document()
+    _document_controller.gallery_transfers.show()
 
 
 def _draw_viewport_overlay(layout):

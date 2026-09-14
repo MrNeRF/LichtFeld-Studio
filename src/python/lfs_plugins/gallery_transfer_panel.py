@@ -8,45 +8,10 @@ from .gallery_messages import tr as gallery_tr
 tr = partial(gallery_tr, prefix="gallery.transfer.")
 from .panels import panel_class
 from .types import Panel
-from .asset_format import format_size
+from .gallery_transfer_ui import transfer_rows
 
 __lfs_panel_classes__ = ["GalleryTransferPanel"]
 __lfs_panel_ids__ = ["lfs.gallery_transfer"]
-
-
-
-def transfer_rows(snapshot, history_limit=30):
-    pending, history = [], []
-    for job in snapshot.get("jobs", []):
-        if job.get("retired"):
-            continue
-        status = job["status"]
-        done, total = job.get("completed", 0), job.get("total", 0)
-        processing = bool(job.get("serverProcessing"))
-        phase = "processing" if processing and status == "running" else (
-            "downloading" if job.get("kind") == "download" else "uploading") if status == "running" else (
-            "interrupted" if job.get("interrupted") and status == "paused" else status)
-        row = {"id": job["id"], "title": job.get("metadata", {}).get("title", ""),
-               "direction": "↓" if job.get("kind") == "download" else "↑",
-               "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
-                         else tr("bytes", done=format_size(done), total=format_size(total))),
-               "phase": tr("phase.error") if job.get("needsAttention") else tr("phase." + phase),
-               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
-               "progress": 100 if status == "completed" else min(100, 100 * done / max(1, total)),
-               "can_pause": status == "running",
-               "can_resume": status in ("paused", "error", "queued") and job.get("retryable") is not False and not snapshot.get("busy"),
-               "can_cancel": status not in ("completed", "canceled")}
-        (history if status in ("completed", "canceled") else pending).append(row)
-    if snapshot.get("phase", "idle") != "idle":
-        pending.insert(0, {"id": "native", "title": tr("title"), "direction": "↓" if snapshot["phase"] == "applying" else "↑",
-            "bytes": "", "phase": tr("phase." + snapshot["phase"]), "reason": "",
-            "progress": snapshot.get("preparationProgress", 0), "can_pause": False,
-            "can_resume": False, "can_cancel": True})
-    if snapshot.get("batchQueued"):
-        pending.insert(0, {"id": "batch-queue", "title": tr("batch", count=snapshot["batchQueued"]),
-            "direction": "↑", "bytes": "", "phase": tr("phase.queued"), "reason": "", "progress": 0,
-            "can_pause": False, "can_resume": False, "can_cancel": False})
-    return pending + list(reversed(history))[:history_limit]
 
 
 @panel_class("gallery_transfer")

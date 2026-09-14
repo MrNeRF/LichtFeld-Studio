@@ -78,6 +78,17 @@ class PortalConnectionOperator(Operator):
         return {"FINISHED"}
 
 
+class GalleryTransfersOperator(Operator):
+    label = "gallery.transfer.title"
+    description = "Show the viewport transfer queue"
+
+    def execute(self, context) -> set:
+        from .overlays import show_gallery_transfers
+
+        show_gallery_transfers()
+        return {"FINISHED"}
+
+
 class BugReportOperator(Operator):
     label = "bugreport.menu"
     description = "Open the in-app bug report form"
@@ -113,6 +124,7 @@ _operator_classes = [
     UnsetDefaultAppOperator,
     AccountOperator,
     PortalConnectionOperator,
+    GalleryTransfersOperator,
     BugReportOperator,
     AboutOperator,
 ]

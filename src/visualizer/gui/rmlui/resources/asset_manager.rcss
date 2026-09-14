@@ -859,8 +859,13 @@
 .gallery-card-action { visibility: hidden; box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-card-meta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 16dp; }
 .asset-card:hover .gallery-card-action, .asset-card:focus .gallery-card-action, .asset-card.is-selected .gallery-card-action { visibility: visible; }
-.gallery-progress-slot { position: absolute; bottom: 0dp; left: 0dp; right: 0dp; height: 2dp; }
-.gallery-progress { height: 2dp; width: 100%; }
+.gallery-card-transfer { display: flex; flex-direction: column; gap: 5dp; margin-top: auto; padding-top: 6dp; padding-bottom: 5dp; min-width: 0; }
+.gallery-progress { height: 5dp; width: 100%; flex-shrink: 0; overflow: hidden; border-radius: 2dp; }
+.gallery-progress-fill { height: 100%; }
+.gallery-card-metrics { font-size: 10dp; line-height: 14dp; min-height: 14dp; padding-right: 26dp; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gallery-list-progress { position: absolute; left: 0; bottom: 0; height: 3dp; }
+@keyframes gallery-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }
+.gallery-progress-fill.is-indeterminate { animation: gallery-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 .asset-col-name { flex-direction: column; justify-content: center; }
 .asset-list-secondary { font-size: 10dp; overflow: hidden; text-overflow: ellipsis; }
 #asset-info-gallery .section-content { padding: 4dp; }

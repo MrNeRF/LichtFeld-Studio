@@ -83,14 +83,23 @@ body {
     height: 18dp;
 }
 
+@keyframes portal-transfer-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
+.menu-portal-connection.transferring img {
+    animation: portal-transfer-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
 .menu-gallery-progress {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    width: 136dp;
-    height: 26dp;
+    width: 200dp;
+    height: 28dp;
     padding: 0 6dp;
-    gap: 3dp;
+    gap: 1dp;
     border-radius: 5dp;
     flex-shrink: 0;
     cursor: pointer;
@@ -102,9 +111,19 @@ body {
 
 .menu-gallery-progress span {
     font-size: 11dp;
+    line-height: 12dp;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.menu-gallery-progress .menu-gallery-progress-detail {
+    font-size: 10dp;
+    line-height: 11dp;
+}
+
+.menu-gallery-progress-detail.hidden {
+    display: none;
 }
 
 .menu-gallery-progress-track {

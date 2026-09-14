@@ -2671,5 +2671,14 @@
   "portal.status.connect": "ポータルに接続",
   "portal.status.disconnect": "ポータルから切断",
   "portal.status.cancel": "接続をキャンセル",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "計算中…",
+  "gallery.status.metrics": "{speed}/s · 残り約{remaining}",
+  "portal.status.uploading": "ポータル: アップロード中",
+  "portal.status.downloading": "ポータル: ダウンロード中",
+  "portal.status.transferring": "ポータル: アップロード / ダウンロード中",
+  "gallery.transfer.queue_header": "実行中 {active} 件 · 待機中 {queued} 件",
+  "gallery.transfer.action.collapse": "リストを折りたたむ",
+  "gallery.transfer.action.expand": "リストを展開",
+  "gallery.transfer.action.details": "すべての転送"
 }

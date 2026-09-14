@@ -2671,5 +2671,14 @@
   "portal.status.connect": "Mit Portal verbinden",
   "portal.status.disconnect": "Vom Portal trennen",
   "portal.status.cancel": "Verbindung abbrechen",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "Wird geschätzt…",
+  "gallery.status.metrics": "{speed}/s · noch ~{remaining}",
+  "portal.status.uploading": "Portal: Upload läuft",
+  "portal.status.downloading": "Portal: Download läuft",
+  "portal.status.transferring": "Portal: Upload / Download",
+  "gallery.transfer.queue_header": "{active} aktiv · {queued} in Warteschlange",
+  "gallery.transfer.action.collapse": "Liste minimieren",
+  "gallery.transfer.action.expand": "Liste erweitern",
+  "gallery.transfer.action.details": "Alle Übertragungen"
 }

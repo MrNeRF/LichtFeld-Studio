@@ -37,11 +37,13 @@ body {
     image-color: @{success};
 }
 
-.menu-portal-connection.connecting {
+.menu-portal-connection.connecting,
+.menu-portal-connection.transferring {
     color: @{info};
 }
 
-.menu-portal-connection.connecting img {
+.menu-portal-connection.connecting img,
+.menu-portal-connection.transferring img {
     image-color: @{info};
 }
 

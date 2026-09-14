@@ -201,6 +201,7 @@ namespace lfs::python {
             state["attention"] = value.attention;
             state["percent"] = value.percent;
             state["label"] = value.label;
+            state["detail"] = value.detail;
             state["tooltip"] = value.tooltip;
             state["tone"] = value.tone;
             state["epoch"] = value.epoch;
@@ -222,6 +223,7 @@ namespace lfs::python {
             state.attention = dict_value(dict, "attention", 0);
             state.percent = dict_value(dict, "percent", -1);
             state.label = dict_value(dict, "label", std::string{});
+            state.detail = dict_value(dict, "detail", std::string{});
             state.tooltip = dict_value(dict, "tooltip", std::string{});
             state.tone = dict_value(dict, "tone", std::string{"idle"});
             state.epoch = dict_value(dict, "epoch", std::uint64_t{0});

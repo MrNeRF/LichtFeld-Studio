@@ -2671,5 +2671,14 @@
   "portal.status.connect": "포털에 연결",
   "portal.status.disconnect": "포털 연결 해제",
   "portal.status.cancel": "연결 취소",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "예상 시간 계산 중…",
+  "gallery.status.metrics": "{speed}/s · 약 {remaining} 남음",
+  "portal.status.uploading": "포털: 업로드 중",
+  "portal.status.downloading": "포털: 다운로드 중",
+  "portal.status.transferring": "포털: 업로드 / 다운로드 중",
+  "gallery.transfer.queue_header": "{active}개 진행 중 · {queued}개 대기 중",
+  "gallery.transfer.action.collapse": "목록 접기",
+  "gallery.transfer.action.expand": "목록 펼치기",
+  "gallery.transfer.action.details": "모든 전송"
 }

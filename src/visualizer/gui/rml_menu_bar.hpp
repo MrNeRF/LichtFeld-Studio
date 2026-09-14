@@ -138,7 +138,9 @@ namespace lfs::vis::gui {
 
         // Keeps the render-on-demand loop ticking while a tooltip is counting
         // down so it reveals on time without needing a mouse jiggle.
-        [[nodiscard]] bool needsAnimationFrame() const { return tooltip_.revealDue(); }
+        [[nodiscard]] bool needsAnimationFrame() const {
+            return tooltip_.revealDue() || portal_transfer_animation_active_;
+        }
 
     private:
         bool updateTheme();
@@ -182,7 +184,9 @@ namespace lfs::vis::gui {
         std::string portal_connection_tooltip_;
         std::string portal_connection_icon_;
         std::string portal_connection_tone_;
+        bool portal_transfer_animation_active_ = false;
         std::string gallery_progress_label_;
+        std::string gallery_progress_detail_;
         std::string gallery_progress_tooltip_;
         std::string gallery_progress_width_{"0%"};
         bool gallery_has_progress_ = false;

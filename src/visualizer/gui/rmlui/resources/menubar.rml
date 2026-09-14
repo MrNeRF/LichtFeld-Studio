@@ -56,6 +56,7 @@
                      data-action="gallery_transfers"
                      data-attr-title="gallery_progress_tooltip">
                     <span>{{ gallery_progress_label }}</span>
+                    <span class="menu-gallery-progress-detail" data-class-hidden="gallery_progress_detail == ''">{{ gallery_progress_detail }}</span>
                     <div class="menu-gallery-progress-track">
                         <div class="menu-gallery-progress-fill" data-style-width="gallery_progress_width"></div>
                     </div>

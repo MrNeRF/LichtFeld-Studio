@@ -3,4 +3,4 @@
 .gallery-transfer-row { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 0dp; border-bottom-width: 1dp; }
 .gallery-transfer-title, .gallery-actions { display: flex; align-items: center; gap: 8dp; flex-wrap: wrap; }
 .gallery-transfer-title { justify-content: space-between; }
-.gallery-transfer-row progress { width: 100%; height: 2dp; }
+.gallery-transfer-row progress { width: 100%; height: 5dp; }

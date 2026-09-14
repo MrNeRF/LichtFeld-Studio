@@ -179,8 +179,13 @@ class GalleryAssetMixin:
         return {**self._asset_index_assets(), **self._gallery_remote_assets()}
 
     def _gallery_rows(self, attention=False):
+        transferring = {j.get("project") for j in self._gallery_state.get("jobs", ())
+                        if not j.get("retired") and j.get("status") not in ("completed", "canceled")}
+        controller = self._gallery_controller
+        if controller and self._gallery_state.get("phase", "idle") != "idle":
+            transferring.add(getattr(controller, "_operation_project", None))
         rows = [a for a in self._asset_index_assets().values()
-                if a.get("id") in self._gallery_state.get("links", {})]
+                if a.get("id") in self._gallery_state.get("links", {}) or a.get("id") in transferring]
         rows += list(self._gallery_remote_assets().values())
         if attention:
             # Failed first publishes are also actionable, even before a link exists.
@@ -197,7 +202,18 @@ class GalleryAssetMixin:
         if asset.get("remote_only"):
             label = tr("state.remote_detail", state=label, size=self._format_size(asset.get("file_size_bytes")),
                        format=asset.get("source_format", "licht").upper())
+        job = next((j for j in self._gallery_state.get("jobs", ()) if j["id"] == facts["jobId"]), {})
+        indeterminate = facts["active"] and (facts["activity"] in ("preparing", "processing", "applying")
+                                            or (facts["activity"] in ("uploading", "downloading") and not job.get("total")))
+        detail = job.get("transferDetail", "")
+        byte_label = tr("bytes", prefix="gallery.transfer.", done=self._format_size(job.get("completed", 0)),
+                        total=self._format_size(job["total"])) if facts["active"] and job.get("total") else ""
         return {"gallery_state": facts["state"], "gallery_label": label,
+                "gallery_detail": detail, "gallery_bytes": byte_label,
+                "gallery_has_bytes": bool(byte_label),
+                "gallery_tooltip": "\n".join(filter(None, (label, byte_label, detail))),
+                "gallery_progress_width": f"{35 if indeterminate else facts['progress']}%",
+                "gallery_indeterminate": indeterminate,
                 "gallery_icon": "../icon/gallery-" + facts["icon"] + ".png",
                 "gallery_tone": "gallery-tone-" + facts["tone"],
                 "gallery_has_action": bool(facts["action"]), "gallery_action": facts["action"], "gallery_action_label": tr("action." + facts["action"]) if facts["action"] else "",

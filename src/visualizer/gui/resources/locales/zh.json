@@ -2671,5 +2671,14 @@
   "portal.status.connect": "连接门户",
   "portal.status.disconnect": "断开门户连接",
   "portal.status.cancel": "取消连接",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "正在估算…",
+  "gallery.status.metrics": "{speed}/s · 约剩 {remaining}",
+  "portal.status.uploading": "门户：正在上传",
+  "portal.status.downloading": "门户：正在下载",
+  "portal.status.transferring": "门户：正在上传 / 下载",
+  "gallery.transfer.queue_header": "{active} 个进行中 · {queued} 个排队中",
+  "gallery.transfer.action.collapse": "收起列表",
+  "gallery.transfer.action.expand": "展开列表",
+  "gallery.transfer.action.details": "所有传输"
 }

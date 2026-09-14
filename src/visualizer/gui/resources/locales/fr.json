@@ -2671,5 +2671,14 @@
   "portal.status.connect": "Connecter au portail",
   "portal.status.disconnect": "Déconnecter du portail",
   "portal.status.cancel": "Annuler la connexion",
-  "gallery.status.progress": "{stage} {percent}%"
+  "gallery.status.progress": "{stage} {percent}%",
+  "gallery.status.estimating": "Estimation…",
+  "gallery.status.metrics": "{speed}/s · reste ~{remaining}",
+  "portal.status.uploading": "Portail : Envoi en cours",
+  "portal.status.downloading": "Portail : Téléchargement",
+  "portal.status.transferring": "Portail : Envoi / Téléchargement",
+  "gallery.transfer.queue_header": "{active} en cours · {queued} en attente",
+  "gallery.transfer.action.collapse": "Réduire la liste",
+  "gallery.transfer.action.expand": "Développer la liste",
+  "gallery.transfer.action.details": "Tous les transferts"
 }
