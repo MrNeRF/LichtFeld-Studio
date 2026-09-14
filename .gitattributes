@@ -1,1 +1,2 @@
 src/python/stubs/**/*.pyi text eol=lf
+tests/data/param_json_golden/*.json text eol=lf

@@ -30,6 +30,7 @@ set(GSPLAT_SOURCES
         QuatToRotmatCUDA.cu
         RasterizeToPixelsFromWorld3DGSBwd.cu
         RasterizeToPixelsFromWorld3DGSFwd.cu
+        PopScores.cu
         RelocationCUDA.cu
         SphericalHarmonicsCUDA.cu
 )
@@ -54,6 +55,7 @@ target_include_directories(gsplat_backend_lfs
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core/tensor/internal
         ${CMAKE_SOURCE_DIR}/src/diagnostics/include
 )

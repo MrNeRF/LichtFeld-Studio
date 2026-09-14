@@ -13,6 +13,8 @@ namespace fast_lfs::rasterization {
     // SH value quant: when sh_value_bits==16, `param` is uint16 codes
     // (pad-dropped cell-linear swizzle) and sh_value_bounds is float2 per 256-prim block.
     struct FusedAdamParam {
+        // Optional raw gradient destination. When present, capture instead of updating Adam.
+        float* gradient_out = nullptr;
         float* param = nullptr; // float params OR bitcast uint16* when sh_value_bits==16
         // Joint codec: packed (u,log_s) bytes + float4 bounds[n_bounds]
         std::uint8_t* joint_packed = nullptr;

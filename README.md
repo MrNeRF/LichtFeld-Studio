@@ -81,6 +81,22 @@ LichtFeld Studio is built for users who need more than a training script or a st
 - **Research-ready features**: MCMC optimization, bilateral grid appearance modeling, 3DGUT support for distorted camera models, and timelapse generation
 - **Native performance**: modern C++23 and CUDA 12.8+ for responsive training and visualization on NVIDIA hardware
 
+### Optional POPSpa sparsification
+
+In the Training panel, enable **Sparsity**, then choose **POPSpa** under
+**Sparsity Settings → Sparsity Method** and set **Target Gaussians**. Opacity ADMM
+remains the default. The CLI equivalent is:
+
+```text
+--enable-sparsity --sparsity-method popspa --popspa-target-count 256000
+```
+
+POPSpa runs after regular training: contribution scoring, an intermediate prune,
+sparse optimization, an exact final prune, and recovery. It supports FastGS and
+the bundled gsplat/GUT backend. The target must fit the active model count and
+retain all frozen Gaussians. Phase lengths and advanced controls are available as
+`popspa_*` settings in the UI, JSON, and Python.
+
 ## Support Development
 
 LichtFeld Studio is free and open source. If it is useful in your research, production, or learning workflow, please consider supporting its continued development.

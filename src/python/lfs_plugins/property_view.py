@@ -113,7 +113,30 @@ BESPOKE_OR_HIDDEN = {
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
 
 # Per-row visibility inside a run (auto-advanced rows have no run-level condition).
+POPSPA_PROPS = (
+    "popspa_target_count",
+    "popspa_first_prune_count",
+    "popspa_sparsify_steps",
+    "popspa_refine_steps",
+    "popspa_projection_interval",
+    "popspa_seed",
+    "popspa_rho",
+    "popspa_erank_weight",
+    "popspa_thin_scale_weight",
+    "popspa_erank_epsilon",
+    "popspa_means_lr",
+    "popspa_scales_lr",
+    "popspa_opacities_lr",
+    "popspa_quaternions_lr",
+    "popspa_sh0_lr",
+    "popspa_shn_lr",
+    "popspa_ssim_weight",
+)
+
 PROP_VISIBILITY_CONDITION_IDS = {
+    "sparsify_steps": "dep_opacity_admm",
+    "init_rho": "dep_opacity_admm",
+    **{prop_id: "dep_popspa" for prop_id in POPSPA_PROPS},
     "ppisp_reg_weight": "dep_show_ppisp_reg_weight",
 }
 
@@ -283,8 +306,10 @@ INIT_RUNS = (
 SPARSITY_RUNS = (
     _run(
         "sparsity",
+        "sparsity_method",
         "sparsify_steps",
         "init_rho",
+        *POPSPA_PROPS,
         visibility_condition_id="dep_sparsity",
     ),
 )

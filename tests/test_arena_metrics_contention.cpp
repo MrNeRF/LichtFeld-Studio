@@ -71,6 +71,105 @@ TEST_F(ArenaMetricsContentionTest, BoundedBeginFrameBailsWhileFrameHeld) {
     arena.end_frame(held, nullptr, false);
 }
 
+namespace {
+    void CUDART_CB delay_arena_stream(void*) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+} // namespace
+
+TEST_F(ArenaMetricsContentionTest, BoundedGpuHandoffPreservesReservationUntilProducerCompletes) {
+    RasterizerMemoryArena arena;
+    cudaStream_t producer = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    const auto frame = arena.begin_frame(producer, false);
+    ASSERT_EQ(cudaLaunchHostFunc(producer, delay_arena_stream, nullptr), cudaSuccess);
+    arena.end_frame(frame, producer, false);
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto render = arena.try_begin_frame_for(15, true);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_FALSE(render.has_value());
+    EXPECT_LT(elapsed, std::chrono::milliseconds(250));
+    if (render)
+        arena.end_frame(*render, true);
+    const auto early_training = arena.try_begin_frame(producer, false);
+    EXPECT_FALSE(early_training.has_value()) << "timing out must not release GPU-owned scratch";
+    if (early_training)
+        arena.end_frame(*early_training, producer, false);
+
+    EXPECT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+    const auto retry = arena.try_begin_frame_for(1000, true);
+    EXPECT_TRUE(retry.has_value());
+    if (retry) {
+        arena.assert_frame_handoff(*retry);
+        arena.end_frame(*retry, true);
+    }
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, CompletedProducerDoesNotWaitForUnrelatedStream) {
+    RasterizerMemoryArena arena;
+    cudaStream_t producer = nullptr, unrelated = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&unrelated, cudaStreamNonBlocking), cudaSuccess);
+    const auto frame = arena.begin_frame(producer, false);
+    arena.end_frame(frame, producer, false);
+    ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+    ASSERT_EQ(cudaLaunchHostFunc(unrelated, delay_arena_stream, nullptr), cudaSuccess);
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto render = arena.try_begin_frame_for(15, true);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_TRUE(render.has_value());
+    EXPECT_LT(elapsed, std::chrono::milliseconds(250));
+    EXPECT_EQ(cudaStreamQuery(unrelated), cudaErrorNotReady);
+    if (render)
+        arena.end_frame(*render, true);
+    EXPECT_EQ(cudaStreamSynchronize(unrelated), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(unrelated), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, MovePreservesCompletedAsynchronousHandoff) {
+    RasterizerMemoryArena arena;
+    cudaStream_t producer = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    const auto frame = arena.begin_frame(producer, false);
+    ASSERT_EQ(cudaLaunchHostFunc(producer, delay_arena_stream, nullptr), cudaSuccess);
+    arena.end_frame(frame, producer, false);
+    const auto early = arena.try_begin_frame_for(15, true);
+    EXPECT_FALSE(early.has_value());
+    if (early)
+        arena.end_frame(*early, true);
+    RasterizerMemoryArena moved(std::move(arena));
+    const auto retry = moved.try_begin_frame_for(1000, true);
+    EXPECT_TRUE(retry.has_value());
+    if (retry)
+        moved.end_frame(*retry, true);
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+}
+
+TEST_F(ArenaMetricsContentionTest, FullResetDrainsPendingGpuHandoff) {
+    RasterizerMemoryArena arena;
+    cudaStream_t producer = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    const auto frame = arena.begin_frame(producer, false);
+    ASSERT_EQ(cudaLaunchHostFunc(producer, delay_arena_stream, nullptr), cudaSuccess);
+    arena.end_frame(frame, producer, false);
+    const auto early = arena.try_begin_frame_for(15, true);
+    EXPECT_FALSE(early.has_value());
+    if (early)
+        arena.end_frame(*early, true);
+    arena.full_reset();
+    EXPECT_EQ(cudaStreamQuery(producer), cudaSuccess);
+    EXPECT_FALSE(arena.has_last_frame_event_for_testing());
+    const auto retry = arena.try_begin_frame_for(1000, true);
+    EXPECT_TRUE(retry.has_value());
+    if (retry)
+        arena.end_frame(*retry, true);
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+}
+
 TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
     RasterizerMemoryArena arena;
     std::shared_mutex render_mutex;

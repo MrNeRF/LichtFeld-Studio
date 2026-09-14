@@ -154,6 +154,10 @@ namespace lfs::training {
         float* edge_score_out = nullptr;
     };
 
+    // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.
+    // The caller zeros these bytes once; each call adds a view without clearing them.
+    lfs::Status fast_accumulate_pop_scores(const FastRasterizeContext& ctx, lfs::core::Tensor& scores);
+
     [[nodiscard]] fast_lfs::rasterization::FusedAdamSettings make_fastgs_fused_adam_settings(
         const FastGSFusedAdamState& optimizer_fused,
         const FastGSFusedExtraGradients& fused_extra_gradients = {});
@@ -185,7 +189,8 @@ namespace lfs::training {
         int iteration = 0,
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
-        const lfs::core::Tensor& grad_normal = {});
+        const lfs::core::Tensor& grad_normal = {},
+        bool defer_optimizer_step = false);
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;

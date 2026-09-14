@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -188,6 +189,11 @@ namespace lfs::core {
         mutable std::mutex sync_mutex_;
         mutable std::condition_variable sync_cv_;
         uint64_t active_frames_ = 0;
+        // A bounded streamless acquisition reserves a frame while its GPU
+        // handoff completes off the calling thread. Protected by sync_mutex_.
+        std::thread handoff_thread_;
+        bool handoff_pending_ = false;
+        cudaError_t handoff_status_ = cudaSuccess;
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
         uint64_t last_handoff_frame_id_ = 0;
@@ -243,6 +249,8 @@ namespace lfs::core {
         // iteration. The timeout covers the refining-iteration case where the
         // trainer holds the frame while blocked on the exclusive render lock the
         // caller's shared lock prevents — give up there instead of deadlocking.
+        // Streamless acquisitions also bound the GPU handoff: an unfinished
+        // handoff keeps the arena reserved, and a later acquisition retries it.
         std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, bool from_rendering = false) {
             return try_begin_frame_for(timeout_ms, nullptr, from_rendering);
         }

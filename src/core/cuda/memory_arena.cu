@@ -15,6 +15,7 @@
 #include <limits>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace lfs::core {
 
@@ -44,6 +45,8 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::~RasterizerMemoryArena() {
+        if (handoff_thread_.joinable())
+            handoff_thread_.join();
         dump_statistics();
 
         {
@@ -74,6 +77,8 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::RasterizerMemoryArena(RasterizerMemoryArena&& other) noexcept {
+        if (other.handoff_thread_.joinable())
+            other.handoff_thread_.join();
         std::scoped_lock lock(other.arena_mutex_, other.frame_mutex_, other.sync_mutex_,
                               other.last_frame_event_mutex_);
         device_arenas_ = std::move(other.device_arenas_);
@@ -89,6 +94,8 @@ namespace lfs::core {
         creation_time_ = other.creation_time_;
         total_frames_processed_ = other.total_frames_processed_.load();
         active_frames_ = other.active_frames_;
+        handoff_pending_ = std::exchange(other.handoff_pending_, false);
+        handoff_status_ = other.handoff_status_;
         pending_render_frames_ = other.pending_render_frames_;
         active_training_frames_ = other.active_training_frames_;
         last_handoff_frame_id_ = other.last_handoff_frame_id_;
@@ -104,6 +111,10 @@ namespace lfs::core {
 
     RasterizerMemoryArena& RasterizerMemoryArena::operator=(RasterizerMemoryArena&& other) noexcept {
         if (this != &other) {
+            if (handoff_thread_.joinable())
+                handoff_thread_.join();
+            if (other.handoff_thread_.joinable())
+                other.handoff_thread_.join();
             std::scoped_lock lock(
                 arena_mutex_,
                 other.arena_mutex_,
@@ -126,6 +137,8 @@ namespace lfs::core {
             creation_time_ = other.creation_time_;
             total_frames_processed_ = other.total_frames_processed_.load();
             active_frames_ = other.active_frames_;
+            handoff_pending_ = std::exchange(other.handoff_pending_, false);
+            handoff_status_ = other.handoff_status_;
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
             last_handoff_frame_id_ = other.last_handoff_frame_id_;
@@ -367,19 +380,88 @@ namespace lfs::core {
     std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                                     std::optional<uint32_t> wait_timeout_ms) {
         LFS_CUDA_BREADCRUMB_STREAM("arena.begin_frame", stream);
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(wait_timeout_ms.value_or(0));
+        bool handoff_complete = false;
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
             const auto can_begin = [this, from_rendering]() {
                 return active_frames_ == 0 && (from_rendering || pending_render_frames_ == 0);
             };
-            if (!wait_timeout_ms.has_value()) {
-                if (!can_begin()) {
+            for (;;) {
+                if (!wait_timeout_ms.has_value()) {
+                    if (!can_begin())
+                        return std::nullopt;
+                } else if (*wait_timeout_ms == 0u) {
+                    sync_cv_.wait(sync_lock, can_begin);
+                } else if (!sync_cv_.wait_until(sync_lock, deadline, can_begin)) {
                     return std::nullopt;
                 }
-            } else if (*wait_timeout_ms == 0u) {
-                sync_cv_.wait(sync_lock, can_begin);
-            } else if (!sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(*wait_timeout_ms), can_begin)) {
-                return std::nullopt;
+
+                if (handoff_pending_) {
+                    // The worker releases its reservation only after the GPU
+                    // dependency is complete. No frame can reuse scratch first.
+                    if (handoff_thread_.joinable())
+                        handoff_thread_.join();
+                    handoff_pending_ = false;
+                    const auto status = handoff_status_;
+                    if (status != cudaSuccess) {
+                        sync_lock.unlock();
+                        LFS_ENSURE_CUDA_SUCCESS_MSG(status, "arena asynchronous GPU handoff", "");
+                    }
+                    handoff_complete = true;
+                    break;
+                }
+                if (stream != nullptr || !wait_timeout_ms || *wait_timeout_ms == 0u)
+                    break;
+
+                // A completed producer event already orders all arena writes.
+                // Do not wait for unrelated streams in this common case.
+                cudaError_t ready = cudaErrorNotReady;
+                {
+                    std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+                    if (last_frame_event_valid_ && external_release_semaphore_ == nullptr)
+                        ready = cudaEventQuery(last_frame_event_);
+                }
+                if (ready == cudaSuccess) {
+                    handoff_complete = true;
+                    break;
+                }
+                if (ready != cudaErrorNotReady) {
+                    sync_lock.unlock();
+                    LFS_ENSURE_CUDA_SUCCESS_MSG(ready, "cudaEventQuery(arena handoff)", "");
+                }
+
+                int device = -1;
+                LFS_CUDA_CHECK_MSG(cudaGetDevice(&device), "arena asynchronous handoff device");
+                ++active_frames_;
+                handoff_pending_ = true;
+                try {
+                    handoff_thread_ = std::thread([this, device] {
+                        auto status = cudaSetDevice(device);
+                        try {
+                            if (status == cudaSuccess)
+                                status = wait_for_previous_frame(nullptr);
+                        } catch (...) {
+                            // LFS-CENSUS-OK(empty-catch): convert worker exceptions to a CUDA error propagated by the next acquisition.
+                            // Publish failure and release the reservation even
+                            // if diagnostic/error formatting throws on this thread.
+                            status = cudaErrorUnknown;
+                        }
+                        std::lock_guard<std::mutex> lock(sync_mutex_);
+                        handoff_status_ = status;
+                        --active_frames_;
+                        sync_cv_.notify_all();
+                    });
+                } catch (...) {
+                    handoff_pending_ = false;
+                    --active_frames_;
+                    sync_cv_.notify_all();
+                    throw;
+                }
+                // Retry under the same deadline. On timeout, leave the worker
+                // and its reservation intact; do not call end_frame or consume
+                // its completion state on behalf of a frame that never began.
             }
             ++active_frames_;
             if (!from_rendering) {
@@ -389,7 +471,7 @@ namespace lfs::core {
 
         uint64_t frame_id = frame_counter_.fetch_add(1, std::memory_order_relaxed);
 
-        const cudaError_t wait_status = wait_for_previous_frame(stream);
+        const cudaError_t wait_status = handoff_complete ? cudaSuccess : wait_for_previous_frame(stream);
         if (wait_status != cudaSuccess) {
             end_frame(frame_id, from_rendering);
             LFS_ENSURE_CUDA_SUCCESS_MSG(
@@ -778,6 +860,9 @@ namespace lfs::core {
         sync_cv_.wait(sync_lock, [this]() {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         });
+        if (handoff_thread_.joinable())
+            handoff_thread_.join();
+        handoff_pending_ = false;
 
         // A submitted viewport batch may still be reading arena scratch; drain
         // its release fence before the reset frees or decommits the backing.
