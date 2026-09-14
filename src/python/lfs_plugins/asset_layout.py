@@ -49,9 +49,11 @@ def list_columns(width):
     # Match the list shell/row padding, gaps and fixed columns in asset_manager.rcss.
     gallery, size, modified_width, folder_width = 96.0, 48.0, 72.0, 58.0
     modified, folder = width >= 380, width >= 600
-    def name_width():
+    def name_width(gallery_width):
         count = 3 + int(modified) + int(folder)
-        return width - 46.0 - 6.0 * (count - 1) - gallery - size - modified * modified_width - folder * folder_width
-    if name_width() < 64:
+        return width - 46.0 - 6.0 * (count - 1) - gallery_width - size - modified * modified_width - folder * folder_width
+    if name_width(gallery) < 64:
         modified = False
-    return dict(modified=modified, folder=folder, name=name_width(), gallery=gallery)
+    spare_gallery = width - 46.0 - 6.0 * (2 + int(modified)) - size - modified * modified_width - folder * folder_width - 64.0
+    gallery = min(200.0, max(96.0, spare_gallery))
+    return dict(modified=modified, folder=folder, name=name_width(gallery), gallery=gallery)

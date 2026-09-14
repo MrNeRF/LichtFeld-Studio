@@ -730,7 +730,7 @@
 
 .asset-col-modified { display: none; width: 72dp; flex-shrink: 0; font-size: 10dp; }
 .asset-scroll-shell-list.is-wide .asset-col-modified { display: block; }
-.asset-col-gallery { width: 96dp; min-width: 96dp; flex-shrink: 0; }
+.asset-col-gallery { width: 200dp; min-width: 96dp; max-width: 200dp; flex: 0 1 200dp; }
 
 
 #asset-info-panel {

@@ -165,7 +165,7 @@
                 <span class="asset-col asset-col-folder">{{col_folder_label}}</span>
                 <span class="asset-col asset-col-size">{{col_size_label}}</span>
                 <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
-                <span class="asset-col asset-col-gallery">{{col_gallery_label}}</span>
+                <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width">{{col_gallery_label}}</span>
               </div>
               <div id="asset-list-view" class="asset-list-view">
                 <div class="asset-virtual-spacer asset-list-top-spacer" data-style-height="asset_list_top_spacer_height"></div>
@@ -178,10 +178,10 @@
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
-                      <span class="asset-col asset-col-gallery" data-attr-title="asset.gallery_tooltip">
+                      <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
                         <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
                         <span data-if="!asset.gallery_has_controls">{{asset.gallery_label}}</span>
-                        <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
+                        <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery" data-attr-title="asset.gallery_action_label"><span data-if="!asset_list_gallery_compact">{{asset.gallery_action_label}}</span><span data-if="asset_list_gallery_compact">↗</span></button>
                         <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_pause" data-attr-data-asset-id="asset.id" data-asset-action="gallery:pause_transfer" data-attr-title="g_action_pause">Ⅱ</button>
                         <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_cancel" data-attr-data-asset-id="asset.id" data-asset-action="gallery:cancel_transfer" data-attr-title="g_action_cancel">×</button>
                       </span>

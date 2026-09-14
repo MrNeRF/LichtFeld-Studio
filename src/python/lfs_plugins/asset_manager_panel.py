@@ -294,6 +294,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["modified"])
         model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["folder"])
+        model.bind_func("asset_list_gallery_width", lambda: f"{list_columns(self._asset_window_client_width / self._ui_scale())['gallery']:.1f}dp")
+        model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["gallery"] < 140)
         model.bind_func("col_gallery_label", lambda: tr("asset_manager.gallery.sidebar.title"))
         model.bind_func("sidebar_height", lambda: f"{self._sidebar_height:.1f}dp")
         model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")

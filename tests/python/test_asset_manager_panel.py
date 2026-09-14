@@ -924,6 +924,20 @@ def test_pull_undo_expires_and_clears_on_next_gallery_action(panel_module, monke
     panel._gallery_command("refresh")
     assert panel._gallery_undo is None
 
+def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatch):
+    from lfs_plugins.asset_layout import list_columns
+    assert list_columns(320)["gallery"] == 150
+    assert list_columns(280)["gallery"] < 140
+    assert list_columns(420)["gallery"] == 172
+    assert list_columns(600)["gallery"] == 200
+    panel = panel_module.AssetManagerPanel()
+    model = _BindingModel()
+    panel._asset_window_client_width = 280
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings["asset_list_gallery_compact"]() is True
+    rcss = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+    assert "min-width: 96dp; max-width: 200dp" in rcss
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
@@ -2086,9 +2100,9 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
     assert not model.func_bindings['asset_list_show_folder']()
     assert model.func_bindings['col_gallery_label']().endswith('gallery.sidebar.title')
     columns = list_columns(width)
-    assert columns['name'] >= 64 and columns['gallery'] == 96
+    assert columns['name'] >= 64 and 96 <= columns['gallery'] <= 200
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
-    assert '.asset-col-gallery { width: 96dp; min-width: 96dp; flex-shrink: 0; }' in (resources / 'asset_manager.rcss').read_text()
+    assert '.asset-col-gallery { width: 200dp; min-width: 96dp; max-width: 200dp; flex: 0 1 200dp; }' in (resources / 'asset_manager.rcss').read_text()
 
 def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
