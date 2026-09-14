@@ -2650,6 +2650,7 @@
   "asset_manager.gallery.empty.published": "No published scenes yet — pick a project and press Publish",
   "asset_manager.gallery.empty.pull": "or pull a scene from your gallery",
   "asset_manager.gallery.drop.review_first": "Zuerst Änderungen prüfen",
+  "asset_manager.gallery.drop.already_published": "Bereits in deiner Galerie",
   "asset_manager.gallery.drop.up_to_date": "Already up to date",
   "preferences.gallery.title": "Gallery",
   "preferences.gallery.format": "Default upload format",
