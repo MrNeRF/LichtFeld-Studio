@@ -7,6 +7,7 @@
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
 #include "rendering/vulkan_wait.hpp"
+#include "visualizer/rendering/vksplat_scratch_release.hpp"
 
 #include <gtest/gtest.h>
 
@@ -225,6 +226,61 @@ namespace {
     }
 
 } // namespace
+
+TEST(VkSplatBufferRetire, ScratchAliasAllocatesFreshStorageAfterOwnerRetires) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestablePipeline pipeline;
+    pipeline.install_fake_handles();
+    pipeline.setVulkanDispatch(make_scripted_dispatch());
+
+    Buffer<uint32_t> keys;
+    Buffer<int32_t> indices;
+    indices.deviceBuffer.label = "scratch.indices";
+    pipeline.resizeDeviceBuffer(keys, 64);
+    aliasDeviceView(indices.deviceBuffer, keys.deviceBuffer);
+    const auto old_handle = keys.deviceBuffer.buffer;
+    const auto old_bytes = keys.deviceBuffer.allocSize;
+    std::vector<_VulkanBuffer> retired;
+    auto retire = [&](_VulkanBuffer& buffer) { retired.push_back(buffer); };
+
+    EXPECT_EQ(lfs::vis::detail::releaseScratchBuffer(keys, retire), old_bytes);
+    EXPECT_EQ(lfs::vis::detail::releaseScratchBuffer(indices, retire), 0u);
+    ASSERT_EQ(retired.size(), 1u);
+    EXPECT_EQ(retired.front().buffer, old_handle);
+    EXPECT_EQ(indices.deviceBuffer.buffer, VK_NULL_HANDLE);
+    EXPECT_EQ(indices.deviceBuffer.capacity, 0u);
+    EXPECT_STREQ(indices.deviceBuffer.label, "scratch.indices");
+    pipeline.destroyBufferRetired(retired.front());
+
+    // Survivor projection resizes the indices directly, without rebinding the
+    // legacy projection alias. A smaller request must still allocate anew.
+    pipeline.resizeDeviceBuffer(indices, 32);
+    EXPECT_NE(indices.deviceBuffer.buffer, old_handle);
+    EXPECT_NE(indices.deviceBuffer.allocation, VK_NULL_HANDLE);
+    EXPECT_EQ(indices.deviceBuffer.size, 32 * sizeof(int32_t));
+    pipeline.destroyBufferRetired(indices.deviceBuffer);
+}
+
+TEST(VkSplatBufferRetire, ScratchExternalViewIsClearedWithoutRetiringItsParent) {
+    Buffer<uint32_t> view;
+    view.resize(4);
+    view.deviceBuffer.buffer = fakeVkHandle<VkBuffer>(0xABCD);
+    view.deviceBuffer.allocSize = 4096;
+    view.deviceBuffer.offset = 256;
+    view.deviceBuffer.capacity = 128;
+    view.deviceBuffer.size = 64;
+    int retire_calls = 0;
+    auto retire = [&](_VulkanBuffer&) { ++retire_calls; };
+    EXPECT_EQ(lfs::vis::detail::releaseScratchBuffer(view, retire), 0u);
+    EXPECT_EQ(retire_calls, 0);
+    EXPECT_EQ(view.deviceBuffer.buffer, VK_NULL_HANDLE);
+    EXPECT_EQ(view.deviceBuffer.offset, 0u);
+    EXPECT_EQ(view.deviceBuffer.capacity, 0u);
+    EXPECT_TRUE(view.empty());
+    EXPECT_EQ(lfs::vis::detail::releaseScratchBuffer(view, retire), 0u);
+    EXPECT_EQ(retire_calls, 0);
+}
 
 TEST(VkSplatBufferRetire, MidBatchGrowthSplitsWithoutFenceAndRetires) {
     DispatchScript script;

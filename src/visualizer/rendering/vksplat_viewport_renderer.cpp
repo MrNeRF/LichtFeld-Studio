@@ -26,6 +26,7 @@
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "vksplat_scratch_release.hpp"
 #include "vksplat_shared_scratch_install.hpp"
 #include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
@@ -3901,22 +3902,18 @@ namespace lfs::vis {
         const bool destroy_now =
             render_complete_timeline_ == VK_NULL_HANDLE || last_submitted_render_value_ == 0;
         const auto release = [&](auto& typed_buffer) {
-            auto& dev = typed_buffer.deviceBuffer;
-            if (dev.buffer == VK_NULL_HANDLE || dev.allocation == VK_NULL_HANDLE) {
-                return;
-            }
-            released_bytes += dev.allocSize;
-            const char* const label = dev.label;
-            _VulkanBuffer owned = dev;
-            dev = {};
-            dev.label = label;
-            typed_buffer.clear();
-            typed_buffer.shrink_to_fit();
-            if (destroy_now) {
-                renderer_.destroyBuffer(owned);
-            } else {
-                retired_private_scratch_buffers_.emplace_back(last_submitted_render_value_, owned);
-            }
+            // Non-owning scratch views must be invalidated too: the legacy
+            // projection aliases sort indices to primitive depth keys and
+            // index offsets to tiles touched. A subsequent survivor projection
+            // does not rebind those aliases, so retaining their capacity would
+            // let resizeDeviceBuffer reuse the retired owner's VkBuffer.
+            released_bytes += detail::releaseScratchBuffer(typed_buffer, [&](_VulkanBuffer& owned) {
+                if (destroy_now) {
+                    renderer_.destroyBuffer(owned);
+                } else {
+                    retired_private_scratch_buffers_.emplace_back(last_submitted_render_value_, owned);
+                }
+            });
         };
 
 #define RELEASE_PRIVATE_SCRATCH(name) release(buffers_.name)
