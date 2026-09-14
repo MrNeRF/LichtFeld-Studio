@@ -156,7 +156,7 @@ def test_P5_publish_pull_other_confirm_remove_waits_for_delete_response(removal_
         assert state['message'] and 'Removed' not in state['message']
     assert not run.controller._message and not manager._gallery_notice
 
-@pytest.mark.parametrize('operation', ['remove', 'unlink', 'edit'])
+@pytest.mark.parametrize('operation', ['remove', 'unlink', 'update'])
 def test_P5_metadata_waits_for_listing_refresh_and_uses_reloaded_journal(removal_sequence, monkeypatch, operation):
     import threading
     run = removal_sequence
@@ -175,12 +175,12 @@ def test_P5_metadata_waits_for_listing_refresh_and_uses_reloaded_journal(removal
         assert service.busy and not service.metadata_busy
         assert service.message == 'Gallery is up to date.'
         assert service._bucket() is not old_bucket
-        if operation == 'edit':
+        if operation == 'update':
             portal = import_module('lfs_plugins.portal_gallery')
             monkeypatch.setattr(portal.PortalGalleryClient, 'scene', lambda *a: copy.deepcopy(run.remote))
             monkeypatch.setattr(portal.PortalGalleryClient, 'update',
                 lambda *a, **k: dict(run.remote, title='Edited'))
-            run.controller.edit_scene(run.remote, {'title': 'Edited'})
+            service.edit(run.remote['id'], run.remote, {'title': 'Edited'})
         else:
             run.manager._gallery_command(operation)
             assert len(run.dialogs) == 1
@@ -287,7 +287,6 @@ def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, 
     poll = {'path': asset['path'], 'generation': 1, 'running': False}
     monkeypatch.setattr(module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
     monkeypatch.setattr(module, 'capture_view', lambda _: {'exposure': 1, 'cameraPath': {'keyframes': [{'t': 0}]}})
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     restored = []
     monkeypatch.setattr(module, 'restore_view', lambda _lf, view, **kw: restored.append(copy.deepcopy(view)))
@@ -430,9 +429,8 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
     monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
-    monkeypatch.setattr(module.lf, 'prepare_gallery_scene', lambda *a: actions.append(a), raising=False)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *a: actions.append(a), raising=False)
     panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
     dialogs = module.lf._test_state.confirm_dialogs
     for _, _, _, callback in dialogs:
@@ -496,7 +494,6 @@ def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monke
     poll = dict(path=asset['path'], generation=1, running=False)
     monkeypatch.setattr(module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
     monkeypatch.setattr(module, 'capture_view', lambda _: dict(exposure=1, cameraPath=None))
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     events = []
     live = {}
@@ -658,14 +655,16 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     export_state = dict(active=False)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: export_state, raising=False)
-    def prepare(path, format):
+    def prepare(project_path, path, format, commit):
+        assert project_path == str(source) and commit == 'after'
         gallery_preparation.unpack_project(tmp_path, source, Path(path))
         shutil.copyfile(source, Path(path)/'project.licht')
-        export_state.update(path=path, outcome='completed')
-    monkeypatch.setattr(module.lf, 'prepare_gallery_scene', prepare, raising=False)
+        export_state.update(path=path, outcome='completed', commit_uuid=commit)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', prepare, raising=False)
+    monkeypatch.setattr(gallery_preparation, 'publication_view_metadata', lambda *args: dict(
+        exposure=1, cameraPath=restored[-1] if both else None, environment=environment))
     uploads = []
     def upload(_client, path, metadata, **kwargs):
         assert Path(path).suffix == '.licht' and Path(path).is_file()

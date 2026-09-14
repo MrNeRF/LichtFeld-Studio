@@ -23,7 +23,7 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 27; // Version 27 adds Asset Manager gallery actions.
+        constexpr int PROFILE_VERSION = 29; // Migrate version 28 window controls and add gallery shortcuts.
         constexpr Action LAST_ACTION = Action::ASSET_REFRESH;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
@@ -359,11 +359,31 @@ namespace lfs::vis::input {
 
             current_profile_name_ = profile_name;
             bindings_.clear();
+            size_t rewritten = 0;
+            bool legacy_window_profile = false;
 
             for (const auto& b : j["bindings"]) {
                 const int mode_value = b.value("mode", 0);
-                const int action_value = b["action"].get<int>();
+                int action_value = b["action"].get<int>();
                 const std::string stored_description = b.value("description", "");
+                if (stored_description == "Window size" || stored_description == "Window drag" ||
+                    stored_description == "Adjust Window Size" || stored_description == "Drag Depth Window" ||
+                    (version == 28 && (action_value == 85 || action_value == 86))) {
+                    legacy_window_profile = true;
+                    ++rewritten;
+                    continue;
+                }
+                // Version 28 inserted two window controls before grouping. They
+                // are unavailable here; their IDs must not invoke grouping.
+                if (version == 28) {
+                    if (action_value == 87) {
+                        action_value = static_cast<int>(Action::GROUP_SELECTED_SCENE_NODES);
+                        ++rewritten;
+                    } else if (action_value == 88) {
+                        action_value = static_cast<int>(Action::UNGROUP_SELECTED_SCENE_NODE);
+                        ++rewritten;
+                    }
+                }
                 const bool transient_scene_graph_binding =
                     version == 24 &&
                     (stored_description == "Select Scene Hierarchy" ||
@@ -374,12 +394,14 @@ namespace lfs::vis::input {
                 if (transient_scene_graph_binding) {
                     LOG_INFO("Replacing transient version 24 Scene Graph binding: '{}'",
                              stored_description);
+                    ++rewritten;
                     continue;
                 }
                 if (mode_value == REMOVED_TOOL_MODE_2 ||
                     action_value == REMOVED_ACTION_39 ||
                     action_value == REMOVED_ACTION_66) {
                     LOG_INFO("Dropping input binding for removed tool/action");
+                    ++rewritten;
                     continue;
                 }
 
@@ -403,6 +425,7 @@ namespace lfs::vis::input {
                                      static_cast<int>(*remapped), getActionName(*remapped));
                             binding.action = *remapped;
                             binding.description = getActionName(*remapped);
+                            ++rewritten;
                         }
                     }
                 }
@@ -460,8 +483,8 @@ namespace lfs::vis::input {
                          added_bindings, current_profile_name_);
             }
 
-            const size_t collapsed = collapseRedundantModeBindings(version);
-            const size_t migrated = collapsed + migrateLoadedProfile(version);
+            rewritten += collapseRedundantModeBindings(version);
+            rewritten += migrateLoadedProfile(legacy_window_profile && version == 27 ? 28 : version);
 
             rebuildLookupMaps();
             LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
@@ -469,7 +492,7 @@ namespace lfs::vis::input {
             // Auto-persist the canonical Default profile so disk stays current
             // after a versioned migration. User-imported files are left untouched;
             // the migration still applies in memory.
-            if (migrated > 0 && version < PROFILE_VERSION) {
+            if (rewritten > 0 && version >= 1 && version < PROFILE_VERSION) {
                 std::error_code ec;
                 const auto config_dir = getConfigDir();
                 const auto config_default = config_dir
@@ -538,7 +561,7 @@ namespace lfs::vis::input {
                 (version < 26 &&
                  (def.action == Action::GROUP_SELECTED_SCENE_NODES ||
                   def.action == Action::UNGROUP_SELECTED_SCENE_NODE)) ||
-                (version < 27 &&
+                ((version < 27 || version == 28) &&
                  (def.action == Action::ASSET_GALLERY_PRIMARY ||
                   def.action == Action::ASSET_GALLERY_COPY_LINK ||
                   def.action == Action::ASSET_REFRESH));

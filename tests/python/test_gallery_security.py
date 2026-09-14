@@ -4,14 +4,12 @@
 import hashlib
 import io
 import json
-from pathlib import Path
 import shutil
 import threading
 import time
 from types import SimpleNamespace
 import urllib.error
 import uuid
-import zipfile
 
 import pytest
 
@@ -82,7 +80,7 @@ def test_signout_wipes_even_when_refresh_storage_fails(tmp_path, monkeypatch):
     path, backend = tmp_path / 'credentials.json', FakeBackend()
     write_credentials(path, access_expires_at=1)
     account = portal_account.PortalAccountService(credentials_path=path, storage_backend=backend)
-    monkeypatch.setattr(account, '_refresh_tokens', lambda *_: (_ for _ in ()).throw(OSError('storage unavailable')))
+    monkeypatch.setattr(account, '_refresh_tokens', lambda *_, **kw: (_ for _ in ()).throw(OSError('storage unavailable')))
     account.sign_out()
     assert backend.value is None and not account.snapshot().signed_in
 
@@ -413,13 +411,16 @@ def test_transient_attempt_counts_are_durable(tmp_path, monkeypatch):
 @pytest.mark.parametrize('was_public,target', [(False, 'public'), (True, 'public'), (True, 'private')])
 def test_public_visibility_and_public_updates_always_confirm(gallery, monkeypatch, was_public, target):
     controller, state, actions = gallery
+    monkeypatch.setattr(controller, '_project_identity', lambda: ('project', '/project.licht'))
     prompts = []
     remote = scene()
     remote['visibility'] = 'public' if was_public else 'private'
     module = __import__('lfs_plugins.gallery_controller', fromlist=['lf'])
+    monkeypatch.setattr(module, 'capture_view', lambda _: {})
     monkeypatch.setattr(controller, 'preferences', lambda: {'askBeforePublic': True})
     monkeypatch.setattr(module.lf.ui, 'confirm_dialog', lambda *a: prompts.append(a), raising=False)
-    controller.edit_scene(remote, {'visibility': target})
+    monkeypatch.setattr(controller, '_publish', lambda *a, **kw: actions.append((a, kw)))
+    controller._review_publish(remote, {'title': 'Scene', 'description': '', 'visibility': target}, 'sog', False, update=True)
     assert prompts and not actions
     prompts[0][-1](prompts[0][-2][-1])
     assert len(actions) == 1

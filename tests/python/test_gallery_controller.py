@@ -252,21 +252,22 @@ def test_preparation_progress_tracks_own_export(gallery, tmp_path, monkeypatch):
     assert "42%" in panel._message
     assert panel._export_pending is not None and not actions
 
-def test_publish_uses_native_scene_capture(gallery, tmp_path, monkeypatch):
+def test_publish_prepares_the_saved_project_off_thread(gallery, tmp_path, monkeypatch):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
     state["source_formats"] = ["ply", "licht"]
     panel.service.root = tmp_path
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda _: SimpleNamespace(commit_uuid="saved"))
     monkeypatch.setattr(panel, "_project_identity", lambda: ("project", "/project.licht"))
     monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
     monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
     monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(get_nodes=lambda: [SimpleNamespace(id=1, name="scene", type=module.lf.scene.NodeType.SPLAT)], is_node_effectively_visible=lambda node_id: True), raising=False)
     monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
-    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda path, payload_format: actions.append((path, payload_format)), raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_project", lambda *args: actions.append(args), raising=False)
     monkeypatch.setattr(module.lf, "export_scene", lambda *args, **kwargs: pytest.fail("Must preserve local multi-object geometry"), raising=False)
     panel._publish({"title": "Scene"})
     assert panel._export_pending[0].suffix == ".scene"
-    assert actions == [(str(panel._export_pending[0]), "ply")]
+    assert actions == [("/project.licht", str(panel._export_pending[0]), "ply", "saved")]
 
 def test_completed_native_scene_hands_off_to_background_packaging(gallery, tmp_path, monkeypatch):
     import uuid
@@ -319,15 +320,18 @@ def test_gallery_does_not_cancel_or_consume_another_export(gallery, tmp_path, mo
 
 def test_making_scene_public_requires_review_and_keeps_captured_details(gallery, monkeypatch):
     controller, state, actions = gallery
+    monkeypatch.setattr(controller, "_project_identity", lambda: ("project", "/project.licht"))
     prompts = []
     monkeypatch.setattr(import_module("lfs_plugins.gallery_controller").lf.ui, "confirm_dialog", lambda *args: prompts.append(args), raising=False)
     details = dict(title="My scene", description="Private description", visibility="public")
-    controller.edit_scene(scene(), details)
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_controller"), "capture_view", lambda _: {})
+    monkeypatch.setattr(controller, "_publish", lambda metadata, **kw: actions.append(metadata))
+    controller._review_publish(scene(), details, "sog", False, update=True)
     assert actions == [] and len(prompts) == 1
     assert prompts[0][1].endswith("confirm.public")
     details["title"] = "Another title entered after confirmation"
     prompts[0][-1](prompts[0][-2][-1])
-    assert actions[0][2] == dict(title="My scene", description="Private description", visibility="public")
+    assert {k: actions[0][k] for k in details} == dict(title="My scene", description="Private description", visibility="public")
 
 def test_unlink_confirmation_and_cancel_never_save_the_project(gallery, panel_module, monkeypatch):
     controller, _, actions = gallery
@@ -519,17 +523,6 @@ def _native_camera_path(path):
         return value
 
     return convert(copy.deepcopy(path))
-def test_edit_still_sends_details_without_camera_path_or_export(gallery, monkeypatch):
-    panel, state, actions = gallery
-    module = import_module("lfs_plugins.gallery_controller")
-    state["scenes"] = [scene()]
-    panel._refresh_model()
-    monkeypatch.setattr(module, "capture_view", lambda _: pytest.fail("details save must not capture the view"))
-    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *a, **k: pytest.fail("details save must not export"), raising=False)
-    panel.edit_scene(state["scenes"][0], {k: state["scenes"][0][k] for k in ("title", "description", "visibility")})
-    assert actions == [("private-one", {"contentRevision": "original", "metadataRevision": "original"},
-        {"title": "My scene", "description": "Private description", "visibility": "private"})]
-
 def _local_track_state(monkeypatch, module, initial=None):
     current = {"path": None if initial is None else _native_camera_path(initial)}
 
@@ -686,12 +679,11 @@ def test_metadata_only_update_skips_native_export(gallery, monkeypatch):
     facts=import_module('lfs_plugins.gallery_project_facts')
     monkeypatch.setattr(facts,'saved_content_stamp',lambda path:'same-content:same-view')
     monkeypatch.setattr(panel,'_project_identity',lambda:('project','/project.licht'))
-    monkeypatch.setattr(module.lf,'prepare_gallery_scene',lambda *_: pytest.fail('Metadata PATCH must upload zero bytes'),raising=False)
+    monkeypatch.setattr(module.lf,'prepare_gallery_project',lambda *_: pytest.fail('Metadata PATCH must upload zero bytes'),raising=False)
     monkeypatch.setattr(module.lf,'io',SimpleNamespace(inspect_project=lambda _:SimpleNamespace(project_uuid='project',commit_uuid='new-commit')),raising=False)
     panel.service.edit=lambda *a,**kw:actions.append((a,kw))
     state['links']={'project':{'sceneId':'scene','contentStamp':'same-content:same-view'}}
-    panel._allow_metadata_patch=True
-    panel._publish_saved({'title':'New title','replaceSceneId':'scene','baseRevisions':{'content':'r1','metadata':'r1'}},'project','/project.licht',state['identity'])
+    panel._publish_saved({'title':'New title','replaceSceneId':'scene','baseRevisions':{'content':'r1','metadata':'r1'}},'project','/project.licht',state['identity'], update=True)
     assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view'})]
 
 def test_cancel_paused_job_does_not_pause_someone_elses_upload(gallery, monkeypatch):
@@ -768,17 +760,16 @@ def test_uncomparable_update_explains_reupload_and_keeps_requested_format(galler
     monkeypatch.setattr(import_module('lfs_plugins.gallery_project_facts'), 'saved_content_stamp', lambda _: '')
     monkeypatch.setattr(panel, '_project_identity', lambda: ('project', '/project.licht'))
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='visible')])
-    monkeypatch.setattr(module.lf, 'prepare_gallery_scene', lambda *a, **kw: actions.append((a, kw)), raising=False)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *a, **kw: actions.append((a, kw)), raising=False)
     panel.service.root = tmp_path
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
     state['source_formats'] = ['licht']
     state['links'] = {'project': {'sceneId': 'scene', 'contentStamp': ''}}
-    panel._allow_metadata_patch = True
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     panel._publish_saved({'title': 'Title', 'replaceSceneId': 'scene', 'baseRevisions': {'content':'r1','metadata':'r1'}},
-                         'project', '/project.licht', state['identity'], upload_format='ssog')
+                         'project', '/project.licht', state['identity'], upload_format='ssog', update=True)
     assert panel.snapshot()['reuploadReason']['message'].endswith('info.reupload_encoding')
-    assert actions[0][0][1] == 'ssog'
+    assert actions[0][0][2] == 'ssog'
 
 def test_C1_both_camera_tracks_use_native_time_without_mutating_inputs(gallery):
     from lfs_plugins.gallery_controller import combine_camera_tracks
@@ -828,22 +819,6 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: 'localized:' + key)
     assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:asset_manager.gallery.sidebar.refresh'
-
-def test_U3_remote_editor_patches_revision_and_confirms_public_transition(gallery, monkeypatch):
-    panel, state, actions = gallery
-    module = import_module('lfs_plugins.gallery_controller')
-    confirmations = []
-    monkeypatch.setattr(module.lf.ui, 'confirm_dialog', lambda *args: confirmations.append(args), raising=False)
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
-    remote = scene()
-    panel.edit_scene(remote, {'title':'Edited remote', 'description':'New description'})
-    assert actions == [('private-one',{'contentRevision':'original','metadataRevision':'original'},{'title':'Edited remote','description':'New description'})]
-    panel.edit_scene(remote, {'visibility':'public'})
-    assert len(actions) == 1 and len(confirmations) == 1
-    assert panel._decision_pending
-    dialog = confirmations[0]
-    dialog[-1](dialog[-2][-1])
-    assert actions[-1] == ('private-one',{'contentRevision':'original','metadataRevision':'original'},{'visibility':'public'})
 
 @pytest.mark.parametrize('kind', ['upload', 'download'])
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])

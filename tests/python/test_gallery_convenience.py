@@ -40,32 +40,6 @@ def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):
         set_preference(key, value, tmp_path)
     assert not (tmp_path / 'preferences.json').exists()
 
-def test_inline_device_flow_uses_complete_uri_and_cancel(convenience, panel_module, monkeypatch):
-    panel, _, _ = convenience
-    calls = []
-    account = SimpleNamespace(base_url='https://portal.example', start_device_flow=lambda: calls.append('start') or True,
-        cancel_device_flow=lambda: calls.append('cancel'),
-        snapshot=lambda: SimpleNamespace(user_code='ABCD-EFGH', verification_uri_complete='https://portal.example/link?code=ABCD-EFGH'))
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(account=account))
-    monkeypatch.setattr(panel_module.lf.ui, 'open_url', lambda url: calls.append(url), raising=False)
-    monkeypatch.setattr(panel_module.lf.ui, 'set_clipboard_text', lambda value: calls.append(value), raising=False)
-    for command in ('connect', 'connect_copy', 'connect_browser', 'connect_cancel'):
-        panel._gallery_command(command)
-    assert calls == ['start', 'ABCD-EFGH', 'https://portal.example/link?code=ABCD-EFGH', 'cancel']
-    assert not panel._gallery_connecting
-    assert not panel_module.lf._test_state.enabled
-
-def test_inline_approval_countdown_relink_and_completion(convenience):
-    panel, _, _ = convenience
-    panel._gallery_state.update(accountFlow={'linking': True, 'countdown_seconds': 581}, relink_required=True)
-    assert panel._gallery_waiting() == 'Waiting for approval… (expires in 9:41)'
-    panel._gallery_connecting = True
-    panel._gallery_completions({}, panel._gallery_state)
-    assert panel._gallery_toast is None
-    panel._gallery_state.update(relink_required=False, display_name='Alice')
-    panel._gallery_completions({}, panel._gallery_state)
-    assert panel._gallery_toast['text'] == 'Gallery connected as Alice'
-
 def test_gallery_quota_requires_server_usage(convenience):
     panel, local, _ = convenience
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
@@ -343,11 +317,16 @@ def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monke
     assert calls[0][1] == {'update':True}
     assert controller._batch_rows == []
 
-def test_publish_review_reads_latest_preferences_default(convenience):
-    panel, _, _ = convenience
+def test_publish_opens_dialog_with_current_format_and_selected_file(convenience, monkeypatch):
+    from lfs_plugins import gallery_file_panel
+    panel, asset, _ = convenience
+    opened = []
     panel._gallery_controller = SimpleNamespace(upload_format='spz')
+    monkeypatch.setattr(gallery_file_panel, 'open_gallery_file_panel', lambda **kw: opened.append(kw))
     panel._gallery_command('publish')
-    assert panel._gallery_review and panel._gallery_upload_format == 'spz'
+    assert len(opened) == 1 and opened[0]['asset'] == asset
+    assert opened[0]['fields']['upload_format'] == 'spz'
+    assert opened[0]['action'] == 'publish'
 
 def test_remote_card_starts_typed_native_drag(convenience, panel_module):
     panel, _, _ = convenience

@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Review FG2 regressions. IDs match reviewFG_report.md."""
+"""Gallery URL, credential-storage, and transfer boundary regressions."""
 import base64
 import ctypes
-import hashlib
 import json
 from pathlib import Path
 import stat
@@ -26,17 +25,36 @@ BAD_URLS = ['https://foreign.example/share', 'http://portal.example/share',
             'https://portal.example:444/share', 'https://user@portal.example/share',
             'https://portal.example/\\evil', 'https://portal.example/\nshare']
 
-@pytest.mark.parametrize('url', BAD_URLS)
-def test_S1_copy_link_refuses_foreign_or_unsafe_url(gallery, panel_module, monkeypatch, url):
-    controller, _, _ = gallery
-    controller.service.account = SimpleNamespace(base_url='https://portal.example')
-    monkeypatch.setattr(panel_module.lf.ui, 'set_clipboard_text', lambda _: pytest.fail('Copied unsafe URL'), raising=False)
-    with pytest.raises(ValueError, match='unsafe_url'):
-        controller.open_portal({'id': str(uuid.uuid4()), 'visibility': 'public', 'viewerUrl': url}, 'copy')
+@pytest.mark.parametrize('url,switched', [(url, False) for url in BAD_URLS] + [
+    ('https://portal.example/share/current', False), ('https://portal.example/share/current', True)])
+def test_copy_link_fetches_current_url_and_rejects_unsafe_or_stale_results(gallery, panel_module, monkeypatch, url, switched):
+    controller, state, _ = gallery
+    workers, callbacks, copies, requests = [], [], [], []
+    def request(*args, **kwargs):
+        requests.append((args, kwargs))
+        return {'url': url}
+    controller.service.account = SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request)
+    monkeypatch.setattr(threading, 'Thread', lambda target, **kw: SimpleNamespace(start=lambda: workers.append(target)))
+    monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', callbacks.append, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, 'set_clipboard_text', copies.append, raising=False)
+    monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
+    scene = {'id': str(uuid.uuid4()), 'visibility': 'public', 'viewerUrl': 'https://portal.example/stale'}
+    controller.open_portal(scene, 'copy')
+    controller.open_portal(scene, 'copy')
+    assert len(workers) == 1 and not copies and not requests
+    workers.pop()()
+    assert requests == [(('POST', '/api/gallery/v1/splats/' + scene['id'] + '/share-link', {}),
+                         {'expected_session': state['identity'][1:3]})]
+    if switched:
+        state['identity'] = ('https://portal.example', 'another-owner', 'another-session', True)
+    callbacks.pop()()
+    assert copies == ([] if switched or url in BAD_URLS else [url])
+    if url in BAD_URLS:
+        assert controller._message
 
 @pytest.mark.parametrize('field', ['verification_uri', 'verification_uri_complete'])
 @pytest.mark.parametrize('url', BAD_URLS[:4])
-def test_S2_device_flow_refuses_bad_origin_before_display(tmp_path, monkeypatch, field, url):
+def test_device_flow_refuses_bad_origin_before_display(tmp_path, monkeypatch, field, url):
     account = portal_account.PortalAccountService(base_url='https://portal.example', credentials_path=tmp_path/'credentials.json')
     payload = dict(device_code='secret', user_code='ABCD', verification_uri='https://portal.example/device',
                    verification_uri_complete='https://portal.example/device?code=ABCD', expires_in=60, interval=1)
@@ -46,31 +64,8 @@ def test_S2_device_flow_refuses_bad_origin_before_display(tmp_path, monkeypatch,
     assert not account.snapshot().signed_in and not account.snapshot().verification_uri_complete
     assert account.snapshot().error == 'unsafe_portal_url'
 
-@pytest.mark.parametrize('url', BAD_URLS[:4])
-def test_X4_inline_browser_refuses_foreign_host_with_notice(convenience, panel_module, monkeypatch, url):
-    panel, _, _ = convenience
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(account=SimpleNamespace(
-        base_url='https://portal.example', snapshot=lambda: SimpleNamespace(verification_uri_complete=url))))
-    monkeypatch.setattr(panel_module.lf.ui, 'open_url', lambda _: pytest.fail('Opened unsafe URL'), raising=False)
-    panel._gallery_command('connect_browser')
-    assert panel._gallery_notice == 'This link does not belong to your portal and was blocked.'
-
-@pytest.mark.parametrize('action', ['_open_verification_uri', '_maybe_open_verification_uri', '_copy_verification_uri'])
-def test_X4_account_panel_browser_and_copy_validate_again(panel_module, monkeypatch, action):
-    from lfs_plugins.account_panel import AccountPanel
-    errors = []
-    panel = AccountPanel.__new__(AccountPanel)
-    panel._service = SimpleNamespace(base_url='https://portal.example',
-        snapshot=lambda: SimpleNamespace(verification_uri_complete='https://foreign.example/device'),
-        _set_signed_out=errors.append)
-    panel._opened_verification_uri = ''
-    monkeypatch.setattr(panel_module.lf.ui, 'open_url', lambda _: pytest.fail('Opened unsafe URL'), raising=False)
-    monkeypatch.setattr(panel_module.lf.ui, 'set_clipboard_text', lambda _: pytest.fail('Copied unsafe URL'), raising=False)
-    getattr(panel, action)(*(() if action == '_maybe_open_verification_uri' else (None,)))
-    assert errors == ['unsafe_portal_url']
-
 @pytest.mark.parametrize('url', [BAD_URLS[i] for i in (1, 2, 6, 7, 8)] + ['http://foreign.example/file'])
-def test_X4_download_refuses_unsafe_transport_before_io(tmp_path, monkeypatch, url):
+def test_download_refuses_unsafe_transport_before_io(tmp_path, monkeypatch, url):
     monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     original = client.account.request_json_authenticated
@@ -82,7 +77,7 @@ def test_X4_download_refuses_unsafe_transport_before_io(tmp_path, monkeypatch, u
         client.download(scene['id'], tmp_path/'file.licht')
     assert not list(tmp_path.iterdir())
 
-def test_X4_me_explicit_owned_host_allows_download(tmp_path, monkeypatch):
+def test_me_explicit_owned_host_allows_download(tmp_path, monkeypatch):
     monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     def request(method, path, body=None):
@@ -106,7 +101,7 @@ def test_X4_me_explicit_owned_host_allows_download(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         portal_security.portal_url('https://portal.example', 'https://cdn.portal.example/file')
 
-def test_P4_r2_download_is_credential_free_and_logs_only_host(tmp_path, monkeypatch, caplog):
+def test_r2_download_is_credential_free_and_logs_only_host(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     original = client.account.request_json_authenticated
@@ -133,18 +128,18 @@ def test_P4_r2_download_is_credential_free_and_logs_only_host(tmp_path, monkeypa
 
 @pytest.mark.parametrize('allowed', [[], 'bucket.r2.cloudflarestorage.com', ['*.r2.cloudflarestorage.com'],
                                       ['bucket.r2.cloudflarestorage.com/path']])
-def test_P4_explicit_empty_or_invalid_storage_allowlist_denies(allowed):
+def test_explicit_empty_or_invalid_storage_allowlist_denies(allowed):
     with pytest.raises(ValueError):
         portal_security.storage_url('https://portal.example', 'https://bucket.r2.cloudflarestorage.com/file', allowed)
 
-def test_P4_http_storage_only_on_configured_local_portal():
+def test_http_storage_only_on_configured_local_portal():
     url = 'http://127.0.0.1:45678/file?signature=local'
     assert portal_security.storage_url('http://127.0.0.1:45678', url) == url
     for base in ('https://portal.example', 'http://127.0.0.1:45679'):
         with pytest.raises(ValueError):
             portal_security.storage_url(base, url)
 
-def test_P4_retry_persisted_unsafe_url_upload_sends_r2_part_without_credentials(tmp_path, monkeypatch):
+def test_retry_persisted_unsafe_url_upload_sends_r2_part_without_credentials(tmp_path, monkeypatch):
     from test_gallery_sync import connected, finish
     service = connected(tmp_path, monkeypatch)
     upload_id, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -208,7 +203,7 @@ def test_P4_retry_persisted_unsafe_url_upload_sends_r2_part_without_credentials(
     assert all(body['idempotencyKey'] == checkpoint['idempotencyKey'] for body in creates)
     assert ('GET', '/api/gallery/v1/splats/uploads/' + upload_id, None) in calls
 
-def test_X4_thumbnail_builds_endpoint_from_origin_not_json(gallery, monkeypatch):
+def test_thumbnail_builds_endpoint_from_origin_not_json(gallery, monkeypatch):
     calls = []
     account = SimpleNamespace(base_url='https://portal.example', request_response_authenticated=lambda *a, **k:
         calls.append(a) or (200, {'ETag': '"poster"'}, b'\x89PNG\r\n\x1a\n'))
@@ -220,7 +215,7 @@ def test_X4_thumbnail_builds_endpoint_from_origin_not_json(gallery, monkeypatch)
         client.thumbnail('https://foreign.example/poster')
 
 @pytest.mark.parametrize('matches', [False, True])
-def test_S3_existing_backend_is_rewritten_and_verified_before_plaintext_delete(tmp_path, matches):
+def test_existing_backend_is_rewritten_and_verified_before_plaintext_delete(tmp_path, matches):
     path, backend = tmp_path/'credentials.json', FakeBackend()
     path.write_bytes(b'new account')
     backend.value = b'new account' if matches else b'old account'
@@ -229,7 +224,7 @@ def test_S3_existing_backend_is_rewritten_and_verified_before_plaintext_delete(t
     assert backend.writes == 1 and backend.value == b'new account' and not path.exists()
     assert storage.migrated.read() == b'verified\n'
 
-def test_S3_failed_readback_preserves_only_unmigrated_plaintext(tmp_path):
+def test_failed_readback_preserves_only_unmigrated_plaintext(tmp_path):
     path, backend = tmp_path/'credentials.json', FakeBackend()
     path.write_bytes(b'good account')
     backend.write = lambda _: None
@@ -243,7 +238,7 @@ def test_S3_failed_readback_preserves_only_unmigrated_plaintext(tmp_path):
     assert path.read_bytes() == b'good account'
 
 @pytest.mark.parametrize('previously_migrated', [False, True])
-def test_S4_decrypt_failure_removes_plaintext_only_after_verified_migration(tmp_path, previously_migrated):
+def test_decrypt_failure_removes_plaintext_only_after_verified_migration(tmp_path, previously_migrated):
     path, backend = tmp_path/'credentials.json', FakeBackend()
     write_credentials(path)
     original = path.read_bytes()
@@ -255,7 +250,7 @@ def test_S4_decrypt_failure_removes_plaintext_only_after_verified_migration(tmp_
     assert not restarted.snapshot().signed_in
     assert path.exists() is not previously_migrated
 
-def test_S5_signout_file_fallback_deletes_hidden_keychain(tmp_path, monkeypatch):
+def test_signout_file_fallback_deletes_hidden_keychain(tmp_path, monkeypatch):
     path = tmp_path/'credentials.json'
     write_credentials(path)
     monkeypatch.setattr(credential_storage.platform, 'system', lambda: 'Darwin')
@@ -276,7 +271,7 @@ def test_S5_signout_file_fallback_deletes_hidden_keychain(tmp_path, monkeypatch)
     assert not account.snapshot().signed_in
 
 @pytest.mark.parametrize('kind', ['toast', 'undo'])
-def test_T1_queued_expiry_never_dirties_unmounted_or_remounted_panel(convenience, panel_module, monkeypatch, kind):
+def test_queued_expiry_never_dirties_unmounted_or_remounted_panel(convenience, panel_module, monkeypatch, kind):
     panel, _, _ = convenience
     queued = []
     monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', queued.append)
@@ -294,7 +289,7 @@ def test_T1_queued_expiry_never_dirties_unmounted_or_remounted_panel(convenience
     timer.function()
     queued.pop()()
 
-def test_C1_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
+def test_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
     panel, _, _ = convenience
     identifier = str(uuid.uuid4())
     panel._gallery_state['scenes'][-1]['id'] = identifier
@@ -312,7 +307,7 @@ def test_C1_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
     assert 'panel->onViewportDrop(released->type, released->data)' in native
     assert 'panel_instance_.attr("gallery_viewport_drop")(data)' in adapter
 
-def test_C2_native_registry_exposes_defaults_and_preferences_rows():
+def test_native_registry_exposes_defaults_and_preferences_rows():
     root = Path(__file__).parents[2]
     source = (root/'src/visualizer/input/input_bindings.cpp').read_text()
     bindings = (root/'src/python/lfs/py_keymap.cpp').read_text()
@@ -324,7 +319,7 @@ def test_C2_native_registry_exposes_defaults_and_preferences_rows():
     assert 'LAST_ACTION = Action::ASSET_REFRESH' in source
 
 @pytest.mark.parametrize('kind,reason', [('diverged', 'Review changes first'), ('remote', 'Already in your gallery')])
-def test_C3_published_drop_has_localized_reason(convenience, kind, reason):
+def test_published_drop_has_localized_reason(convenience, kind, reason):
     panel, local, remote = convenience
     if kind == 'diverged':
         local['commit_uuid'] = 'local change'
@@ -346,7 +341,7 @@ def test_C3_published_drop_has_localized_reason(convenience, kind, reason):
 @pytest.mark.parametrize('record', [{'localUpdate': {'backupPath': '/backup.licht'}},
     {'stagedImport': {'path': '/imports/a.licht'}}, {'recoveryPath': '/recovery/a.licht'},
     {'downloadPath': '/downloads/a.licht'}, {'kind': 'download', 'path': '/downloads/a.licht'}])
-def test_C4_prune_preserves_all_owned_recovery_paths(record):
+def test_prune_preserves_all_owned_recovery_paths(record):
     owned = dict(id='owned', status='completed', finishedAt=1, **record)
     old = dict(id='old', status='completed', finishedAt=1)
     service = gallery_sync.GallerySync.__new__(gallery_sync.GallerySync)
@@ -356,7 +351,7 @@ def test_C4_prune_preserves_all_owned_recovery_paths(record):
     jobs = service._data['accounts']['owner']['jobs']
     assert owned in jobs and old not in jobs and len(jobs) == 201
 
-def test_X3_dpapi_uses_user_scope_and_frees_os_buffers(tmp_path, monkeypatch):
+def test_dpapi_uses_user_scope_and_frees_os_buffers(tmp_path, monkeypatch):
     calls, buffers = [], []
     class Operation:
         def __init__(self, protect):
@@ -394,7 +389,7 @@ def test_X3_dpapi_uses_user_scope_and_frees_os_buffers(tmp_path, monkeypatch):
     backend.delete()
     assert not path.exists()
 
-def test_X3_keychain_exact_subprocess_contract_and_file_write_mode(tmp_path, monkeypatch):
+def test_keychain_exact_subprocess_contract_and_file_write_mode(tmp_path, monkeypatch):
     path, calls = tmp_path/'credentials.json', []
     backend = credential_storage.KeychainBackend(path, '/usr/bin/security')
     secret = b'private refresh token'
@@ -417,7 +412,7 @@ def test_X3_keychain_exact_subprocess_contract_and_file_write_mode(tmp_path, mon
     with pytest.raises(OSError):
         backend.write(secret)
 
-def test_X5_keep_waiting_real_http_only_polls_existing_upload(tmp_path):
+def test_keep_waiting_real_http_only_polls_existing_upload(tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     upload_id, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
     requests, polls = [], []
@@ -481,7 +476,7 @@ def test_X5_keep_waiting_real_http_only_polls_existing_upload(tmp_path):
         server.server_close()
         thread.join(timeout=5)
 
-def test_S4_missing_security_in_path_does_not_downgrade_verified_keychain(tmp_path, monkeypatch):
+def test_missing_security_in_path_does_not_downgrade_verified_keychain(tmp_path, monkeypatch):
     path = tmp_path/'credentials.json'
     write_credentials(path)
     path.with_suffix('.migrated').write_bytes(b'verified\n')

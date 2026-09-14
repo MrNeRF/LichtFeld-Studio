@@ -361,7 +361,6 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
         "ResumeCheckpointPanel",
         "ExportPanel",
         "AboutPanel",
-        "AccountPanel",
         "BugReportPanel",
         "GettingStartedPanel",
         "ImagePreviewPanel",

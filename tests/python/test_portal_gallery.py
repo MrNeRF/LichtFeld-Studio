@@ -158,7 +158,7 @@ def test_old_portal_cannot_silently_create_instead_of_replace(tmp_path):
         portal_gallery.PortalGalleryClient(account).upload(export, {"title": "Edited", "replaceSceneId": str(uuid.uuid4())})
     assert requests == [("GET", "/api/gallery/v1/me")]
 
-def _domain_client(version=1, changed=None, *, repeat=False):
+def _domain_client(version=1, changed=None):
     scene_id = str(uuid.uuid4())
     scene = {"id": scene_id, "revision": "reviewed", "contentRevision": "content-old", "metadataRevision": "metadata-old"}
     calls = []
@@ -168,9 +168,9 @@ def _domain_client(version=1, changed=None, *, repeat=False):
         if path.endswith("/me"):
             return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1, **({"revisionDomains": version} if version else {})}
         writes = sum(call[0] != "GET" for call in calls)
-        if changed and (writes == 1 or repeat):
+        if changed and writes == 1:
             raise PortalHTTPError(409, "sync_conflict", detail={"changedDomains": changed,
-                "currentRevisions": {"content": "content-new", "metadata": "metadata-new", "presentation": "presentation-new"}})
+                "currentRevisions": {"content": "content-new", "metadata": "metadata-new"}})
         return scene
     def response(method, path, *, body=None, **kwargs):
         request(method, path, body, **kwargs)
@@ -191,59 +191,34 @@ def test_capability_selects_exactly_one_guard_style(version, operation, domains)
     assert set(body["baseRevisions"]) == domains
     assert "baseRevision" not in body
 
-@pytest.mark.parametrize("changed,retries", [(["presentation"], 1), (["content"], 0), (["metadata"], 0)])
-def test_domain_conflict_retries_only_unwritten_domains(changed, retries):
+@pytest.mark.parametrize('changed', [['content'], ['metadata']])
+@pytest.mark.parametrize('operation', ['update', 'delete'])
+def test_domain_conflict_preserves_details_without_retry(changed, operation):
     client, scene, calls = _domain_client(changed=changed)
-    if retries:
-        client.update(scene["id"], scene, title="Changed")
-        assert calls[-1][2]["baseRevisions"] == {"metadata": "metadata-new"}
-    else:
-        with pytest.raises(PortalHTTPError) as error:
-            client.update(scene["id"], scene, title="Changed")
-        assert error.value.detail["changedDomains"] == changed
-    assert sum(call[0] == "PATCH" for call in calls) == 1 + retries
+    with pytest.raises(PortalHTTPError) as error:
+        if operation == 'update':
+            client.update(scene['id'], scene, title='Changed')
+        else:
+            client.delete(scene['id'], scene)
+    assert error.value.detail['changedDomains'] == changed
+    assert sum(call[0] != 'GET' for call in calls) == 1
 
-def test_presentation_retry_is_limited_to_once():
-    client, scene, calls = _domain_client(changed=["presentation"], repeat=True)
-    with pytest.raises(PortalHTTPError):
-        client.delete(scene["id"], scene)
-    assert sum(call[0] == "DELETE" for call in calls) == 2
-
-@pytest.mark.parametrize("version", [1])
-@pytest.mark.parametrize("rebase", [False, True])
-def test_upload_create_and_rebase_capability_guards(tmp_path, version, rebase):
-    import copy
+def test_upload_create_uses_reviewed_revision_guards(tmp_path):
     scene_id, upload_id = str(uuid.uuid4()), str(uuid.uuid4())
-    scene = {"id": scene_id, "revision": "reviewed", "contentRevision": "c", "metadataRevision": "m"}
-    calls, checkpoints = [], []
-    def request(method, path, body=None, **kwargs):
-        calls.append((method, path, copy.deepcopy(body)))
-        if path.endswith("/me"):
-            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": version}
-        if method == "GET":
-            return scene
-        if path.endswith("/rebase"):
-            return {"id": upload_id, "status": "completed", "scene": scene}
-        return {"id": upload_id, "status": "conflict" if rebase else "completed", "scene": scene}
-    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
-    path = tmp_path / "scene.licht"
-    path.write_bytes(b"ply\ndata")
-    metadata = {"title": "Title", "replaceSceneId": scene_id, "baseRevisions": {"content": "c", "metadata": "m"}}
-    if rebase:
-        with pytest.raises(PortalHTTPError):
-            client.upload(path, metadata, on_checkpoint=checkpoints.append)
-        cp = checkpoints[-1]
-        guard = {"baseRevisions": {"content": "c", "metadata": "m"}}
-        cp["rebase"] = {**guard, "metadata": {"title": "Reviewed"}}
-        metadata = {key: value for key, value in cp["request"].items() if key not in ("sourceFormat", "contentLength")}
-        client.upload(path, metadata, checkpoint=cp)
-    else:
-        client.upload(path, metadata)
-    for method, endpoint, body in calls:
-        if method != "POST":
-            continue
-        assert body["baseRevisions"] == {"content": "c", "metadata": "m"}
-        assert "baseRevision" not in body
+    calls = []
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        if path.endswith('/me'):
+            return {'sourceFormats': ['licht'], 'id': 'owner', 'revisionDomains': 1, 'gallerySyncVersion': 1}
+        assert path.endswith('/uploads')
+        return {'id': upload_id, 'status': 'completed', 'scene': {'id': scene_id}}
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request))
+    path = tmp_path / 'scene.licht'
+    path.write_bytes(b'transport fixture')
+    client.upload(path, {'title': 'Title', 'replaceSceneId': scene_id, 'baseRevisions': {'content': 'c', 'metadata': 'm'}})
+    assert len(calls) == 2
+    assert calls[-1][2]['baseRevisions'] == {'content': 'c', 'metadata': 'm'}
+    assert 'baseRevision' not in calls[-1][2]
 
 def test_listing_validator_only_on_first_page_and_304():
     import json
@@ -307,40 +282,30 @@ def test_bounded_authenticated_response_rejects_oversized_thumbnail(tmp_path, mo
     with pytest.raises(PortalProtocolError, match="size limit"):
         service._request_json("GET", "/thumbnail", response_options={"max_bytes": 4})
 
-@pytest.mark.parametrize("changed,retries", [(["presentation"], 1), (["content"], 0)])
-@pytest.mark.parametrize("background", [False, True])
-def test_upload_completion_domain_conflicts_preserve_details_and_retry_once(tmp_path, changed, retries, background):
+@pytest.mark.parametrize('changed', [['content'], ['metadata']])
+@pytest.mark.parametrize('background', [False, True])
+def test_upload_conflicts_preserve_details_without_automatic_rebase(tmp_path, changed, background):
     identifier, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
-    calls, checkpoints = [], []
-    parts = [{"partNumber": 1, "etag": "part", "size": 8}]
-    detail = {"changedDomains": changed, "currentRevisions": {"content": "c2", "metadata": "m2", "presentation": "p2"}}
-    conflict = {"id": identifier, "status": "conflict", "conflict": {"error": "sync_conflict", "detail": detail}}
+    calls = []
+    parts = [{'partNumber': 1, 'etag': 'part', 'size': 8}]
+    detail = {'changedDomains': changed, 'currentRevisions': {'content': 'c2', 'metadata': 'm2'}}
+    conflict = {'id': identifier, 'status': 'conflict', 'conflict': {'error': 'sync_conflict', 'detail': detail}}
     def request(method, path, body=None):
-        calls.append((method, path, body))
-        if path.endswith("/me"):
-            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1}
-        if path.endswith("/uploads"):
-            return conflict if background else {"id": identifier, "status": "uploading", "partSize": 8, "uploadedParts": parts}
-        if path.endswith("/rebase"):
-            assert body["baseRevisions"] == {"content": "c2", "metadata": "m2"}
-            return {"id": identifier, "status": "uploading", "uploadedParts": parts}
-        assert path.endswith("/complete")
-        assert body["parts"] == [{"partNumber": 1, "etag": "part"}]
-        if not any(call[1].endswith("/rebase") for call in calls):
-            raise PortalHTTPError(409, "sync_conflict", detail=detail)
-        return {"id": identifier, "status": "completed", "scene": {"contentRevision": "new", "metadataRevision": "new", "id": scene_id, "revision": "new"}}
-    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
-    export = tmp_path / "scene.licht"
-    export.write_bytes(b"ply\ndata")
-    metadata = {"title": "Title", "replaceSceneId": scene_id, "baseRevisions": {"content": "c1", "metadata": "m1"}}
-    if retries:
-        assert client.upload(export, metadata, on_checkpoint=checkpoints.append)["status"] == "completed"
-        assert checkpoints[-1]["rebase"]["baseRevisions"] == {"content": "c2", "metadata": "m2"}
-    else:
-        with pytest.raises(PortalHTTPError) as error:
-            client.upload(export, metadata)
-        assert error.value.detail == detail
-    assert sum(call[1].endswith("/rebase") for call in calls) == retries
+        calls.append(path)
+        if path.endswith('/me'):
+            return {'sourceFormats': ['licht'], 'id': 'owner', 'revisionDomains': 1, 'gallerySyncVersion': 1}
+        if path.endswith('/uploads'):
+            return conflict if background else {'id': identifier, 'status': 'uploading', 'partSize': 8, 'uploadedParts': parts}
+        assert path.endswith('/complete')
+        assert body['parts'] == [{'partNumber': 1, 'etag': 'part'}]
+        raise PortalHTTPError(409, 'sync_conflict', detail=detail)
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request))
+    export = tmp_path / 'scene.licht'
+    export.write_bytes(b'ply\ndata')
+    with pytest.raises(PortalHTTPError) as error:
+        client.upload(export, {'title': 'Title', 'replaceSceneId': scene_id, 'baseRevisions': {'content': 'c1', 'metadata': 'm1'}})
+    assert error.value.detail == detail
+    assert len(calls) == (2 if background else 3)
 
 def test_exposure_only_patch_uses_metadata_guard():
     client, scene, calls = _domain_client()
@@ -367,44 +332,3 @@ def test_cached_scene_tokens_cannot_override_an_older_review():
     with pytest.raises(PortalProtocolError, match="Missing gallery revision tokens"):
         client.update(scene["id"], "older-review", title="Edited")
     assert all(call[0] == "GET" for call in calls)
-
-
-@pytest.mark.parametrize('first_conflict', ['create', 'processing', 'rebase'])
-def test_upload_shares_one_presentation_retry_budget(tmp_path, first_conflict):
-    import copy
-    upload_id, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
-    calls, checkpoints = [], []
-    detail = {'changedDomains': ['presentation'], 'currentRevisions': {'content': 'c', 'metadata': 'm'}}
-    conflict = {'id': upload_id, 'status': 'conflict', 'conflict': {'detail': detail}}
-    def request(method, path, body=None):
-        calls.append((method, path))
-        if path.endswith('/me'):
-            return {'storageHosts': ['portal.example'], 'sourceFormats': ['licht'],
-                    'id': 'owner', 'gallerySyncVersion': 1, 'revisionDomains': 1}
-        if path.endswith('/uploads'):
-            if first_conflict == 'create' and calls.count((method, path)) == 1:
-                raise PortalHTTPError(409, 'sync_conflict', detail=detail)
-            return conflict
-        if path.endswith('/rebase'):
-            if first_conflict == 'rebase' and calls.count((method, path)) == 1:
-                raise PortalHTTPError(409, 'sync_conflict', detail=detail)
-            return conflict
-        if method == 'GET':
-            return conflict
-        pytest.fail('Unexpected request: ' + path)
-    account = SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request)
-    client = portal_gallery.PortalGalleryClient(account)
-    export = tmp_path / 'scene.licht'
-    export.write_bytes(b'transport fixture')
-    metadata = {'title': 'Title', 'replaceSceneId': scene_id, 'baseRevisions': {'content': 'c', 'metadata': 'm'}}
-    checkpoint = None
-    if first_conflict == 'rebase':
-        with pytest.raises(PortalHTTPError):
-            client.upload(export, metadata, on_checkpoint=lambda value: checkpoints.append(copy.deepcopy(value)))
-        checkpoint = checkpoints[-1]
-        checkpoint['rebase'] = {'baseRevisions': metadata['baseRevisions'], 'metadata': {'title': 'Title'}}
-        calls.clear()
-    with pytest.raises(PortalHTTPError):
-        client.upload(export, metadata, checkpoint=checkpoint)
-    assert sum(path.endswith('/rebase') for _, path in calls) == {'create': 0, 'processing': 1, 'rebase': 2}[first_conflict]
-    assert sum(path.endswith('/uploads') for _, path in calls) == (2 if first_conflict == 'create' else 1)

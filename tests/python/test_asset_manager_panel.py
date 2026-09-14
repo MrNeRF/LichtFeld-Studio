@@ -1671,6 +1671,8 @@ def test_on_mount_shows_cached_rows_without_inspecting(
         return original_refresh(assets=assets, folders=folders)
 
     panel._refresh_records = timed_refresh
+    ui_callbacks = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", ui_callbacks.append)
     started = time.perf_counter()
     panel.on_mount(_Document())
     mount_to_refresh_ms = (refresh_at["time"] - started) * 1000
@@ -1685,6 +1687,10 @@ def test_on_mount_shows_cached_rows_without_inspecting(
     }
     assert verify_done.wait(timeout=2.0)
     assert {project.status for project in index.list_projects()} == {"AVAILABLE"}
+    if panel._catalog_verify_thread:
+        panel._catalog_verify_thread.join(timeout=2.0)
+    for callback in ui_callbacks:
+        callback()
     panel.on_update(_Document())
     assert {row["status"] for row in panel._handle.records["assets"]} <= {
         "AVAILABLE",
@@ -1758,7 +1764,7 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     assert actions[0:2] == ['load','gallery:resolve']
     assert 'gallery:update' not in actions and 'gallery:publish' not in actions
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
-    assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy']
+    assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
 
 def test_multi_selection_publish_and_update_are_disjoint(panel_module):
     panel,local,remote = _gallery_fixture(panel_module)
@@ -1810,7 +1816,7 @@ def test_pull_completion_reloads_catalog_and_selects_new_card(panel_module, monk
     assert panel._selected_folder_id == '__gallery__'
     assert panel._gallery_notice.endswith('info.pulled')
 
-def test_U1_removed_scene_keeps_info_link_controls(panel_module):
+def test_removed_scene_keeps_unlink_action(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id(local['id'])
     panel._gallery_state['scenes'] = []
@@ -1818,7 +1824,7 @@ def test_U1_removed_scene_keeps_info_link_controls(panel_module):
     assert panel._has_gallery_link()
     assert panel._gallery_scene(local) is None
     actions = panel._gallery_context_items(local)
-    assert any(child['action']=='gallery:unlink' for item in actions for child in item.get('children', []))
+    assert any(item['action'] == 'gallery:unlink' for item in actions)
 
 def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -1839,57 +1845,7 @@ def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     panel._gallery_changed(dict(state, undoPull={'backup':'/backup', 'attempt':2, 'backupMissing':True, 'error':'gone'}))
     assert panel._gallery_undo is None and panel._gallery_notice == 'gone'
 
-def test_U3_remote_title_edit_exposes_update_and_uses_controller(panel_module):
-    panel, local, remote = _gallery_fixture(panel_module)
-    panel._select_asset_id('remote:remote-only')
-    panel._gallery_title = 'Edited remote title'
-    calls = []
-    panel._gallery_controller = SimpleNamespace(edit_scene=lambda *args: calls.append(args))
-    assert panel._selected_gallery_action() == 'update'
-    panel._gallery_command('primary')
-    assert calls[0][0]['id'] == 'remote-only'
-    assert calls[0][1]['title'] == 'Edited remote title'
-    assert panel_module.lf._test_state.opened == []
-
 # Moved from test_gallery_controller: the Asset Manager owns the editor/open flow.
-def test_refresh_updates_clean_form_but_keeps_dirty_form_revision(panel_module):
-    import copy
-    panel, local, remote = _gallery_fixture(panel_module)
-    panel._select_asset_id(local['id'])
-    changed = copy.deepcopy(panel._gallery_state)
-    changed['scenes'][0].update(title='New remote title', revision='second')
-    panel._gallery_changed(changed)
-    assert panel._gallery_title == 'New remote title'
-    assert panel._gallery_editor_scene['revision'] == 'second'
-    panel._gallery_title = 'My unsaved change'
-    changed = copy.deepcopy(changed)
-    changed['scenes'][0].update(title='Concurrent change', revision='third')
-    panel._gallery_changed(changed)
-    assert panel._gallery_title == 'My unsaved change'
-    assert panel._gallery_editor_scene['revision'] == 'second'
-
-def test_U3_remote_draft_keeps_its_reviewed_revision_across_refresh(panel_module):
-    import copy
-    panel, _, _ = _gallery_fixture(panel_module)
-    panel._select_folder_id('__gallery__')
-    panel._select_asset_id('remote:remote-only')
-    panel._gallery_title = 'My draft'
-    state = copy.deepcopy(panel._gallery_state)
-    state['scenes'][1].update(title='Portal changed', revision='r2')
-    panel._gallery_changed(state)
-    calls = []
-    panel._gallery_controller = SimpleNamespace(edit_scene=lambda *a: calls.append(a))
-    panel._gallery_command('primary')
-    assert calls[0][0]['revision'] == 'r1'
-    assert calls[0][1]['title'] == 'My draft'
-
-def test_leftover_controller_ui_surface_has_one_editor_and_confirmation(panel_module):
-    from lfs_plugins.gallery_controller import GalleryController
-    for name in ('_action_new', '_action_select', '_action_edit', '_action_open_project', 'focus_project'):
-        assert not hasattr(GalleryController, name)
-    assert callable(GalleryController.edit_scene)
-    assert callable(GalleryController.confirm_action)
-
 @pytest.mark.parametrize('height', [600, 720, 1000])
 @pytest.mark.parametrize('folder_count', [2, 40])
 @pytest.mark.parametrize('restored_info', [220, 1000])
@@ -2023,18 +1979,15 @@ def test_update_review_explains_cover_preservation(panel_module):
     text = panel._gallery_review_includes()
     assert "asset_manager.gallery.review.cover_kept" in text
 
-@pytest.mark.parametrize("tab", ["story", "display", "manage"])
-def test_portal_deep_links_and_copy_share_link(panel_module, tab):
+@pytest.mark.parametrize('visibility', ['private', 'public'])
+def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibility):
     from lfs_plugins.gallery_controller import GalleryController
-    urls, copies = [], []
+    urls = []
     panel_module.lf.ui.open_url = urls.append
-    panel_module.lf.ui.set_clipboard_text = copies.append
-    controller = SimpleNamespace(service=SimpleNamespace(account=SimpleNamespace(base_url="https://portal.example")))
-    scene = {"id": str(uuid.uuid4()), "visibility": "public", "viewerUrl": "https://portal.example/share/public"}
-    GalleryController.open_portal(controller, scene, tab)
-    assert urls == [f'https://portal.example/gallery/scenes/{scene["id"]}/?tab={tab}']
-    GalleryController.open_portal(controller, scene, "copy")
-    assert copies == [scene["viewerUrl"]] and len(urls) == 1
+    controller = SimpleNamespace(service=SimpleNamespace(account=SimpleNamespace(base_url='https://portal.example')))
+    scene = {'id': str(uuid.uuid4()), 'visibility': visibility}
+    GalleryController.open_portal(controller, scene)
+    assert urls == [f'https://portal.example/gallery/scenes/{scene["id"]}/open/']
 
 def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
