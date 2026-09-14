@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "pose_refinement_session.hpp"
+#include "joint_pose_proposal.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cmath>
@@ -215,7 +216,8 @@ namespace lfs::training::camera_pose {
             }
         }
         const double point_limit = config_.optimizer.scene_scale * config_.optimizer.max_center_fraction;
-        auto relax_points = [&](const Matrix4& pose, std::vector<SparsePointPosition>& positions) {
+        auto relax_points = [&](const Matrix4& pose, std::vector<SparsePointPosition>& positions,
+                                double ceiling = std::numeric_limits<double>::infinity()) {
             const WallTimer timer{diagnostics_.point_ms};
             double cost = 0;
             for (size_t i = 0; i < joint_tracks.size(); ++i) {
@@ -231,6 +233,11 @@ namespace lfs::training::camera_pose {
                     positions[i] = proposal->position;
                 }
                 cost += sparse_point_cost(track, positions[i]);
+                // Each completed track contributes nonnegative cost. Once this
+                // partial sum fails, solving remaining independent tracks cannot
+                // rescue this candidate. Partially updated candidates never commit.
+                if (!std::isfinite(cost) || cost > ceiling)
+                    return cost;
             }
             return cost;
         };
@@ -258,16 +265,8 @@ namespace lfs::training::camera_pose {
             }();
             if (!joint_tracks.empty()) {
                 const WallTimer timer{diagnostics_.proposal_ms};
-                std::vector<ReprojectionObservation> observations;
-                ReprojectionCalibration k{};
-                for (size_t i = 0; i < joint_tracks.size(); ++i) {
-                    const auto& track = joint_tracks[i];
-                    const auto m = std::find_if(track.measurements.begin(), track.measurements.end(),
-                                                [&](const auto& m) { return m.camera_uid == uid; });
-                    k = m->calibration;
-                    observations.push_back({m->u, m->v, points[i][0], points[i][1], points[i][2]});
-                }
-                image.geometric_proposal = SparseReprojectionGuard(pose.current, k, observations).proposal(pose.current, config_.optimizer.scene_scale);
+                image.geometric_proposal = propose_joint_pose(uid, pose.current, joint_tracks, points,
+                                                              config_.optimizer.scene_scale);
             }
             if (stop.stop_requested()) {
                 result.cancelled = true;
@@ -286,7 +285,8 @@ namespace lfs::training::camera_pose {
                 }
                 if (!joint_tracks.empty()) {
                     candidate_points = initial_points;
-                    const double cost = relax_points(candidate, candidate_points);
+                    const double cost = relax_points(candidate, candidate_points,
+                                                     geometry_baseline + 1e-12 * joint_tracks.size());
                     if (!std::isfinite(cost) || !std::isfinite(geometry_baseline) ||
                         cost > geometry_baseline + 1e-12 * joint_tracks.size()) {
                         if (!stop.stop_requested())

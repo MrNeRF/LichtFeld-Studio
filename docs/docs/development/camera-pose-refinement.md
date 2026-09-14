@@ -155,7 +155,20 @@ matching a COLMAP ID to an array index. Reconstruction gains and solve overhead
 must be measured on the dataset; an improved sparse residual alone does not
 establish better novel-view rendering.
 
-When the fixed observations constrain all six pose dimensions, their reprojection
+For shared geometry, the pose proposal uses a reduced Gauss-Newton system.
+Huber-weighted reprojection Jacobians include both the active camera's left
+SE(3) increment and each incident point's world-space increment. Eliminating
+the point blocks with a Schur complement accounts for point motion before
+choosing the camera direction. Other cameras remain fixed during this local
+solve; it is not a simultaneous multi-camera bundle adjustment. Singular
+point or reduced camera blocks yield no geometric proposal, retaining the
+photometric search. World-unit normalization does not change the physical step.
+Nonlinear candidate verification retains the same point budget, cumulative
+bounds and separate geometric and photometric acceptance requirements. A
+candidate's point solve stops once its nonnegative partial cost exceeds the
+full acceptance ceiling; incomplete candidates never commit.
+
+For the fixed-source fallback, when observations constrain all six pose dimensions, their reprojection
 Jacobian supplies a Gauss-Newton proposal for coupled translation and rotation.
 The proposal must be a descent direction for the photometric objective and source
 prior, and accepted steps must still reduce the photometric loss and satisfy the
@@ -163,7 +176,7 @@ source reprojection ceiling and motion bounds. Geometric proposals share the
 existing candidate budget with the photometric search. Missing or rank-deficient
 geometry uses the photometric search alone. The sparse points remain fixed.
 
-Sparse reprojection protects the imported geometric evidence; it does not
+The fixed-source fallback protects the imported geometric evidence; it does not
 establish improvement on unseen images. An accepted update can still compensate
 for limited appearance capacity or imperfections in the sparse model. Accurate
 source cameras may reject all proposed movement. Acceptance alone is not evidence

@@ -20,6 +20,7 @@ from check_camera_pose_gate import SPARSE_POINT_SUITE, SPARSE_POINT_TESTS, inspe
 from check_camera_pose_gate import JOINT_SESSION_SUITE, JOINT_SESSION_TESTS, inspect_joint_session_gate
 from check_camera_pose_gate import JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS, inspect_joint_integration_gate
 from check_camera_pose_gate import DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS, inspect_diagnostics_gate
+from check_camera_pose_gate import SCHUR_SUITE, SCHUR_TESTS, inspect_schur_gate
 
 
 class ReportFailureTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class ReportFailureTests(unittest.TestCase):
                                 (VIEW_SUITE, VIEW_TESTS), (ACTIVATION_SUITE, ACTIVATION_TESTS),
                                 (SPARSE_POINT_SUITE, SPARSE_POINT_TESTS), (JOINT_SESSION_SUITE, JOINT_SESSION_TESTS),
                                 (JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS),
-                                (DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS)):
+                                (DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS), (SCHUR_SUITE, SCHUR_TESTS)):
             with self.subTest(suite=suite):
                 self.assertEqual(found.get(suite), expected)
 
@@ -361,6 +362,44 @@ class CameraPoseDiagnosticsGateTests(unittest.TestCase):
         ET.SubElement(suite.find("testcase"), "skipped")
         with self.assertRaises(ValueError):
             inspect_diagnostics_gate(root)
+
+
+class CameraPoseSchurGateTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseJointIntegrationGateReportTests().report()
+        for name, inventory in ((DIAGNOSTICS_SUITE, DIAGNOSTICS_TESTS), (SCHUR_SUITE, SCHUR_TESTS)):
+            suite = ET.SubElement(root, "testsuite", name=name)
+            for case in sorted(inventory):
+                ET.SubElement(suite, "testcase", name=case, status="run", result="completed")
+        return root
+
+    def test_requires_complete_schur_contracts_without_claiming_quality(self):
+        result = inspect_schur_gate(self.report())
+        self.assertEqual(result["tests"], 73)
+        self.assertTrue(result["schur_proposal_contracts"])
+        self.assertFalse(result["reconstruction_quality_validated"])
+
+    def test_rejects_incomplete_or_unexecuted_schur_suite(self):
+        for defect in ("suite", "duplicate_suite", "missing", "duplicate", "unknown", "notrun", "failure", "error", "skipped"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{SCHUR_SUITE}']")
+            case = suite.find("testcase")
+            if defect == "suite":
+                root.remove(suite)
+            elif defect == "duplicate_suite":
+                root.append(suite)
+            elif defect == "missing":
+                suite.remove(case)
+            elif defect == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif defect == "unknown":
+                case.set("name", "Unknown")
+            elif defect == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, defect)
+            with self.subTest(defect=defect), self.assertRaises(ValueError):
+                inspect_schur_gate(root)
 
 
 class CameraPoseActivationGateReportTests(unittest.TestCase):

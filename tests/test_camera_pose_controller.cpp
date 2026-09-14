@@ -2,8 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
-#include "training/camera_pose/sparse_reprojection_guard.hpp"
+#include "training/camera_pose/joint_pose_proposal.hpp"
 #include "training/camera_pose/sparse_point_refinement.hpp"
+#include "training/camera_pose/sparse_reprojection_guard.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
@@ -13,6 +14,180 @@ namespace {
     using namespace lfs::training::camera_pose;
 
     constexpr ReprojectionCalibration calibration{800, 780, 800, 600, 1600, 1200};
+
+    std::vector<SparsePointTrack> joint_tracks(double scale = 1.0) {
+        std::vector<SparsePointTrack> result;
+        for (int i = 0; i < 20; ++i) {
+            SparsePointPosition truth{(i % 5 - 2) * 0.4 * scale,
+                                      (i / 5 - 1.5) * 0.4 * scale, (3.5 + (i % 3) * 0.5) * scale};
+            SparsePointTrack track{static_cast<std::uint64_t>(i), truth, {}};
+            track.source[2] += 0.01 * scale;
+            for (int camera = 0; camera < 3; ++camera) {
+                auto p = identity_transform();
+                p[3] = static_cast<float>((camera - 1) * scale);
+                p[7] = static_cast<float>((camera % 2) * 0.3 * scale);
+                track.measurements.push_back({track.point_id, track.source, camera, true, p, calibration,
+                                              calibration.fx * (truth[0] + p[3]) / truth[2] + calibration.cx,
+                                              calibration.fy * (truth[1] + p[7]) / truth[2] + calibration.cy});
+            }
+            result.push_back(track);
+        }
+        return result;
+    }
+
+    TEST(CameraPoseSchurTest, RecoversPoseWithMovableStructureWithoutMutatingSources) {
+        auto tracks = joint_tracks();
+        auto pose = apply_left_increment({0.008f, -0.004f, 0.003f, 0.001f, -0.001f, 0.002f},
+                                         tracks.front().measurements[1].pose);
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        const auto original_points = points;
+        const auto fingerprint = sparse_track_fingerprint(tracks.front());
+        auto cost = [&](const Matrix4& p) {
+            double value = 0;
+            for (size_t i = 0; i < tracks.size(); ++i) {
+                auto track = tracks[i];
+                track.measurements[1].pose = p;
+                value += sparse_point_cost(track, points[i]);
+            }
+            return value;
+        };
+        const double before = cost(pose);
+        const auto step = propose_joint_pose(1, pose, tracks, points, 1.0);
+        ASSERT_TRUE(step);
+        EXPECT_EQ(points, original_points);
+        EXPECT_EQ(sparse_track_fingerprint(tracks.front()), fingerprint);
+        const auto candidate = apply_left_increment(*step, pose);
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            auto track = tracks[i];
+            track.measurements[1].pose = candidate;
+            if (auto update = propose_sparse_point(track, 0.1, 2.0, points[i]))
+                points[i] = update->position;
+        }
+        EXPECT_LT(cost(candidate), before * 0.05);
+        EXPECT_NEAR(candidate[3], 0, 0.001);
+        EXPECT_NEAR(candidate[7], 0.3, 0.001);
+        EXPECT_NEAR(candidate[11], 0, 0.001);
+    }
+
+    TEST(CameraPoseSchurTest, ProposalIsInvariantToWorldUnits) {
+        std::optional<Twist> reference;
+        for (const double scale : {1.0, 100.0}) {
+            auto tracks = joint_tracks(scale);
+            std::vector<SparsePointPosition> points;
+            for (const auto& track : tracks)
+                points.push_back(track.source);
+            const auto pose = apply_left_increment({static_cast<float>(0.005 * scale), 0, 0, 0, 0.001f, 0},
+                                                   tracks.front().measurements[1].pose);
+            auto step = propose_joint_pose(1, pose, tracks, points, scale);
+            ASSERT_TRUE(step);
+            for (int i = 0; i < 3; ++i)
+                (*step)[i] = static_cast<float>((*step)[i] / scale);
+            if (reference)
+                for (int i = 0; i < 6; ++i)
+                    EXPECT_NEAR((*step)[i], (*reference)[i], 1e-6);
+            reference = step;
+        }
+    }
+
+    TEST(CameraPoseSchurTest, InvalidOrUnobservableGeometryNeverProducesProposal) {
+        for (int defect = 0; defect < 7; ++defect) {
+            auto tracks = joint_tracks();
+            std::vector<SparsePointPosition> points;
+            for (const auto& track : tracks)
+                points.push_back(track.source);
+            if (defect == 0)
+                points.pop_back();
+            if (defect == 1)
+                tracks[0].measurements[0].training = false;
+            if (defect == 2)
+                tracks[0].measurements[0].camera_uid = 1;
+            if (defect == 3)
+                points[0][2] = std::numeric_limits<double>::quiet_NaN();
+            if (defect == 4)
+                tracks[0].measurements[0].pose[0] = 2;
+            if (defect == 5)
+                for (auto& track : tracks)
+                    for (auto& m : track.measurements)
+                        m.pose = identity_transform();
+            if (defect == 6)
+                tracks[0].measurements[1].camera_uid = 5;
+            EXPECT_FALSE(propose_joint_pose(1, identity_transform(), tracks, points, 1)) << defect;
+        }
+    }
+
+    TEST(CameraPoseSchurTest, NormalizedFactorSolvesCoupledSystem) {
+        const joint_detail::Matrix<3> h{{{4, 2, 0}, {2, 5, 1}, {0, 1, 3}}};
+        joint_detail::Factor<3> factor;
+        ASSERT_TRUE(factor.compute(h));
+        const auto x = factor.solve({0, -5, 7}); // h * (1, -2, 3)
+        EXPECT_NEAR(x[0], 1, 1e-12);
+        EXPECT_NEAR(x[1], -2, 1e-12);
+        EXPECT_NEAR(x[2], 3, 1e-12);
+    }
+
+    TEST(CameraPoseSchurTest, ReducedStepMatchesFullNumericalNormalEquations) {
+        const auto tracks = joint_tracks();
+        const auto pose = apply_left_increment({0.006f, -0.003f, 0.002f, 0.001f, -0.001f, 0.002f},
+                                               tracks.front().measurements[1].pose);
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        // Independent full 66-variable system, using central differences rather
+        // than the production analytic Jacobians or point elimination.
+        constexpr size_t dimensions = 6 + 3 * 20;
+        joint_detail::Matrix<dimensions> h{};
+        joint_detail::Vector<dimensions> rhs{};
+        constexpr double epsilon = 1e-3;
+        for (size_t t = 0; t < tracks.size(); ++t) {
+            for (const auto& m : tracks[t].measurements) {
+                const auto p = m.camera_uid == 1 ? pose : m.pose;
+                auto residual = [&](const Matrix4& camera, const SparsePointPosition& point) {
+                    const double x = camera[0] * point[0] + camera[1] * point[1] + camera[2] * point[2] + camera[3];
+                    const double y = camera[4] * point[0] + camera[5] * point[1] + camera[6] * point[2] + camera[7];
+                    const double z = camera[8] * point[0] + camera[9] * point[1] + camera[10] * point[2] + camera[11];
+                    return std::array<double, 2>{(calibration.fx * x / z + calibration.cx - m.u) / 1600,
+                                                 (calibration.fy * y / z + calibration.cy - m.v) / 1600};
+                };
+                const auto r = residual(p, points[t]);
+                const double norm = std::hypot(r[0], r[1]);
+                const double weight = norm <= 2.0 / 1600 ? 1.0 : 2.0 / (1600 * norm);
+                std::array<joint_detail::Vector<dimensions>, 2> jacobian{};
+                if (m.camera_uid == 1)
+                    for (size_t i = 0; i < 6; ++i) {
+                        Twist plus{}, minus{};
+                        plus[i] = static_cast<float>(epsilon);
+                        minus[i] = -plus[i];
+                        const auto a = residual(apply_left_increment(plus, p), points[t]);
+                        const auto b = residual(apply_left_increment(minus, p), points[t]);
+                        for (size_t row = 0; row < 2; ++row)
+                            jacobian[row][i] = (a[row] - b[row]) / (2 * epsilon);
+                    }
+                for (size_t i = 0; i < 3; ++i) {
+                    auto plus = points[t], minus = points[t];
+                    plus[i] += epsilon;
+                    minus[i] -= epsilon;
+                    const auto a = residual(p, plus), b = residual(p, minus);
+                    for (size_t row = 0; row < 2; ++row)
+                        jacobian[row][6 + 3 * t + i] = (a[row] - b[row]) / (2 * epsilon);
+                }
+                for (size_t i = 0; i < dimensions; ++i)
+                    for (size_t row = 0; row < 2; ++row) {
+                        rhs[i] -= weight * jacobian[row][i] * r[row];
+                        for (size_t j = 0; j < dimensions; ++j)
+                            h[i][j] += weight * jacobian[row][i] * jacobian[row][j];
+                    }
+            }
+        }
+        joint_detail::Factor<dimensions> full;
+        ASSERT_TRUE(full.compute(h));
+        const auto expected = full.solve(rhs);
+        const auto actual = propose_joint_pose(1, pose, tracks, points, 1);
+        ASSERT_TRUE(actual);
+        for (size_t i = 0; i < 6; ++i)
+            EXPECT_NEAR((*actual)[i], expected[i], 2e-5) << i;
+    }
 
     SparsePointTrack point_track(const double scale = 1.0) {
         const SparsePointPosition truth{0.3 * scale, 0.2 * scale, 4.0 * scale};

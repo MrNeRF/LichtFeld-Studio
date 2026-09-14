@@ -119,14 +119,15 @@ def test_live_output_and_child_error(tmp_path, capsys):
     assert 'detail' in (tmp_path / 'console.log').read_text()
 
 
-def test_full_driver_with_mock_training(tmp_path):
+@pytest.mark.parametrize('selection,count', [([], 12), (['--only-dataset', 'statue', '--only-strategy', 'mrnf'], 2)])
+def test_full_driver_with_mock_training(tmp_path, selection, count):
     executable = tmp_path / 'app.exe'
     executable.write_bytes(b'not executable')
     for dataset, images in (('bicycle', 'images_4'), ('statue', 'images')):
         (tmp_path / dataset / images).mkdir(parents=True)
         (tmp_path / dataset / 'sparse').mkdir()
     args = ['benchmark', '--bicycle', str(tmp_path / 'bicycle'), '--statue', str(tmp_path / 'statue'),
-            '--executable', str(executable), '--output', str(tmp_path / 'results')]
+            '--executable', str(executable), '--output', str(tmp_path / 'results')] + selection
     def fake_training(command, console, label):
         folder = Path(command[command.index('-o') + 1])
         write_result(folder)
@@ -137,11 +138,13 @@ def test_full_driver_with_mock_training(tmp_path):
     with patch.object(sys, 'argv', args), patch.object(matrix, 'run_child', side_effect=fake_training) as child, \
             patch.object(matrix.time, 'perf_counter', side_effect=range(24)):
         matrix.main()
-        assert child.call_count == 12
+        assert child.call_count == count
+        if selection:
+            assert [call.args[2] for call in child.call_args_list] == ['statue/mrnf/off', 'statue/mrnf/on']
     summary = json.loads((tmp_path / 'results/summary.json').read_text())
-    assert len(summary) == 6
+    assert len(summary) == count // 2
     with (tmp_path / 'results/summary.csv').open() as file:
-        assert len(list(csv.DictReader(file))) == 6
+        assert len(list(csv.DictReader(file))) == count // 2
     with patch.object(sys, 'argv', args), patch.object(matrix, 'run_child') as child:
         with pytest.raises(SystemExit):
             matrix.main()

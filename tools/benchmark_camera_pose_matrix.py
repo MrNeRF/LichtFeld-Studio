@@ -152,7 +152,9 @@ def main():
     parser.add_argument('--statue', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--executable', type=Path, default=Path('build/LichtFeld-Studio.exe'))
-    parser.add_argument('--dry-run', action='store_true', help='Print the 12 commands without writing or running')
+    parser.add_argument('--only-dataset', choices=('bicycle', 'statue'), help='Run only this dataset, retaining OFF/ON pairs')
+    parser.add_argument('--only-strategy', choices=STRATEGIES, help='Run only this strategy, retaining OFF/ON pairs')
+    parser.add_argument('--dry-run', action='store_true', help='Print selected commands without writing or running')
     args = parser.parse_args()
     args.bicycle, args.statue = args.bicycle.resolve(), args.statue.resolve()
     output, executable = args.output.resolve(), args.executable.resolve()
@@ -166,6 +168,9 @@ def main():
         if not (dataset / images).is_dir() or not (dataset / 'sparse').is_dir():
             parser.error(f'Missing {images} or sparse directory in {dataset}')
     runs = plan(executable, args.bicycle, args.statue, output)
+    runs = [run for run in runs
+            if (args.only_dataset is None or run['dataset'] == args.only_dataset)
+            and (args.only_strategy is None or run['strategy'] == args.only_strategy)]
     if args.dry_run:
         print(json.dumps(runs, indent=2))
         return
