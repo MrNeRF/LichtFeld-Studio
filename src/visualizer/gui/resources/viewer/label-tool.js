@@ -35,8 +35,8 @@ const LABEL_CLICK_DEADZONE = 8;
 // Screen-space radius (px) around a label's point that counts as a click
 // on that label.
 const LABEL_PICK_TOLERANCE = 12;
-// Rough clickable width (px) of the label text to the left of its anchor.
-const LABEL_TEXT_WIDTH = 120;
+// Padding around the rendered text bounds, including its outline stroke.
+const LABEL_TEXT_PADDING = 3;
 
 function initLabelTool(global) {
     const { app, camera, events } = global;
@@ -207,6 +207,9 @@ function initLabelTool(global) {
 
     // ---- hit testing ------------------------------------------------------
     const findLabelAt = (mx, my) => {
+        const canvasBounds = canvas.getBoundingClientRect();
+        const clientX = canvasBounds.left + mx;
+        const clientY = canvasBounds.top + my;
         for (let i = 0; i < labels.length; i++) {
             // A label hidden behind the camera must not be clickable either
             // (it would otherwise still project onto the visible screen).
@@ -218,10 +221,13 @@ function initLabelTool(global) {
                 Math.abs(_screen.y - my) <= LABEL_PICK_TOLERANCE) {
                 return i;
             }
-            // Text sits to the left of its anchor (text-anchor: end).
-            if (mx <= _screen.x + LABEL_TEXT_DX &&
-                mx >= _screen.x + LABEL_TEXT_DX - LABEL_TEXT_WIDTH &&
-                Math.abs(_screen.y + LABEL_TEXT_DY - my) <= 12) {
+            // Match the visible text, including long and non-ASCII labels.
+            // DOM bounds and the pointer must both use viewport coordinates.
+            const textBounds = groups[i].childNodes[3].getBoundingClientRect();
+            if (clientX >= textBounds.left - LABEL_TEXT_PADDING &&
+                clientX <= textBounds.right + LABEL_TEXT_PADDING &&
+                clientY >= textBounds.top - LABEL_TEXT_PADDING &&
+                clientY <= textBounds.bottom + LABEL_TEXT_PADDING) {
                 return i;
             }
         }
