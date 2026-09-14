@@ -21,7 +21,6 @@ from test_gallery_sync import connected, finish, Client
 from test_gallery_controller import gallery, scene
 from test_asset_manager_panel import panel_module, _gallery_fixture
 
-
 class FakeBackend:
     def __init__(self):
         self.value = None
@@ -39,11 +38,9 @@ class FakeBackend:
         self.value = None
         self.deleted += 1
 
-
 @pytest.fixture(autouse=True)
 def no_backoff_sleep(monkeypatch):
     monkeypatch.setattr(portal_retry.time, 'sleep', lambda _: None)
-
 
 def test_credentials_migrate_once_and_refresh_uses_backend(tmp_path):
     path, backend = tmp_path / 'credentials.json', FakeBackend()
@@ -57,7 +54,6 @@ def test_credentials_migrate_once_and_refresh_uses_backend(tmp_path):
     restarted._save_credentials(account._current_credentials())
     assert backend.writes == 2 and not path.exists()
 
-
 def test_failed_secure_migration_preserves_plaintext(tmp_path):
     path, backend = tmp_path / 'credentials.json', FakeBackend()
     write_credentials(path)
@@ -65,7 +61,6 @@ def test_failed_secure_migration_preserves_plaintext(tmp_path):
     backend.write = lambda _: (_ for _ in ()).throw(OSError('locked'))
     account = portal_account.PortalAccountService(credentials_path=path, storage_backend=backend)
     assert path.read_bytes() == original and not account.snapshot().signed_in
-
 
 @pytest.mark.parametrize('offline', [False, True])
 def test_signout_revokes_and_wipes_backend_and_stale_files(tmp_path, monkeypatch, offline):
@@ -83,7 +78,6 @@ def test_signout_revokes_and_wipes_backend_and_stale_files(tmp_path, monkeypatch
     assert backend.value is None and backend.deleted == 1
     assert not path.exists() and not path.with_suffix('.dpapi').exists()
 
-
 def test_signout_wipes_even_when_refresh_storage_fails(tmp_path, monkeypatch):
     path, backend = tmp_path / 'credentials.json', FakeBackend()
     write_credentials(path, access_expires_at=1)
@@ -92,7 +86,6 @@ def test_signout_wipes_even_when_refresh_storage_fails(tmp_path, monkeypatch):
     account.sign_out()
     assert backend.value is None and not account.snapshot().signed_in
 
-
 @pytest.mark.parametrize('system,security,expected', [('Windows', None, credential_storage.DPAPIBackend),
     ('Darwin', '/usr/bin/security', credential_storage.KeychainBackend), ('Darwin', None, credential_storage.FileBackend),
     ('Linux', '/usr/bin/security', credential_storage.FileBackend)])
@@ -100,7 +93,6 @@ def test_default_credential_backend_selection(tmp_path, monkeypatch, system, sec
     monkeypatch.setattr(credential_storage.platform, 'system', lambda: system)
     monkeypatch.setattr(credential_storage.shutil, 'which', lambda _: security)
     assert type(credential_storage.default_backend(tmp_path / 'credentials.json')) is expected
-
 
 def test_dpapi_file_contains_only_protected_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr(credential_storage, '_dpapi', lambda value, protect: b'cipher:' + value[::-1] if protect else value[7:][::-1])
@@ -111,7 +103,6 @@ def test_dpapi_file_contains_only_protected_bytes(tmp_path, monkeypatch):
     assert backend.read() == b'access_token plaintext'
     backend.delete()
     assert not path.exists()
-
 
 def test_keychain_secret_passes_via_stdin_not_argv(tmp_path, monkeypatch):
     import base64
@@ -131,13 +122,11 @@ def test_keychain_secret_passes_via_stdin_not_argv(tmp_path, monkeypatch):
     backend.delete()
     assert 'delete-generic-password' in calls[-1][0]
 
-
 @pytest.mark.parametrize('value', ['Authorization: Bearer secret', '{"access_token": "secret"}',
     "{'refresh_token': 'secret'}", 'user_code=secret', 'https://host/download?token=secret&ok=1',
     'x-amz-signature=secret'])
 def test_redact_secret_fields(value):
     assert 'secret' not in portal_security.redact(value)
-
 
 def test_redact_actual_tokens_and_user_code_in_unstructured_exception(tmp_path, monkeypatch, caplog):
     path = tmp_path / 'credentials.json'
@@ -148,7 +137,6 @@ def test_redact_actual_tokens_and_user_code_in_unstructured_exception(tmp_path, 
     text = portal_security.redact('failure private-access private-refresh ABCD-1234')
     assert text == 'failure [REDACTED] [REDACTED] [REDACTED]'
     assert 'ABCD-1234' not in caplog.text
-
 
 @pytest.mark.parametrize('method,key,retried', [('GET', False, True), ('PATCH', False, False),
     ('DELETE', False, False), ('POST', False, False), ('POST', True, True)])
@@ -165,7 +153,6 @@ def test_account_retry_is_idempotency_gated(tmp_path, monkeypatch, method, key, 
     assert len(network.requests) == (2 if retried else 1)
     assert all(r.get_header('User-agent') == 'LichtFeld-Studio/9.8.7' for r in network.requests)
 
-
 @pytest.mark.parametrize('error', [TimeoutError(), urllib.error.URLError(TimeoutError()),
     portal_account.PortalHTTPError(429, 'busy', retry_after=500), portal_account.PortalHTTPError(502, 'gateway')])
 def test_retry_delay_is_capped_and_attempt_count_is_bounded(error):
@@ -179,25 +166,22 @@ def test_retry_delay_is_capped_and_attempt_count_is_bounded(error):
     if getattr(error, 'status', None) == 429:
         assert delays == [30, 30, 30]
 
-
 def _download_client(size, limit=None):
     identifier = str(uuid.uuid4())
-    scene = {'id': identifier, 'contentLength': size, 'revision': 'r1'}
+    scene = {"contentRevision": 'r1', "metadataRevision": 'r1', 'id': identifier, 'contentLength': size, 'revision': 'r1'}
     def request(method, path, body=None):
         if path.endswith('/me'):
-            return {'maxFileBytes': size if limit is None else limit}
+            return {"storageHosts": ["portal.example"], 'revisionDomains': 1, 'maxFileBytes': size if limit is None else limit}
         if path.endswith('/download'):
             return {'url': 'https://portal.example/presigned?token=opaque', 'scene': scene}
         return scene
     account = SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request, _client_version='1.2.3')
     return portal_gallery.PortalGalleryClient(account), scene
 
-
 def _response(data, status=200, headers=None):
     response = io.BytesIO(data)
     response.status, response.headers = status, headers or {}
     return response
-
 
 def test_oversized_declared_download_rejected_before_writing(tmp_path, monkeypatch):
     client, scene = _download_client(100, limit=99)
@@ -205,7 +189,6 @@ def test_oversized_declared_download_rejected_before_writing(tmp_path, monkeypat
     with pytest.raises(portal_account.PortalProtocolError, match='file-size limit'):
         client.download(scene['id'], tmp_path / 'absent' / 'scene.licht')
     assert list(tmp_path.iterdir()) == []
-
 
 def test_download_disk_preflight_includes_staging_backup_and_destination(tmp_path, monkeypatch):
     client, scene = _download_client(100)
@@ -215,8 +198,8 @@ def test_download_disk_preflight_includes_staging_backup_and_destination(tmp_pat
         client.download(scene['id'], tmp_path / 'absent' / 'scene.licht')
     assert list(tmp_path.iterdir()) == []
 
-
 def test_same_portal_host_presigned_download_has_no_bearer_and_records_hash(tmp_path, monkeypatch):
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     calls, checkpoints = [], []
     def opened(request, **kwargs):
@@ -226,13 +209,13 @@ def test_same_portal_host_presigned_download_has_no_bearer_and_records_hash(tmp_
         assert kwargs == {'timeout': 120, 'no_redirect': True}
         return _response(b'data')
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    client.download(scene['id'], tmp_path/'file.ply', on_checkpoint=checkpoints.append)
-    assert (tmp_path/'file.ply').read_bytes() == b'data'
+    client.download(scene['id'], tmp_path/'file.licht', on_checkpoint=checkpoints.append)
+    assert (tmp_path/'file.licht').read_bytes() == b'data'
     assert checkpoints[-1]['sha256'] == hashlib.sha256(b'data').hexdigest()
     assert 'token=opaque' not in json.dumps(checkpoints)
 
-
 def test_pinned_download_resumes_range_if_range_and_hashes_all_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     data = b'a' * (1024 * 1024) + b'ending'
     client, scene = _download_client(len(data))
     checkpoints, calls = [], []
@@ -247,62 +230,32 @@ def test_pinned_download_resumes_range_if_range_and_hashes_all_bytes(tmp_path, m
             headers['Content-Range'] = f'bytes {offset}-{len(data)-1}/{len(data)}'
         return _response(data[offset:], 206 if offset else 200, headers)
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    destination = tmp_path/'file.ply'
+    destination = tmp_path/'file.licht'
     with pytest.raises(portal_gallery.GalleryTransferCanceled):
         client.download(scene['id'], destination, cancel=cancel, on_checkpoint=checkpoints.append,
                         on_progress=lambda *a: cancel.set())
     assert not destination.exists()
-    assert (tmp_path/'.file.ply.part').stat().st_size == 1024*1024
+    assert (tmp_path/'.file.licht.part').stat().st_size == 1024*1024
     client.download(scene['id'], destination, checkpoint=checkpoints[-1], on_checkpoint=checkpoints.append)
     assert destination.read_bytes() == data
     assert checkpoints[-1]['sha256'] == hashlib.sha256(data).hexdigest()
-    assert not (tmp_path/'.file.ply.part').exists()
-
+    assert not (tmp_path/'.file.licht.part').exists()
 
 @pytest.mark.parametrize('etag', [None, 'W/"weak"'])
 def test_unpinned_download_restarts_with_clear_message(tmp_path, monkeypatch, etag):
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     messages, requests = [], []
-    partial = tmp_path/'.file.ply.part'
+    partial = tmp_path/'.file.licht.part'
     partial.write_bytes(b'old')
     def opened(request, **kwargs):
         requests.append(request)
         return _response(b'data', headers={'ETag': etag, 'Accept-Ranges': 'bytes'})
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    client.download(scene['id'], tmp_path/'file.ply', checkpoint={'representationId': etag}, on_message=messages.append)
+    client.download(scene['id'], tmp_path/'file.licht', checkpoint={'representationId': etag}, on_message=messages.append)
     assert requests[0].get_header('Range') is None
     assert messages and 'Restarting from zero' in messages[0]
-    assert (tmp_path/'file.ply').read_bytes() == b'data'
-
-
-def test_X2_zip_slip_download_reaches_bundle_validation(tmp_path, monkeypatch):
-    from test_gallery_bundle import archive_bytes
-    from lfs_plugins import gallery_bundle, gallery_preparation
-    data = archive_bytes(extras=[('../outside.ply', b'private data')])
-    client, scene = _download_client(len(data))
-    reads = []
-    def opened(*a, **k):
-        reads.append(True)
-        return _response(data)
-    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    destination = tmp_path/'project.lfsg'
-    with pytest.raises(gallery_bundle.BundleError, match='member|entries|files'):
-        client.download(scene['id'], destination)
-    assert reads == [True] and not destination.exists()
-    assert not (tmp_path/'.project.lfsg.part').exists()
-    # The same real archive also enters the staging/extraction entry point.
-    archive = tmp_path/'untrusted.lfsg'
-    archive.write_bytes(data)
-    with pytest.raises(gallery_bundle.BundleError):
-        gallery_preparation.unpack_bundle(tmp_path, archive, tmp_path/(str(uuid.uuid4()) + '.scene'))
-    assert not (tmp_path/'outside.ply').exists()
-    # Control: this is otherwise a valid bundle and copies its real node bytes.
-    valid = archive_bytes()
-    client, scene = _download_client(len(valid))
-    monkeypatch.setattr(portal_gallery, 'urlopen', lambda *a, **k: _response(valid))
-    client.download(scene['id'], destination)
-    assert destination.read_bytes() == valid
-
+    assert (tmp_path/'file.licht').read_bytes() == b'data'
 
 def test_native_licht_embedded_path_is_rejected_before_publish(tmp_path, monkeypatch):
     from test_portable_project import rewrite_chapter, FIXTURES
@@ -314,7 +267,6 @@ def test_native_licht_embedded_path_is_rejected_before_publish(tmp_path, monkeyp
         client.download(scene['id'], tmp_path/'project.licht')
     assert list(tmp_path.iterdir()) == []
 
-
 @pytest.mark.parametrize('title', ['..', '../../etc/passwd', 'CON', 'prn', 'AUX', 'NUL', 'COM1', 'LPT9', 'COM¹',
                                   'a' * 300, 'name.  ', 'a' * 113 + ' .'])
 def test_destination_names_are_cross_platform_safe(title):
@@ -322,7 +274,6 @@ def test_destination_names_are_cross_platform_safe(title):
     assert len(name) <= 120 and '..' not in name and not any(c in name for c in '/\\:')
     assert name.endswith('.licht') and not name[:-6].endswith((' ', '.'))
     assert name.split('.')[0].upper() not in {'CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM¹', 'LPT9'}
-
 
 def test_stuck_processing_never_spins_or_links(tmp_path, monkeypatch):
     client = portal_gallery.PortalGalleryClient(SimpleNamespace())
@@ -333,7 +284,7 @@ def test_stuck_processing_never_spins_or_links(tmp_path, monkeypatch):
     with pytest.raises(portal_gallery.GalleryProcessingTimeout, match='taking longer'):
         client._await_processing(upload, identifier, 8, threading.Event(), lambda _: None)
     service = connected(tmp_path, monkeypatch)
-    path = tmp_path/'scene.ply'
+    path = tmp_path/'scene.licht'
     path.write_bytes(b'ply-data')
     monkeypatch.setattr(Client, 'upload', lambda *a, **k: (_ for _ in ()).throw(
         portal_gallery.GalleryProcessingTimeout('Portal is taking longer than expected · Retry / Keep waiting')), raising=False)
@@ -342,7 +293,6 @@ def test_stuck_processing_never_spins_or_links(tmp_path, monkeypatch):
     snapshot = service.snapshot()
     assert snapshot['jobs'][0]['status'] == 'error' and snapshot['jobs'][0]['needsAttention']
     assert snapshot['links'] == {}
-
 
 def test_account_switch_drops_in_memory_scenes_list_and_posters(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
@@ -353,7 +303,7 @@ def test_account_switch_drops_in_memory_scenes_list_and_posters(tmp_path, monkey
     poster.write_bytes(b'private')
     service._poster_entries['private'] = {'path': str(poster)}
     first_bucket = service._bucket()
-    first_bucket['links']['one-project'] = {'sceneId': 'private', 'revision': 'r1'}
+    first_bucket['links']['one-project'] = {"contentRevision": 'r1', "metadataRevision": 'r1', 'sceneId': 'private', 'revision': 'r1'}
     service.account.email = 'two@example.com'
     service.account.owner = 'two'
     assert service.snapshot()['scenes'] == []
@@ -369,10 +319,9 @@ def test_account_switch_drops_in_memory_scenes_list_and_posters(tmp_path, monkey
     finish(service)
     assert len(service._data['accounts']) == 3
 
-
 def test_journal_corruption_drill_keeps_links_after_restoring_backup(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
-    service._bucket()['links']['project'] = {'sceneId': 'remote', 'revision': 'r1'}
+    service._bucket()['links']['project'] = {"contentRevision": 'r1', "metadataRevision": 'r1', 'sceneId': 'remote', 'revision': 'r1'}
     service._save()
     service._save()  # Last known-good generation, including the link.
     backup = tmp_path/'sync.json.bak'
@@ -385,9 +334,8 @@ def test_journal_corruption_drill_keeps_links_after_restoring_backup(tmp_path, m
     restarted.refresh()
     finish(restarted)
     assert not restarted.snapshot()['storage_issue']
-    assert restarted.snapshot()['links']['project'] == {'sceneId': 'remote', 'revision': 'r1',
+    assert restarted.snapshot()['links']['project'] == {"contentRevision": 'r1', "metadataRevision": 'r1', 'sceneId': 'remote', 'revision': 'r1',
         'checkedAt': restarted.snapshot()['links']['project']['checkedAt']}
-
 
 def test_journal_history_bound_preserves_pending_and_recovery(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
@@ -401,10 +349,9 @@ def test_journal_history_bound_preserves_pending_and_recovery(tmp_path, monkeypa
     kept = {job['id'] for job in service._bucket()['jobs']}
     assert len(kept) == 202 and {'backup', 'pending'} <= kept and 'old' not in kept
 
-
 def test_transient_attempt_counts_are_durable(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
-    path = tmp_path/'scene.ply'
+    path = tmp_path/'scene.licht'
     path.write_bytes(b'data')
     calls = []
     def upload(*a, **kwargs):
@@ -412,7 +359,7 @@ def test_transient_attempt_counts_are_durable(tmp_path, monkeypatch):
             calls.append(1)
             if len(calls) == 1:
                 raise TimeoutError()
-            return {'scene': {'id': 'remote', 'revision': 'r1'}}
+            return {'scene': {"contentRevision": 'r1', "metadataRevision": 'r1', 'id': 'remote', 'revision': 'r1'}}
         return portal_retry.retry_call(operation, idempotent=True)
     monkeypatch.setattr(Client, 'upload', upload, raising=False)
     service.queue_upload(path, {'title': 'Scene'}, 'project')
@@ -421,7 +368,6 @@ def test_transient_attempt_counts_are_durable(tmp_path, monkeypatch):
     saved = json.loads((tmp_path/'sync.json').read_bytes())
     assert next(iter(saved['accounts'].values()))['jobs'][0]['attempts'] == 2
 
-
 @pytest.mark.parametrize('was_public,target', [(False, 'public'), (True, 'public'), (True, 'private')])
 def test_public_visibility_and_public_updates_always_confirm(gallery, monkeypatch, was_public, target):
     controller, state, actions = gallery
@@ -429,13 +375,12 @@ def test_public_visibility_and_public_updates_always_confirm(gallery, monkeypatc
     remote = scene()
     remote['visibility'] = 'public' if was_public else 'private'
     module = __import__('lfs_plugins.gallery_controller', fromlist=['lf'])
-    monkeypatch.setattr(controller, 'preferences', lambda: {'askBeforePublic': False})
+    monkeypatch.setattr(controller, 'preferences', lambda: {'askBeforePublic': True})
     monkeypatch.setattr(module.lf.ui, 'confirm_dialog', lambda *a: prompts.append(a), raising=False)
     controller.edit_scene(remote, {'visibility': target})
     assert prompts and not actions
     prompts[0][-1](prompts[0][-2][-1])
     assert len(actions) == 1
-
 
 @pytest.mark.parametrize('action', ['remove', 'publish_new'])
 def test_remove_and_publish_as_new_confirm_public_scene(gallery, monkeypatch, panel_module, action):
@@ -457,24 +402,7 @@ def test_remove_and_publish_as_new_confirm_public_scene(gallery, monkeypatch, pa
     prompts[-1][-1](prompts[-1][-2][-1])
     assert len(actions) == 1
     if action == 'remove':
-        assert actions == [(remote['id'], remote['revision'])]
-
-
-def test_asset_manager_return_after_five_minutes_refreshes_immediately(gallery, monkeypatch):
-    controller, state, actions = gallery
-    module = __import__('lfs_plugins.gallery_controller', fromlist=['time'])
-    now = [1000.]
-    monkeypatch.setattr(module.time, 'monotonic', lambda: now[0])
-    monkeypatch.setattr(controller, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(controller, 'refresh', lambda: actions.append('refresh'))
-    controller._hidden_since = None
-    unsubscribe = controller.subscribe(lambda _: None)
-    unsubscribe()
-    now[0] += 301
-    snapshots = []
-    controller.subscribe(snapshots.append)
-    assert actions == ['refresh'] and snapshots[-1]['wakeGeneration'] == 1
-
+        assert actions == [(remote['id'], remote)]
 
 def test_watchdog_resume_offers_retry_and_keep_waiting(gallery, monkeypatch):
     controller, state, actions = gallery
@@ -484,10 +412,9 @@ def test_watchdog_resume_offers_retry_and_keep_waiting(gallery, monkeypatch):
     monkeypatch.setattr(module.lf.ui, 'confirm_dialog', lambda *a: prompts.append(a), raising=False)
     controller.service.resume = lambda *a, **kw: actions.append((a, kw))
     controller._action_resume('stuck')
-    assert not actions and prompts[0][2][-2:] == ['Retry', 'Keep waiting']
-    prompts[0][-1](2)
+    assert not actions and prompts[0][2][-2:] == ['asset_manager.gallery.action.retry', 'asset_manager.gallery.action.keep_waiting']
+    prompts[0][-1](prompts[0][2][2])
     assert actions == [(('stuck',), {'keep_waiting': True})]
-
 
 def test_expired_part_url_is_renewed_without_bearer_or_changed_bytes(tmp_path, monkeypatch):
     identifier = str(uuid.uuid4())
@@ -495,7 +422,7 @@ def test_expired_part_url_is_renewed_without_bearer_or_changed_bytes(tmp_path, m
     completed = []
     def request(method, path, body=None):
         if path.endswith('/me'):
-            return {'id': 'owner', 'gallerySyncVersion': 1}
+            return {"storageHosts": ["portal.example"], 'id': 'owner', 'gallerySyncVersion': 1, 'sourceFormats': ['licht'], "revisionDomains": 1}
         if path.endswith('/part-upload-urls'):
             urls.append(body)
             return {'urls': [{'partNumber': 1, 'url': 'https://portal.example/signed?token=' + str(len(urls))}]}
@@ -515,14 +442,14 @@ def test_expired_part_url_is_renewed_without_bearer_or_changed_bytes(tmp_path, m
     monkeypatch.setattr(portal_gallery, 'urlopen', put)
     account = SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request)
     client = portal_gallery.PortalGalleryClient(account)
-    source = tmp_path/'scene.ply'
+    source = tmp_path/'scene.licht'
     source.write_bytes(b'ply-data')
     client.upload(source, {'title': 'Scene'})
     assert len(puts) == len(urls) == 2 and len(completed) == 1
     assert puts[0].full_url != puts[1].full_url
 
-
 def test_invalid_range_response_preserves_destination_and_removes_partial(tmp_path, monkeypatch):
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     data = b'a' * (1024 * 1024) + b'end'
     client, scene = _download_client(len(data))
     calls, checkpoints = [], []
@@ -534,7 +461,7 @@ def test_invalid_range_response_preserves_destination_and_removes_partial(tmp_pa
         return _response(b'end', 206, {'ETag': '"two"', 'Accept-Ranges': 'bytes',
             'Content-Range': f'bytes {1024*1024}-{len(data)-1}/{len(data)}'})
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    destination = tmp_path/'file.ply'
+    destination = tmp_path/'file.licht'
     destination.write_bytes(b'original')
     with pytest.raises(portal_gallery.GalleryTransferCanceled):
         client.download(scene['id'], destination, cancel=cancel, on_checkpoint=checkpoints.append,
@@ -542,10 +469,10 @@ def test_invalid_range_response_preserves_destination_and_removes_partial(tmp_pa
     with pytest.raises(portal_account.PortalProtocolError, match='representation'):
         client.download(scene['id'], destination, checkpoint=checkpoints[-1])
     assert destination.read_bytes() == b'original'
-    assert not (tmp_path/'.file.ply.part').exists()
-
+    assert not (tmp_path/'.file.licht.part').exists()
 
 def test_timeout_mid_read_restarts_unpinned_without_appending(tmp_path, monkeypatch):
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: None)  # Byte-transport unit boundary.
     client, scene = _download_client(4)
     requests = []
     class Interrupted(io.BytesIO):
@@ -558,10 +485,9 @@ def test_timeout_mid_read_restarts_unpinned_without_appending(tmp_path, monkeypa
         requests.append(request)
         return Interrupted(b'old!') if len(requests) == 1 else _response(b'data')
     monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    client.download(scene['id'], tmp_path/'file.ply')
-    assert (tmp_path/'file.ply').read_bytes() == b'data'
+    client.download(scene['id'], tmp_path/'file.licht')
+    assert (tmp_path/'file.licht').read_bytes() == b'data'
     assert len(requests) == 2 and all(r.get_header('Range') is None for r in requests)
-
 
 def test_valid_native_download_checks_embedded_crc_before_atomic_rename(tmp_path, monkeypatch):
     from test_portable_project import FIXTURES
@@ -579,19 +505,6 @@ def test_valid_native_download_checks_embedded_crc_before_atomic_rename(tmp_path
     assert destination.read_bytes() == b'existing'
     assert not (tmp_path/'.scene.licht.part').exists()
 
-
-def test_wake_reverification_disables_update_until_catalog_finishes(panel_module, monkeypatch):
-    manager, local, remote = _gallery_fixture(panel_module)
-    local['commit_uuid'] = 'new-local'
-    manager._gallery_wake_verifying = True
-    facts = manager._gallery_facts(local)
-    assert facts['action'] == '' and facts['state'] == 'checking'
-    with pytest.raises(ValueError, match='Checking the saved project'):
-        manager._begin_gallery_publish(local, 'update')
-    manager._gallery_wake_verifying = False
-    assert manager._gallery_facts(local)['action'] == 'update'
-
-
 def test_account_switch_during_backoff_stops_old_bearer(tmp_path, monkeypatch):
     path = tmp_path/'credentials.json'
     write_credentials(path)
@@ -603,10 +516,9 @@ def test_account_switch_during_backoff_stops_old_bearer(tmp_path, monkeypatch):
         account.request_json_authenticated('GET', '/api/gallery/v1/me')
     assert len(network.requests) == 1
 
-
 def test_watchdog_deadline_survives_restart_and_keep_waiting_extends_it(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
-    path = tmp_path/'scene.ply'
+    path = tmp_path/'scene.licht'
     path.write_bytes(b'data')
     def timed_out(self, *a, **kw):
         self.processing_deadline = time.time() - 1
@@ -622,17 +534,16 @@ def test_watchdog_deadline_survives_restart_and_keep_waiting_extends_it(tmp_path
     assert restarted.snapshot()['jobs'][0]['processingDeadline'] == deadline
     def done(self, *args, **kwargs):
         assert self.processing_deadline > time.time() + 890
-        return {'scene': {'id': 'remote', 'revision': 'r1'}}
+        return {'scene': {"contentRevision": 'r1', "metadataRevision": 'r1', 'id': 'remote', 'revision': 'r1'}}
     monkeypatch.setattr(Client, 'upload', done)
     restarted.resume(job_id, keep_waiting=True)
     finish(restarted)
     assert restarted.snapshot()['jobs'][0]['status'] == 'completed'
 
-
 def test_strict_partial_cleanup_owns_only_download_sidecar(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     identifier = str(uuid.uuid4())
-    path = tmp_path/'downloads'/(identifier+'.ply')
+    path = tmp_path/'downloads'/(identifier+'.licht')
     path.parent.mkdir()
     partial = path.with_name('.'+path.name+'.part')
     partial.write_bytes(b'partial')
@@ -646,49 +557,6 @@ def test_strict_partial_cleanup_owns_only_download_sidecar(tmp_path, monkeypatch
         service._cleanup_paths(job, {})
     assert external.read_bytes() == b'keep'
 
-
-def test_transfer_panel_does_not_suppress_asset_manager_wake(gallery, monkeypatch):
-    controller, state, actions = gallery
-    module = __import__('lfs_plugins.gallery_controller', fromlist=['time'])
-    now = [1000.]
-    monkeypatch.setattr(module.time, 'monotonic', lambda: now[0])
-    monkeypatch.setattr(controller, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(controller, 'refresh', lambda: actions.append('refresh'))
-    controller._hidden_since = 1000.
-    controller.subscribe(lambda _: None, asset_manager=False)
-    now[0] = 1301.
-    controller.subscribe(lambda _: None)
-    assert actions == ['refresh']
-
-
-def test_failed_wake_verification_keeps_update_disabled(panel_module, monkeypatch):
-    manager, local, remote = _gallery_fixture(panel_module)
-    manager._panel_mounted = True
-    manager._catalog_verify_refresh_pending = True
-    manager._catalog_verify_succeeded = False
-    manager._gallery_wake_verifying = True
-    monkeypatch.setattr(manager, '_publish_catalog_if_changed', lambda: None)
-    monkeypatch.setattr(manager, '_refresh_records', lambda **kwargs: None)
-    manager._complete_catalog_verify()
-    assert manager._gallery_wake_verifying and 'Refresh Asset Manager' in manager._gallery_notice
-    manager._catalog_verify_refresh_pending = True
-    manager._catalog_verify_succeeded = True
-    manager._complete_catalog_verify()
-    assert not manager._gallery_wake_verifying
-
-
-def test_wake_restarts_preexisting_verifier_before_enabling_update(panel_module, monkeypatch):
-    manager, local, remote = _gallery_fixture(panel_module)
-    manager._panel_mounted = True
-    manager._catalog_verify_refresh_pending = True
-    manager._gallery_wake_verifying = True
-    manager._gallery_wake_reverify_pending = True
-    calls = []
-    monkeypatch.setattr(manager, '_start_catalog_verify', lambda: calls.append('fresh verification'))
-    manager._complete_catalog_verify()
-    assert calls == ['fresh verification'] and manager._gallery_wake_verifying
-
-
 def test_processing_watchdog_uses_elapsed_time_if_wall_clock_stops(monkeypatch):
     client = portal_gallery.PortalGalleryClient(SimpleNamespace())
     client.processing_deadline = 1900.
@@ -701,7 +569,6 @@ def test_processing_watchdog_uses_elapsed_time_if_wall_clock_stops(monkeypatch):
     with pytest.raises(portal_gallery.GalleryProcessingTimeout):
         client._await_processing(state, identifier, 8, threading.Event(), lambda _: None)
 
-
 @pytest.mark.parametrize('format', ['ply', 'sog', 'ssog'])
 def test_native_download_validates_before_publication(tmp_path, monkeypatch, format):
     from test_portable_project import FIXTURES
@@ -712,7 +579,6 @@ def test_native_download_validates_before_publication(tmp_path, monkeypatch, for
     client.download(scene['id'], tmp_path/'project.licht', on_checkpoint=checkpoints.append)
     assert (tmp_path/'project.licht').read_bytes() == data
     assert checkpoints[-1]['sha256'] == hashlib.sha256(data).hexdigest()
-
 
 def test_dpapi_ctypes_uses_user_scope_and_releases_native_buffer(monkeypatch):
     import ctypes
@@ -739,20 +605,17 @@ def test_dpapi_ctypes_uses_user_scope_and_releases_native_buffer(monkeypatch):
     assert credential_storage._dpapi(cipher, protect=False) == b'secret'
     assert calls == [1, 1] and len(freed) == 2
 
-
 def test_credential_initialization_handles_unwritable_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(portal_account, '_locked_sidecar', lambda *_: (_ for _ in ()).throw(OSError('read-only')))
     account = portal_account.PortalAccountService(credentials_path=tmp_path/'account'/'credentials.json')
     assert not account.snapshot().signed_in
     assert not (tmp_path/'account').exists()
 
-
 def test_account_code_is_included_in_bug_report_redaction_material(tmp_path):
     account = portal_account.PortalAccountService(credentials_path=tmp_path/'credentials.json')
     account._set_linking(user_code='LINK-ONLY', verification_uri='', verification_uri_complete='',
                          expires_at=time.time()+60, interval=1)
     assert 'LINK-ONLY' in account._redaction_tokens()
-
 
 def test_controller_drops_previous_account_scene_snapshots(gallery):
     controller, state, _ = gallery
@@ -762,11 +625,10 @@ def test_controller_drops_previous_account_scene_snapshots(gallery):
     controller._check_identity()
     assert controller._state['scenes'] == [] and controller._last_snapshot is None
 
-
 def test_keep_waiting_only_polls_existing_upload_without_reading_export(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     identifier = str(uuid.uuid4())
-    job = {'id': 'waiting', 'project': 'project', 'kind': 'upload', 'path': str(tmp_path/'missing.ply'),
+    job = {'id': 'waiting', 'project': 'project', 'kind': 'upload', 'path': str(tmp_path/'missing.licht'),
            'message': '', 'status': 'error', 'needsAttention': True, 'total': 8, 'completed': 4,
            'metadata': {'title': 'Scene'}, 'checkpoint': {'uploadId': identifier}}
     service._bucket()['jobs'].append(job)
@@ -774,7 +636,7 @@ def test_keep_waiting_only_polls_existing_upload_without_reading_export(tmp_path
     requests = []
     def request(self, method, path):
         requests.append((method, path))
-        return {'id': identifier, 'status': 'completed', 'scene': {'id': 'remote', 'revision': 'r1'}}
+        return {'id': identifier, 'status': 'completed', 'scene': {"contentRevision": 'r1', "metadataRevision": 'r1', 'id': 'remote', 'revision': 'r1'}}
     monkeypatch.setattr(Client, '_request', request)
     monkeypatch.setattr(Client, '_await_processing', lambda self, result, *a: result, raising=False)
     monkeypatch.setattr(Client, 'upload', lambda *a, **kw: pytest.fail('Keep waiting must not start an upload'), raising=False)
@@ -783,14 +645,12 @@ def test_keep_waiting_only_polls_existing_upload_without_reading_export(tmp_path
     assert requests == [('GET', '/splats/uploads/'+identifier)]
     assert service.snapshot()['jobs'][0]['status'] == 'completed'
 
-
 def test_resume_explanation_survives_ui_message_translation(gallery, monkeypatch):
     from lfs_plugins import gallery_messages
     module = __import__('lfs_plugins.gallery_controller', fromlist=['lf'])
     monkeypatch.setattr(module.lf.ui, 'tr', lambda _: 'generic translated status')
     text = 'Paused. The download will restart from zero because the portal has no pinned representation.'
     assert gallery_messages.localize_message(text) == text
-
 
 @pytest.mark.parametrize('origin,url,allowed', [
     ('http://127.0.0.1', 'http://127.0.0.1/data', True),

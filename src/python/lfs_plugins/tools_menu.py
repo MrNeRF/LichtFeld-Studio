@@ -8,7 +8,7 @@ from .layouts.menus import register_menu, menu_action, menu_separator
 __lfs_menu_classes__ = ["ToolsMenu"]
 
 
-def _open_gallery_panel() -> None:
+def _open_gallery_scope() -> None:
     lf.ui.set_panel_enabled("lfs.asset_manager", True)
     get_panel_object = getattr(lf.ui, "get_panel_object", None)
     panel = get_panel_object("lfs.asset_manager") if callable(get_panel_object) else None
@@ -38,7 +38,7 @@ class ToolsMenu:
             ),
             menu_action(
                 tr("menu.tools.gallery"),
-                _open_gallery_panel,
+                _open_gallery_scope,
             ),
             menu_action(
                 tr("menu.tools.gallery_transfers"),

@@ -3,7 +3,7 @@
 """Bounded saved-project content evidence for deciding PATCH versus replace.
 
 This is not a project loader. Unsupported index encodings return no evidence,
-which always falls back to the native publication path. Display freshness still
+which requires native replacement. Display freshness still
 uses commit UUID alone (a save is never described as a geometry edit).
 """
 import hashlib
@@ -48,15 +48,19 @@ def saved_content_stamp(path):
             count = struct.unpack_from('<Q',index,16)[0]
             if len(index) != 64 + count * 96:
                 return ''
-            records=[]
+            records, view_records = [], []
             for i in range(count):
                 row=index[64+i*96:160+i*96]
                 if row[:4] in (b'SCNG',b'REFS',b'DSRC',b'SPLT',b'CKPT',b'SELM'):
                     # Include decoded payload and native chunk-header checksums;
                     # ignore index/chapter generation and file layout offsets.
                     records.append(row[:32]+row[48:64]+row[72:80])
+                elif row[:4] in (b'VIEW', b'SEQR'):
+                    view_records.append(row[:32]+row[48:64]+row[72:80])
             if not any(r[:4] == b'SCNG' for r in records):
                 return ''
-            return hashlib.sha256(b''.join(sorted(records))).hexdigest()
+            if len(view_records) != 2:
+                return ''
+            return ':'.join(hashlib.sha256(b''.join(sorted(rows))).hexdigest() for rows in (records, view_records))
     except (OSError, ValueError, struct.error):
         return ''

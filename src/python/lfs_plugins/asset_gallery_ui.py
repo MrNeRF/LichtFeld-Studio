@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import lichtfeld as lf
+from .gallery_messages import tr
 
 from .gallery_controller import asset_sync_state, get_gallery_controller
 
@@ -19,11 +20,6 @@ SCOPE_TRANSFERS = "__gallery_transfers__"
 GALLERY_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-gallery-scene"
 GALLERY_SCOPES = (SCOPE_PUBLISHED, SCOPE_ATTENTION)
 
-
-def tr(key, **values):
-    from .localization import safe_format
-    full_key = "asset_manager.gallery." + key
-    return safe_format(lf.ui.tr(full_key), **values)
 
 
 def relative_time(timestamp, *, now=None):
@@ -57,7 +53,6 @@ class GalleryAssetMixin:
         self._gallery_pull_folder = ""
         self._gallery_pull_name = ""
         self._gallery_pull_review = False
-        self._gallery_pending_publish = None
         self._gallery_batch = []
         self._gallery_batch_waiting = False
         self._gallery_notice = ""
@@ -74,8 +69,6 @@ class GalleryAssetMixin:
         self._gallery_toast = None
         self._gallery_toast_timer = None
         self._gallery_connecting = False
-        self._gallery_wake_verifying = False
-        self._gallery_wake_reverify_pending = False
 
     def _controller(self):
         if self._gallery_controller is None:
@@ -91,19 +84,11 @@ class GalleryAssetMixin:
         previous_identity = self._gallery_state.get("identity")
         previous = self._gallery_state
         self._gallery_state = snapshot
-        if snapshot.get('wakeGeneration', 0) > previous.get('wakeGeneration', 0):
-            self._gallery_wake_verifying = True
-            if self._catalog_verify_active:
-                self._gallery_wake_reverify_pending = True
-                self._catalog_verify_cancel.set()
-            else:
-                self._start_catalog_verify()
         if snapshot.get("relink_required"):
             self._gallery_notice = snapshot.get("message", "")
         if previous_identity != snapshot.get("identity"):
             self._gallery_edit_id = None
             self._gallery_review = self._gallery_pull_review = False
-            self._gallery_pending_publish = None
             self._gallery_undo = None
             self._gallery_batch = []
             self._gallery_notice = ""
@@ -141,9 +126,8 @@ class GalleryAssetMixin:
                 self._set_gallery_undo(self._controller().undo_pull, kind="pull")
         elif not undo and self._gallery_undo_kind == "pull":
             self._gallery_undo = None
-        self._continue_gallery_publish()
         controller = self._gallery_controller
-        if self._gallery_batch_waiting and controller and not controller._panel_busy() and not self._gallery_pending_publish:
+        if self._gallery_batch_waiting and controller and not controller._panel_busy():
             facts = self._gallery_facts(self._get_selected_asset() or {})
             self._gallery_batch_waiting = False
             if facts["activity"] in ("error", "paused", "interrupted") or facts["freshness"] == "diverged" or controller._last_canceled:
@@ -175,8 +159,6 @@ class GalleryAssetMixin:
             self._gallery_state.get("jobs", ()), checked=bool(self._gallery_state.get("checkedAt")),
             storage_issue=self._gallery_state.get("storage_issue", False), phase=phase,
             cached_projection=asset.get("gallery") if "identity" not in self._gallery_state else None)
-        if self._gallery_wake_verifying and not remote and facts['action'] == 'update':
-            facts.update(action='', state='checking', activity='checking', active=True)
         return facts
 
     def _asset_with_poster(self, asset):
@@ -298,6 +280,7 @@ class GalleryAssetMixin:
         for name in ("review", "expanded", "more", "pull_review"):
             model.bind_func("gallery_" + name, lambda n=name: getattr(self, "_gallery_" + n))
         values = {
+            "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
             "gallery_account": lambda: self._gallery_state.get("display_name") or self._gallery_state.get("email", ""),
             "gallery_checked": self._gallery_checked_label,
@@ -345,8 +328,8 @@ class GalleryAssetMixin:
             "gallery_multi_summary": lambda: tr("multi.summary", **self._gallery_counts()),
             "gallery_publish_many": lambda: tr("multi.publish", count=self._gallery_counts()["ready"]),
             "gallery_update_many": lambda: tr("multi.update", count=self._gallery_counts()["linked"]),
-            "gallery_can_publish_many": lambda: self._gallery_counts()["ready"] > 0,
-            "gallery_can_update_many": lambda: self._gallery_counts()["linked"] > 0,
+            "gallery_can_publish_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["ready"] > 0,
+            "gallery_can_update_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["linked"] > 0,
             "gallery_has_pulled_project": lambda: bool(self._gallery_state.get("pulledProject")),
             "gallery_pull_label": lambda: tr("action.pull_open" if self._gallery_pull_open else "action.pull"),
             "gallery_has_undo": lambda: bool(self._gallery_undo and time.monotonic() < self._gallery_undo[0]
@@ -404,10 +387,14 @@ class GalleryAssetMixin:
 
     def _gallery_command(self, action, args=()):
         try:
+            if self._gallery_state.get("unsupported") and action not in ("account", "transfers", "toggle", "more"):
+                self._gallery_notice = tr("error.portal_version")
+                return
             if action.startswith("connect"):
                 account = self._controller().service.account
                 if action == "connect":
                     self._gallery_connecting = bool(account.start_device_flow())
+                    self._controller()._schedule_poll()
                 elif action == "connect_cancel":
                     account.cancel_device_flow()
                     self._gallery_connecting = False
@@ -448,7 +435,6 @@ class GalleryAssetMixin:
             if action == "cancel":
                 self._gallery_review = self._gallery_pull_review = False
                 self._gallery_batch = []
-                self._gallery_pending_publish = None
                 return
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")
@@ -510,7 +496,7 @@ class GalleryAssetMixin:
                 self._confirm_gallery("confirm.unlink", lambda: self._controller().service.unlink(asset["id"]))
             elif action == "remove":
                 scene = self._gallery_scene(asset)
-                self._confirm_gallery("confirm.remove", lambda: self._controller().service.remove(scene["id"], scene["revision"]))
+                self._confirm_gallery("confirm.remove", lambda: self._controller().service.remove(scene["id"], scene))
         except Exception as exc:
             from .gallery_messages import localize_message
             self._gallery_notice = localize_message(str(exc))
@@ -606,11 +592,8 @@ class GalleryAssetMixin:
     def _gallery_quota_values(self):
         state = self._gallery_state
         quota, used = state.get("quotaBytes"), state.get("usedBytes")
-        if type(quota) is not int or quota < 0:
+        if type(quota) is not int or quota < 0 or type(used) is not int or used < 0:
             return None, 0
-        if type(used) is not int or used < 0:
-            used = sum(max(0, s.get("contentLength", 0)) for s in state.get("scenes", [])
-                       if type(s.get("contentLength", 0)) is int)
         return quota, used
 
     def _gallery_quota_warning(self):
@@ -693,8 +676,7 @@ class GalleryAssetMixin:
     def _gallery_review_includes(self):
         text = tr("review.includes", saved=self.get_selected_asset_modified())
         if self._gallery_scene(self._get_selected_asset() or {}) and not self._gallery_publish_new:
-            text += (" The cover is kept. Review Story on portal after a substantial content change."
-                     if self._gallery_state.get("revisionDomains", 0) >= 1 else " The cover will be regenerated.")
+            text += " " + tr("review.cover_kept")
         return text
 
     def _gallery_published_summary(self):
@@ -708,8 +690,8 @@ class GalleryAssetMixin:
             time=relative_time(link.get("exchangedAt") or time.time()))
 
     def _selected_gallery_action(self):
-        if self._gallery_wake_verifying:
-            return ''
+        if self._gallery_state.get("unsupported"):
+            return ""
         asset = self._get_selected_asset()
         if not asset:
             return ""
@@ -721,8 +703,6 @@ class GalleryAssetMixin:
         return facts["action"]
 
     def _begin_gallery_publish(self, asset, action):
-        if self._gallery_wake_verifying and action == 'update':
-            raise ValueError('Checking the saved project after returning to Asset Manager. Try again when checking finishes.')
         warning = self._gallery_quota_warning()
         if warning and not getattr(self, "_gallery_quota_ack", False):
             def proceed():
@@ -734,63 +714,14 @@ class GalleryAssetMixin:
             self._confirm_gallery("quota.confirm", proceed)
             return
         controller = self._controller()
-        pending = {"asset": dict(asset), "action": action, "details": self._gallery_details(),
-                   "format": self._gallery_upload_format, "identity": controller.service.identity(),
-                   "publish_new": self._gallery_publish_new}
-        poll = getattr(lf, "project_poll_write", lambda: {})()
-        if poll.get("path") and Path(poll["path"]).resolve() == Path(asset["path"]).resolve():
-            controller.publish_asset(asset, pending["details"], pending["format"], update=action == "update",
-                                     **({"publish_as_new": True} if pending["publish_new"] else {}))
-            self._gallery_batch_waiting = bool(self._gallery_batch)
-            self._gallery_review = False
-            return
-        if callable(getattr(lf, "prepare_gallery_project", None)):
-            self._gallery_batch_waiting = bool(self._gallery_batch)
-            try:
-                controller.publish_asset(asset, pending["details"], pending["format"], update=action == "update",
-                                         publish_as_new=pending["publish_new"],
-                                         on_fallback=lambda: self._open_gallery_publish(pending))
-            except Exception:
-                self._gallery_batch_waiting = False
-                raise
-            self._gallery_review = False
-            return
-        self._open_gallery_publish(pending)
-
-    def _open_gallery_publish(self, pending):
-        controller = self._controller()
-        asset = pending["asset"]
-        # Resume the batch only once the fallback open/publish actually starts.
-        # A canceled discard/training prompt must not advance to another asset.
-        self._gallery_batch_waiting = False
-        from .training_confirm import confirm_discard_work_then
-        def open_selected(stop_training):
-            if controller.service.identity() != pending["identity"]:
-                return
-            self._gallery_pending_publish = pending
-            lf.project_open(asset["path"], True, stop_training, True)
-            when_open = getattr(controller, "when_project_open", None)
-            if callable(when_open):
-                when_open(asset["path"], pending["identity"], self._continue_gallery_publish)
-        confirm_discard_work_then(tr("action.publish"), open_selected)
-
-    def _continue_gallery_publish(self):
-        pending = self._gallery_pending_publish
-        if not pending:
-            return
-        poll = getattr(lf, "project_poll_write", lambda: {})()
-        if not poll.get("path") or poll.get("running"):
-            return
-        if Path(poll["path"]).resolve() != Path(pending["asset"]["path"]).resolve():
-            return
-        if getattr(lf.ui, "get_import_state", lambda: {})().get("active"):
-            return
-        self._gallery_pending_publish = None
-        if self._controller().service.identity() == pending["identity"]:
-            self._controller().publish_asset(pending["asset"], pending["details"], pending["format"], update=pending["action"] == "update",
-                                            **({"publish_as_new": True} if pending["publish_new"] else {}))
-            self._gallery_batch_waiting = bool(self._gallery_batch)
-            self._gallery_review = False
+        self._gallery_batch_waiting = bool(self._gallery_batch)
+        try:
+            controller.publish_asset(asset, self._gallery_details(), self._gallery_upload_format,
+                                     update=action == "update", publish_as_new=self._gallery_publish_new)
+        except Exception:
+            self._gallery_batch_waiting = False
+            raise
+        self._gallery_review = False
 
     def _publish_as_new(self, asset):
         self._gallery_publish_new = True

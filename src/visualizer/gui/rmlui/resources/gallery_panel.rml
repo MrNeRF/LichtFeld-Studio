@@ -1,2 +1,0 @@
-<rml><head><link type="text/template" href="floating_window.rml"/></head>
-<body template="floating-window" data-model="gallery_redirect"><p class="text-muted">{{notice}}</p></body></rml>

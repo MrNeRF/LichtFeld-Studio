@@ -51,11 +51,11 @@ same-path request against the response's `Retry-After` interval.
 | Scenario | Required observations |
 | --- | --- |
 | `round_trip_cycles` | SOG publish, repeated saved exposure updates and portal view/camera pulls, matching domain tokens, stable scene identity, bounded jobs, Up to date. |
-| `web_edits_during_idle` | Title, description, visibility and camera changes show Portal changes. Poster/presentation changes preserve shared-domain freshness and cause no 409 on the next Update. |
+| `web_edits_during_idle` | Press Refresh after title, description, visibility and camera edits to show Portal changes. Poster/presentation changes preserve shared-domain freshness and cause no 409 on the next Update. |
 | `conflict_both_sides` | Changed here and on portal; actual resolution dialogs exercise Mine, Portal and camera Both; chosen title, camera frames and journal domain tokens checked. |
 | `replaced_elsewhere` | Independent HTTP replacement upload, stale domain write returns 409/currentRevisions, Studio cannot overwrite replacement content, portal-first resolution then successful Update. |
-| `kill_during_upload` | Expected SIGKILL at 30–70%, relaunch on the same `LFS_HOME` with sign-in re-injected, paused/Interrupted journal job restored, same job resumed, retained UploadPart ETags/sizes preserved, fewer bytes sent than the full file, one live scene. Unexpected exits of the relaunched process still fail. |
-| `portal_down_mid_transfer` | Portal stopped during both upload and download, recoverable transfer status, editor remains responsive, no partial project registration, restart/resume succeeds. |
+| `kill_during_upload` | Expected SIGKILL at 30–70%, relaunch on the same `LFS_HOME` with sign-in re-injected, paused/Interrupted journal job restored, explicitly press Resume on the same job, retained UploadPart ETags/sizes preserved, fewer bytes sent than the full file, one live scene. Unexpected exits of the relaunched process still fail. |
+| `portal_down_mid_transfer` | Portal stopped during both upload and download, Paused (connection lost) in both halves, editor remains responsive, no partial project registration; restart the portal, explicitly press Resume, and verify completion. |
 | `slow_processing_watchdog` | Worker withheld for `--watchdog-seconds`; responsive editor, visibly checking or recoverable job, cancel stops waiting and discards upload. |
 | `remote_delete_and_recreate` | Soft deletion, Removed on portal, Publish again creates a different scene ID. |
 | `account_switch` | A's links/jobs/posters exist first; switching to B clears cards, posters and tray; switching back restores A's links. |
@@ -79,10 +79,7 @@ disk space and time. Polling waits default to 120 seconds and are capped at 120
 even if `--timeout` is higher; smaller values shorten the waits. Transfer pacing is
 4 MiB/s so the kill/down window can be observed without racing localhost speed.
 
-Set `--watchdog-seconds` above the product's configured no-progress bound. In a
-build without a watchdog, remaining in Portal is checking is accepted only if the
-editor stays responsive and cancel works. This fallback is reported as observed
-behavior; it does not claim a watchdog exists.
+Set `--watchdog-seconds` above the product's configured no-progress bound. The watchdog flags a stuck transfer; further checking requires Resume.
 
 The Markdown report has PASS/FAIL and duration per scenario; each scenario has a
 JSON file with timed observations, portal rows, sanitized transfer summaries and

@@ -14,7 +14,7 @@ import stat
 import struct
 from zipfile import ZIP_STORED, ZipFile
 
-from . import gallery_bundle as codec
+from . import gallery_validation as codec
 
 MAX_PROJECT_BYTES = 8 * 1024 * 1024
 CHAPTERS = {b'PROJ', b'REFS', b'SCNG', b'PRMS', b'SELM', b'VIEW', b'GUIL', b'EDTR', b'SEQR', b'METR'}
@@ -173,7 +173,7 @@ def read_project(source):
             try:
                 chapters[kind] = json.loads(payload, object_pairs_hook=codec._object, parse_constant=codec._constant)
             except (ValueError, UnicodeError, RecursionError):
-                raise codec.BundleError('Invalid project chapter JSON.') from None
+                raise ValueError('Invalid project chapter JSON.') from None
     cursor = 0
     for start, end in sorted(occupied):
         _check(cursor <= start, 'Overlapping project records.')
@@ -264,7 +264,7 @@ class ProjectFile:
             self._nodes.append(asset)
             manifest_nodes.append({'file': f'nodes/{i:06d}.{extension}', 'count': count, 'shDegree': degree,
                                    'transform': matrix, 'sha256': '', 'bytes': asset['size']})
-        self.manifest = {'format': codec.FORMAT, 'version': 1, 'nodes': manifest_nodes}
+        self.manifest = {'version': 1, 'nodes': manifest_nodes}
         settings = self.chapters[b'VIEW']['render_settings']
         references = self.chapters[b'REFS']['references']
         _check(isinstance(references, list) and len(references) <= 1)
@@ -299,7 +299,7 @@ class ProjectFile:
             crc = google_crc32c.Checksum()
         except ImportError:
             crc = None
-        digest, completed, fallback, ieee = hashlib.sha256(), 0, 0xffffffff, 0
+        digest, completed, crc32c, ieee = hashlib.sha256(), 0, 0xffffffff, 0
         stream = SliceReader(self.source, asset['offset'], asset['size'])
         while chunk := stream.read(codec.MAX_READ_BYTES):
             if environment:
@@ -308,13 +308,13 @@ class ProjectFile:
                 crc.update(chunk)
             else:
                 for byte in chunk:
-                    fallback = _CRC_TABLE[(fallback ^ byte) & 255] ^ (fallback >> 8)
+                    crc32c = _CRC_TABLE[(crc32c ^ byte) & 255] ^ (crc32c >> 8)
             ieee = zlib.crc32(chunk, ieee)
             digest.update(chunk)
             output.write(chunk)
             completed += len(chunk)
             if progress: progress(completed)
-        actual_crc = int.from_bytes(crc.digest(), 'big') if crc else fallback ^ 0xffffffff
+        actual_crc = int.from_bytes(crc.digest(), 'big') if crc else crc32c ^ 0xffffffff
         _check(completed == asset['size'] and actual_crc == asset['crc32c'], 'Embedded asset checksum failed.')
         metadata['sha256'] = digest.hexdigest()
         asset['crc32'] = ieee

@@ -699,6 +699,7 @@ p._gallery_visibility = 'private'
 p._gallery_command('publish')
 """)
             self.job(set(self.jobs), "upload")
+            self.mcp.rpc("assert not lf.project_has_path(), 'Closed publication opened a document'")
             self.wait(f"{self.asset_id!r} in p._gallery_state.get('links', {{}})", "Published link")
             self.scene_id = self.mcp.value(f"p._gallery_state['links'][{self.asset_id!r}]['sceneId']")
             row["detail"] = self.verify_remote()

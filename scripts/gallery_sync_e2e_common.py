@@ -28,7 +28,7 @@ def run_directory(root):
 
 def studio_log_excerpt(directory, limit=20):
     """Stream large debug logs, retaining useful diagnostics over frame chatter."""
-    relevant, fallback = deque(maxlen=limit), deque(maxlen=limit)
+    relevant = deque(maxlen=limit)
     ansi = re.compile(r'\x1b\[[0-9;]*m')
     match = re.compile(r'gallery|portal|upload|download|sync|error|warn|exception|traceback|failed', re.I)
     paths = sorted(directory.glob('*.log'), key=lambda p: (p.stat().st_mtime_ns, p.name))
@@ -41,10 +41,9 @@ def studio_log_excerpt(directory, limit=20):
                 if not line or '[perf]' in line:
                     continue
                 entry = f'{path.name}: {line}'
-                fallback.append(entry)
                 if path.name == 'editor-diagnostics.log' or match.search(line):
                     relevant.append(entry)
-    return list(relevant or fallback)
+    return list(relevant)
 
 
 def portal_poster_requests(lines, identifiers):

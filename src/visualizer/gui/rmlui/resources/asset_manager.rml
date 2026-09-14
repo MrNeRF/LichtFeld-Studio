@@ -256,7 +256,8 @@
                 <button class="asset-button asset-button--text asset-info-button" data-event-click="on_locate_file"><span class="asset-button-text">{{locate_file_button_label}}</span></button>
               </div>
 
-              <div class="asset-info-section" id="asset-info-gallery">
+              <div class="asset-info-section" data-if="!gallery_supported"><p>@tr:asset_manager.gallery.error.portal_version</p></div>
+              <div class="asset-info-section" id="asset-info-gallery" data-if="gallery_supported">
                 <div class="section-header" data-event-click="gallery_toggle"><span class="section-arrow" data-class-is-expanded="gallery_expanded">▶</span><span>{{g_sidebar_title}}</span><span class="text-muted">{{gallery_selected_state}}</span><span class="text-muted">{{gallery_reupload_reason}}</span></div>
                 <div class="section-content" data-if="gallery_expanded">
                   <p class="text-muted">{{gallery_exchange_summary}}</p>

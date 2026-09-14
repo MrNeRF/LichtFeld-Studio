@@ -5,7 +5,7 @@ import json
 import threading
 from pathlib import Path
 
-DEFAULTS = dict(uploadFormat="sog", askBeforePublic=True, posterCacheMiB=64, refreshMinutes=5)
+DEFAULTS = dict(uploadFormat="sog", askBeforePublic=True, posterCacheMiB=64)
 _lock = threading.RLock()
 
 
@@ -39,11 +39,11 @@ def _validate(key, value):
     if key == "askBeforePublic":
         if type(value) is not bool:
             raise ValueError("Expected a checkbox value")
-        return True  # Public operations always require review, including legacy preferences.
-    if key not in ("posterCacheMiB", "refreshMinutes") or isinstance(value, bool):
+        return value
+    if key != "posterCacheMiB" or isinstance(value, bool):
         raise ValueError("Unknown gallery preference")
     number = int(value)
-    if str(number) != str(value) or not 1 <= number <= (4096 if key == "posterCacheMiB" else 1440):
+    if str(number) != str(value) or not 1 <= number <= 4096:
         raise ValueError("Gallery preference is outside its supported range")
     return number
 

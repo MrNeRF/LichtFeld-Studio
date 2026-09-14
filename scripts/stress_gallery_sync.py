@@ -723,14 +723,15 @@ p._gallery_command('publish')
         upload_id = (middle.get('checkpoint') or {}).get('uploadId') or middle.get('uploadId')
         self.observe("portal stopped at", safe_job(middle))
         self.stop(self.portal)
-        job = self.wait_job(identifier, lambda j: j['status'] == 'waiting', "upload waiting for connection")
+        job = self.wait_job(identifier, lambda j: j['status'] == 'paused' and j['message'] == 'Paused (connection lost)', "upload paused after connection loss")
         self.observe("upload outage", safe_job(job))
         self.assert_responsive()
         self.until(lambda: all('finished' in e for e in self.proxy.snapshot()), "outage upload socket closed", 30)
         before_parts = self.part_rows(upload_id)
         marker = len(self.proxy.snapshot())
         self.portal_restart()
-        self.wait_job(identifier, lambda j: j.get('serverProcessing'), "automatically resumed parts accepted")
+        self.rpc(f"p._controller().command('resume', {identifier!r})")
+        self.wait_job(identifier, lambda j: j.get('serverProcessing'), "manually resumed parts accepted")
         after_parts = self.part_rows(upload_id)
         sent = sum(e['request_bytes'] for e in self.proxy.snapshot()[marker:] if e['method'] == 'PUT')
         assert_retained_parts(before_parts, after_parts, middle['total'], sent)
@@ -747,11 +748,12 @@ p._gallery_command('publish')
         download = self.pull(remote_only=True)
         self.wait_job(download, lambda j: 0 < j['completed'] < j['total'] * .7, "download in progress")
         self.stop(self.portal)
-        job = self.wait_job(download, lambda j: j['status'] == 'waiting', "download waiting for connection")
+        job = self.wait_job(download, lambda j: j['status'] == 'paused' and j['message'] == 'Paused (connection lost)', "download paused after connection loss")
         self.observe("download outage", safe_job(job))
         assert self.value("sorted(p._asset_index_assets())") == before, "Partial project registered"
         self.assert_responsive()
         self.portal_restart()
+        self.rpc(f"p._controller().command('resume', {download!r})")
         self.finish_job(download)
         self.wait_value("sorted(p._asset_index_assets())", "resumed download registration",
                         accept=lambda ids: set(before) < set(ids) and len(ids) == len(before) + 1)
@@ -837,7 +839,8 @@ assert not new.snapshot()['scenes']
 assert not new.snapshot()['posters']
 assert not new.snapshot()['jobs']
 assert not p._gallery_remote_assets()
-assert not p._controller()._visible_jobs()
+from lfs_plugins.gallery_transfer_panel import transfer_rows
+assert not transfer_rows(p._controller().snapshot())
 assert not list((new.root/'posters').glob('*.png'))
 """)
         self.observe("B isolation", self.value("dict(links=new.snapshot()['links'], posters=new.snapshot()['posters'], jobs=new.snapshot()['jobs'])"))
@@ -942,17 +945,21 @@ Scene.objects.bulk_create(rows)
             f"Scene.objects.filter(pk__in={identifiers!r}).update(poster=b.getvalue(), poster_type='image/png')")
 
     def thumbnail_cache(self):
+        # Opening the scope is itself a manual refresh. Finish it before
+        # seeding posters so each measured window contains exactly one refresh.
+        self.rpc("p._select_folder_id('__gallery__')\np.set_view_mode(None, None, ['gallery'])")
+        self.wait_value("new.busy", "gallery scope refresh idle", accept=lambda busy: not busy)
         identifiers = self.seed_scenes(50)
         self.set_posters(identifiers)
         marker = len(self.proxy.snapshot())
         self.refresh()
         self.wait_value("sorted(new.snapshot()['posters'])", "50 posters cached",
                         accept=lambda posters: posters == sorted(identifiers))
-        self.rpc("p._select_folder_id('__gallery__')\np.set_view_mode(None, None, ['gallery'])")
         self.wait_value("(p._sync_asset_window_viewport(), p._asset_window_client_height)[1]",
                         "gallery scroll viewport", accept=lambda height: height > 0)
         initial = [e for e in self.proxy.snapshot()[marker:] if e['path'].endswith('/thumbnail')]
         assert_poster_requests(initial, identifiers, 200)
+        marker = len(self.proxy.snapshot())
         cards = self.value("[a['id'] for a in p._filtered_assets()]")
         assert set(cards) == {'remote:' + key for key in identifiers}, cards
         visited, pages = set(), []
@@ -966,6 +973,8 @@ Scene.objects.bulk_create(rows)
             visited.update(page['cards'])
             self.assert_responsive()
         assert set("remote:" + key for key in identifiers) <= visited, "Grid paging did not visit all cards"
+        assert not any(e['path'].endswith('/thumbnail') for e in self.proxy.snapshot()[marker:]), \
+            "Scrolling fetched posters without an explicit refresh"
         marker = len(self.proxy.snapshot())
         self.refresh()
         events = [e for e in self.proxy.snapshot()[marker:] if e["path"].endswith("/thumbnail")]
@@ -998,9 +1007,7 @@ Scene.objects.bulk_create(rows)
         locale = json.loads((Path(__file__).resolve().parents[1] /
             "src/visualizer/gui/resources/locales/en.json").read_text(encoding="utf-8"))
         expected_messages = {
-            # Older catalogs lack a dedicated incomplete-download translation.
-            "over_length": locale.get("asset_manager.gallery.error.download_incomplete",
-                                      "Gallery download was incomplete"),
+            "over_length": locale["asset_manager.gallery.error.download_damaged"],
             "truncated": locale["asset_manager.gallery.error.download_damaged"],
         }
         self.publish()
@@ -1018,9 +1025,16 @@ Scene.objects.bulk_create(rows)
             job = self.wait_job(identifier, lambda j: j['status'] in {'error', 'paused'}
                 or j.get('stagedImport', {}).get('state') == 'failed', "specific bad-download failure")
             message = job.get("stagedImport", {}).get("message") or job["message"]
+            assert job['status'] == 'error' or job.get('stagedImport', {}).get('state') == 'failed', job
             assert message == expected_messages[mode], message
             assert self.value("sorted(p._asset_index_assets())") == baseline, "Bad download registered a project"
             self.rpc("assert not list(new.root.rglob('.gallery-*'))")
+            self.rpc(f"""from lfs_plugins.gallery_transfer_panel import transfer_rows
+assert not next(row for row in transfer_rows(p._controller().snapshot()) if row['id'] == {identifier!r})['can_resume']
+_bad_path = Path(new._job({identifier!r})['path'])
+assert not _bad_path.exists()
+assert not _bad_path.with_name('.' + _bad_path.name + '.part').exists()
+""")
             stage = job.get("stagedImport", {}).get("path")
             if stage:
                 assert not Path(stage).exists(), "Failed staging was not cleaned"

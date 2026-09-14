@@ -98,10 +98,10 @@ def test_gallery_delete_preserves_revision_body_through_token_refresh(tmp_path, 
         account._set_current_credentials(replace(old, access_token='replacement-token'))
         return 'ok'
     monkeypatch.setattr(account, '_refresh_tokens', refresh)
-    client = PortalGalleryClient(account, expected_session=(old.email, old.connected_since), revision_domains=0)
-    client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', 'reviewed-legacy')
+    client = PortalGalleryClient(account, expected_session=(old.email, old.connected_since), revision_domains=1)
+    client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', {'contentRevision': 'content', 'metadataRevision': 'metadata'})
     assert len(network.requests) == 2
-    assert all(r.method == 'DELETE' and json.loads(r.data) == {'baseRevision': 'reviewed-legacy'}
+    assert all(r.method == 'DELETE' and json.loads(r.data) == {'baseRevisions': {'content': 'content', 'metadata': 'metadata'}}
                for r in network.requests)
     assert network.requests[-1].get_header('Authorization') == 'Bearer replacement-token'
 

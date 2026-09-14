@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Persistent, nonmodal progress for native gallery operations."""
 import lichtfeld as lf
+from functools import partial
+from .gallery_messages import tr as gallery_tr
+
+tr = partial(gallery_tr, prefix="gallery.transfer.")
 from .panels import panel_class
 from .types import Panel
 from .asset_format import format_size
@@ -9,11 +13,6 @@ from .asset_format import format_size
 __lfs_panel_classes__ = ["GalleryTransferPanel"]
 __lfs_panel_ids__ = ["lfs.gallery_transfer"]
 
-
-def tr(key, **values):
-    from .localization import safe_format
-    full_key = "gallery.transfer." + key
-    return safe_format(lf.ui.tr(full_key), **values)
 
 
 def transfer_rows(snapshot, history_limit=30):
@@ -31,11 +30,11 @@ def transfer_rows(snapshot, history_limit=30):
                "direction": "↓" if job.get("kind") == "download" else "↑",
                "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else tr("bytes", done=format_size(done), total=format_size(total))),
-               "phase": "Needs attention" if job.get("needsAttention") else tr("phase." + phase),
-               "reason": job.get("message", "") if status in ("error", "conflict", "paused", "waiting") else "",
+               "phase": tr("phase.error") if job.get("needsAttention") else tr("phase." + phase),
+               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
                "progress": 100 if status == "completed" else min(100, 100 * done / max(1, total)),
-               "can_pause": status == "running" or status == "waiting" and not snapshot.get("busy"),
-               "can_resume": status in ("paused", "waiting", "error", "queued") and not snapshot.get("busy"),
+               "can_pause": status == "running",
+               "can_resume": status in ("paused", "error", "queued") and job.get("retryable") is not False and not snapshot.get("busy"),
                "can_cancel": status not in ("completed", "canceled")}
         (history if status in ("completed", "canceled") else pending).append(row)
     if snapshot.get("phase", "idle") != "idle":
@@ -110,7 +109,7 @@ class GalleryTransferPanel(Panel):
         super().on_mount(doc)
         from .gallery_controller import get_gallery_controller
         self._owner = get_gallery_controller()
-        self._unsubscribe = self._owner.subscribe(self._changed, asset_manager=False)
+        self._unsubscribe = self._owner.subscribe(self._changed)
 
     def on_unmount(self, doc):
         if self._unsubscribe:

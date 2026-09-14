@@ -12,7 +12,6 @@ import pytest
 from test_asset_manager_panel import panel_module, _gallery_fixture, _Handle, _BindingContext, _BindingModel, _Element, _Event
 from test_gallery_controller import gallery
 
-
 @pytest.fixture
 def convenience(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -24,26 +23,22 @@ def convenience(panel_module, monkeypatch):
     if panel._gallery_toast_timer:
         panel._gallery_toast_timer.cancel()
 
-
 def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     from lfs_plugins.gallery_preferences import read_preferences, set_preference
     (tmp_path / 'preferences.json').write_text('{"uploadFormat":"spz"}')
-    assert read_preferences(tmp_path) == dict(uploadFormat='spz', askBeforePublic=True, posterCacheMiB=64, refreshMinutes=5)
+    assert read_preferences(tmp_path) == dict(uploadFormat='spz', askBeforePublic=True, posterCacheMiB=64)
     set_preference('posterCacheMiB', 128, tmp_path)
-    set_preference('refreshMinutes', '7', tmp_path)
     set_preference('askBeforePublic', False, tmp_path)
     set_preference('uploadFormat', 'ssog', tmp_path)
-    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=True, posterCacheMiB=128, refreshMinutes=7)
+    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=False, posterCacheMiB=128)
 
-
-@pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097), ('refreshMinutes', '1.5'),
-    ('refreshMinutes', -1), ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
+@pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097),
+     ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
 def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):
     from lfs_plugins.gallery_preferences import set_preference
     with pytest.raises(ValueError):
         set_preference(key, value, tmp_path)
     assert not (tmp_path / 'preferences.json').exists()
-
 
 def test_inline_device_flow_uses_complete_uri_and_cancel(convenience, panel_module, monkeypatch):
     panel, _, _ = convenience
@@ -60,7 +55,6 @@ def test_inline_device_flow_uses_complete_uri_and_cancel(convenience, panel_modu
     assert not panel._gallery_connecting
     assert not panel_module.lf._test_state.enabled
 
-
 def test_inline_approval_countdown_relink_and_completion(convenience):
     panel, _, _ = convenience
     panel._gallery_state.update(accountFlow={'linking': True, 'countdown_seconds': 581}, relink_required=True)
@@ -72,20 +66,19 @@ def test_inline_approval_countdown_relink_and_completion(convenience):
     panel._gallery_completions({}, panel._gallery_state)
     assert panel._gallery_toast['text'] == 'Gallery connected as Alice'
 
-
-def test_gallery_quota_uses_me_and_listing_fallback(convenience):
+def test_gallery_quota_requires_server_usage(convenience):
     panel, local, _ = convenience
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
     assert panel._gallery_quota() == '12.3 GB of 50 GB used'
     panel._gallery_state.update(quotaBytes=100, usedBytes=None)
-    assert panel._gallery_quota_values() == (100, 84)
+    assert panel._gallery_quota_values() == (None, 0)
+    panel._gallery_state["usedBytes"] = 84
     local['file_size_bytes'] = 20
     assert 'may not fit' in panel._gallery_quota_warning()
     local['file_size_bytes'] = 16
     assert panel._gallery_quota_warning() == ''
     panel._gallery_state = {}
     assert panel._gallery_quota() == ''
-
 
 def test_completion_actions_pin_scene_and_expire_without_focus(convenience, monkeypatch):
     panel, local, remote = convenience
@@ -101,14 +94,12 @@ def test_completion_actions_pin_scene_and_expire_without_focus(convenience, monk
     panel._gallery_toast_timer.function()
     assert panel._gallery_toast is None
 
-
 def test_completion_actions_refuse_changed_account(convenience):
     panel, _, remote = convenience
     panel._show_gallery_toast('Published', scene=remote)
     panel._gallery_state['identity'] = 'other'
     panel._gallery_controller = SimpleNamespace(open_portal=lambda *_: pytest.fail('Stale account action'))
     panel._gallery_command('toast_copy')
-
 
 def test_remove_and_pull_completions(convenience):
     panel, local, _ = convenience
@@ -118,15 +109,14 @@ def test_remove_and_pull_completions(convenience):
     assert 'to ‹Scenes›' in panel._gallery_toast['text']
     assert panel._gallery_toast['path'] == '/tmp/Scenes/Example.licht'
 
-
 def test_update_all_candidates_exclude_equal_remote_and_conflicts(convenience):
     panel, local, remote = convenience
     assert panel._gallery_update_candidates() == []
     local['commit_uuid'] = 'changed'
     assert panel._gallery_update_candidates() == [local]
     remote['title'] = 'Remote edit'
+    remote['metadataRevision'] = 'metadata-edited'
     assert panel._gallery_update_candidates() == []
-
 
 def test_local_drop_reuses_primary_validation_and_equal_hint(convenience, monkeypatch):
     panel, local, _ = convenience
@@ -144,7 +134,6 @@ def test_local_drop_reuses_primary_validation_and_equal_hint(convenience, monkey
     panel._gallery_drop_asset(local['id'], '__gallery__', 'other')
     assert calls == ['update', 'publish']
 
-
 def test_remote_drag_has_only_origin_owner_scene_id(convenience):
     panel, _, _ = convenience
     identifier = str(uuid.uuid4())
@@ -156,7 +145,6 @@ def test_remote_drag_has_only_origin_owner_scene_id(convenience):
     panel._gallery_state['connected'] = False
     assert panel._gallery_drag_payload(asset) is None
 
-
 def test_remote_folder_drop_selects_requested_folder_for_shared_review(convenience, monkeypatch):
     panel, _, _ = convenience
     panel._asset_index.folders['destination'] = {'id': 'destination', 'path': '/tmp/destination'}
@@ -164,7 +152,6 @@ def test_remote_folder_drop_selects_requested_folder_for_shared_review(convenien
     monkeypatch.setattr(panel, '_gallery_command', lambda action: calls.append((action, panel._gallery_last_folder, panel.get_selected_asset_id())))
     panel._gallery_drop_asset('remote:remote-only', 'destination', 'account')
     assert calls == [('pull', 'destination', 'remote:remote-only')]
-
 
 def test_gallery_empty_states_follow_account_and_library(convenience):
     panel, _, _ = convenience
@@ -176,18 +163,16 @@ def test_gallery_empty_states_follow_account_and_library(convenience):
     panel._gallery_state['connected'] = False
     assert model.func_bindings['gallery_empty']() is False
 
-
 def _batch_assets(state):
     from lfs_plugins.gallery_sync import shared_fields
     assets = []
     for number in range(2):
         identifier = f'project{number}'
-        scene = dict(id=f'scene{number}', title=f'Public {number}', visibility='public', description='', revision='r1', viewerSettings={})
+        scene = dict(id=f'scene{number}', title=f'Public {number}', visibility='public', description='', revision='r1', viewerSettings={}, contentRevision='r1', metadataRevision='r1')
         state['scenes'].append(scene)
-        state['links'][identifier] = dict(sceneId=scene['id'], commitUuid='old', revision='r1', sharedFields=shared_fields(scene))
+        state['links'][identifier] = dict(sceneId=scene['id'], commitUuid='old', revision='r1', sharedFields=shared_fields(scene), contentRevision='r1', metadataRevision='r1')
         assets.append(dict(id=identifier, path=f'/tmp/{identifier}.licht', commit_uuid='new', exists=True))
     return assets
-
 
 def test_update_all_one_public_confirmation_continues_after_item_failure(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
@@ -216,7 +201,6 @@ def test_update_all_one_public_confirmation_continues_after_item_failure(gallery
     row = next(r for r in transfer_rows(controller.snapshot()) if r['id'] == failures[0]['id'])
     assert row['can_resume'] and row['can_cancel']
 
-
 def test_update_all_revalidates_account_and_reviewed_revision(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
     controller.service.root = tmp_path
@@ -225,13 +209,12 @@ def test_update_all_revalidates_account_and_reviewed_revision(gallery, monkeypat
     monkeypatch.setattr(controller, 'confirm_action', lambda key, title, callback: confirmations.append(callback))
     monkeypatch.setattr(controller, 'publish_asset', lambda *args, **kwargs: started.append(args[0]['id']))
     controller.update_all(assets)
-    state['scenes'][0]['revision'] = 'changed'
+    state['scenes'][0]['metadataRevision'] = 'changed'
     confirmations[0]()
     assert started == [] and controller._batch_rows[0]['project'] == 'project0'
     state['identity'] = ('other', 'account')
     controller._advance_update_all()
     assert started == [] and controller._update_queue == []
-
 
 def test_update_all_keeps_async_preparation_failure_visible(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
@@ -244,48 +227,20 @@ def test_update_all_keeps_async_preparation_failure_visible(gallery, monkeypatch
     controller._advance_update_all()
     assert controller._batch_rows[0]['message'] == 'Preparation failed: missing payload'
 
-
-def test_legacy_public_preference_cannot_disable_required_confirmation(gallery, tmp_path):
-    from lfs_plugins.gallery_preferences import set_preference
-    controller, _, _ = gallery
-    controller.service.root = tmp_path
-    actions = []
-    controller._public_confirmation({}, lambda: actions.append('publish'), details={'visibility': 'public'}, defer=True)
-    assert actions == [] and controller._confirm
-    controller._confirm = None
-    set_preference('askBeforePublic', False, tmp_path)
-    controller._public_confirmation({}, lambda: actions.append('publish'), details={'visibility': 'public'}, defer=True)
-    assert actions == [] and controller._confirm is not None
-
-
 def test_preferences_format_setter_preserves_other_values(gallery, tmp_path):
     from lfs_plugins.gallery_preferences import set_preference, read_preferences
     controller, _, _ = gallery
     controller.service.root = tmp_path
-    set_preference('refreshMinutes', 9, tmp_path)
+    set_preference('posterCacheMiB', 9, tmp_path)
     set_preference('posterCacheMiB', 3, tmp_path)
     controller.upload_format = 'spz'
-    assert read_preferences(tmp_path)['refreshMinutes'] == 9
     assert read_preferences(tmp_path)['posterCacheMiB'] == 3
     assert controller.upload_format == 'spz'
-
-
-def test_hidden_refresh_uses_remembered_interval(gallery, monkeypatch, tmp_path):
-    from lfs_plugins.gallery_preferences import set_preference
-    controller, _, _ = gallery
-    controller.service.root = tmp_path
-    set_preference('refreshMinutes', 9, tmp_path)
-    monkeypatch.setattr('lfs_plugins.gallery_controller.time.monotonic', lambda: 100)
-    unsubscribe = controller.subscribe(lambda _: None)
-    unsubscribe()
-    assert controller._next_refresh == 640
-
 
 @pytest.mark.parametrize('key,ctrl,shift,command', [(72,True,False,'primary'), (14,True,True,'copy'), (111,False,False,'refresh_scope'), (72,False,False,None), (14,True,False,None)])
 def test_gallery_shortcut_defaults(key, ctrl, shift, command):
     from lfs_plugins.gallery_shortcuts import shortcut_command
     assert shortcut_command(None, key, ctrl, shift) == command
-
 
 def test_shortcuts_respect_native_conflicts_capture_and_rebinding():
     from lfs_plugins.gallery_shortcuts import shortcut_command
@@ -299,7 +254,6 @@ def test_shortcuts_respect_native_conflicts_capture_and_rebinding():
     keymap = SimpleNamespace(Action=SimpleNamespace(NONE=0), ToolMode=SimpleNamespace(GLOBAL=0), is_capturing=lambda: False,
         get_action_for_key=lambda *args: 99)
     assert shortcut_command(keymap, 72, True) is None
-
 
 def test_keyboard_primary_does_not_open_and_f5_refreshes_active_scope(convenience, panel_module, monkeypatch):
     panel, _, _ = convenience
@@ -316,7 +270,6 @@ def test_keyboard_primary_does_not_open_and_f5_refreshes_active_scope(convenienc
     panel._on_asset_results_keydown(_Event(_Element(), params={'key_identifier':'111'}))
     assert calls == ['primary', 'local_refresh', 'refresh']
 
-
 def test_keyboard_does_not_take_text_field_input(convenience, monkeypatch):
     panel, _, _ = convenience
     monkeypatch.setattr(panel, '_gallery_command', lambda *_: pytest.fail('Text field shortcut stolen'))
@@ -325,7 +278,6 @@ def test_keyboard_does_not_take_text_field_input(convenience, monkeypatch):
     event = _Event(text, params={'key_identifier': '72'}, bool_params={'ctrl_key':True})
     assert not panel._on_gallery_shortcut(event)
     assert not event.stopped
-
 
 def test_viewport_drop_handoff_validates_identity_before_shared_pull_open(convenience, monkeypatch):
     panel, _, _ = convenience
@@ -341,7 +293,6 @@ def test_viewport_drop_handoff_validates_identity_before_shared_pull_open(conven
                 dict(payload, url='https://evil.example'), dict(payload, sceneId='invalid'), {}):
         assert not panel.gallery_viewport_drop(json.dumps(bad))
     assert calls == ['pull_open']
-
 
 def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, panel_module, monkeypatch):
     panel, local, _ = convenience
@@ -364,12 +315,11 @@ def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, p
     rcss = (Path(__file__).parents[2] / 'src/visualizer/gui/rmlui/resources/asset_manager.rcss').read_text()
     assert 'drag: drag-drop;' in rcss
 
-
 def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch, tmp_path):
     # Exercise the same preference helper used by the Preferences setters without
     # coupling this suite to a second native-module fixture.
     from lfs_plugins.gallery_preferences import set_preference, read_preferences
-    for key, value in [('uploadFormat','studio'), ('askBeforePublic',False), ('posterCacheMiB',32), ('refreshMinutes',10)]:
+    for key, value in [('uploadFormat','studio'), ('askBeforePublic',False), ('posterCacheMiB',32)]:
         set_preference(key, value, tmp_path)
     assert read_preferences(tmp_path)['posterCacheMiB'] == 32
     import xml.etree.ElementTree as ET
@@ -377,8 +327,7 @@ def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch,
     group = rml.find('.//*[@data-if="gallery_expanded"]')
     assert group is not None
     bindings = {e.get('data-value') or e.get('data-checked') for e in group.iter()}
-    assert {'gallery_uploadFormat','gallery_askBeforePublic','gallery_posterCacheMiB','gallery_refreshMinutes'} <= bindings
-
+    assert {'gallery_uploadFormat','gallery_askBeforePublic','gallery_posterCacheMiB'} <= bindings
 
 def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
@@ -394,13 +343,11 @@ def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monke
     assert calls[0][1] == {'update':True}
     assert controller._batch_rows == []
 
-
 def test_publish_review_reads_latest_preferences_default(convenience):
     panel, _, _ = convenience
     panel._gallery_controller = SimpleNamespace(upload_format='spz')
     panel._gallery_command('publish')
     assert panel._gallery_review and panel._gallery_upload_format == 'spz'
-
 
 def test_remote_card_starts_typed_native_drag(convenience, panel_module):
     panel, _, _ = convenience

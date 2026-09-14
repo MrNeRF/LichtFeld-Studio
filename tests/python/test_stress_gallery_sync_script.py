@@ -8,9 +8,9 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from test_asset_manager_panel import panel_module
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
 
 def module(name):
     if name in sys.modules:
@@ -21,21 +21,17 @@ def module(name):
     spec.loader.exec_module(result)
     return result
 
-
 module("validate_gallery_sync")
 common = module("gallery_sync_e2e_common")
 stress = module("stress_gallery_sync")
 
-
 def args(*extra):
     return stress.parse_args(["--build-dir", "/tmp/build", "--portal-source", "/tmp/portal", *extra])
-
 
 def test_all_fourteen_scenarios_are_callable():
     parsed = args()
     assert len(parsed.scenarios) == 14
     assert all(callable(getattr(stress.StressRun, name)) for name in parsed.scenarios)
-
 
 @pytest.mark.parametrize("extra", [
     ["--cycles", "0"], ["--cycles", "-1"], ["--scenarios", "missing"],
@@ -48,25 +44,21 @@ def test_rejects_invalid_cli(extra):
     with pytest.raises(SystemExit):
         args(*extra)
 
-
 def test_cli_selection_and_seed():
     parsed = args("--scenarios", "listing_scale, thumbnail_cache", "--cycles", "7", "--seed", "-8", "--keep")
     assert parsed.scenarios == ["listing_scale", "thumbnail_cache"]
     assert parsed.cycles == 7 and parsed.seed == -8 and parsed.keep
-
 
 def test_seed_independent_of_selected_scenarios():
     assert common.scenario_seed(7, "one") == common.scenario_seed(7, "one")
     assert common.scenario_seed(7, "one") != common.scenario_seed(7, "two")
     assert common.scenario_seed(7, "one") != common.scenario_seed(8, "one")
 
-
 def test_revision_hashes_are_not_compared_lexically():
     common.assert_revision_progress([
         dict(sceneId="s", metadataRevision="z", exchangedAt=1),
         dict(sceneId="s", metadataRevision="a", exchangedAt=1),
     ])
-
 
 @pytest.mark.parametrize("second", [
     dict(sceneId="s", metadataRevision="z", exchangedAt=2),
@@ -77,11 +69,9 @@ def test_revision_regressions_fail(second):
     with pytest.raises(AssertionError):
         common.assert_revision_progress([dict(sceneId="s", metadataRevision="z", exchangedAt=1), second])
 
-
 def test_single_exchange_is_insufficient():
     with pytest.raises(AssertionError):
         common.assert_revision_progress([])
-
 
 def test_retained_parts_require_reuse_and_reduced_network_bytes():
     old = [dict(number=1, etag="same", size=8)]
@@ -92,28 +82,23 @@ def test_retained_parts_require_reuse_and_reduced_network_bytes():
         with pytest.raises(AssertionError):
             common.assert_retained_parts(before, after, 16, sent)
 
-
 def retry_events(elapsed=2):
     return [dict(method="POST", path="/upload", injected=429, retry_after=2, started=0, finished=.1),
             dict(method="GET", path="/me", injected=0, started=.2, finished=.3),
             dict(method="POST", path="/upload", injected=0, started=.1+elapsed, finished=3)]
 
-
 def test_retry_matches_endpoint_and_method():
     checked = common.retry_evidence(retry_events())
     assert checked[0]["elapsed"] == 2
-
 
 def test_retry_uses_response_time_not_request_start():
     with pytest.raises(AssertionError, match="Retry-After"):
         common.retry_evidence(retry_events(.5))
 
-
 @pytest.mark.parametrize("events", [[], retry_events()[:1]])
 def test_missing_retry_evidence_fails(events):
     with pytest.raises(AssertionError):
         common.retry_evidence(events)
-
 
 def test_job_evidence_omits_checkpoint_credentials_and_signed_urls():
     data = common.safe_job(dict(id="a", status="paused", checkpoint={"uploadId": "u", "url": "secret"},
@@ -121,12 +106,10 @@ def test_job_evidence_omits_checkpoint_credentials_and_signed_urls():
     assert data["uploadId"] == "u"
     assert "secret" not in json.dumps(data)
 
-
 def proxy_policy(seed):
     proxy = object.__new__(common.FaultProxy)
     proxy.faults, proxy.seed, proxy.count, proxy.lock = True, seed, 0, threading.Lock()
     return proxy
-
 
 def test_fault_schedule_ten_percent_with_both_statuses():
     proxy = proxy_policy(3)
@@ -136,13 +119,11 @@ def test_fault_schedule_ten_percent_with_both_statuses():
     other = proxy_policy(3)
     assert statuses == [other.inject("GET", "/api/gallery/v1/splats") for _ in range(100)]
 
-
 def test_fault_schedule_does_not_touch_non_gallery_traffic():
     proxy = proxy_policy(3)
     assert proxy.inject("GET", "/health") == 0 and proxy.count == 0
     proxy.faults = False
     assert proxy.inject("GET", "/api/gallery/v1/me") == 0 and proxy.count == 0
-
 
 def test_report_escapes_failures_and_keeps_evidence_links():
     rows = [dict(name="one", status="FAIL", seconds=.2, error="bad|row\nnext", json="a.json", screenshot="a.png"),
@@ -152,11 +133,9 @@ def test_report_escapes_failures_and_keeps_evidence_links():
     assert "[JSON](<b.json>)" in report and "[failure screenshot](<a.png>)" in report
     assert "--seed 3" in report and "FAIL" in report
 
-
 def test_proxy_rejects_nonlocal_upstream(tmp_path):
     with pytest.raises(ValueError, match="loopback"):
         common.FaultProxy("https://example.com", 1, tmp_path / "proxy.jsonl")
-
 
 def test_confirmation_uses_actual_enabled_label():
     modal = {"buttons": [{"label": "Cancel", "enabled": True},
@@ -164,13 +143,11 @@ def test_confirmation_uses_actual_enabled_label():
                          {"label": "Unavailable", "enabled": False}]}
     assert common.confirmation_label(modal) == "Pull from portal"
 
-
 def test_shell_json_handles_large_result_and_diagnostics():
     value = ['scene ' + str(i) for i in range(1000)]
     assert common.shell_json('Django diagnostics\n' + common.SHELL_MARKER + json.dumps(value)) == value
     with pytest.raises(ValueError):
         common.shell_json(common.SHELL_MARKER + '{}\n' + common.SHELL_MARKER + '{}')
-
 
 def test_remote_snapshot_is_evaluated_once_and_paged_below_editor_limit():
     expected = ['scene ' + str(i) for i in range(300)]
@@ -188,12 +165,10 @@ def test_remote_snapshot_is_evaluated_once_and_paged_below_editor_limit():
     assert common.remote_json(MCP(), 'expected') == expected
     assert len(calls) == 1
 
-
 @pytest.mark.parametrize("labels", [[], ["Cancel"], ["Cancel", "Mine", "Portal"]])
 def test_confirmation_never_guesses_between_conflict_choices(labels):
     with pytest.raises(AssertionError):
         common.confirmation_label({"buttons": [{"label": label} for label in labels]})
-
 
 def test_forward_stream_and_inflated_download_without_socket(tmp_path):
     """Exercise real proxy forwarding with in-memory transport, including redaction."""
@@ -240,7 +215,6 @@ def test_forward_stream_and_inflated_download_without_socket(tmp_path):
     assert "SECRET" not in proxy.log.read_text()
     assert proxy.events[0]["status"] == 200 and "finished" in proxy.events[0]
 
-
 def test_main_continues_after_failure_and_cleans_each_scenario(tmp_path, monkeypatch):
     cleaned = []
     class FakeRun:
@@ -260,7 +234,6 @@ def test_main_continues_after_failure_and_cleans_each_scenario(tmp_path, monkeyp
     first = json.loads(next((tmp_path / 'report-artifacts').glob('*/listing_scale.json')).read_text())
     assert first["evidence"]["observed"] and "intentional" in first["error"]
 
-
 def test_evidence_failure_still_cleans_and_reports_failure(tmp_path, monkeypatch):
     cleaned = []
     class FakeRun:
@@ -278,7 +251,6 @@ def test_evidence_failure_still_cleans_and_reports_failure(tmp_path, monkeypatch
     row = json.loads(next((tmp_path / 'evidence-artifacts').glob('*/listing_scale.json')).read_text())
     assert row['evidence_error'] == 'log disappeared' and row['status'] == 'FAIL'
 
-
 @pytest.fixture
 def waiting_run(monkeypatch):
     run = object.__new__(stress.StressRun)
@@ -294,7 +266,6 @@ def waiting_run(monkeypatch):
     monkeypatch.setattr(stress.time, 'sleep', advance)
     return run
 
-
 @pytest.mark.parametrize('timeout,limit', [(None, 120), (600, 120), (.4, .4)])
 def test_wait_caps_deadline_and_reports_observed_facts(waiting_run, timeout, limit):
     run = waiting_run
@@ -306,7 +277,6 @@ def test_wait_caps_deadline_and_reports_observed_facts(waiting_run, timeout, lim
     assert 'poll_time' in str(caught.value)
     assert run._wait_deadline is None
 
-
 def test_wait_respects_shorter_cli_limit_and_false_is_success(waiting_run):
     run = waiting_run
     run.args.timeout = .2
@@ -316,7 +286,6 @@ def test_wait_respects_shorter_cli_limit_and_false_is_success(waiting_run):
     with pytest.raises(TimeoutError, match='limit 0.2s'):
         run.wait_value('new.busy', 'active', 100)
     assert run.now == pytest.approx(.2)
-
 
 def test_wait_transport_timeout_keeps_last_observation(waiting_run):
     run = waiting_run
@@ -328,7 +297,6 @@ def test_wait_transport_timeout_keeps_last_observation(waiting_run):
     with pytest.raises(TimeoutError, match="transfer.*last=.*processing.*MCP timed out"):
         run.wait_value('job', 'transfer', accept=lambda v: v['status'] == 'completed')
 
-
 def test_wait_job_reports_progress_without_checkpoint_secrets(waiting_run):
     run = waiting_run
     run.args.timeout = .2
@@ -339,17 +307,14 @@ def test_wait_job_reports_progress_without_checkpoint_secrets(waiting_run):
     assert 'running' in str(caught.value) and '17' in str(caught.value)
     assert 'SECRET' not in str(caught.value)
 
-
 def panel_observation(**overrides):
     return dict(checked='Checked just now', checked_label='Checked just now',
                 counts=dict(count=1, ready=0, linked=1, missing=0), selection_count=1,
                 selected=dict(id='a'), available=True, catalog=['a'], cards=[], **overrides)
 
-
 def test_panel_accepts_unchanged_relative_label_and_current_counts():
     assert common.panel_refresh_ready(panel_observation(), 'Checked just now',
         dict(links={'a': {'sceneId': 's'}}, scenes=[]))
-
 
 def test_panel_rejects_stale_counts_and_listing_then_accepts_updated_dom():
     observed = panel_observation()
@@ -362,7 +327,6 @@ def test_panel_rejects_stale_counts_and_listing_then_accepts_updated_dom():
     observed['checked'] = 'Offline'
     assert not common.panel_refresh_ready(observed, 'Checked just now', fresh)
 
-
 def test_panel_excludes_linked_and_deleted_remote_cards():
     observed = panel_observation()
     fresh = dict(links={'a': {'sceneId': 's'}}, scenes=[dict(id='s', status='ready'),
@@ -370,7 +334,6 @@ def test_panel_excludes_linked_and_deleted_remote_cards():
     assert not common.panel_refresh_ready(observed, observed['checked'], fresh)
     observed['cards'] = ['remote:other']
     assert common.panel_refresh_ready(observed, observed['checked'], fresh)
-
 
 def test_refresh_waits_for_fresh_success_idle_and_coalesced_panel(waiting_run):
     """Execute the actual remote expressions without a panel _gallery_state."""
@@ -410,7 +373,6 @@ def test_refresh_waits_for_fresh_success_idle_and_coalesced_panel(waiting_run):
     assert service.polls == 4 and panel.polls == 3
     assert run.now >= .6
 
-
 def test_bounded_remote_snapshot_pages_share_remaining_transport_budget(waiting_run):
     import io
     from contextlib import redirect_stdout
@@ -439,7 +401,6 @@ def test_bounded_remote_snapshot_pages_share_remaining_transport_budget(waiting_
         common.remote_json(mcp, 'expected', deadline=.15)
     assert run.now == pytest.approx(.2)
 
-
 @pytest.mark.parametrize('flag', ['running', 'timed_out'])
 def test_remote_editor_timeout_has_wait_context_and_diagnostics(waiting_run, flag):
     run = waiting_run
@@ -449,7 +410,6 @@ def test_remote_editor_timeout_has_wait_context_and_diagnostics(waiting_run, fla
     with pytest.raises(TimeoutError, match='panel refresh.*last=None.*snapshot editor'):
         run.wait_value('True', 'panel refresh')
     assert diagnostics == ['partial diagnostic']
-
 
 def test_modal_confirmation_shares_wait_deadline(waiting_run):
     run = waiting_run
@@ -463,7 +423,6 @@ def test_modal_confirmation_shares_wait_deadline(waiting_run):
         run.press_modal('Keep portal', {'title': 'Resolve', 'body': 'Changes', 'buttons': [{'label': 'Keep portal'}]})
     assert len(calls) == 1
 
-
 def test_intentional_kill_does_not_hide_a_relaunch_crash(waiting_run):
     run = waiting_run
     killed = SimpleNamespace(pid=12, exited=False)
@@ -476,7 +435,6 @@ def test_intentional_kill_does_not_hide_a_relaunch_crash(waiting_run):
     run.app = SimpleNamespace(poll=lambda: -11)
     with pytest.raises(AssertionError, match='Studio exited unexpectedly'):
         run.until(lambda: True, 'relaunch')
-
 
 @pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
 def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run, tmp_path, id_source):
@@ -533,7 +491,6 @@ def test_kill_scenario_reuses_home_and_reinjects_auth_before_resume(waiting_run,
     assert calls.index('sign in') < calls.index(resume) < calls.index('completed')
     assert ('scene', 'scene') in calls
     assert any(o['label'] == 'restored interrupted jobs' for o in run.observations)
-
 
 @pytest.mark.parametrize('supplied', [False, True])
 def test_large_fixture_is_saved_in_app_and_closed_before_card_publish(waiting_run, tmp_path, monkeypatch, supplied):
@@ -618,7 +575,6 @@ def test_large_fixture_is_saved_in_app_and_closed_before_card_publish(waiting_ru
     if supplied:
         assert source.exists() and source != path
 
-
 @pytest.mark.parametrize('fraction,eligible', [(.29, False), (.3, True), (.5, True), (.7, True), (.71, False)])
 def test_mid_upload_requires_real_large_upload_bytes(waiting_run, fraction, eligible):
     job = dict(status='running', total=32 * 1024 * 1024, completed=fraction * 32 * 1024 * 1024,
@@ -635,7 +591,6 @@ def test_mid_upload_requires_real_large_upload_bytes(waiting_run, fraction, elig
         return job
     waiting_run.wait_job = wait
     assert waiting_run.mid_upload('job') is job
-
 
 @pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
 def test_mid_upload_waits_through_native_preparation_until_45_percent(waiting_run, id_source):
@@ -664,7 +619,6 @@ def test_mid_upload_waits_through_native_preparation_until_45_percent(waiting_ru
     assert middle['total'] == upload_total
     assert waiting_run.last_wait['label'] == '30–70% upload'
 
-
 @pytest.mark.parametrize('failure', [None, 'nodes', 'title', 'id', 'missing', 'extra'])
 def test_large_scene_requires_expected_ready_portal_nodes(waiting_run, failure):
     run = waiting_run
@@ -688,10 +642,9 @@ def test_large_scene_requires_expected_ready_portal_nodes(waiting_run, failure):
         run.assert_large_scene(dict(result=dict(id='scene')))
         assert run.observations[-1]['value']['nodes'] == 2
 
-
 @pytest.mark.parametrize('sent', [8, 16])
 @pytest.mark.parametrize('id_source', ['checkpoint', 'uploadId'])
-def test_outage_automatically_resumes_retained_parts_and_checks_publication(waiting_run, tmp_path, sent, id_source):
+def test_outage_requires_manual_resume_and_reuses_parts(waiting_run, tmp_path, sent, id_source):
     run = waiting_run
     run.asset_id = 'large-id'
     calls, events = [], []
@@ -713,13 +666,13 @@ def test_outage_automatically_resumes_retained_parts_and_checks_publication(wait
         return [dict(number=1, etag='retained', size=8)]
     run.part_rows = part_rows
     def wait_job(identifier, predicate, label):
-        if 'waiting for connection' in label:
-            assert not predicate(dict(status='paused'))
-            job = dict(status='waiting')
+        if 'paused after connection loss' in label:
+            assert not predicate(dict(status='running', message='Uploading'))
+            job = dict(status='paused', message='Paused (connection lost)')
             assert predicate(job)
             calls.append(identifier + ' waiting')
         elif 'resumed parts' in label:
-            assert calls[-1] == 'portal restarted'
+            assert calls[-1] == "p._controller().command('resume', 'upload-job')"
             events.append(dict(method='PUT', request_bytes=sent, finished=1))
             job = dict(serverProcessing=True)
             assert predicate(job)
@@ -759,13 +712,13 @@ def test_outage_automatically_resumes_retained_parts_and_checks_publication(wait
         run.portal_down_mid_transfer()
         assert calls.index('parts accepted') < calls.index('worker started') < calls.index('published nodes checked')
         assert "new.unlink('large-id')" in calls
-        assert not any("command('resume'" in call for call in calls)
+        assert [call for call in calls if "command('resume'" in call] == [
+            "p._controller().command('resume', 'upload-job')", "p._controller().command('resume', 'download-job')"]
         assert calls.count('portal stopped') == calls.count('portal restarted') == 2
         assert calls.index('download in progress') < calls.index('download-job waiting')
         assert calls[-2:] == ['registered', 'published nodes checked']
         evidence = next(row['value'] for row in run.observations if row['label'] == 'outage resume parts')
         assert evidence['resumed_bytes'] < evidence['total']
-
 
 def test_second_launcher_has_shared_oracle_and_profile_but_owns_only_its_processes(waiting_run, tmp_path, monkeypatch):
     run = waiting_run
@@ -801,7 +754,6 @@ def test_second_launcher_has_shared_oracle_and_profile_but_owns_only_its_process
     assert other is run.other
     assert calls == ['display', 'app', 'panel', 'auth']
     assert run.args.display == ':94'
-
 
 @pytest.mark.parametrize('width,height', [(250, 230), (1000, 400)])
 def test_grid_pages_use_real_panel_window_and_scroll_api(waiting_run, width, height):
@@ -842,7 +794,6 @@ def test_grid_pages_use_real_panel_window_and_scroll_api(waiting_run, width, hei
     if width == 250:
         assert scroll.scroll_top > 10000  # old fixed range could never reach the end
 
-
 def test_poster_log_parser_counts_query_urls_and_conditional_bytes():
     lines = ['[date] "GET /api/gallery/v1/splats/a/thumbnail?size=256 HTTP/1.1" 200 858',
              '[date] "GET /api/gallery/v1/splats/a/thumbnail?size=256 HTTP/1.1" 304 0',
@@ -856,7 +807,6 @@ def test_poster_log_parser_counts_query_urls_and_conditional_bytes():
         with pytest.raises(AssertionError):
             common.assert_poster_requests(bad, ['a'], 304)
 
-
 def test_unique_artifact_directories_preserve_existing_evidence(tmp_path):
     root = tmp_path / 'artifacts'
     first = common.run_directory(root)
@@ -864,7 +814,6 @@ def test_unique_artifact_directories_preserve_existing_evidence(tmp_path):
     second = common.run_directory(root)
     assert first != second and first.parent == second.parent == root
     assert (first / 'saved.json').read_text() == 'old evidence'
-
 
 def test_log_excerpt_keeps_last_twenty_relevant_lines_over_frame_noise(tmp_path):
     lines = [f'\x1b[31m[error] gallery upload reason {i}\x1b[0m' for i in range(30)]
@@ -875,7 +824,6 @@ def test_log_excerpt_keeps_last_twenty_relevant_lines_over_frame_noise(tmp_path)
     assert len(excerpt) == 20
     assert excerpt[0].endswith('reason 10') and excerpt[-1].endswith('reason 29')
     assert '\x1b' not in ''.join(excerpt)
-
 
 def test_modal_attempt_survives_failed_transport_with_complete_dialog(waiting_run):
     run = waiting_run
@@ -890,7 +838,6 @@ def test_modal_attempt_survives_failed_transport_with_complete_dialog(waiting_ru
     assert saved['title'] == 'Resolve camera' and saved['body'] == 'Both versions changed.'
     assert len(saved['buttons']) == 4 and saved['label'] == 'Portal' and saved['outcome'] == 'error'
     assert run.observations[0]['value'] == saved
-
 
 def test_failure_json_retains_jobs_wait_modal_and_logs_even_if_evidence_fails(tmp_path, monkeypatch):
     class FakeRun:
@@ -925,7 +872,6 @@ def test_failure_json_retains_jobs_wait_modal_and_logs_even_if_evidence_fails(tm
     assert len(row['log_excerpt']) == 20 and row['modal_presses'][0]['title'] == 'Resolve'
     assert row['observations']
     assert f'[JSON](<{files[-1]}>)' in report.read_text()
-
 
 @pytest.mark.parametrize('clobber', [False, True])
 def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, clobber):
@@ -972,14 +918,17 @@ def test_shared_journal_scenario_checks_rejected_write_and_refresh(waiting_run, 
         assert run.refreshed == 2 and run.loaded == 'after' and not run.stale
         assert run.observations[-1]['value'] == dict(before='before', after='after', refreshed='after')
 
-
 @pytest.mark.parametrize('cache_bytes,bound,passes', [(1, 1, True), (2, 1, False)])
 def test_thumbnail_scenario_asserts_configured_cache_bound(waiting_run, tmp_path, cache_bytes, bound, passes):
     run = waiting_run
     run.artifacts = tmp_path
+    opened = False
     ids = [str(i) for i in range(50)]
     cards = ['remote:' + key for key in ids]
-    run.seed_scenes = lambda n: ids if n == 50 else []
+    def seed_scenes(n):
+        assert opened, 'Open the scope before seeding the measured posters'
+        return ids if n == 50 else []
+    run.seed_scenes = seed_scenes
     run.set_posters = lambda _: None
     events = []
     run.proxy = SimpleNamespace(snapshot=lambda: list(events))
@@ -993,7 +942,15 @@ def test_thumbnail_scenario_asserts_configured_cache_bound(waiting_run, tmp_path
                 log.write(f'"GET {path}?size=256 HTTP/1.1" {status} {size}\n')
     run.refresh = refresh
     run.wait_value = lambda *a, **kw: None
-    run.rpc = lambda _: None
+    def rpc(code):
+        nonlocal opened
+        if "p._select_folder_id('__gallery__')" in code:
+            opened = True
+            # Real scope opening refreshes the listing. If posters were already
+            # fetched this would add an unwanted conditional response batch.
+            if events:
+                refresh()
+    run.rpc = rpc
     run.grid_page = lambda index: dict(cards=cards)
     run.assert_responsive = lambda: None
     def value(expression):
@@ -1010,26 +967,64 @@ def test_thumbnail_scenario_asserts_configured_cache_bound(waiting_run, tmp_path
             run.thumbnail_cache()
 
 
-@pytest.mark.parametrize('incomplete_translation', [None, 'The gallery download is incomplete.'])
-@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'declared_size', 'extra_text', 'registered', 'staging'])
+@pytest.mark.parametrize('leaked_rows', [False, True])
+def test_account_switch_asserts_public_transfer_rows(waiting_run, panel_module, tmp_path, leaked_rows):
+    run = waiting_run
+    run.scene_id = 'scene'
+    state = dict(links={'project': {'sceneId': 'scene'}}, posters={'scene': 'poster'},
+                 jobs=[dict(id='upload', status='completed')], scenes=[{'id': 'scene'}])
+    tray = dict(state)
+    saved = dict(state)
+    (tmp_path / 'posters').mkdir()
+    poster = tmp_path / 'posters' / 'scene.png'
+    poster.write_bytes(b'poster')
+    namespace = dict(new=SimpleNamespace(snapshot=lambda: state, root=tmp_path),
+                     p=SimpleNamespace(_gallery_remote_assets=lambda: state['scenes'],
+                                       _controller=lambda: SimpleNamespace(snapshot=lambda: tray)))
+    run.publish = run.refresh = run.assert_link = lambda: None
+    run.set_posters = lambda _: None
+    run.rpc = lambda code: exec(code, namespace)
+    run.value = lambda expression: eval(expression, namespace)
+    def switch(account):
+        state.clear()
+        state.update(saved if account == 'A' else dict(links={}, posters={}, jobs=[], scenes=[]))
+        tray.clear()
+        tray.update(state)
+        if account == 'B':
+            poster.unlink()
+            if leaked_rows:
+                tray['jobs'] = saved['jobs']
+    run.switch_account = switch
+    if leaked_rows:
+        with pytest.raises(AssertionError):
+            run.account_switch()
+    else:
+        run.account_switch()
+
+@pytest.mark.parametrize('failure', [None, 'legacy', 'wrong_reason', 'declared_size', 'extra_text', 'registered',
+                                     'staging', 'paused', 'resume', 'download_file', 'partial'])
 @pytest.mark.parametrize('failed_mode', ['over_length', 'truncated'])
 def test_bad_downloads_requires_localized_reason_and_cleanup(
-        waiting_run, tmp_path, monkeypatch, failure, failed_mode, incomplete_translation):
+        waiting_run, panel_module, tmp_path, monkeypatch, failure, failed_mode):
     run = waiting_run
     locale = json.loads((SCRIPTS.parent / 'src/visualizer/gui/resources/locales/en.json').read_text(encoding='utf-8'))
-    locale.pop('asset_manager.gallery.error.download_incomplete', None)
-    if incomplete_translation is not None:
-        locale['asset_manager.gallery.error.download_incomplete'] = incomplete_translation
-    monkeypatch.setattr(stress.json, 'loads', lambda text: locale)
     expected = {
-        'over_length': incomplete_translation or 'Gallery download was incomplete',
+        'over_length': locale['asset_manager.gallery.error.download_damaged'],
         'truncated': locale['asset_manager.gallery.error.download_damaged'],
     }
     run.asset_id, run.scene_id = 'asset', 'scene'
     run.proxy = SimpleNamespace(inflate_download=0)
     run.publish = run.refresh = lambda: None
     calls = []
-    run.rpc = calls.append
+    current_job = {}
+    namespace = dict(Path=Path, new=SimpleNamespace(_job=lambda _: current_job),
+                     p=SimpleNamespace(_controller=lambda: SimpleNamespace(
+                         snapshot=lambda: dict(jobs=[current_job]))))
+    def rpc(code):
+        calls.append(code)
+        if code.startswith('from lfs_plugins.gallery_transfer_panel'):
+            exec(code, namespace)
+    run.rpc = rpc
     run.db = lambda code: calls.append(code)
     run.wait_value = lambda *a, **kw: None
     current = None
@@ -1048,15 +1043,29 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
         message = expected[identifier]
         if identifier == failed_mode:
             if failure == 'legacy': message = 'Invalid download checksum'
-            if failure == 'wrong_reason': message = expected['truncated' if identifier == 'over_length' else 'over_length']
+            if failure == 'wrong_reason': message = locale['asset_manager.gallery.state.connection_lost']
             if failure == 'declared_size': message = locale['asset_manager.gallery.error.download_size']
             if failure == 'extra_text': message += ' Unexpected diagnostic'
             if failure == 'staging': stage.write_bytes(b'leftover')
-        job = dict(id=identifier, status='error', message=message)
+        job = dict(id=identifier, status='error', message=message, retryable=False,
+                   path=str(tmp_path / (identifier + '.licht')))
         if identifier == 'truncated':
             job.update(message='Download failed', stagedImport=dict(state='failed', message=message, path=str(stage)))
         elif failure == 'staging':
             job['stagedImport'] = dict(path=str(stage))
+        if failure == 'paused' and identifier == failed_mode:
+            job.update(status='paused')
+            job.pop('stagedImport', None)
+        if identifier == failed_mode:
+            if failure == 'resume':
+                job['retryable'] = True
+            if failure == 'download_file':
+                Path(job['path']).write_bytes(b'invalid')
+            if failure == 'partial':
+                path = Path(job['path'])
+                path.with_name('.' + path.name + '.part').write_bytes(b'partial')
+        current_job.clear()
+        current_job.update(job)
         assert accept(job)
         return job
     run.wait_job = wait_job
@@ -1068,7 +1077,6 @@ def test_bad_downloads_requires_localized_reason_and_cleanup(
         assert [row['label'] for row in run.observations] == ['over_length', 'truncated']
         assert calls.count("assert not list(new.root.rglob('.gallery-*'))") == 2
         assert "new.discard('over_length')" in calls and "new.discard('truncated')" in calls
-
 
 def test_constructor_failure_has_explicit_unavailable_diagnostics(tmp_path, monkeypatch):
     def failed(*args): raise PermissionError('loopback socket unavailable')
@@ -1082,7 +1090,6 @@ def test_constructor_failure_has_explicit_unavailable_diagnostics(tmp_path, monk
     assert 'loopback socket unavailable' in row['reason']
     assert row['message'].startswith('No job message available:')
     assert 'may not have started' in row['log_excerpt_error']
-
 
 def test_safe_job_keeps_reason_and_is_idempotent():
     job = dict(id='j', message='Interrupted', reason='socket closed', checkpoint=dict(uploadId='u', url='SECRET'))

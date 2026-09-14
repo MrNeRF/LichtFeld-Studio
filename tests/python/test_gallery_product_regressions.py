@@ -7,7 +7,6 @@ import pytest
 
 from test_gallery_controller import gallery, panel_module, scene
 
-
 @pytest.fixture
 def removal_sequence(gallery, tmp_path, monkeypatch):
     """Real journal/controller/client; byte transfers and HTTP responses are controlled."""
@@ -23,8 +22,8 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     account_module = import_module('lfs_plugins.portal_account')
     module = import_module('lfs_plugins.gallery_controller')
     manager, local, remote = _gallery_fixture(import_module('lfs_plugins.asset_manager_panel'))
-    remote.update(id='7e812ba8-6cfb-4307-a0bc-da8e395bb721', revision='legacy-reviewed')
-    other = dict(remote, id='52dde335-aab0-412d-a788-de4a5b414d4f', sourceFormat='spz', contentLength=8)
+    remote.update(id='7e812ba8-6cfb-4307-a0bc-da8e395bb721', revision='reviewed', contentRevision='reviewed', metadataRevision='reviewed')
+    other = dict(remote, id='52dde335-aab0-412d-a788-de4a5b414d4f', sourceFormat='licht', contentLength=8)
     remote_scenes = [other]
     requests = []
     reply = {'status': 204}
@@ -47,7 +46,7 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
         status = 200
         if request.method == 'DELETE':
             assert request.full_url.endswith('/splats/' + remote['id'])
-            assert body == {'baseRevision': 'legacy-reviewed'}
+            assert body == {'baseRevisions': {'content': 'reviewed', 'metadata': 'reviewed'}}
             deleting.set()
             assert release_delete.wait(3)
             status = reply['status']
@@ -57,7 +56,7 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
                 remote_scenes[:] = [s for s in remote_scenes if s['id'] != remote['id']]
             payload = {} if status in (200, 204) else {'error': 'delete refused'}
         elif request.full_url.endswith('/me'):
-            payload = {'id': 'owner', 'gallerySyncVersion': 1}  # Legacy: no revisionDomains.
+            payload = {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], 'id': 'owner', 'gallerySyncVersion': 1, "revisionDomains": 1}
         else:
             assert request.full_url.endswith('/splats')
             payload = {'scenes': copy.deepcopy(remote_scenes), 'nextCursor': None}
@@ -69,7 +68,7 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_cache_posters', lambda *a: None)
     service.refresh()
     finish(service)
-    source = tmp_path / 'prepared.ply'
+    source = tmp_path / 'prepared.licht'
     source.write_bytes(b'payload!')
     attempts = []
     def upload(*args, **kwargs):
@@ -98,8 +97,8 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     controller._identity = service.identity()
     controller._state = service.snapshot()
     controller._message = ''
-    monkeypatch.setattr(controller, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(controller, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
     manager._gallery_controller = controller
     manager._gallery_state = service.snapshot()
     manager._select_asset_id(local['id'])
@@ -113,7 +112,6 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     release_delete.set()
     finish(service)
     controller._release_native_use()
-
 
 @pytest.mark.parametrize('status', [200, 204, 404, 202, 403, 409, 500, 'timeout'])
 def test_P5_publish_pull_other_confirm_remove_waits_for_delete_response(removal_sequence, status):
@@ -141,7 +139,7 @@ def test_P5_publish_pull_other_confirm_remove_waits_for_delete_response(removal_
     run.finish()
     deletes = [r for r in run.requests if r[0] == 'DELETE']
     assert deletes == [('DELETE', 'https://portal.lichtfeld.io/api/gallery/v1/splats/' + run.remote['id'],
-                        {'baseRevision': 'legacy-reviewed'})]
+                        {'baseRevisions': {'content': 'reviewed', 'metadata': 'reviewed'}})]
     state = service.snapshot()
     persisted = next(iter(json.loads(service._journal.read_bytes())['accounts'].values()))['links']
     if status in (200, 204, 404):
@@ -157,7 +155,6 @@ def test_P5_publish_pull_other_confirm_remove_waits_for_delete_response(removal_
         assert state['completion']['kind'] != 'remove'
         assert state['message'] and 'Removed' not in state['message']
     assert not run.controller._message and not manager._gallery_notice
-
 
 @pytest.mark.parametrize('operation', ['remove', 'unlink', 'edit'])
 def test_P5_metadata_waits_for_listing_refresh_and_uses_reloaded_journal(removal_sequence, monkeypatch, operation):
@@ -204,7 +201,6 @@ def test_P5_metadata_waits_for_listing_refresh_and_uses_reloaded_journal(removal
         assert links[run.local['id']]['metadata']['title'] == 'Edited'
     assert not old_bucket['links'][run.local['id']].get('remoteDeleted')
 
-
 @pytest.mark.parametrize('refusal', ['busy', 'launch', 'replacement', 'cancel'])
 def test_P5_refused_remove_keeps_link_and_explains(removal_sequence, monkeypatch, refusal):
     import threading
@@ -234,7 +230,6 @@ def test_P5_refused_remove_keeps_link_and_explains(removal_sequence, monkeypatch
     if refusal != 'cancel':
         assert run.controller._message or service.message == 'Discard the unfinished replacement before removing this gallery item.'
 
-
 def test_P5_queued_remove_cannot_cross_account_boundary(removal_sequence, monkeypatch):
     import threading
     run = removal_sequence
@@ -255,7 +250,6 @@ def test_P5_queued_remove_cannot_cross_account_boundary(removal_sequence, monkey
     assert not any(r[0] == 'DELETE' for r in run.requests)
     assert run.service._journal.read_bytes() == before
     assert 'account changed' in run.service.message
-
 
 def test_P5_metadata_thread_start_failure_retains_refresh_ownership(removal_sequence, monkeypatch):
     import threading
@@ -281,7 +275,6 @@ def test_P5_metadata_thread_start_failure_retains_refresh_ownership(removal_sequ
     assert run.service._journal.read_bytes() == before
     assert not any(r[0] == 'DELETE' for r in run.requests)
 
-
 @pytest.mark.parametrize('choice,content,expected', [('mine', True, 'upload'), ('portal', True, 'pull'), ('portal', False, 'patch')])
 def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, choice, content, expected):
     panel, state, actions = gallery
@@ -294,8 +287,8 @@ def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, 
     poll = {'path': asset['path'], 'generation': 1, 'running': False}
     monkeypatch.setattr(module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
     monkeypatch.setattr(module, 'capture_view', lambda _: {'exposure': 1, 'cameraPath': {'keyframes': [{'t': 0}]}})
-    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     restored = []
     monkeypatch.setattr(module, 'restore_view', lambda _lf, view, **kw: restored.append(copy.deepcopy(view)))
     def save(**kwargs):
@@ -323,7 +316,6 @@ def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, 
         assert restored[-1] == remote['viewerSettings']
     assert [a[0] for a in actions] == [expected]
 
-
 @pytest.mark.parametrize('diagnostic,key', [
     ('Gallery download exceeds its declared size', 'error.download_size'),
     ('Gallery download was incomplete', 'error.download_damaged'),
@@ -339,7 +331,6 @@ def test_download_validation_reason_is_localized_before_generic_error(panel_modu
     monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda k: translations.get(k, k))
     assert localize_message(friendly_error(ValueError(diagnostic))) == translations['asset_manager.gallery.' + key]
 
-
 def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
     import hashlib
     import io
@@ -347,7 +338,7 @@ def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
     from lfs_plugins import gallery_sync, portal_gallery
     from test_gallery_sync import connected, finish
     service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
+    source = tmp_path / 'scene.licht'
     source.write_bytes(b'12345678')
     monkeypatch.setattr(service, 'resume', lambda _: None)
     identifier = service.queue_upload(source, {'title': 'Scene', '_commitUuid': 'saved'}, 'project')
@@ -355,7 +346,7 @@ def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
     upload_id = str(uuid.uuid4())
     job.update(status='running', completed=3, checkpoint=dict(origin=service.account.base_url, owner='one',
         sha256=hashlib.sha256(source.read_bytes()).hexdigest(), idempotencyKey='stable', uploadId=upload_id,
-        request=dict(title='Scene', sourceFormat='ply', contentLength=8)))
+        request=dict(title='Scene', sourceFormat='licht', contentLength=8)))
     service._save()
     restarted = gallery_sync.GallerySync(service.account, tmp_path)
     restarted.refresh()
@@ -363,10 +354,10 @@ def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
     recovered = restarted.snapshot()['jobs'][0]
     assert recovered['status'] == 'paused' and recovered['interrupted']
     puts, creates = [], []
-    result = dict(id=str(uuid.uuid4()), revision='new', title='Scene', description='', visibility='private', viewerSettings={})
+    result = dict(id=str(uuid.uuid4()), revision='new', title='Scene', description='', visibility='private', viewerSettings={}, contentRevision='new', metadataRevision='new')
     def request(_client, method, path, body=None):
         if path == '/me':
-            return dict(id='one', gallerySyncVersion=1)
+            return dict(id='one', gallerySyncVersion=1, sourceFormats=["licht"])
         if path == '/splats/uploads':
             creates.append(body)
             return dict(id=upload_id, status='uploading', partSize=3,
@@ -399,12 +390,11 @@ def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
     from lfs_plugins.gallery_controller import asset_sync_state
     assert asset_sync_state(dict(id='project', commit_uuid='saved'), state['links']['project'], result)['freshness'] == 'equal'
 
-
 @pytest.mark.parametrize('exception', [ConnectionRefusedError(), TimeoutError()])
-def test_outage_exhaustion_pauses_with_automatic_resume(tmp_path, monkeypatch, exception):
+def test_outage_exhaustion_requires_manual_resume(tmp_path, monkeypatch, exception):
     from test_gallery_sync import connected, finish, Client
     service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
+    source = tmp_path / 'scene.licht'
     source.write_bytes(b'ply-data')
     def upload(*args, **kwargs):
         kwargs['on_checkpoint']({'uploadId': 'retained'})
@@ -414,13 +404,11 @@ def test_outage_exhaustion_pauses_with_automatic_resume(tmp_path, monkeypatch, e
     service.queue_upload(source, {'title': 'Scene'}, 'project')
     finish(service)
     job = service.snapshot()['jobs'][0]
-    assert job['status'] == 'waiting' and job['retryDelay'] == 5 and job['retryAt'] > 0
+    assert job['status'] == 'paused' and job['message'] == 'Paused (connection lost)'
     assert job['completed'] == 4 and job['checkpoint']['uploadId'] == 'retained'
-    assert job['message'] == 'Waiting for connection…'
+    assert job['message'] == 'Paused (connection lost)'
     service.pause()
     finish(service)
-
-
 
 def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
@@ -441,8 +429,8 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
         pytest.fail('Lost HDR source') if kw.get('environment_path') != '/saved.lfsenv' else None)
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
     monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
-    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
     monkeypatch.setattr(module.lf, 'prepare_gallery_scene', lambda *a: actions.append(a), raising=False)
     panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
@@ -451,7 +439,6 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
         callback(module.tr('conflict.mine'))
     assert panel._export_pending, panel._message
     assert len(actions) == 1 and panel._export_pending[1]['viewerSettings'] == view
-
 
 def test_resolve_portal_retires_conflict_before_backup_and_relinks(gallery, tmp_path, monkeypatch):
     from test_gallery_sync import connected, finish, Client, downloaded_job
@@ -472,7 +459,7 @@ def test_resolve_portal_retires_conflict_before_backup_and_relinks(gallery, tmp_
     service._bucket()['links']['project'] = gallery_sync.exchange_link(remote, 'before')
     service._save()
     monkeypatch.setattr(Client, 'scene', lambda *a: remote)
-    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     started = []
     def pull():
         started.append('pull')
@@ -492,7 +479,6 @@ def test_resolve_portal_retires_conflict_before_backup_and_relinks(gallery, tmp_
         service.snapshot()['jobs'])
     assert facts['freshness'] == 'equal' and facts['state'] == 'equal'
 
-
 def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monkeypatch, tmp_path):
     from test_gallery_sync import connected, finish, Client, gallery_sync
     from lfs_plugins.gallery_controller import asset_sync_state
@@ -510,8 +496,8 @@ def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monke
     poll = dict(path=asset['path'], generation=1, running=False)
     monkeypatch.setattr(module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
     monkeypatch.setattr(module, 'capture_view', lambda _: dict(exposure=1, cameraPath=None))
-    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     events = []
     live = {}
     monkeypatch.setattr(module, 'restore_view', lambda _, view, **k: (live.update(copy.deepcopy(view)), events.append('restore')))
@@ -525,7 +511,7 @@ def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monke
     monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(commit_uuid='after'))
     def patch(_client, scene_id, revision, **metadata):
         events.append('PATCH')
-        return dict(remote, **metadata, revision='patched')
+        return dict(remote, **metadata, revision='patched', contentRevision=remote['contentRevision'], metadataRevision='patched')
     monkeypatch.setattr(Client, 'update', patch, raising=False)
     panel.resolve_asset(asset, dict(title='Local title', description='', visibility='private'))
     for _, _, _, callback in module.lf._test_state.confirm_dialogs:
@@ -537,7 +523,6 @@ def test_resolve_metadata_saves_camera_before_patch_and_freshness(gallery, monke
     state = service.snapshot()
     assert asset_sync_state(dict(asset, commit_uuid='after'), state['links']['project'], state['scenes'][0])['freshness'] == 'equal'
 
-
 def test_portal_rejecting_corrupt_project_keeps_specific_damage_reason(panel_module, monkeypatch):
     from lfs_plugins.gallery_sync import friendly_error
     from lfs_plugins.gallery_messages import localize_message
@@ -545,7 +530,6 @@ def test_portal_rejecting_corrupt_project_keeps_specific_damage_reason(panel_mod
     monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: key)
     reason = friendly_error(PortalHTTPError(400, 'Invalid portable LichtFeld project.'))
     assert localize_message(reason) == 'The downloaded file is damaged or was changed on the portal.'
-
 
 @pytest.mark.parametrize('is_open', [False, True])
 def test_linked_pull_targets_selected_project_before_apply(gallery, monkeypatch, is_open):
@@ -573,7 +557,6 @@ def test_linked_pull_targets_selected_project_before_apply(gallery, monkeypatch,
         panel._open_continuation[2]()
     assert actions[-1] == ('apply', selected)
 
-
 @pytest.mark.parametrize('kind', ['corrupt', 'over_length'])
 def test_bad_download_transport_reports_specific_localized_reason(panel_module, tmp_path, monkeypatch, kind):
     import json
@@ -587,10 +570,10 @@ def test_bad_download_transport_reports_specific_localized_reason(panel_module, 
     if kind == 'corrupt':
         data[-1] ^= 1
     total = len(data) - (1 if kind == 'over_length' else 0)
-    scene = dict(id='00000000-0000-0000-0000-000000000001', contentLength=total, revision='r1')
+    scene = dict(id='00000000-0000-0000-0000-000000000001', contentLength=total, revision='r1', contentRevision='r1', metadataRevision='r1')
     def request(method, path, body=None):
         if path.endswith('/me'):
-            return {'maxFileBytes': total}
+            return {"storageHosts": ["portal.example"], 'revisionDomains': 1, 'maxFileBytes': total}
         if path.endswith('/download'):
             return {'url': 'https://portal.example/content', 'scene': scene}
         return scene
@@ -610,7 +593,6 @@ def test_bad_download_transport_reports_specific_localized_reason(panel_module, 
     assert localize_message(friendly_error(raised.value)) == translations['asset_manager.gallery.error.' + key], repr(raised.value)
     assert not destination.exists() and not (tmp_path/'.download.licht.part').exists()
 
-
 def test_retry_classification_keeps_storage_5xx_resumable_without_retrying_tls_failure():
     import io
     import ssl
@@ -620,7 +602,6 @@ def test_retry_classification_keeps_storage_5xx_resumable_without_retrying_tls_f
     assert is_transient(urllib.error.HTTPError('https://portal.example/part', 429, 'Busy', {}, io.BytesIO()))
     assert not is_transient(urllib.error.URLError(ssl.SSLCertVerificationError('Certificate rejected')))
 
-
 def test_account_switch_releases_pending_resolution(gallery):
     panel, state, actions = gallery
     panel._decision_pending = True
@@ -629,7 +610,6 @@ def test_account_switch_releases_pending_resolution(gallery):
     panel._check_identity()
     assert not panel._decision_pending and panel._after_service is None
     assert not actions
-
 
 @pytest.mark.parametrize('both', [False, True])
 def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, tmp_path, monkeypatch, both):
@@ -677,8 +657,8 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     monkeypatch.setattr(module, 'restore_view', lambda lf, view, **kw: restore_camera_path(lf, view['cameraPath']))
     monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
-    monkeypatch.setattr(panel, '_schedule_phase_poll', lambda: None)
-    monkeypatch.setattr(panel, '_schedule_tick', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     export_state = dict(active=False)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: export_state, raising=False)
     def prepare(path, format):
@@ -690,7 +670,7 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     def upload(_client, path, metadata, **kwargs):
         assert Path(path).suffix == '.licht' and Path(path).is_file()
         uploads.append(copy.deepcopy(metadata))
-        return {'scene': dict(remote, title=metadata['title'], viewerSettings=metadata['viewerSettings'], revision='uploaded')}
+        return {'scene': dict(remote, title=metadata['title'], viewerSettings=metadata['viewerSettings'], revision='uploaded', contentRevision='uploaded', metadataRevision='uploaded')}
     monkeypatch.setattr(Client, 'upload', upload, raising=False)
     panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
     pressed = []
@@ -712,7 +692,6 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     assert state['jobs'][-1]['status'] == 'completed', state['jobs'][-1]['message']
     assert asset_sync_state(asset, state['links']['project'], state['scenes'][0], state['jobs'])['freshness'] == 'equal'
 
-
 @pytest.fixture
 def connection_clock(monkeypatch):
     from lfs_plugins import gallery_sync
@@ -733,72 +712,27 @@ def connection_clock(monkeypatch):
     monkeypatch.setattr(gallery_sync.time, 'time', lambda: now[0])
     return now, timers
 
-
-def test_waiting_probes_backoff_then_resumes_without_controller(tmp_path, monkeypatch, connection_clock):
-    from test_gallery_sync import connected, finish, Client
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
-    from lfs_plugins.gallery_controller import asset_sync_state
-    service = connected(tmp_path, monkeypatch)
-    now, timers = connection_clock
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    attempts, probes = [], []
-    reachable = [False]
-    def upload(client, path, metadata, **kwargs):
-        attempts.append(kwargs['checkpoint'])
-        if len(attempts) == 1:
-            kwargs['on_checkpoint']({'uploadId': 'retained'})
-            kwargs['on_progress'](4, 8)
-            raise ConnectionRefusedError()
-        assert kwargs['checkpoint']['uploadId'] == 'retained'
-        return {'scene': scene()}
-    monkeypatch.setattr(Client, 'upload', upload, raising=False)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    def probe(client, method, path):
-        assert (method, path) == ('GET', '/me')
-        probes.append(now[0])
-        if not reachable[0]:
-            raise ConnectionRefusedError()
-        return {'id': 'one', 'gallerySyncVersion': 1}
-    monkeypatch.setattr(Client, '_request', probe)
-    for delay in [5, 10, 20, 40, 80, 160, 300, 300]:
-        assert timers[-1].delay == delay
-        state = service.snapshot()
-        assert state['jobs'][0]['status'] == 'waiting'
-        assert state['jobs'][0]['completed'] == 4
-        row = transfer_rows(state)[0]
-        assert row['can_pause'] and row['can_resume']
-        assert row['phase'].endswith('waiting') or row['phase'] == 'Waiting for connection…'
-        assert asset_sync_state({'id': 'project'}, None, None, state['jobs'])['state'] == 'waiting'
-        timers[-1].fire()
-        finish(service)
-        assert len(attempts) == 1
-    reachable[0] = True
-    timers[-1].fire()
-    finish(service)
-    assert len(probes) == 9 and len(attempts) == 2
-    assert service._job(identifier)['status'] == 'completed'
-    assert service._connection_timer is None
-
-
 @pytest.mark.parametrize('pinned', [False, True], ids=['restart', 'range'])
-@pytest.mark.parametrize('failure', ['socket', 'eof', 'incomplete_read'])
-@pytest.mark.parametrize('pause', [False, True], ids=['automatic', 'user_pause'])
-def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_clock, pinned, failure, pause):
+@pytest.mark.parametrize('failure', ['socket', 'timeout', 'eof', 'incomplete_read', 'server_closed', 'server_closed_wrapped', 'oversized'])
+def test_download_transport_failure_classification(tmp_path, monkeypatch, connection_clock, pinned, failure):
     import hashlib
     import io
     import json
-    from http.client import IncompleteRead
+    import urllib.error
+    from http.client import IncompleteRead, RemoteDisconnected
     from pathlib import Path
-    from test_gallery_sync import connected, finish, gallery_sync
+    import test_gallery_sync
+    from test_gallery_sync import connected, finish
+    from lfs_plugins import gallery_sync
+    monkeypatch.setattr(test_gallery_sync, 'gallery_sync', gallery_sync)
     from lfs_plugins import portal_gallery, portal_retry
     from lfs_plugins.gallery_controller import asset_sync_state
     from lfs_plugins.gallery_transfer_panel import transfer_rows
 
     service = connected(tmp_path, monkeypatch)
-    data, prefix = b'ply\ncomplete-download', b'ply\n'
-    remote = scene(sourceFormat='ply', contentLength=len(data))
+    data = (Path(__file__).parents[1] / 'data' / 'portable-sog.licht').read_bytes()
+    prefix = data[:64]
+    remote = scene(sourceFormat='licht', contentLength=len(data))
     remote['id'] = '28d8880e-96d2-46a0-9226-bb62976392b2'
     reachable, requests, probes, messages, progress = [True], [], [], [], []
     headers = {'ETag': '"pinned-v1"', 'Accept-Ranges': 'bytes'} if pinned else {}
@@ -812,8 +746,16 @@ def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_c
                 return super().read(len(prefix))
             if failure == 'socket':
                 raise ConnectionResetError('Portal stopped mid-stream')
+            if failure == 'timeout':
+                raise TimeoutError('Portal stopped mid-stream')
             if failure == 'incomplete_read':
                 raise IncompleteRead(b'', len(data) - len(prefix))
+            if failure == 'server_closed':
+                raise RemoteDisconnected('Portal closed the response')
+            if failure == 'server_closed_wrapped':
+                raise urllib.error.URLError(RemoteDisconnected('Portal closed the response'))
+            if failure == 'oversized':
+                return data
             return b''
 
     class Recovered(io.BytesIO):
@@ -847,7 +789,7 @@ def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_c
             probes.append(reachable[0])
             if not reachable[0]:
                 raise ConnectionRefusedError('Portal offline')
-            return {'id': 'one', 'gallerySyncVersion': 1}
+            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], 'id': 'one', 'gallerySyncVersion': 1, "revisionDomains": 1}
         assert reachable[0]
         if path.endswith('/download'):
             return {'scene': remote, 'url': 'https://portal.example/storage'}
@@ -862,8 +804,27 @@ def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_c
     service.download(remote)
     finish(service)
     job = service.snapshot()['jobs'][0]
-    assert job['status'] == 'waiting', (job['message'], len(requests), probes)
-    assert job['message'] == 'Waiting for connection…'
+    if failure in ('eof', 'incomplete_read', 'server_closed', 'server_closed_wrapped', 'oversized'):
+        assert job['status'] == 'error' and job['retryable'] is False
+        assert job['message'] == ('Gallery download exceeds its declared size' if failure == 'oversized'
+                                  else 'Gallery download was incomplete')
+        assert len(requests) == 1 and not connection_clock[1]
+        assert not list((tmp_path / 'downloads').iterdir())
+        assert not service.snapshot()['links'] and service.snapshot()['completion'] is None
+        assert not transfer_rows(service.snapshot())[0]['can_resume']
+        assert asset_sync_state({}, None, remote, [job])['action'] == ''
+        with pytest.raises(ValueError, match=job['message']):
+            service.resume(job['id'])
+        # The refusal must survive journal reload, not just this worker.
+        from test_gallery_sync import Client
+        monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', Client)
+        restored = gallery_sync.GallerySync(service.account, tmp_path)
+        restored.refresh()
+        finish(restored)
+        assert restored.snapshot()['jobs'][0]['retryable'] is False
+        return
+    assert job['status'] == 'paused', (job['message'], len(requests), probes)
+    assert job['message'] == 'Paused (connection lost)'
     assert job['completed'] == len(prefix) and len(requests) == 4
     destination = Path(job['path'])
     partial = destination.with_name('.' + destination.name + '.part')
@@ -872,114 +833,95 @@ def test_download_outage_waits_then_recovers(tmp_path, monkeypatch, connection_c
     if pinned:
         assert partial.read_bytes() == prefix
     row = transfer_rows(service.snapshot())[0]
-    assert row['phase'].endswith('waiting') or row['phase'] == 'Waiting for connection…'
-    assert row['can_pause'] and row['can_resume']
-    assert asset_sync_state({}, None, remote, [job])['state'] == 'waiting'
+    assert row['phase'].endswith('paused') or row['phase'] == 'Paused'
+    assert not row['can_pause'] and row['can_resume']
+    assert asset_sync_state({}, None, remote, [job])['state'] == 'paused'
     persisted = json.loads((tmp_path / 'sync.json').read_text())
     assert 'storage' not in json.dumps(persisted)  # No signed URL in the journal.
-    timer = connection_clock[1][-1]
-    assert timer.delay == 5
-    timer.fire()
-    finish(service)
-    assert service._job(job['id'])['status'] == 'waiting'
-    assert connection_clock[1][-1].delay == 10 and len(requests) == 4
-    if pause:
-        timer = connection_clock[1][-1]
-        service.pause(job['id'])
-        finish(service)
-        assert timer.canceled
-        assert service._job(job['id'])['status'] == 'paused'
-        assert 'retryAt' not in service._job(job['id'])
+    assert not connection_clock[1], "No outage retry timer may be scheduled"
     reachable[0] = True
-    if pause:
-        service._retry_connection()
-        assert not service.busy and service._connection_timer is None
-        assert len(requests) == 4
-        service.resume(job['id'])
-    else:
-        connection_clock[1][-1].fire()
+    assert not service.busy and len(requests) == 4
+    service.resume(job['id'])
     finish(service)
     job = service._job(job['id'])
     assert job['status'] == 'completed', job['message']
     assert destination.read_bytes() == data and not partial.exists()
     assert job['sha256'] == hashlib.sha256(data).hexdigest()
     assert job['completed'] == len(data) and len(requests) == 5
-    assert probes == ([False] if pause else [False, True])
-    assert service._connection_timer is None
+    assert probes == []
     if not pinned:
         assert 'Restarting from zero' in messages[0]
         assert progress[0] == 0
 
 
-@pytest.mark.parametrize('restart', [False, True])
-def test_explicit_pause_never_auto_resumes_after_outage(tmp_path, monkeypatch, connection_clock, restart):
-    from test_gallery_sync import connected, finish, Client, gallery_sync
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    timer = connection_clock[1][-1]
-    service.pause(identifier)
-    finish(service)
-    assert timer.canceled
-    if restart:
-        service = gallery_sync.GallerySync(service.account, tmp_path)
-        service.refresh()
-        finish(service)
-        assert service._owner, service.message
-    job = service._job(identifier)
-    assert job['status'] == 'paused' and 'retryAt' not in job
-    assert service._connection_timer is None
-    service._retry_connection()
-    assert service._connection_timer is None and not service.busy
-
-
-def test_waiting_recovers_after_restart_but_old_account_cannot_resume(tmp_path, monkeypatch, connection_clock):
-    from test_gallery_sync import connected, finish, Client, gallery_sync
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    service._connection_timer.cancel()
-    restarted = gallery_sync.GallerySync(service.account, tmp_path)
-    restarted.refresh()
-    finish(restarted)
-    assert restarted._owner, restarted.message
-    assert restarted._job(identifier)['status'] == 'waiting'
-    assert restarted._connection_timer.delay == 5
-    service.account.email = 'different@example.com'
-    restarted._connection_timer.fire()
-    assert not restarted.busy and restarted._connection_timer is None
-    assert restarted.snapshot()['jobs'] == []
-
-
-def test_pause_while_connection_probe_is_in_flight_stays_paused(tmp_path, monkeypatch, connection_clock):
-    import threading
-    from test_gallery_sync import connected, finish, Client
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    monkeypatch.setattr(Client, 'upload', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()), raising=False)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    probing, release = threading.Event(), threading.Event()
-    def probe(*args):
-        probing.set()
-        assert release.wait(2)
-        raise TimeoutError()
-    monkeypatch.setattr(Client, '_request', probe)
-    connection_clock[1][-1].fire()
-    assert probing.wait(2)
-    service.pause()
-    release.set()
-    finish(service)
-    assert service._job(identifier)['status'] == 'paused'
-    assert service._connection_timer is None
-
+@pytest.mark.parametrize('failure', ['server_closed', 'server_closed_wrapped', 'incomplete_read', 'socket', 'timeout', 'unacknowledged', 'http500', 'http429'])
+def test_upload_transport_failure_classification(tmp_path, monkeypatch, failure):
+    import io
+    import urllib.error
+    from http.client import IncompleteRead, RemoteDisconnected
+    from pathlib import Path
+    import test_gallery_sync
+    from lfs_plugins import gallery_sync, portal_gallery, portal_retry
+    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    monkeypatch.setattr(test_gallery_sync, 'gallery_sync', gallery_sync)
+    service = test_gallery_sync.connected(tmp_path, monkeypatch)
+    path = tmp_path / 'upload.licht'
+    path.write_bytes((Path(__file__).parents[1] / 'data' / 'portable-sog.licht').read_bytes())
+    upload_id = '28d8880e-96d2-46a0-9226-bb62976392b2'
+    calls, completed = [], []
+    def request(client, method, route, body=None):
+        if route == '/me':
+            return dict(id='one', gallerySyncVersion=1, revisionDomains=1, sourceFormats=['licht'])
+        if route.endswith('/part-upload-urls'):
+            return {'urls': [dict(partNumber=body['parts'][0], url='https://portal.example/storage')]}
+        if route.endswith('/complete'):
+            completed.append(body)
+            return dict(id=upload_id, status='completed', scene=scene())
+        assert route.endswith('/uploads')
+        return dict(id=upload_id, status='uploading', partSize=path.stat().st_size // 2)
+    def opened(req, **kwargs):
+        calls.append(req)
+        assert req.method == 'PUT'
+        if len(calls) > 1:
+            if failure == 'server_closed':
+                raise RemoteDisconnected('Portal closed without an upload acknowledgment')
+            if failure == 'server_closed_wrapped':
+                raise urllib.error.URLError(RemoteDisconnected('Portal closed without an upload acknowledgment'))
+            if failure == 'incomplete_read':
+                raise IncompleteRead(b'', 1)
+            if failure == 'socket':
+                raise ConnectionResetError('Socket reset during upload')
+            if failure == 'timeout':
+                raise TimeoutError('Socket timed out during upload')
+            if failure.startswith('http'):
+                raise urllib.error.HTTPError(req.full_url, int(failure[4:]), 'Busy', {}, io.BytesIO())
+        response = io.BytesIO()
+        response.status = 200
+        response.headers = {} if len(calls) > 1 else {'ETag': '"part1"'}
+        return response
+    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_request', request)
+    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
+    monkeypatch.setattr(portal_gallery, 'retry_call', lambda operation, **kwargs:
+                        portal_retry.retry_call(operation, sleep=lambda _: None, **kwargs))
+    monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
+    identifier = service.queue_upload(path, {'title': 'Upload'}, 'project')
+    test_gallery_sync.finish(service)
+    job = service.snapshot()['jobs'][0]
+    transient = failure in ('socket', 'timeout')
+    resumable = transient or failure.startswith('http')
+    assert job['status'] == ('paused' if transient else 'error'), job
+    assert job['completed'] == path.stat().st_size // 2
+    assert not completed and not service.snapshot()['links']
+    assert transfer_rows(service.snapshot())[0]['can_resume'] == resumable
+    assert len(calls) == (5 if resumable else 2)
+    if transient:
+        assert job['message'] == 'Paused (connection lost)'
+    elif not resumable:
+        assert job['retryable'] is False
+        assert job['message'] == ('Storage did not acknowledge the upload part' if failure == 'unacknowledged'
+                                  else 'The portal closed the upload without acknowledging it. Start a new upload.')
+        with pytest.raises(ValueError, match=job['message']):
+            service.resume(identifier)
 
 @pytest.mark.skipif(__import__('sys').platform == 'win32', reason='Exercises SIGKILL and the POSIX process lock')
 def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp_path, monkeypatch):
@@ -1026,7 +968,7 @@ def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp
     assert recovered['status'] == 'paused' and recovered['interrupted']
     assert recovered['completed'] == part_size * 2
     storage, puts, requests = {1: data[:part_size], 2: b'truncated'}, [], []
-    remote_scene = dict(id=str(uuid.uuid4()), revision='published', title='Scene', viewerSettings={})
+    remote_scene = dict(id=str(uuid.uuid4()), revision='published', title='Scene', viewerSettings={}, contentRevision='published', metadataRevision='published')
     def request(client, method, path, body=None):
         requests.append((method, path))
         if path == '/me':
@@ -1068,55 +1010,3 @@ def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp
     from lfs_plugins.gallery_controller import asset_sync_state
     assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved'},
         restarted.snapshot()['links']['project'], remote_scene)['freshness'] == 'equal'
-
-
-def test_waiting_wording_is_not_replaced_by_generic_connection_error(panel_module, monkeypatch):
-    from lfs_plugins.gallery_messages import localize_message
-    monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: {
-        'asset_manager.gallery.state.waiting': 'Waiting for connection…',
-        'asset_manager.gallery.error.connection': 'Connection failed',
-    }.get(key, key))
-    assert localize_message('Waiting for connection…') == 'Waiting for connection…'
-    assert localize_message('Waiting for the portal connection. The transfer will resume automatically.') == 'Waiting for connection…'
-
-
-@pytest.mark.parametrize('probe_result', ['wrong_owner', 'unauthorized'])
-def test_connection_probe_does_not_resume_under_another_account(tmp_path, monkeypatch, connection_clock, probe_result):
-    from test_gallery_sync import connected, finish, Client
-    from lfs_plugins.portal_account import PortalHTTPError
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    attempts = []
-    def upload(*args, **kwargs):
-        attempts.append(1)
-        raise TimeoutError()
-    monkeypatch.setattr(Client, 'upload', upload, raising=False)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    def probe(*args):
-        if probe_result == 'unauthorized':
-            raise PortalHTTPError(401, 'Expired')
-        return {'id': 'two', 'gallerySyncVersion': 1}
-    monkeypatch.setattr(Client, '_request', probe)
-    connection_clock[1][-1].fire()
-    finish(service)
-    assert service._job(identifier)['status'] == 'error'
-    assert len(attempts) == 1 and service._connection_timer is None
-
-
-def test_legacy_outage_pause_migrates_to_waiting_on_restart(tmp_path, monkeypatch, connection_clock):
-    from test_gallery_sync import connected, finish, gallery_sync
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.ply'
-    source.write_bytes(b'12345678')
-    monkeypatch.setattr(service, 'resume', lambda _: None)
-    identifier = service.queue_upload(source, {'title': 'Scene'}, 'project')
-    service._job(identifier).update(status='paused', retryAt=1005,
-        message='Waiting for the portal connection. The transfer will resume automatically.')
-    service._save()
-    restarted = gallery_sync.GallerySync(service.account, tmp_path)
-    restarted.refresh()
-    finish(restarted)
-    assert restarted._job(identifier)['status'] == 'waiting'
-    assert restarted._connection_timer.delay == 5

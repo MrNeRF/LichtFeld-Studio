@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import timezone
 from email.utils import parsedate_to_datetime
+from http.client import RemoteDisconnected
 import math
 import errno
 import random
@@ -42,6 +43,9 @@ def transfer_attempts(callback, cancel):
 def is_transient(exc):
     status = getattr(exc, 'status', getattr(exc, 'code', None))
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    # A clean HTTP close is not a socket reset, despite its Python base class.
+    if isinstance(reason, RemoteDisconnected):
+        return False
     return (status == 429 or (isinstance(status, int) and 500 <= status <= 599)
             or isinstance(reason, (TimeoutError, socket.timeout, ConnectionError))
             or isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN

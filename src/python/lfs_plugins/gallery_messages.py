@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Translate durable diagnostic messages at the UI boundary, never on a worker.
 
-Old journals contain English diagnostics. Keep those diagnostic bytes for
-recovery, while presenting concise localized reasons and phases in both panels.
+Present concise localized reasons while retaining detailed diagnostics in the journal.
 """
 import re
 from .portal_security import redact
+
+
+def tr(key, *, prefix="asset_manager.gallery.", **values):
+    import lichtfeld as lf
+    from .localization import safe_format
+    return safe_format(lf.ui.tr(prefix + key), **values)
 
 
 def localize_message(message):
@@ -16,15 +21,16 @@ def localize_message(message):
     text = redact(message)
     if text == lf.ui.tr("asset_manager.gallery.error.unsafe_url"):
         return text
+    if text.startswith("gallery_project_"):
+        return text
     lower = text.casefold()
     if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
         return text  # Keep the explanation of restart versus resume visible.
-    # Already localized messages/keys are not fed back through the diagnostic
-    # classifier. These patterns describe only the old English journal format.
     rules = (
         (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
         (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
-        (r'waiting for (?:the portal )?connection', 'state.waiting'),
+        (r'^paused \(connection lost\)$', 'state.connection_lost'),
+        (r'this portal version does not support gallery sync', 'error.portal_version'),
         (r'unsafe portal url|unsafe_portal_url', 'error.unsafe_url'),
         (r'account changed|account or .*changed|previous account', 'error.account_changed'),
         (r'sign out and reconnect|approve gallery', 'error.access'),
@@ -35,7 +41,7 @@ def localize_message(message):
         (r'not.*linked|linked.*different|linked.*another|linked.*unavailable|select.*linked|already.*linked', 'error.link'),
         (r'no visible splats', 'error.empty'),
         (r'unlock|locked|child.*preserved', 'error.locked'),
-        (r'format|portal.*needs.*update|portal.*cannot receive|update the portal', 'error.format'),
+        (r'format', 'error.format'),
         (r'title.*characters|description.*characters', 'error.details'),
         (r'backup.*no longer|recovery copy.*no longer', 'error.backup'),
         (r'couldn.t read.*links|sync record|history.*too large', 'error.storage'),
@@ -50,9 +56,6 @@ def localize_message(message):
         (r'cancel|discarded', 'info.canceled'),
         (r'saving|saving its gallery link', 'info.saving'),
         (r'keeping.*recovery|recovery copy before', 'info.backup'),
-        (r'sending.*camera', 'info.sending_track'),
-        (r'getting.*camera', 'info.getting_track'),
-        (r'camera track (?:sent|received|applied)', 'info.track_done'),
         (r'prepar|checking downloaded|opening', 'state.preparing'),
         (r'upload complete|uploaded', 'info.upload_done'),
         (r'uploading', 'info.uploading'),
@@ -73,8 +76,6 @@ def localize_message(message):
     translated = lf.ui.tr(full_key)
     if translated == full_key:
         return text
-    if "review story on portal" in lower:
-        translated += " Review Story on portal after this content change."
     return translated
 
 

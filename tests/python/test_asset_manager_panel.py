@@ -15,7 +15,6 @@ import uuid
 
 import pytest
 
-
 def _install_lf_stub(monkeypatch):
     class _Panel:
         def __init__(self):
@@ -106,7 +105,6 @@ def _install_lf_stub(monkeypatch):
     lf_stub._test_state = state
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
-
 @pytest.fixture
 def panel_module(monkeypatch):
     source_python = Path(__file__).resolve().parents[2] / "src" / "python"
@@ -121,8 +119,15 @@ def panel_module(monkeypatch):
     controller_module = sys.modules.get("lfs_plugins.gallery_controller")
     controller = getattr(controller_module, "_controller", None)
     if controller is not None:
-        controller.close()
+        _stop_gallery_controller(controller)
 
+def _stop_gallery_controller(controller):
+    """Stop fixture-owned timers after the singleton's test lifetime."""
+    controller._poll = lambda: None
+    if controller._timer:
+        controller._timer.cancel()
+        controller._timer = None
+    controller._subscribers.clear()
 
 
 class _Handle:
@@ -141,7 +146,6 @@ class _Handle:
 
     def request_update(self):
         self.dirty_fields.append("__update__")
-
 
 class _BindingModel:
     def __init__(self):
@@ -163,14 +167,12 @@ class _BindingModel:
     def get_handle(self):
         return self.handle
 
-
 class _BindingContext:
     def __init__(self, model):
         self._model = model
 
     def create_data_model(self, _name):
         return self._model
-
 
 class _Element:
     def __init__(self, attrs=None, parent=None):
@@ -227,7 +229,6 @@ class _Element:
     def focus(self):
         self.focused = True
 
-
 class _Event:
     def __init__(self, current_target=None, target=None, params=None, bool_params=None):
         self._current_target = current_target
@@ -251,7 +252,6 @@ class _Event:
     def stop_propagation(self):
         self.stopped = True
 
-
 class _Document:
     def __init__(self, elements=None):
         self.elements = elements or {}
@@ -263,18 +263,15 @@ class _Document:
     def add_event_listener(self, event, callback):
         self.listeners[event] = callback
 
-
 _MIN_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
 )
 
-
 def _write_png(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_MIN_PNG)
     return path
-
 
 def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
     value = {
@@ -301,7 +298,6 @@ def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
     value.update(overrides)
     return value
 
-
 def _index(assets=None, folders=None, **methods):
     payload = {"load_issues": []}
     payload.update(methods)
@@ -318,7 +314,6 @@ def _index(assets=None, folders=None, **methods):
         **payload,
     )
 
-
 def _wait_until(predicate, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -326,7 +321,6 @@ def _wait_until(predicate, timeout=2.0):
             return True
         time.sleep(0.01)
     return False
-
 
 def _scan_result(**overrides):
     value = SimpleNamespace(
@@ -336,14 +330,12 @@ def _scan_result(**overrides):
         setattr(value, key, item)
     return value
 
-
 def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     panel_type = panel_module.AssetManagerPanel
     assert panel_type.update_policy == "dirty"
     assert panel_type.update_interval_ms == 100
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
-
 
 def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     root = Path(__file__).resolve().parents[2]
@@ -367,7 +359,6 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert ".asset-pill {" not in rcss
     assert ".asset-pill-folder" not in rcss
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
-
 
 def test_results_header_uses_icon_views_and_nondestructive_refresh_action():
     root = Path(__file__).resolve().parents[2]
@@ -393,7 +384,6 @@ def test_results_header_uses_icon_views_and_nondestructive_refresh_action():
     assert 'data-if="has_catalog_notice"' in rml
     assert "{{catalog_notice}}" in rml
     assert "width: 18dp;" in rcss
-
 
 def test_all_asset_manager_buttons_use_strict_size_variants():
     root = Path(__file__).resolve().parents[2]
@@ -424,7 +414,6 @@ def test_all_asset_manager_buttons_use_strict_size_variants():
     assert "padding: 0 12dp 32dp 12dp;" in rcss
     assert "padding: 12dp 0 0 0;" in rcss
 
-
 def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project(path="/tmp/a folder/project & one.licht")
@@ -439,7 +428,6 @@ def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module
     )
     assert asset["path"] not in decorator
     assert panel._thumbnail_decorator({**asset, "has_preview": False}) == "none"
-
 
 def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
     panel = panel_module.AssetManagerPanel()
@@ -494,7 +482,6 @@ def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
     both = _project(fallback_preview_path=str(fallback_image))
     assert "kind=licht" in panel._thumbnail_decorator(both)
 
-
 def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_path):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index()
@@ -523,7 +510,6 @@ def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_pat
     assert asset["id"] not in panel._thumbnail_sources_by_asset
     assert panel_module.lf._test_state.released_textures == [first_source, second_source]
 
-
 def test_thumbnail_source_strips_cover_center_suffix(panel_module, tmp_path):
     panel = panel_module.AssetManagerPanel()
     fallback_image = _write_png(tmp_path / "dataset" / "frame 1.png")
@@ -546,7 +532,6 @@ def test_thumbnail_source_strips_cover_center_suffix(panel_module, tmp_path):
     none_source = panel._thumbnail_source_from_decorator("none")
     assert none_source == ""
 
-
 def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(assets={_project()["id"]: _project()})
@@ -559,7 +544,6 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["status_label"] == "asset_manager.status.available"
     assert row["saved_label"]
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
-
 
 def test_selecting_project_updates_info_without_rebuilding_rows(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -578,7 +562,6 @@ def test_selecting_project_updates_info_without_rebuilding_rows(panel_module):
     assert "selected_asset_has_relocation_candidate" in panel._handle.dirty_fields
     assert "has_catalog_notice" in panel._handle.dirty_fields
     assert "assets" not in panel._handle.records
-
 
 def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -611,7 +594,6 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     ]
     assert event.stopped is True
 
-
 def test_gallery_more_button_uses_same_shared_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
@@ -626,7 +608,6 @@ def test_gallery_more_button_uses_same_shared_menu(panel_module):
 
     assert len(panel_module.lf._test_state.context_menus) == 1
     assert event.stopped is True
-
 
 def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -651,7 +632,6 @@ def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     menu["on_action"]("remove")
     assert calls == [("projects",)]
 
-
 def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
@@ -669,13 +649,11 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     ]
     assert panel.get_selected_asset_id() == asset["id"]
 
-
 def test_gallery_toolbar_opens_transfers_without_opening_project(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel.on_open_gallery()
     assert panel_module.lf._test_state.opened == []
     assert ("lfs.gallery_transfer", True) in panel_module.lf._test_state.enabled
-
 
 def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -708,7 +686,6 @@ def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     callback("unsaved_work.continue_without_saving")
     assert state.opened == [(asset["path"], True, False, True)]
 
-
 def test_import_registers_only_selected_licht_project(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
@@ -729,7 +706,6 @@ def test_import_registers_only_selected_licht_project(panel_module):
     assert calls == [(asset["path"], None)]
     assert panel.get_selected_asset_id() == asset["id"]
 
-
 def test_add_folder_uses_real_directory_picker(panel_module):
     panel = panel_module.AssetManagerPanel()
     selected = "/tmp/assets"
@@ -748,7 +724,6 @@ def test_add_folder_uses_real_directory_picker(panel_module):
     assert calls == [selected]
     assert panel._selected_folder_id == "selected-folder"
 
-
 def test_folder_counts_match_search_results(panel_module):
     first = _project(name="Bicycle")
     second = _project(
@@ -764,7 +739,6 @@ def test_folder_counts_match_search_results(panel_module):
     assert len(panel.get_filtered_assets()) == 1
     assert panel.get_folder_list()[0]["project_count"] == 1
 
-
 def test_search_matches_path_and_type(panel_module):
     asset = _project(type="capture")
     panel = panel_module.AssetManagerPanel()
@@ -773,7 +747,6 @@ def test_search_matches_path_and_type(panel_module):
     for query in ("bicycle project.licht", "capture", "licht project"):
         panel._search_query = query
         assert [row["id"] for row in panel.get_filtered_assets()] == [asset["id"]]
-
 
 def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     first = _project(name="Bicycle")
@@ -802,11 +775,9 @@ def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     assert all(row["can_manage"] for row in folders)
     assert panel.get_all_assets_count() == 2
 
-
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
-
 
 def test_precise_scroll_moves_gallery_container(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -819,7 +790,6 @@ def test_precise_scroll_moves_gallery_container(panel_module):
     assert scroll.scroll_top == 152.0
     assert event.stopped is True
 
-
 def test_mount_binds_stable_delegated_handlers(panel_module):
     panel = panel_module.AssetManagerPanel()
     shell = _Element()
@@ -831,7 +801,6 @@ def test_mount_binds_stable_delegated_handlers(panel_module):
     assert {"mousedown", "click", "dblclick", "dragstart", "dragend"}.issubset(shell.listeners)
     assert {"scroll", "mousescroll", "keydown"}.issubset(scroll.listeners)
     assert {"mousemove", "mouseup"}.issubset(doc.listeners)
-
 
 def test_keyboard_navigation_enter_delete_and_typeahead(panel_module, monkeypatch):
     first = _project(name="Alpha", path="/tmp/alpha.licht")
@@ -887,7 +856,6 @@ def test_keyboard_navigation_enter_delete_and_typeahead(panel_module, monkeypatc
     assert search.focused is True
     assert panel.get_search_query() == "a"
 
-
 def test_filter_clamps_hidden_selection_for_enter_and_delete(panel_module, monkeypatch):
     alpha = _project(name="Alpha", path="/tmp/alpha.licht")
     beta = _project(
@@ -920,7 +888,6 @@ def test_filter_clamps_hidden_selection_for_enter_and_delete(panel_module, monke
     assert deleted == []
     assert opened == []
 
-
 def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
     assets = {}
     for index, name in enumerate(("Alpha", "Beta", "Gamma", "Omega"), start=1):
@@ -941,7 +908,6 @@ def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
     assert panel.get_selected_asset_id() == list(assets)[2]
     panel._navigate_selection(panel_module.KI_LEFT)
     assert panel.get_selected_asset_id() == list(assets)[1]
-
 
 def test_toolbar_refresh_does_not_verify_on_ui_thread_then_scans(
     panel_module, monkeypatch
@@ -973,7 +939,6 @@ def test_toolbar_refresh_does_not_verify_on_ui_thread_then_scans(
     assert calls == ["verify_bg", "scan"]
     assert set(assets) == {missing["id"], present["id"]}
 
-
 def test_delete_folder_requires_confirmation_with_project_count(panel_module):
     first = _project(folder_id="projects")
     second = _project(
@@ -1002,14 +967,12 @@ def test_delete_folder_requires_confirmation_with_project_count(panel_module):
     callback("asset_manager.action.remove_folder")
     assert deleted == ["projects"]
 
-
 def test_identity_mismatch_has_distinct_status(panel_module):
     panel = panel_module.AssetManagerPanel()
 
     assert panel._project_status_label({"status": "IDENTITY_MISMATCH"}) == (
         "asset_manager.status.identity_mismatch"
     )
-
 
 def test_thumbnail_revision_falls_back_and_releases_stale_source(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1028,7 +991,6 @@ def test_thumbnail_revision_falls_back_and_releases_stale_source(panel_module):
     assert panel_module.lf._test_state.released_textures == [
         panel._thumbnail_source_from_decorator(first)
     ]
-
 
 def test_completed_project_save_reverifies_catalog_thumbnail(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1058,7 +1020,6 @@ def test_completed_project_save_reverifies_catalog_thumbnail(panel_module):
     assert panel._refresh_after_project_write() is True
     assert verified == [asset["id"]]
     assert "rev=new" in panel._handle.records["assets"][0]["thumbnail_decorator"]
-
 
 def test_drag_available_project_publishes_typed_payload(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1093,7 +1054,6 @@ def test_drag_available_project_publishes_typed_payload(panel_module):
     assert state.drag_ends == [1]
     assert end.stopped is True
 
-
 def test_drag_missing_project_is_rejected(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
@@ -1111,7 +1071,6 @@ def test_drag_missing_project_is_rejected(panel_module, monkeypatch):
 
     assert panel_module.lf._test_state.drag_begins == []
 
-
 def test_default_folder_links_to_settings_instead_of_removal(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folder_context_menu_items("default") == [
@@ -1125,7 +1084,6 @@ def test_default_folder_links_to_settings_instead_of_removal(panel_module):
             "separator_before": True,
         },
     ]
-
 
 def test_add_folder_starts_scan(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -1144,7 +1102,6 @@ def test_add_folder_starts_scan(panel_module, monkeypatch):
     assert panel._add_folder_from_path("/tmp/assets") == "selected-folder"
     assert scans == [("selected-folder", "/tmp/assets")]
 
-
 def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(load_issues=["bad uuid", "duplicate path"])
@@ -1155,7 +1112,6 @@ def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
     panel._asset_index.load_issues = []
     assert panel.get_catalog_notice() == ""
     assert panel.get_has_catalog_notice() is False
-
 
 def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -1173,7 +1129,6 @@ def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monke
     panel.on_mount(_Document())
     assert panel.get_has_catalog_notice()
     panel.on_unmount(_Document())
-
 
 def test_backend_initialization_completes_without_ui_scheduler(panel_module, monkeypatch, tmp_path):
     loaded = threading.Event()
@@ -1215,7 +1170,6 @@ def test_backend_initialization_completes_without_ui_scheduler(panel_module, mon
     assert panel._catalog_load_failed is False
     assert updates == [True]
 
-
 def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
     started = threading.Event()
     observed = {}
@@ -1244,7 +1198,6 @@ def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
     assert observed.get("waited") is True
     assert not thread.is_alive()
 
-
 def test_unmount_does_not_join_scan_worker(panel_module):
     class NoJoin:
         ident = 1
@@ -1258,7 +1211,6 @@ def test_unmount_does_not_join_scan_worker(panel_module):
     panel._folder_scan_thread = NoJoin()
     panel._folder_scan_cancel = threading.Event()
     panel.on_unmount(_Document())
-
 
 def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypatch):
     started = threading.Event()
@@ -1289,7 +1241,6 @@ def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypat
     assert _wait_until(lambda: not panel._folder_scan_active)
     panel.on_unmount(_Document())
 
-
 def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
     started = threading.Event()
     one_calls = []
@@ -1319,7 +1270,6 @@ def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
     assert one_calls == [("selected-folder", "/tmp/mrnf_local")]
     assert all_calls == []
     panel.on_unmount(_Document())
-
 
 def test_on_mount_scans_all_folders_only_before_first_completed_scan(
     panel_module, monkeypatch
@@ -1363,7 +1313,6 @@ def test_on_mount_scans_all_folders_only_before_first_completed_scan(
     assert not started.is_set()
     panel.on_unmount(_Document())
 
-
 def test_refresh_during_scan_cancels_and_shows_stopped_status(panel_module, monkeypatch):
     started = threading.Event()
     calls = []
@@ -1392,7 +1341,6 @@ def test_refresh_during_scan_cancels_and_shows_stopped_status(panel_module, monk
     assert panel.get_has_scan_status() is True
     assert panel.get_refresh_action_tooltip() == "asset_manager.tooltip.refresh"
     panel.on_unmount(_Document())
-
 
 def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
     started = threading.Event()
@@ -1427,7 +1375,6 @@ def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
     assert _wait_until(lambda: not panel._folder_scan_active)
     panel.on_unmount(_Document())
 
-
 def test_use_found_location_relinks_selected_asset(panel_module):
     asset = _project(
         exists=False,
@@ -1455,7 +1402,6 @@ def test_use_found_location_relinks_selected_asset(panel_module):
 
     assert relinked == [(asset["id"], "/tmp/found.licht"), "refresh"]
 
-
 def test_context_menu_shows_use_found_location_only_with_candidate(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
@@ -1471,7 +1417,6 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
     assert "use_found_location" in [
         item["action"] for item in panel._asset_context_menu_items(asset)
     ]
-
 
 def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
     asset = _project(status="IDENTITY_MISMATCH", exists=True, available=False)
@@ -1500,7 +1445,6 @@ def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
     panel.on_locate_file()
     assert relinked == [(asset["id"], "/tmp/correct.licht")]
 
-
 def test_repair_only_and_newer_version_status_labels(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._project_status_label({"status": "REPAIR_ONLY"}) == (
@@ -1509,7 +1453,6 @@ def test_repair_only_and_newer_version_status_labels(panel_module):
     assert panel._project_status_label({"status": "UNSUPPORTED_NEWER"}) == (
         "asset_manager.status.newer_version"
     )
-
 
 def test_completed_save_registers_new_project_inside_project_location(panel_module):
     registered = []
@@ -1531,7 +1474,6 @@ def test_completed_save_registers_new_project_inside_project_location(panel_modu
     assert panel._refresh_after_project_write() is True
     assert registered == ["/tmp/projects/new.licht"]
 
-
 def test_completed_save_outside_folder_is_ignored(panel_module):
     registered = []
     panel = panel_module.AssetManagerPanel()
@@ -1551,7 +1493,6 @@ def test_completed_save_outside_folder_is_ignored(panel_module):
     assert panel._refresh_after_project_write() is False
     assert panel._refresh_after_project_write() is False
     assert registered == []
-
 
 def test_placeholder_label_uses_first_two_words(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1576,7 +1517,6 @@ def test_placeholder_label_uses_first_two_words(panel_module):
     assert "{{asset.placeholder_label}}" in rml
     assert "display: block;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
     assert "width: 100%;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
-
 
 def test_data_if_model_fields_are_boolean_bindings(panel_module):
     root = Path(__file__).resolve().parents[2]
@@ -1620,7 +1560,6 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
-
 
 def test_on_mount_shows_cached_rows_without_inspecting(
     panel_module, monkeypatch, tmp_path
@@ -1723,7 +1662,6 @@ def test_on_mount_shows_cached_rows_without_inspecting(
     }
     panel.on_unmount(_Document())
 
-
 def test_on_update_publishes_new_catalog_rows(panel_module):
     first = _project()
     second = _project(
@@ -1751,18 +1689,16 @@ def test_on_update_publishes_new_catalog_rows(panel_module):
         second["id"],
     }
 
-
 def _gallery_fixture(panel_module):
     from lfs_plugins.gallery_sync import shared_fields
     panel = panel_module.AssetManagerPanel()
     local = _project(commit_uuid='saved')
-    remote = dict(id='scene',title='Published project',description='',visibility='private',revision='r1',status='ready',sourceFormat='licht',contentLength=42,viewerSettings={})
+    remote = dict(id='scene',title='Published project',description='',visibility='private',revision='r1',status='ready',sourceFormat='licht',contentLength=42,viewerSettings={}, contentRevision='r1', metadataRevision='r1')
     panel._asset_index = _index(assets={local['id']:local})
     panel._gallery_state = dict(identity='account',signed_in=True,connected=True,checkedAt=1,
-        links={local['id']:dict(sceneId='scene',revision='r1',commitUuid='saved',sharedFields=shared_fields(remote))},
+        links={local['id']:dict(sceneId='scene',revision='r1',commitUuid='saved',sharedFields=shared_fields(remote), contentRevision='r1', metadataRevision='r1')},
         scenes=[remote,dict(remote,id='remote-only',title='Remote only')],jobs=[])
     return panel,local,remote
-
 
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -1779,12 +1715,12 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel._select_folder_id('__all__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
 
-
 def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     assert panel._gallery_facts(local)['state'] == 'equal'
     local['commit_uuid'] = 'new'
     remote['title'] = 'Portal edit'
+    remote['metadataRevision'] = 'metadata-edited'
     assert panel._gallery_facts(local)['state'] == 'diverged'
     panel._select_folder_id('__gallery_attention__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
@@ -1794,7 +1730,6 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy']
 
-
 def test_multi_selection_publish_and_update_are_disjoint(panel_module):
     panel,local,remote = _gallery_fixture(panel_module)
     ready=_project(id='ready',project_uuid='ready')
@@ -1803,38 +1738,12 @@ def test_multi_selection_publish_and_update_are_disjoint(panel_module):
     panel._selected_asset_ids={local['id'],'ready','missing'}
     assert panel._gallery_counts()==dict(count=3,ready=1,linked=1,missing=1)
 
-
-def test_inline_publish_review_opens_then_continues_same_details(panel_module, monkeypatch):
-    panel=panel_module.AssetManagerPanel()
-    local=_project()
-    panel._asset_index=_index(assets={local['id']:local})
-    panel._select_asset_id(local['id'])
-    published=[]
-    controller=SimpleNamespace(service=SimpleNamespace(identity=lambda:'account'), upload_format='sog',publish_asset=lambda *a,**kw: published.append((a,kw)))
-    panel._gallery_controller=controller
-    poll={'path':'/different.licht'}
-    monkeypatch.setattr(panel_module.lf,'project_poll_write',lambda:dict(poll),raising=False)
-    panel._gallery_command('publish')
-    assert panel._gallery_review and not published
-    panel._gallery_title='Reviewed title'
-    panel._gallery_upload_format='spz'
-    panel._gallery_command('publish')
-    assert panel_module.lf._test_state.opened==[(local['path'],True,False,True)]
-    assert panel._gallery_pending_publish['format']=='spz' and not published
-    poll['path']=local['path']
-    panel._continue_gallery_publish()
-    assert published[0][0][1]['title']=='Reviewed title'
-    assert published[0][0][2]=='spz'
-    assert panel._gallery_pending_publish is None
-
-
 @pytest.mark.parametrize('elapsed,key,count', [(0,'just_now',None),(59,'just_now',None),(60,'minutes',1),
     (3599,'minutes',59),(3600,'hours',1),(86399,'hours',23),(86400,'yesterday',None),(172800,'days',2)])
 def test_gallery_relative_time_shared_boundaries(panel_module, monkeypatch, elapsed, key, count):
     from lfs_plugins import asset_gallery_ui as ui
     monkeypatch.setattr(ui, 'tr', lambda key, **values: (key, values))
     assert ui.relative_time(1000, now=1000+elapsed) == ('time.'+key, {} if count is None else {'count': count})
-
 
 def test_signed_out_gallery_never_claims_offline_or_checked(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1843,13 +1752,11 @@ def test_signed_out_gallery_never_claims_offline_or_checked(panel_module):
     panel._gallery_state['signed_in'] = True
     assert panel._gallery_checked_label().endswith('sidebar.offline')
 
-
 def test_sidebar_restores_old_heights_with_room_for_gallery(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._sidebar_height == 280
     panel.apply_chrome({'sidebar_height': 176})
     assert panel._sidebar_height == 280
-
 
 def test_remote_double_click_routes_to_explicit_pull_open(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -1858,7 +1765,6 @@ def test_remote_double_click_routes_to_explicit_pull_open(panel_module, monkeypa
     panel._load_asset('remote:remote-only')
     assert actions == ['pull_open']
     assert panel.get_selected_asset_id() == 'remote:remote-only'
-
 
 def test_pull_completion_reloads_catalog_and_selects_new_card(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -1874,25 +1780,6 @@ def test_pull_completion_reloads_catalog_and_selects_new_card(panel_module, monk
     assert panel._selected_folder_id == '__gallery__'
     assert panel._gallery_notice.endswith('info.pulled')
 
-
-def test_T2_continuation_failure_does_not_stop_asset_manager_slow_poll(panel_module, monkeypatch):
-    panel = panel_module.AssetManagerPanel()
-    callbacks, logs = [], []
-    monkeypatch.setattr(panel_module.threading, 'Timer', lambda interval, callback: SimpleNamespace(start=lambda: callbacks.append(callback)))
-    monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', lambda callback: callback(), raising=False)
-    monkeypatch.setattr(panel_module.lf.log, 'error', logs.append)
-    monkeypatch.setattr(panel, '_sync_default_folder_path', lambda: False)
-    monkeypatch.setattr(panel, '_refresh_after_project_write', lambda: False)
-    panel._panel_mounted = True
-    panel._mount_generation = 1
-    monkeypatch.setattr(panel, '_continue_gallery_publish', lambda: (_ for _ in ()).throw(ValueError('continued failure')))
-    panel._schedule_slow_poll(1)
-    callbacks.pop(0)()
-    callbacks.pop(0)()
-    assert callbacks and panel._gallery_notice == 'continued failure'
-    assert len(logs) == 1 and 'Traceback' in logs[0]
-
-
 def test_U1_removed_scene_keeps_info_link_controls(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id(local['id'])
@@ -1902,7 +1789,6 @@ def test_U1_removed_scene_keeps_info_link_controls(panel_module):
     assert panel._gallery_scene(local) is None
     actions = panel._gallery_context_items(local)
     assert any(child['action']=='gallery:unlink' for item in actions for child in item.get('children', []))
-
 
 def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -1923,7 +1809,6 @@ def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     panel._gallery_changed(dict(state, undoPull={'backup':'/backup', 'attempt':2, 'backupMissing':True, 'error':'gone'}))
     assert panel._gallery_undo is None and panel._gallery_notice == 'gone'
 
-
 def test_U3_remote_title_edit_exposes_update_and_uses_controller(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id('remote:remote-only')
@@ -1935,7 +1820,6 @@ def test_U3_remote_title_edit_exposes_update_and_uses_controller(panel_module):
     assert calls[0][0]['id'] == 'remote-only'
     assert calls[0][1]['title'] == 'Edited remote title'
     assert panel_module.lf._test_state.opened == []
-
 
 # Moved from test_gallery_controller: the Asset Manager owns the editor/open flow.
 def test_refresh_updates_clean_form_but_keeps_dirty_form_revision(panel_module):
@@ -1954,47 +1838,6 @@ def test_refresh_updates_clean_form_but_keeps_dirty_form_revision(panel_module):
     assert panel._gallery_title == 'My unsaved change'
     assert panel._gallery_editor_scene['revision'] == 'second'
 
-
-def test_use_current_project_clears_asset_manager_target(panel_module, monkeypatch):
-    # The old Use current button is replaced by canceling the review and selecting
-    # the current local card. It must still clear the earlier pending target.
-    panel, local, _ = _gallery_fixture(panel_module)
-    panel._gallery_pending_publish = {'asset': {'path': '/different.licht'}}
-    panel._gallery_command('cancel')
-    panel._select_asset_id(local['id'])
-    calls = []
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: 'account'),
-        publish_asset=lambda *a, **kw: calls.append(a))
-    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: {'path': local['path']}, raising=False)
-    panel._begin_gallery_publish(local, 'publish')
-    assert panel._gallery_pending_publish is None
-    assert calls[0][0]['path'] == local['path']
-
-
-def test_account_change_clears_pending_asset_manager_target(panel_module):
-    panel, local, _ = _gallery_fixture(panel_module)
-    panel._gallery_pending_publish = {'asset': local, 'identity': 'account'}
-    panel._gallery_changed(dict(panel._gallery_state, identity='other-account', links={}, scenes=[]))
-    assert panel._gallery_pending_publish is None
-    assert not panel._gallery_review
-
-
-def test_delayed_project_open_cannot_survive_an_account_switch(panel_module, monkeypatch):
-    from lfs_plugins import training_confirm
-    panel, local, _ = _gallery_fixture(panel_module)
-    panel._select_asset_id(local['id'])
-    identity = ['account']
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: identity[0]))
-    prompts = []
-    monkeypatch.setattr(training_confirm, 'confirm_discard_work_then', lambda _, cb: prompts.append(cb))
-    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: {'path': ''}, raising=False)
-    panel._begin_gallery_publish(local, 'publish')
-    identity[0] = 'other-account'
-    prompts[0](False)
-    assert panel_module.lf._test_state.opened == []
-    assert panel._gallery_pending_publish is None
-
-
 def test_U3_remote_draft_keeps_its_reviewed_revision_across_refresh(panel_module):
     import copy
     panel, _, _ = _gallery_fixture(panel_module)
@@ -2010,14 +1853,12 @@ def test_U3_remote_draft_keeps_its_reviewed_revision_across_refresh(panel_module
     assert calls[0][0]['revision'] == 'r1'
     assert calls[0][1]['title'] == 'My draft'
 
-
 def test_leftover_controller_ui_surface_has_one_editor_and_confirmation(panel_module):
     from lfs_plugins.gallery_controller import GalleryController
     for name in ('_action_new', '_action_select', '_action_edit', '_action_open_project', 'focus_project'):
         assert not hasattr(GalleryController, name)
     assert callable(GalleryController.edit_scene)
     assert callable(GalleryController.confirm_action)
-
 
 @pytest.mark.parametrize('height', [600, 720, 1000])
 @pytest.mark.parametrize('folder_count', [2, 40])
@@ -2052,7 +1893,6 @@ def test_A4_small_panel_reserves_results_and_all_gallery_rows(panel_module, monk
         assert top >= 8 and top + 24 <= panel._sidebar_height - 8
     assert not panel._sync_panel_layout()  # Stable geometry does not dirty every tick.
 
-
 def test_A4_short_panel_starts_folders_collapsed_and_keeps_info_preference(panel_module):
     panel = panel_module.AssetManagerPanel()
     popup = SimpleNamespace(client_height=600)
@@ -2064,7 +1904,6 @@ def test_A4_short_panel_starts_folders_collapsed_and_keeps_info_preference(panel
     popup.client_height = 1000
     panel._sync_panel_layout()
     assert panel._bottom_panel_height == 220
-
 
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET
@@ -2078,7 +1917,6 @@ def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     rcss = (resources / 'asset_manager.rcss').read_text()
     assert '#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto;' in rcss
     assert '#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }' in rcss
-
 
 @pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (1024, '1.0 KB'),
     (137114, '134 KB'), (10 * 1024, '10 KB'), (1024**2, '1.0 MB'), (42 * 1024**2, '42 MB'), (1024**3, '1.0 GB')])
@@ -2100,7 +1938,6 @@ def test_A4_adaptive_sizes_match_tray_cards_and_info(panel_module, monkeypatch, 
     job = dict(id='job', status='running', completed=size, total=size)
     assert transfer_rows({'jobs':[job]})[0]['bytes'] == f'{expected} / {expected}'
 
-
 @pytest.mark.parametrize('width,modified', [(320, False), (380, True), (420, True)])
 @pytest.mark.parametrize('scale', [1.0, 1.5])
 def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, width, modified, scale):
@@ -2117,51 +1954,6 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
     assert columns['name'] >= 64 and columns['gallery'] == 96
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
     assert '.asset-col-gallery { width: 96dp; min-width: 96dp; flex-shrink: 0; }' in (resources / 'asset_manager.rcss').read_text()
-
-
-def test_closed_project_publish_keeps_editor_and_review_values_for_fallback(panel_module, monkeypatch):
-    panel = panel_module.AssetManagerPanel()
-    local = _project()
-    panel._asset_index = _index(assets={local['id']: local})
-    panel._select_asset_id(local['id'])
-    published = []
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: 'account'),
-        upload_format='sog', publish_asset=lambda *a, **kw: published.append((a, kw)))
-    poll = {'path': '/different.licht'}
-    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
-    monkeypatch.setattr(panel_module.lf, 'prepare_gallery_project', lambda *a: None, raising=False)
-    panel._gallery_title = 'Reviewed title'
-    panel._gallery_description = 'Reviewed description'
-    panel._gallery_upload_format = 'ssog'
-    panel._begin_gallery_publish(local, 'publish')
-    assert panel_module.lf._test_state.opened == []
-    assert published[0][0][1]['title'] == 'Reviewed title'
-    assert published[0][0][2] == 'ssog'
-    panel._gallery_title = 'Later UI edit'
-    published[0][1]['on_fallback']()
-    assert panel_module.lf._test_state.opened == [(local['path'], True, False, True)]
-    poll['path'] = local['path']
-    panel._continue_gallery_publish()
-    assert published[1][0][1]['title'] == 'Reviewed title'
-    assert published[1][0][2] == 'ssog'
-
-
-def test_closed_publish_batch_waits_when_fallback_prompt_is_canceled(panel_module, monkeypatch):
-    from importlib import import_module
-    panel = panel_module.AssetManagerPanel()
-    local = _project()
-    panel._asset_index = _index(assets={local['id']: local})
-    panel._select_asset_id(local['id'])
-    panel._gallery_batch = [('next-project', 'publish')]
-    panel._gallery_controller = SimpleNamespace(service=SimpleNamespace(identity=lambda: 'account'),
-        publish_asset=lambda *a, **kw: kw['on_fallback']())
-    monkeypatch.setattr(panel_module.lf, 'project_poll_write', lambda: {'path': '/different.licht'}, raising=False)
-    monkeypatch.setattr(panel_module.lf, 'prepare_gallery_project', lambda *a: None, raising=False)
-    monkeypatch.setattr(import_module('lfs_plugins.training_confirm'), 'confirm_discard_work_then', lambda *a: None)
-    panel._begin_gallery_publish(local, 'publish')
-    assert not panel._gallery_batch_waiting
-    assert panel_module.lf._test_state.opened == []
-
 
 def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -2184,7 +1976,6 @@ def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path)
     panel._gallery_state["posters"] = {}
     assert panel._format_asset_for_ui(row)["thumbnail_decorator"] == "none"
 
-
 @pytest.mark.parametrize("domain,expected", [("presentationRevision", "equal"), ("contentRevision", "remote"), ("metadataRevision", "remote")])
 def test_freshness_uses_domain_tokens_not_presentation(panel_module, domain, expected):
     from lfs_plugins.gallery_controller import asset_sync_state
@@ -2196,16 +1987,11 @@ def test_freshness_uses_domain_tokens_not_presentation(panel_module, domain, exp
     remote["revision"] = "broad-change"
     assert asset_sync_state(local, link, remote)["freshness"] == expected
 
-
-@pytest.mark.parametrize("domains,wording", [(0, "cover will be regenerated"), (1, "cover is kept")])
-def test_update_review_explains_cover_capability(panel_module, domains, wording):
+def test_update_review_explains_cover_preservation(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id(local["id"])
-    panel._gallery_state["revisionDomains"] = domains
     text = panel._gallery_review_includes()
-    assert wording in text
-    assert ("Review Story on portal" in text) == bool(domains)
-
+    assert "asset_manager.gallery.review.cover_kept" in text
 
 @pytest.mark.parametrize("tab", ["story", "display", "manage"])
 def test_portal_deep_links_and_copy_share_link(panel_module, tab):
@@ -2219,7 +2005,6 @@ def test_portal_deep_links_and_copy_share_link(panel_module, tab):
     assert urls == [f'https://portal.example/gallery/scenes/{scene["id"]}/?tab={tab}']
     GalleryController.open_portal(controller, scene, "copy")
     assert copies == [scene["viewerUrl"]] and len(urls) == 1
-
 
 def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -2243,8 +2028,7 @@ def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
     assert properties["display"] == "none"
     assert source in panel_module.lf._test_state.released_textures
 
-
-def test_story_reminder_survives_message_translation(panel_module):
+def test_translated_message_has_no_english_append(panel_module):
     from lfs_plugins.gallery_messages import localize_message
-    panel_module.lf.ui.tr = lambda key: "Upload complete."
-    assert "Review Story on portal" in localize_message("Upload complete. Review Story on portal after this content change.")
+    panel_module.lf.ui.tr = lambda key: "Téléversement terminé."
+    assert localize_message("Upload complete.") == "Téléversement terminé."

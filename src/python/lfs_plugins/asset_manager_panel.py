@@ -988,7 +988,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False
         if folder_id in self._asset_index_folders():
             self._gallery_last_folder = folder_id
+        entering_gallery = folder_id in GALLERY_SCOPES and self._selected_folder_id != folder_id
         self._selected_folder_id = folder_id
+        if entering_gallery:
+            self._controller().refresh()
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
         self._update_selection_type()
@@ -1552,14 +1555,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._catalog_verify_refresh_pending = False
         if not self._panel_mounted:
             return
-        if self._gallery_wake_reverify_pending:
-            self._gallery_wake_reverify_pending = False
-            self._start_catalog_verify()
-            return
-        if getattr(self, '_catalog_verify_succeeded', False):
-            self._gallery_wake_verifying = False
-        elif self._gallery_wake_verifying:
-            self._gallery_notice = 'Could not verify saved projects. Refresh Asset Manager to retry.'
         self._publish_catalog_if_changed()
         self._refresh_records(assets=True, folders=True)
         if self._handle:
@@ -2326,7 +2321,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 if generation != self._mount_generation or not self._panel_mounted:
                     return
                 try:
-                    self._continue_gallery_publish()
                     changed = self._sync_default_folder_path()
                     changed = self._refresh_after_project_write() or changed
                     if changed:
