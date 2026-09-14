@@ -1854,7 +1854,7 @@ def test_on_mount_shows_cached_rows_without_inspecting(
     assert index.load() is True
     load_ms = (time.perf_counter() - loaded_at) * 1000
     assert inspect_calls == []
-    assert {project.status for project in index.list_projects()} == {"UNVERIFIED"}
+    assert {project.status for project in index.list_projects()} == {"READING"}
 
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
@@ -1879,7 +1879,7 @@ def test_on_mount_shows_cached_rows_without_inspecting(
 
     assert refresh_at["inspects"] == 0
     assert panel._last_asset_match_count == 34
-    assert {row["status"] for row in panel._handle.records["assets"]} == {"UNVERIFIED"}
+    assert {row["status"] for row in panel._handle.records["assets"]} == {"READING"}
     assert mount_to_refresh_ms < 100.0
     panel._mount_timing = {
         "load_ms": load_ms,
@@ -1894,7 +1894,7 @@ def test_on_mount_shows_cached_rows_without_inspecting(
     panel.on_update(_Document())
     assert {row["status"] for row in panel._handle.records["assets"]} <= {
         "AVAILABLE",
-        "UNVERIFIED",
+        "READING",
     }
     panel.on_unmount(_Document())
 

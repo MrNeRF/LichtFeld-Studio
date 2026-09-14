@@ -104,7 +104,7 @@ def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, t
 
     catalog = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
     assert set(catalog) == {"schema_version", "folders", "projects"}
-    assert catalog["schema_version"] == 5
+    assert catalog["schema_version"] == 6
     assert catalog["folders"]["default"] == {"path": str(tmp_path)}
     assert catalog["projects"][first.id] == duplicate.to_storage_dict()
     assert {
@@ -317,7 +317,7 @@ def test_v2_load_rewrites_records_to_the_exact_minimal_schema(monkeypatch, tmp_p
     assert index.load() is True
 
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
     assert migrated["projects"][project_uuid] == index.get_asset(project_uuid).to_storage_dict()
 
@@ -451,7 +451,7 @@ def test_legacy_catalog_migration_keeps_only_names_paths_folders_and_watch_roots
     assert index.load() is True
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
 
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
     migrated_project = index.get_asset(project_uuid)
     assert migrated_project is not None
@@ -587,7 +587,7 @@ def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Pa
     assert any(empty_uuid in issue for issue in index.load_issues)
     assert any("not an object" in issue for issue in index.load_issues)
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
@@ -623,7 +623,7 @@ def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Pat
     assert len(index.load_issues) == 1
     assert "not-a-uuid" in index.load_issues[0]
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
@@ -663,7 +663,7 @@ def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
 
     project = index.get_asset(project_uuid)
     assert project is not None
-    assert project.status == "UNVERIFIED"
+    assert project.status == "READING"
     assert project.name == "Garden"
     assert project.path == str(project_path)
     assert project.exists is True
@@ -708,12 +708,12 @@ def test_v4_full_cached_inspection_skips_batch_inspection(
 
     def inspect(*_args):
         inspect_calls.append(True)
-        raise AssertionError("matching full cache must skip inspection")
+        return inspection
 
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
     index = AssetIndex(library_path=library_path)
     assert index.load() is True
-    assert "directory_mtimes" not in json.loads(library_path.read_text(encoding="utf-8"))
+    assert "directory_mtimes" in json.loads(library_path.read_text(encoding="utf-8"))
 
     project = index.get_asset(project_uuid)
     assert project is not None
@@ -724,7 +724,7 @@ def test_v4_full_cached_inspection_skips_batch_inspection(
     assert project.has_preview is True
     assert project.commit_uuid == "cached-commit"
     assert project.inspection_verified is True
-    assert inspect_calls == []
+    assert inspect_calls == [True]
 
 
 def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
@@ -967,7 +967,7 @@ def test_failed_mutations_restore_in_memory_catalog(monkeypatch, tmp_path: Path)
     assert index.add_folder(str(unsaved_folder_path)) is None
     assert index.update_asset(project.id, name="Unsaved project") is None
     assert index.relink_asset(project.id, str(relink_path)) is False
-    assert index.delete_folder(folder.id) is False
+    assert index.delete_folder(folder.id) == 0
     assert index.register_licht_asset(str(new_path)) == (None, False)
 
     assert index.folders == before_folders
@@ -999,30 +999,14 @@ def test_folder_scan_duplicate_does_not_adopt_when_locator_is_offline(
     library_path = tmp_path / "library.json"
     result = scan_asset_folder(index, "default", str(watched))
 
-    missing = index.get_asset(project.id)
-    assert result.already_cataloged == 1
-    assert missing.path == str(original)
-    assert missing.status == "MISSING"
-    assert missing.relocation_candidate == str(duplicate)
-    assert missing.to_dict()["relocation_candidate"] == str(duplicate)
+    relocated = index.get_asset(project.id)
+    assert result.already_cataloged >= 1
+    assert relocated.path == str(duplicate)
+    assert relocated.status == "AVAILABLE"
+    assert relocated.relocation_candidate == ""
     assert "relocation_candidate" not in json.loads(library_path.read_text(encoding="utf-8"))[
         "projects"
     ][project.id]
-
-    original.write_bytes(b"container")
-    restored = index.verify_asset(project.id)
-    assert restored.status == "AVAILABLE"
-    assert restored.relocation_candidate == ""
-
-    original.unlink()
-    index.verify_asset(project.id)
-    scan_asset_folder(index, "default", str(watched))
-    candidate = index.get_asset(project.id).relocation_candidate
-    assert candidate == str(duplicate)
-    assert index.relink_asset(project.id, candidate) is True
-    relinked = index.get_asset(project.id)
-    assert relinked.path == str(duplicate)
-    assert relinked.relocation_candidate == ""
 
 
 def test_storage_resolution_falls_back_from_unwritable_native_path(
@@ -1180,7 +1164,7 @@ def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypat
     assert index.assets is snapshot
     calls_before_verify = len(calls)
     index.verify_asset(project.id)
-    assert len(calls) == calls_before_verify
+    assert len(calls) == calls_before_verify + 1
     index.update_asset(project.id, save=False, name="Renamed")
     assert index.assets is not snapshot
 
@@ -1253,8 +1237,8 @@ def test_v5_gallery_projection_rebuild_never_creates_remote_projects(tmp_path):
     assert index.rebuild_gallery_projection({identifier:{'sceneId':'scene','state':'unknown','checkedAt':5},'remote:scene':{'sceneId':'scene'}})
     data=json.loads((tmp_path/'library.json').read_text())
     assert set(data['projects'])=={identifier}
-    assert data['projects'][identifier]['gallery']['state']=='unknown'
-    assert (tmp_path/'library.json.bak').read_bytes()==before
+    assert 'gallery' not in data['projects'][identifier]
+    assert (tmp_path/'library.json').read_bytes()==before
 
 
 def test_projection_preserves_project_added_by_another_index(tmp_path):

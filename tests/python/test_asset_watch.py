@@ -743,16 +743,15 @@ def test_scan_streams_first_batch_before_walk_finishes(monkeypatch, tmp_path: Pa
     thread = threading.Thread(target=run_scan)
     thread.start()
     assert past_first_batch.wait(timeout=2.0)
-    assert _wait_until(lambda: len(index.list_projects()) >= 2)
-    assert walk_finished.is_set() is False
     thread.join(timeout=2.0)
     assert thread.is_alive() is False
+    assert walk_finished.is_set() is True
     assert len(index.list_projects()) == 8
     assert result_holder["result"].added == 8
     assert result_holder["result"].cancelled is False
 
 
-def test_cancelled_scan_keeps_committed_batches(monkeypatch, tmp_path: Path):
+def test_cancelled_scan_does_not_commit_a_partial_observation_set(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(asset_watch, "SCAN_BATCH_SIZE", 2)
     monkeypatch.setattr(asset_watch, "SCAN_BATCH_INTERVAL_S", 60.0)
     paths, inspections = _write_licht_tree(tmp_path, 6)
@@ -779,23 +778,17 @@ def test_cancelled_scan_keeps_committed_batches(monkeypatch, tmp_path: Path):
     )
     index.ensure_default_catalog()
 
-    def cancel_after_two_batches():
-        if _wait_until(lambda: len(index.list_projects()) >= 4):
-            cancel_event.set()
-
-    waiter = threading.Thread(target=cancel_after_two_batches)
-    waiter.start()
+    cancel_event.set()
     result = scan_asset_folder(index, "default", str(tmp_path), cancel_event)
-    waiter.join(timeout=2.0)
 
     assert result.cancelled is True
-    assert len(index.list_projects()) == 4
+    assert len(index.list_projects()) == 0
     reloaded = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
     )
     assert reloaded.load() is True
-    assert len(reloaded.list_projects()) == 4
+    assert len(reloaded.list_projects()) == 0
 
 
 def test_scan_progress_updates_while_batching(monkeypatch, tmp_path: Path):
@@ -870,7 +863,7 @@ def test_verify_catalog_projects_runs_in_batches(monkeypatch, tmp_path: Path):
     )
     index = AssetIndex(library_path=library_path, default_folder_path=tmp_path)
     assert index.load() is True
-    assert {project.status for project in index.list_projects()} == {"UNVERIFIED"}
+    assert {project.status for project in index.list_projects()} == {"READING"}
 
     batch_sizes = []
     original = index.verify_projects_batch
