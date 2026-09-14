@@ -186,6 +186,7 @@ class _Element:
         self.client_height = 300.0
         self.client_width = 800.0
         self.focused = False
+        self.selection_range = None
         if parent is not None:
             parent.children.append(self)
 
@@ -228,6 +229,10 @@ class _Element:
 
     def focus(self):
         self.focused = True
+
+    def set_selection_range(self, start, end):
+        self.selection_range = (start, end)
+        return True
 
 class _Event:
     def __init__(self, current_target=None, target=None, params=None, bool_params=None):
@@ -809,6 +814,50 @@ def test_published_sidebar_click_selects_gallery_scope(panel_module):
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     assert 'class="asset-filter-row" tabindex="0" data-class-is-active="selected_folder_id == \'__gallery__\'" data-folder-id="__gallery__"' in rml
     assert 'data-event-click="select_folder"' not in rml
+
+def test_recent_scope_and_shift_click_select_a_range(panel_module):
+    assets = {
+        str(index): _project(id=str(index), project_uuid=str(index), name=f"Project {index}")
+        for index in range(3)
+    }
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets=assets)
+
+    assert panel._select_folder_id(panel_module.SCOPE_RECENT) is True
+    assert panel._select_folder_id(panel_module.SCOPE_ALL) is True
+    assert panel._select_asset_id("0") is True
+    shell = _Element()
+    row = _Element({"data-asset-id": "2", "data-asset-action": "select"}, shell)
+    panel._on_asset_manager_click(
+        _Event(shell, row, bool_params={"shift_key": True})
+    )
+
+    assert panel._selected_asset_ids == {"0", "1", "2"}
+
+def test_rename_passes_name_to_update_asset_without_shadowing_command(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    calls = []
+    panel._asset_index.update_asset = lambda *args, **kwargs: calls.append((args, kwargs))
+    panel_module.lf.ui.input_dialog = lambda _title, _hint, _current, callback: callback("New name")
+
+    panel.on_rename_asset(None, None, [asset["id"]])
+
+    assert calls == [((asset["id"],), {"name": "New name"})]
+
+def test_typeahead_places_caret_after_appended_character(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    search = _Element()
+    panel._doc = _Document({"asset-search-input": search})
+    panel.set_search_query("x")
+
+    panel._on_asset_results_keydown(
+        _Event(search, search, params={"key_identifier": "12"})
+    )
+
+    assert panel.get_search_query() == "xa"
+    assert search.selection_range == (2, 2)
 
 def test_startup_keeps_local_folder_but_rejects_gallery_scope(panel_module):
     panel = panel_module.AssetManagerPanel()

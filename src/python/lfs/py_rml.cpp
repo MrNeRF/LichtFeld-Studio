@@ -793,6 +793,15 @@ namespace lfs::python {
         return false;
     }
 
+    bool PyRmlElement::set_selection_range(int start, int end) {
+        if (auto* input = rmlui_dynamic_cast<Rml::ElementFormControlInput*>(elem_)) {
+            input->SetSelectionRange(std::max(0, start), std::max(start, end));
+            mark_document_dirty(input);
+            return true;
+        }
+        return false;
+    }
+
     void PyRmlElement::submit(const std::string& name, const std::string& value) {
         Rml::Element* element = elem_;
         while (element) {
@@ -1251,6 +1260,7 @@ namespace lfs::python {
             .def("focus", &PyRmlElement::focus)
             .def("blur", &PyRmlElement::blur)
             .def("select", &PyRmlElement::select)
+            .def("set_selection_range", &PyRmlElement::set_selection_range)
             .def("submit", &PyRmlElement::submit, nb::arg("name") = "",
                  nb::arg("value") = "");
 

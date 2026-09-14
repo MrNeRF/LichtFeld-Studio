@@ -111,6 +111,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         self._selected_asset_ids: Set[str] = set()
         self._selection_cursor_id: Optional[str] = None
+        self._selection_anchor_id: Optional[str] = None
         self._selected_folder_id: Optional[str] = SCOPE_ALL
         self._selection_type = "none"
         self._view_mode = "list"
@@ -689,10 +690,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             folders = getattr(self._asset_index, "folders", {}) if self._asset_index else {}
         return folders if isinstance(folders, dict) else {}
 
-    def _library_command(self, name: str, *args: Any, **kwargs: Any) -> Any:
+    def _library_command(self, command: str, *args: Any, **kwargs: Any) -> Any:
         if self._library_service is not None:
-            return self._library_service._call(name, *args, **kwargs)
-        return getattr(self._asset_index, name)(*args, **kwargs)
+            return self._library_service._call(command, *args, **kwargs)
+        return getattr(self._asset_index, command)(*args, **kwargs)
 
     def _default_folder_id(self) -> Optional[str]:
         folders = self._asset_index_folders()
@@ -1228,6 +1229,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._selected_folder_id = folder.id
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
+        self._selection_anchor_id = None
         self._update_selection_type()
         self.refresh_catalog(scan_folders=False)
         folder_path = str(getattr(folder, "path", "") or directory).strip()
@@ -1280,7 +1282,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if folder_id == SCOPE_TRANSFERS:
             self.on_open_gallery()
             return True
-        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, *GALLERY_SCOPES}:
+        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES}:
             return False
         if folder_id in self._asset_index_folders():
             self._gallery_last_folder = folder_id
@@ -1290,6 +1292,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._controller().refresh()
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
+        self._selection_anchor_id = None
         self._update_selection_type()
         self._reset_scroll()
         self._refresh_records(assets=True, folders=True)
@@ -1314,18 +1317,29 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset_id: str,
         *,
         multi_select: bool = False,
+        range_select: bool = False,
         row_element=None,
         container=None,
     ) -> bool:
         if asset_id not in self._all_display_assets():
             return False
-        if multi_select:
+        visible_ids = [
+            str(asset.get("id") or asset.get("project_uuid") or "")
+            for asset in self._filtered_assets()
+        ]
+        if range_select and self._selection_anchor_id in visible_ids:
+            start = visible_ids.index(self._selection_anchor_id)
+            end = visible_ids.index(asset_id)
+            lo, hi = sorted((start, end))
+            self._selected_asset_ids = set(visible_ids[lo : hi + 1])
+        elif multi_select:
             if asset_id in self._selected_asset_ids:
                 self._selected_asset_ids.remove(asset_id)
             else:
                 self._selected_asset_ids.add(asset_id)
         else:
             self._selected_asset_ids = {asset_id}
+            self._selection_anchor_id = asset_id
         self._selection_cursor_id = (
             asset_id if asset_id in self._selected_asset_ids else next(iter(self._selected_asset_ids), None)
         )
@@ -1336,7 +1350,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def toggle_asset_selection(self, _handle, _ev, args):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        self._select_asset_id(asset_id, multi_select=self._event_multi_select(_ev))
+        self._select_asset_id(
+            asset_id,
+            multi_select=self._event_multi_select(_ev),
+            range_select=self._event_range_select(_ev),
+        )
 
     def _dirty_selection(self) -> None:
         if self._handle:
@@ -2178,6 +2196,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._select_asset_id(
                     asset_id,
                     multi_select=self._event_multi_select(event),
+                    range_select=self._event_range_select(event),
                     row_element=action_element,
                     container=container,
                 )
@@ -2519,6 +2538,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             focus = getattr(search, "focus", None)
             if callable(focus):
                 focus()
+            set_selection = getattr(search, "set_selection_range", None)
+            if callable(set_selection):
+                set_selection(len(self._search_query), len(self._search_query))
             self._stop_event(event)
 
     def _sync_asset_selection_dom(self, container=None, selected_element=None) -> None:
@@ -2546,6 +2568,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             event.get_bool_parameter(key, False)
             for key in ("ctrl_key", "meta_key", "command_key")
         )
+
+    @staticmethod
+    def _event_range_select(event) -> bool:
+        return bool(event and event.get_bool_parameter("shift_key", False))
 
     @staticmethod
     def _stop_event(event) -> None:
