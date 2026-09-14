@@ -24,8 +24,8 @@ namespace {
     using lfs::io::ExtractionMode;
     using lfs::io::VideoFrameExtractor;
 
-    constexpr int kWidth = 16;
-    constexpr int kHeight = 16;
+    constexpr int kWidth = 64;
+    constexpr int kHeight = 64;
     constexpr int kChannels = 3;
     constexpr int kFixtureFrameCount = 50;
     constexpr double kFixtureEndTime = 0.5;
@@ -169,11 +169,54 @@ TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
 
     VideoFrameExtractor extractor;
     ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
     EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_1.png"));
     EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_3.png"));
     EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_5.png"));
     EXPECT_FALSE(std::filesystem::exists(output_dir / "frame_2.png"));
     EXPECT_EQ(3u, countPngFiles(output_dir));
+
+    const nlohmann::json metadata = readMetadata(output_dir);
+    ASSERT_TRUE(metadata.contains("processing"));
+    EXPECT_EQ(metadata["processing"]["decoder"]["backend"], "nvdec")
+        << "regression must exercise the hardware decode path";
+}
+
+TEST(VideoFrameExtractorOutcome, CancellationDoesNotRelabelEarlierFailure) {
+    VideoFrameExtractor::Params params;
+    params.video_path = "/path/that/does/not/exist.mp4";
+    params.cancel_requested = [] { return true; };
+
+    VideoFrameExtractor extractor;
+    std::string error;
+    EXPECT_FALSE(extractor.extract(params, error));
+    EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Failed);
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(VideoFrameExtractorOutcome, ReportsExplicitCancellation) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
+
+    TempDir temp("cancelled");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    const std::filesystem::path output_dir = temp.path / "frames";
+    std::filesystem::create_directories(output_dir);
+
+    std::string error;
+    ASSERT_TRUE(writeEncodedVideo(video_path, kFixtureFrameCount, 10, error)) << error;
+
+    auto params = extractionParams(video_path, output_dir);
+    params.cancel_requested = [] { return true; };
+
+    VideoFrameExtractor extractor;
+    EXPECT_FALSE(extractor.extract(params, error));
+    EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Cancelled);
+
+    params.cancel_requested = [] { return false; };
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+    EXPECT_TRUE(error.empty());
 }
 
 TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumbers) {
