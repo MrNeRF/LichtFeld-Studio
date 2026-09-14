@@ -12,6 +12,33 @@ import pytest
 import benchmark_camera_pose_recovery as bench
 
 
+def test_checkpoint_selection_follows_training_binding_not_row_order():
+    old = dict(fourcc='CKPT', row_kind='Live', uuid='old')
+    final = dict(fourcc='CKPT', row_kind='Live', uuid='final')
+    graph = dict(training_model_uuid='model', nodes=[dict(uuid='model', payload=dict(
+        fourcc='CKPT', instance_uuid='final'))])
+    for rows in ([old, final], [final, old]):
+        assert bench.bound_checkpoint_row(rows, graph) is final
+    graph['nodes'][0]['payload']['instance_uuid'] = 'old'
+    assert bench.bound_checkpoint_row([final, old], graph) is old
+
+
+@pytest.mark.parametrize('defect', ['missing_node', 'duplicate_node', 'wrong_type',
+                                  'missing_chunk', 'duplicate_chunk', 'tombstone'])
+def test_checkpoint_selection_rejects_broken_bindings(defect):
+    graph = dict(training_model_uuid='model', nodes=[dict(uuid='model', payload=dict(
+        fourcc='CKPT', instance_uuid='bound'))])
+    rows = [dict(fourcc='CKPT', row_kind='Live', uuid='bound')]
+    if defect == 'missing_node': graph['nodes'] = []
+    if defect == 'duplicate_node': graph['nodes'] *= 2
+    if defect == 'wrong_type': graph['nodes'][0]['payload']['fourcc'] = 'SPLT'
+    if defect == 'missing_chunk': rows = []
+    if defect == 'duplicate_chunk': rows *= 2
+    if defect == 'tombstone': rows[0]['row_kind'] = 'Tombstone'
+    with pytest.raises(ValueError):
+        bench.bound_checkpoint_row(rows, graph)
+
+
 def test_child_progress_is_visible_and_failure_is_not_hidden(tmp_path, capsys):
     log = tmp_path / 'console.log'
     command = [sys.executable, '-u', '-c', "print('detail'); print('Training [==] 10%'); raise SystemExit(3)"]

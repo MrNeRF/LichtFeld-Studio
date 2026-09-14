@@ -23,6 +23,22 @@ import time
 import numpy as np
 
 
+def bound_checkpoint_row(rows, scene_graph):
+    """Follow the training node binding, never arbitrary index row order."""
+    uid = scene_graph.get('training_model_uuid')
+    nodes = [n for n in scene_graph.get('nodes', []) if n.get('uuid') == uid]
+    if not uid or len(nodes) != 1:
+        raise ValueError('Missing or ambiguous training model in project scene graph')
+    payload = nodes[0].get('payload') or {}
+    if payload.get('fourcc') != 'CKPT' or not payload.get('instance_uuid'):
+        raise ValueError('Training model is not bound to a checkpoint')
+    candidates = [r for r in rows if r['fourcc'] == 'CKPT' and r['row_kind'] == 'Live'
+                  and r['uuid'] == payload['instance_uuid']]
+    if len(candidates) != 1:
+        raise ValueError('Missing or ambiguous bound checkpoint in project index')
+    return candidates[0]
+
+
 def checkpoint_params(path):
     import inspect_licht as il
 
@@ -31,7 +47,12 @@ def checkpoint_params(path):
         head = max((h for h in heads if h), key=lambda h: h['head_sequence'])
         p = head['commit_offset']
         _, rows = il.decode_index(data, il.parse_commit(data[p:p + 256], p))
-        row = il.live_row(rows, 'CKPT')
+        scenes = [r for r in rows if r['fourcc'] == 'SCNG' and r['row_kind'] == 'Live']
+        if len(scenes) != 1:
+            raise ValueError('Missing or ambiguous project scene graph')
+        scene_row = scenes[0]
+        scene = json.loads(il.read_first_uncompressed(data, scene_row, scene_row['uncompressed_bytes']))
+        row = bound_checkpoint_row(rows, scene)
         payload = bytes(data[row['payload_offset']:row['payload_offset'] + row['stored_bytes']])
         decoded = payload if row['compression'] == 'Stored' else b''.join(
             il._iter_uncompressed_chunks(payload, row['uncompressed_bytes']))
