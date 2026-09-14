@@ -6,6 +6,8 @@
   "asset_manager.gallery.format.spz_hint": "Portable, pour d’autres outils.",
   "asset_manager.gallery.state.connection_lost": "Paused (connection lost)",
   "asset_manager.gallery.error.portal_version": "This portal version does not support gallery sync",
+  "asset_manager.gallery.error.download_damaged": "Le fichier téléchargé est endommagé ou a été modifié sur le portail.",
+  "asset_manager.gallery.error.download_size": "Le fichier téléchargé est incomplet ou sa taille dépasse celle indiquée par le portail.",
   "_language_name": "Français",
   "menu": {
     "file": "Fichier",

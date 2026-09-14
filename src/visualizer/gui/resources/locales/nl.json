@@ -6,6 +6,8 @@
   "asset_manager.gallery.format.spz_hint": "Uitwisselbaar met andere tools.",
   "asset_manager.gallery.state.connection_lost": "Paused (connection lost)",
   "asset_manager.gallery.error.portal_version": "This portal version does not support gallery sync",
+  "asset_manager.gallery.error.download_damaged": "Het gedownloade bestand is beschadigd of is op het portaal gewijzigd.",
+  "asset_manager.gallery.error.download_size": "Het gedownloade bestand is onvolledig of groter dan door het portaal aangegeven.",
   "_language_name": "Nederlands",
   "menu": {
     "file": "Bestand",

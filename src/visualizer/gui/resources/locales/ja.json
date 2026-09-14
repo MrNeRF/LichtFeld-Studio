@@ -6,6 +6,8 @@
   "asset_manager.gallery.format.spz_hint": "他のツールでも利用可能。",
   "asset_manager.gallery.state.connection_lost": "Paused (connection lost)",
   "asset_manager.gallery.error.portal_version": "This portal version does not support gallery sync",
+  "asset_manager.gallery.error.download_damaged": "ダウンロードしたファイルが破損しているか、ポータル上で変更されています。",
+  "asset_manager.gallery.error.download_size": "ダウンロードしたファイルが不完全であるか、ポータルが示したサイズを超えています。",
   "_language_name": "日本語",
   "menu": {
     "file": "ファイル",

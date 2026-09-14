@@ -6,6 +6,8 @@
   "asset_manager.gallery.format.spz_hint": "便于移植，适用于其他工具。",
   "asset_manager.gallery.state.connection_lost": "Paused (connection lost)",
   "asset_manager.gallery.error.portal_version": "This portal version does not support gallery sync",
+  "asset_manager.gallery.error.download_damaged": "下载的文件已损坏或已在门户上被修改。",
+  "asset_manager.gallery.error.download_size": "下载的文件不完整或大于门户声明的大小。",
   "_language_name": "简体中文",
   "menu": {
     "file": "文件",
