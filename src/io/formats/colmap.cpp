@@ -586,6 +586,9 @@ namespace lfs::io {
         // before the requested image-folder scale is applied.
         int original_width = 0;
         int original_height = 0;
+        // Preserve the exact divisor used for K; integer dimensions lose the
+        // fractional pixels when a source size is not divisible by this factor.
+        float intrinsics_scale_factor = 1.0f;
         std::vector<float> params;
     };
 
@@ -1536,6 +1539,7 @@ namespace lfs::io {
             if (scale_factor != 1.0f) {
                 scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
             }
+            cam.intrinsics_scale_factor = scale_factor;
 
             if (!valid) {
                 if (tally) {
@@ -2057,7 +2061,8 @@ namespace lfs::io {
     std::vector<ImageData> read_images_text_camera_metadata_only(
         const std::filesystem::path& file_path,
         const LoadOptions& options = {},
-        SkipTally* pose_tally = nullptr) {
+        SkipTally* pose_tally = nullptr,
+        const bool collect_observations = false) {
         LOG_TIMER_TRACE("Read images.txt camera metadata");
         const auto start = std::chrono::high_resolution_clock::now();
         std::error_code file_size_ec;
@@ -2130,19 +2135,70 @@ namespace lfs::io {
                                                img.name, img.image_id, file_lines),
                                    lfs::SmallFields{}.add("name", img.name));
             }
+            if (!collect_observations) {
+                // Layout validation and camera-only reads retain the bounded
+                // metadata probe; they do not need the potentially long tracks.
+                has_pending_line = read_next_short_metadata_line_or_skip(file, pending_line, file_lines);
+            } else {
+                std::string points_line;
+                while (std::getline(file, points_line)) {
+                    ++file_lines;
+                    throw_if_load_cancel_requested(options, "COLMAP observations parse cancelled");
+                    if (!points_line.empty() && points_line.back() == '\r')
+                        points_line.pop_back();
+                    if (points_line.starts_with("#"))
+                        continue;
+                    ImageData next_image;
+                    if (parse_image_metadata_line(points_line, next_image)) {
+                        // Also accept metadata-only files without a points row.
+                        pending_line = std::move(points_line);
+                        has_pending_line = true;
+                        break;
+                    }
+                    std::istringstream points_stream(points_line);
+                    bool valid = true;
+                    while (points_stream >> std::ws && !points_stream.eof()) {
+                        if (should_poll_cancel(img.points2D.size()))
+                            throw_if_load_cancel_requested(options, "COLMAP observations parse cancelled");
+                        ImagePoint2D point;
+                        std::string id;
+                        if (!(points_stream >> point.x >> point.y >> id) ||
+                            !std::isfinite(point.x) || !std::isfinite(point.y)) {
+                            valid = false;
+                            break;
+                        }
+                        if (id == "-1") {
+                            point.point3D_id = INVALID_POINT3D_ID;
+                        } else {
+                            const auto parsed = std::from_chars(id.data(), id.data() + id.size(), point.point3D_id);
+                            if (parsed.ec != std::errc{} || parsed.ptr != id.data() + id.size()) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        img.points2D.push_back(point);
+                    }
+                    if (!valid) {
+                        // Auxiliary evidence must not make a previously loadable
+                        // camera unusable, nor expose a partially parsed row.
+                        img.points2D.clear();
+                        LOG_WARN("Ignoring malformed SfM observations for image {} at line {}", img.image_id, file_lines);
+                    }
+                    break;
+                }
+            }
             images.push_back(std::move(img));
-            has_pending_line = read_next_short_metadata_line_or_skip(file, pending_line, file_lines);
         }
 
         if (images.empty()) {
             throw_colmap_error(lfs::ErrorCode::DataLoss, "No valid images in images.txt");
         }
 
-        LOG_INFO("[COLMAP_LOAD] parse images.txt camera_metadata_fast images={} file_lines={} bytes={} elapsed_ms={:.2f}",
+        LOG_INFO("[COLMAP_LOAD] parse images.txt camera_metadata_fast images={} file_lines={} bytes={} elapsed_ms={:.2f} observations={}",
                  images.size(),
                  file_lines,
                  file_size_ec ? std::string("unknown") : std::format("{}", byte_size),
-                 elapsed_ms(start));
+                 elapsed_ms(start), collect_observations);
         LOG_DEBUG("Read {} images from text file", images.size());
         return images;
     }
@@ -2233,6 +2289,7 @@ namespace lfs::io {
             if (scale_factor != 1.0f) {
                 scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
             }
+            cam.intrinsics_scale_factor = scale_factor;
 
             const auto [_, inserted] = cams.emplace(cam.camera_id, std::move(cam));
             if (!inserted) {
@@ -2621,14 +2678,10 @@ namespace lfs::io {
         if (image.points2D.empty() || points_xyz.empty()) {
             return;
         }
-        const float u_scale =
-            cam_data.original_width > 0
-                ? static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width)
-                : 1.0f;
-        const float v_scale =
-            cam_data.original_height > 0
-                ? static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height)
-                : 1.0f;
+        // SfM pixels must remain in the same projection as the imported K.
+        // Ratios of rounded image dimensions introduce a systematic residual
+        // that pose refinement would otherwise try to compensate geometrically.
+        const float scale_factor = cam_data.intrinsics_scale_factor;
         std::vector<Camera::SfmObservation> observations;
         observations.reserve(image.points2D.size());
         for (const auto& point : image.points2D) {
@@ -2643,8 +2696,8 @@ namespace lfs::io {
                 continue;
             }
             observations.push_back(Camera::SfmObservation{
-                .u = static_cast<float>(point.x) * u_scale,
-                .v = static_cast<float>(point.y) * v_scale,
+                .u = static_cast<float>(point.x) / scale_factor,
+                .v = static_cast<float>(point.y) / scale_factor,
                 .x = (*xyz)[0],
                 .y = (*xyz)[1],
                 .z = (*xyz)[2]});
@@ -4498,7 +4551,7 @@ namespace lfs::io {
             SkipTally camera_tally;
             SkipTally pose_tally;
             auto cam_map = read_cameras_text(cams_file, scale_factor, options, &camera_tally);
-            auto images = read_images_text_camera_metadata_only(images_file, options, &pose_tally);
+            auto images = read_images_text_camera_metadata_only(images_file, options, &pose_tally, true);
 
             LOG_INFO("Read {} cameras and {} images from COLMAP text files", cam_map.size(), images.size());
             auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);

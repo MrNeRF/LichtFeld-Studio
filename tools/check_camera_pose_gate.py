@@ -26,6 +26,8 @@ TESTS = frozenset({
     "SHViewDirectionSurvivesGeometryCancellation",
     "CameraOnlyPreservesModelOptimizerAndSource",
     "SparseGuardRejectsDriftBeforePhotometricRendering",
+    "SparseGuardSupportsUndistortionWithoutMutatingMeasurements",
+    "UndistortionInverseMappingSupportsModelsCropScaleAndInvalidInputs",
     "TiledGradientMatchesFullImage",
     "OptionalGradientPreservesJointGaussianUpdate",
     "RejectsInvalidContractsBeforeBackward",
@@ -36,6 +38,7 @@ GRADIENT = "AnisotropicSH3MatchesSixAxisFiniteDifferences"
 CONTROLLER_RECOVERY = "BoundedControllerRecoversPoseFromImages"
 CONTROLLER_SUITE = "CameraPoseControllerTest"
 CONTROLLER_TESTS = frozenset({
+    "GeometricProposalStillRequiresPhotometricDescentAndBoundedBudget",
     "RejectsInvalidSourcesAndConfiguration",
     "FrozenAnchorAndEvaluationNeverRenderOrMove",
     "StaleAndInvalidGradientsAreRejectedBeforeRendering",
@@ -159,6 +162,7 @@ def inspect_gate(root: ET.Element) -> dict:
 
 SESSION_SUITE = "CameraPoseSessionTest"
 SESSION_TESTS = {
+    "GeometricProposalReachesControllerWithoutChangingImageObjective",
     "GeometricRejectionDoesNotRenderOrMoveAndExceptionsRollBack",
     "DeterministicAnchorsExcludeEvaluationAndSortByUid",
     "RejectsAmbiguousMembershipAndDegenerateGauge",
@@ -200,6 +204,8 @@ TRAINER_TESTS = {
 
 REPROJECTION_SUITE = "CameraPoseReprojectionTest"
 REPROJECTION_TESTS = {
+    "GeometricProposalRecoversCoupledRotationAndTranslation",
+    "GeometricProposalRejectsMissingAndUnobservableGeometry",
     "AccurateCalibrationRejectsPhotometricDrift",
     "PermitsCorrectionButKeepsImmutableSourceCeiling",
     "ResizeAndWorldTranslationPreserveDecisions",

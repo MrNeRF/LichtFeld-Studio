@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <initializer_list>
 #include <limits>
 #include <nvtx3/nvToolsExt.h>
 
@@ -514,6 +515,49 @@ namespace lfs::core {
         }
 
     } // anonymous namespace
+
+    bool undistort_observation(const UndistortParams& params, const float src_u, const float src_v,
+                               float& dst_u, float& dst_v) noexcept {
+        if ((params.model_type != CameraModelType::PINHOLE &&
+             params.model_type != CameraModelType::FISHEYE &&
+             params.model_type != CameraModelType::THIN_PRISM_FISHEYE) ||
+            params.num_distortion < 0 || params.num_distortion > 12 ||
+            params.src_width <= 0 || params.src_height <= 0 ||
+            params.dst_width <= 0 || params.dst_height <= 0 ||
+            !std::isfinite(src_u) || !std::isfinite(src_v) ||
+            src_u < 0 || src_v < 0 || src_u >= params.src_width || src_v >= params.src_height)
+            return false;
+        for (const float value : {params.src_fx, params.src_fy, params.dst_fx, params.dst_fy})
+            if (!std::isfinite(value) || value <= 0)
+                return false;
+        for (const float value : {params.src_cx, params.src_cy, params.dst_cx, params.dst_cy})
+            if (!std::isfinite(value))
+                return false;
+        for (int i = 0; i < params.num_distortion; ++i)
+            if (!std::isfinite(params.distortion[i]))
+                return false;
+        float x, y;
+        if (!cam_from_img_cpu(src_u, src_v, params.src_fx, params.src_fy, params.src_cx, params.src_cy,
+                              params.model_type, params.distortion, params.num_distortion, x, y))
+            return false;
+        // Existing crop solvers can exhaust their iterations with finite values.
+        // Require a forward round trip before accepting a sparse measurement.
+        float dx, dy;
+        apply_distortion_cpu(x, y, params.model_type, params.distortion, params.num_distortion, dx, dy);
+        const float error_u = params.src_fx * dx + params.src_cx - src_u;
+        const float error_v = params.src_fy * dy + params.src_cy - src_v;
+        if (!std::isfinite(error_u) || !std::isfinite(error_v) ||
+            std::abs(error_u) > 0.01f || std::abs(error_v) > 0.01f)
+            return false;
+        const float u = params.dst_fx * x + params.dst_cx;
+        const float v = params.dst_fy * y + params.dst_cy;
+        if (!std::isfinite(u) || !std::isfinite(v) ||
+            u < 0 || v < 0 || u >= params.dst_width || v >= params.dst_height)
+            return false;
+        dst_u = u;
+        dst_v = v;
+        return true;
+    }
 
     UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,

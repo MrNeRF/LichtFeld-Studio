@@ -6,6 +6,7 @@
 #include "se3.hpp"
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace lfs::training::camera_pose {
 
@@ -51,6 +52,7 @@ namespace lfs::training::camera_pose {
         std::uint64_t pose_revision = 0;
         double image_loss = 0.0;
         Twist image_gradient{}; // Fresh left-tangent gradient, not matrix gradient
+        std::optional<Twist> geometric_proposal{}; // World-unit left increment; never an acceptance override.
     };
 
     struct PoseStepResult {

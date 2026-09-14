@@ -117,7 +117,7 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
         return root
 
     def test_accepts_complete_session_report(self):
-        self.assertEqual(inspect_session_gate(self.report())["tests"], 31)
+        self.assertEqual(inspect_session_gate(self.report())["tests"], 35)
 
     def test_rejects_missing_session_and_missing_previous_gate(self):
         with self.assertRaises(ValueError):
@@ -160,7 +160,7 @@ class CameraPoseTrainerGateReportTests(unittest.TestCase):
 
     def test_accepts_complete_trainer_report(self):
         result = inspect_trainer_gate(self.report())
-        self.assertEqual(result["tests"], 39)
+        self.assertEqual(result["tests"], 45)
         self.assertTrue(result["sparse_reprojection_contracts"])
 
     def test_requires_complete_sparse_reprojection_evidence(self):
@@ -212,7 +212,7 @@ class CameraPoseViewGateReportTests(unittest.TestCase):
 
     def test_accepts_complete_view_report(self):
         result = inspect_view_gate(self.report())
-        self.assertEqual(result["tests"], 42)
+        self.assertEqual(result["tests"], 48)
         self.assertTrue(result["view_pose_contracts"])
 
     def test_rejects_incomplete_view_evidence(self):
@@ -246,7 +246,7 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
 
     def test_accepts_complete_activation_report(self):
         result = inspect_activation_gate(self.report())
-        self.assertEqual(result["tests"], 46)
+        self.assertEqual(result["tests"], 52)
         self.assertTrue(result["activation_contracts"])
 
     def test_rejects_missing_or_failed_activation(self):
@@ -271,7 +271,7 @@ class CameraPoseActivationGateReportTests(unittest.TestCase):
 class CameraPoseControllerGateReportTests(unittest.TestCase):
     def test_accepts_complete_controller_report(self):
         result = inspect_controller_gate(valid_controller_report())
-        self.assertEqual(result["tests"], 19)
+        self.assertEqual(result["tests"], 22)
         self.assertEqual(len(result["controller_trials"]), 3)
 
     def test_rejects_checkpoint_a_without_controller(self):
@@ -314,7 +314,7 @@ class CameraPoseControllerGateReportTests(unittest.TestCase):
 class CameraPoseGateReportTests(unittest.TestCase):
     def test_accepts_complete_success_and_reports_all_trials(self):
         result = inspect_gate(valid_report())
-        self.assertEqual(result["tests"], 10)
+        self.assertEqual(result["tests"], 12)
         self.assertEqual(len(result["trials"]), 3)
         self.assertIn("not certified", result["scope"])
 

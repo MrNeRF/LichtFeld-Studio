@@ -10,9 +10,12 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "training/camera_pose/fastgs_pose_evaluator.hpp"
 #include <cmath>
 
 #include <atomic>
+#include <algorithm>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
@@ -340,6 +343,152 @@ TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_EQ(cameras[0]->image_name(), "frame_0.png");
+}
+
+TEST_F(ColmapImageLayoutTest, SfmObservationsUseExactIntrinsicsScale) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+
+    // Exercise both readers, the unscaled path, and divisible/nondivisible
+    // dimensions. The latter reproduce the half-pixel truncation in images_4.
+    for (const bool binary : {false, true}) {
+        for (const int width : {4944, 4946}) {
+            const int height = width == 4944 ? 3280 : 3286;
+            for (const int factor : {1, 4, 8}) {
+                SCOPED_TRACE(::testing::Message() << "binary=" << binary
+                                                << " width=" << width << " factor=" << factor);
+                const fs::path dataset = temp_dir_ / (binary ? "binary" : "text") /
+                                         std::to_string(width) / std::to_string(factor);
+                const std::string folder = factor == 1 ? "images" : "images_" + std::to_string(factor);
+                write_png(dataset / folder / "frame.png");
+                const double cx = width / 2.0, cy = height / 2.0;
+                constexpr double focal = 4000;
+                constexpr uint64_t count = 20;
+                std::ostringstream camera_text, image_text, point_text;
+                camera_text << "1 PINHOLE " << width << ' ' << height << " 4000 4000 " << cx << ' ' << cy << '\n';
+                image_text << "1 1 0 0 0 0 0 0 1 frame.png\n";
+
+                // Write the equivalent little-endian COLMAP binary fixture.
+                std::ostringstream camera_bin, image_bin, point_bin;
+                const auto pod = [](std::ostream& out, const auto value) {
+                    out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+                };
+                pod(camera_bin, uint64_t{1});
+                pod(camera_bin, uint32_t{1});
+                pod(camera_bin, int32_t{1}); // PINHOLE
+                pod(camera_bin, static_cast<uint64_t>(width));
+                pod(camera_bin, static_cast<uint64_t>(height));
+                for (const double value : {focal, focal, cx, cy})
+                    pod(camera_bin, value);
+                pod(image_bin, uint64_t{1});
+                pod(image_bin, uint32_t{1});
+                for (const double value : {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0})
+                    pod(image_bin, value);
+                pod(image_bin, uint32_t{1});
+                image_bin.write("frame.png", sizeof("frame.png"));
+                pod(image_bin, count);
+                pod(point_bin, count);
+                for (uint64_t i = 0; i < count; ++i) {
+                    const double x = static_cast<int>(i % 5) - 2;
+                    const double y = (static_cast<int>(i / 5) - 1.5) * 0.5;
+                    constexpr double z = 5;
+                    const double u = focal * x / z + cx, v = focal * y / z + cy;
+                    image_text << u << ' ' << v << ' ' << i + 1 << ' ';
+                    point_text << i + 1 << ' ' << x << ' ' << y << " 5 128 128 128 0 1 " << i << '\n';
+                    pod(image_bin, u);
+                    pod(image_bin, v);
+                    pod(image_bin, i + 1);
+                    pod(point_bin, i + 1);
+                    for (const double value : {x, y, z})
+                        pod(point_bin, value);
+                    for (int c = 0; c < 3; ++c)
+                        pod(point_bin, uint8_t{128});
+                    pod(point_bin, 0.0);
+                    pod(point_bin, uint64_t{1});
+                    pod(point_bin, uint32_t{1});
+                    pod(point_bin, static_cast<uint32_t>(i));
+                }
+                image_text << '\n';
+                if (binary) {
+                    write_text_file(dataset / "cameras.bin", camera_bin.str());
+                    write_text_file(dataset / "images.bin", image_bin.str());
+                    write_text_file(dataset / "points3D.bin", point_bin.str());
+                } else {
+                    write_text_file(dataset / "cameras.txt", camera_text.str());
+                    write_text_file(dataset / "images.txt", image_text.str());
+                    write_text_file(dataset / "points3D.txt", point_text.str());
+                }
+
+                auto result = binary
+                                  ? lfs::io::read_colmap_cameras_and_images(dataset, folder)
+                                  : lfs::io::read_colmap_cameras_and_images_text(dataset, folder);
+                ASSERT_TRUE(result.has_value()) << result.error().format();
+                const auto& cameras = std::get<0>(result->value);
+                ASSERT_EQ(cameras.size(), 1u);
+                const auto& camera = *cameras.front();
+                // Existing imported K/dimensions must not change with this fix.
+                EXPECT_EQ(camera.camera_width(), width / factor);
+                EXPECT_EQ(camera.camera_height(), height / factor);
+                EXPECT_FLOAT_EQ(camera.focal_x(), focal / factor);
+                EXPECT_FLOAT_EQ(camera.focal_y(), focal / factor);
+                EXPECT_FLOAT_EQ(camera.center_x(), cx / factor);
+                EXPECT_FLOAT_EQ(camera.center_y(), cy / factor);
+                ASSERT_EQ(camera.sfm_observations().size(), count);
+                for (size_t i = 0; i < count; ++i) {
+                    const auto& point = camera.sfm_observations()[i];
+                    const double x = static_cast<int>(i % 5) - 2;
+                    const double y = (static_cast<int>(i / 5) - 1.5) * 0.5;
+                    EXPECT_FLOAT_EQ(point.u, (focal * x / 5 + cx) / factor);
+                    EXPECT_FLOAT_EQ(point.v, (focal * y / 5 + cy) / factor);
+                }
+                const auto guard = lfs::training::camera_pose::make_sparse_reprojection_guard(camera);
+                ASSERT_TRUE(guard.active());
+                EXPECT_EQ(guard.observation_count(), count);
+                EXPECT_LT(guard.source_error(), 1e-7);
+                const auto source = camera.world_view_transform().cpu().contiguous();
+                lfs::training::camera_pose::Matrix4 pose{};
+                std::copy_n(source.ptr<float>(), pose.size(), pose.begin());
+                EXPECT_TRUE(guard.allows(pose));
+                pose[3] += 0.01f;
+                EXPECT_FALSE(guard.allows(pose));
+            }
+        }
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, SfmTextObservationsKeepCameraBoundariesAndIgnoreMalformedRows) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+
+    const fs::path dataset = temp_dir_ / "observations";
+    write_text_file(dataset / "cameras.txt", "1 PINHOLE 100 100 80 80 50 50\n");
+    write_text_file(dataset / "points3D.txt", "7 0 0 5 128 128 128 0 2 0\n");
+    for (const std::string bad_row : {"1 2 7 3", "1 2 7 3 4 7oops", "1 2 7 3 4 -2"}) {
+        SCOPED_TRACE(bad_row);
+        write_text_file(dataset / "images.txt",
+                        "1 1 0 0 0 0 0 0 1 a.png\n" + bad_row + "\n"
+                        "2 1 0 0 0 0 0 0 1 b.png\n"
+                        "# observations follow\n"
+                        "50 50 7 20 20 -1\n"
+                        "3 1 0 0 0 0 0 0 1 c.png\n"
+                        "4 1 0 0 0 0 0 0 1 d.png\n\n");
+        for (const auto* name : {"a.png", "b.png", "c.png", "d.png"})
+            write_png(dataset / "images" / name);
+        auto result = lfs::io::read_colmap_cameras_and_images_text(dataset, "images");
+        ASSERT_TRUE(result.has_value()) << result.error().format();
+        const auto& cameras = std::get<0>(result->value);
+        ASSERT_EQ(cameras.size(), 4u);
+        for (const auto& camera : cameras) {
+            const auto& points = camera->sfm_observations();
+            if (camera->image_name() == "b.png") {
+                ASSERT_EQ(points.size(), 1u);
+                EXPECT_FLOAT_EQ(points[0].u, 50);
+                EXPECT_FLOAT_EQ(points[0].v, 50);
+            } else {
+                EXPECT_TRUE(points.empty()) << camera->image_name();
+            }
+        }
+    }
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {

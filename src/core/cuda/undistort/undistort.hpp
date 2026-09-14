@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera_types.h"
+#include "core/export.hpp"
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
 
@@ -20,6 +21,13 @@ namespace lfs::core {
         int num_distortion;
         bool crop_solve_failed = false;
     };
+
+    // Map an imported pixel into the native undistorted image, without changing
+    // calibration or observations. Returns false for invalid/noninvertible rays
+    // or pixels outside the destination crop; outputs remain unchanged on failure.
+    [[nodiscard]] LFS_CUDA_API bool undistort_observation(
+        const UndistortParams& params, float src_u, float src_v,
+        float& dst_u, float& dst_v) noexcept;
 
     UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,

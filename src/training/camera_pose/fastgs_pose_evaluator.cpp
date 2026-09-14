@@ -22,10 +22,9 @@ namespace lfs::training::camera_pose {
     }
 
     SparseReprojectionGuard make_sparse_reprojection_guard(const Camera& camera) {
-        // SfM pixels currently remain in the imported projection after image
-        // undistortion. Do not compare them with the replacement pinhole K.
-        if (camera.camera_model_type() != CameraModelType::PINHOLE ||
-            camera.has_distortion() || camera.is_undistort_prepared() || camera.sfm_observations().empty())
+        const bool rectified = camera.is_undistort_prepared();
+        if ((!rectified && (camera.camera_model_type() != CameraModelType::PINHOLE || camera.has_distortion())) ||
+            camera.sfm_observations().empty())
             return {};
         const auto source_tensor = camera.world_view_transform().to(Device::CPU).contiguous();
         if (source_tensor.dtype() != DataType::Float32 || source_tensor.numel() != 16)
@@ -34,8 +33,14 @@ namespace lfs::training::camera_pose {
         std::copy_n(source_tensor.ptr<float>(), source.size(), source.begin());
         std::vector<ReprojectionObservation> observations;
         observations.reserve(camera.sfm_observations().size());
-        for (const auto& point : camera.sfm_observations())
-            observations.push_back({point.u, point.v, point.x, point.y, point.z});
+        for (const auto& point : camera.sfm_observations()) {
+            float u = point.u, v = point.v;
+            // Keep original measurements intact, including for checkpoint reload
+            // and repeated evaluator construction. No pose-derived pseudo-targets.
+            if (rectified && !undistort_observation(camera.undistort_params(), point.u, point.v, u, v))
+                continue;
+            observations.push_back({u, v, point.x, point.y, point.z});
+        }
         // Native calibration matches images_N-scaled SfM pixels and does not
         // depend on lazy image loading, training resize or a tile offset.
         return SparseReprojectionGuard(source,
@@ -91,7 +96,8 @@ namespace lfs::training::camera_pose {
         const auto cpu = matrix_gradient.to(Device::CPU).contiguous();
         Matrix4 gradient{};
         std::copy_n(cpu.ptr<float>(), gradient.size(), gradient.begin());
-        return {objective.loss, left_increment_gradient(pose, gradient)};
+        return {objective.loss, left_increment_gradient(pose, gradient),
+                reprojection_guard_.proposal(pose, model_.get_scene_scale())};
     }
 
     double FastGSPoseEvaluator::loss(const Matrix4& pose) {

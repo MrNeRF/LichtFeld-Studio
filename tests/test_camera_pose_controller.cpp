@@ -3,6 +3,7 @@
 
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
 #include "training/camera_pose/sparse_reprojection_guard.hpp"
+#include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
 #include <stdexcept>
@@ -40,6 +41,92 @@ namespace {
         });
         EXPECT_EQ(update.status, PoseStepStatus::Rejected);
         EXPECT_EQ(optimizer.snapshot().current, source);
+    }
+
+    TEST(CameraPoseReprojectionTest, GeometricProposalRecoversCoupledRotationAndTranslation) {
+        const auto source = exp_se3({0.02f, -0.015f, 0.01f, 0.001f, -0.002f, 0.0015f});
+        const SparseReprojectionGuard guard(source, calibration, sparse_points());
+        const auto proposal = guard.proposal(source, 1.0);
+        ASSERT_TRUE(proposal.has_value());
+        const auto corrected = apply_left_increment(*proposal, source);
+        EXPECT_TRUE(guard.allows(corrected));
+        EXPECT_LT(guard.error(corrected), guard.error(source) * 0.01);
+        // Changing units used by the solver must not change the world-unit step.
+        const auto other_scale = guard.proposal(source, 100.0);
+        ASSERT_TRUE(other_scale.has_value());
+        for (size_t i = 0; i < proposal->size(); ++i)
+            EXPECT_NEAR((*proposal)[i], (*other_scale)[i], 1e-7);
+        auto reduced = calibration;
+        reduced.fx /= 4;
+        reduced.fy /= 4;
+        reduced.cx /= 4;
+        reduced.cy /= 4;
+        reduced.width /= 4;
+        reduced.height /= 4;
+        auto points = sparse_points();
+        for (auto& point : points) {
+            point.u /= 4;
+            point.v /= 4;
+        }
+        const auto resized = SparseReprojectionGuard(source, reduced, points).proposal(source, 1.0);
+        ASSERT_TRUE(resized.has_value());
+        for (size_t i = 0; i < proposal->size(); ++i)
+            EXPECT_NEAR((*proposal)[i], (*resized)[i], 1e-7);
+    }
+
+    TEST(CameraPoseReprojectionTest, GeometricProposalRejectsMissingAndUnobservableGeometry) {
+        const auto source = identity_transform();
+        EXPECT_FALSE(SparseReprojectionGuard{}.proposal(source, 1.0));
+        std::vector<ReprojectionObservation> points;
+        for (int i = 0; i < 20; ++i) {
+            const double x = (i - 9.5) * 0.2, y = x, z = 4 + 0.2 * x;
+            points.push_back({calibration.fx * x / z + calibration.cx,
+                              calibration.fy * y / z + calibration.cy, x, y, z});
+        }
+        const SparseReprojectionGuard line(source, calibration, points);
+        ASSERT_TRUE(line.active());
+        EXPECT_FALSE(line.proposal(source, 1.0));
+        const SparseReprojectionGuard good(source, calibration, sparse_points());
+        EXPECT_FALSE(good.proposal(source, 0));
+        EXPECT_FALSE(good.proposal(source, std::numeric_limits<double>::quiet_NaN()));
+        auto invalid = source;
+        invalid[0] = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_FALSE(good.proposal(invalid, 1.0));
+    }
+
+    TEST(CameraPoseControllerTest, GeometricProposalStillRequiresPhotometricDescentAndBoundedBudget) {
+        const auto source = identity_transform();
+        const PoseEvaluation baseline{7, 1, 0, 4e-6, {-0.004f, 0, 0, 0, 0, 0}, Twist{0.002f, 0, 0, 0, 0, 0}};
+        const auto loss = [](const Matrix4& pose) { return std::pow(pose[3] - 0.002, 2); };
+        BoundedPoseOptimizer guided(7, source, {});
+        EXPECT_EQ(guided.step(baseline, loss).status, PoseStepStatus::Accepted);
+        EXPECT_NEAR(guided.snapshot().current[3], 0.002, 1e-8);
+
+        BoundedPoseOptimizer rejected(7, source, {});
+        int evaluations = 0;
+        const auto result = rejected.step(baseline, [&](const Matrix4&) { ++evaluations; return 1.0; });
+        EXPECT_EQ(result.status, PoseStepStatus::Rejected);
+        EXPECT_LE(evaluations, BoundedPoseConfig{}.max_backtracks);
+        EXPECT_EQ(rejected.snapshot().current, source);
+
+        BoundedPoseOptimizer retry(7, source, {});
+        int retry_evaluations = 0;
+        const auto retried = retry.step(baseline, [&](const Matrix4& pose) {
+            ++retry_evaluations;
+            return pose[3] <= 0.0021f ? 1.0 : loss(pose);
+        });
+        EXPECT_EQ(retried.status, PoseStepStatus::Accepted);
+        EXPECT_GT(retry_evaluations, 1);
+        EXPECT_LE(retry_evaluations, BoundedPoseConfig{}.max_backtracks);
+        EXPECT_NEAR(retry.snapshot().current[3], 0.003, 1e-8);
+
+        auto wrong = baseline;
+        wrong.geometric_proposal = Twist{-0.002f, 0, 0, 0, 0, 0};
+        auto ordinary = baseline;
+        ordinary.geometric_proposal.reset();
+        BoundedPoseOptimizer fallback(7, source, {}), control(7, source, {});
+        EXPECT_EQ(fallback.step(wrong, loss).status, control.step(ordinary, loss).status);
+        EXPECT_EQ(fallback.snapshot().current, control.snapshot().current);
     }
 
     TEST(CameraPoseReprojectionTest, PermitsCorrectionButKeepsImmutableSourceCeiling) {

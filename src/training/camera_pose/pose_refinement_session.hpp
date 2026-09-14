@@ -63,6 +63,7 @@ namespace lfs::training::camera_pose {
     struct PoseImageEvaluation {
         double loss = 0;
         Twist gradient{};
+        std::optional<Twist> geometric_proposal{};
     };
 
     struct PoseVisitResult {

@@ -26,6 +26,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <numeric>
@@ -475,6 +476,104 @@ namespace {
                                            [](const RenderOutput&, bool) { return PoseObjectiveResult{0.2, {}, {}}; });
         EXPECT_TRUE(without_sparse.allows(drift));
         EXPECT_NEAR(without_sparse.loss(drift), 0.2, 1e-12);
+    }
+
+    TEST_F(CameraPosePhotometricTest, SparseGuardSupportsUndistortionWithoutMutatingMeasurements) {
+        UndistortParams params{};
+        params.src_fx = params.src_fy = 55;
+        params.src_cx = WIDTH / 2.0f;
+        params.src_cy = HEIGHT / 2.0f;
+        params.src_width = WIDTH;
+        params.src_height = HEIGHT;
+        params.dst_fx = params.dst_fy = 55;
+        params.dst_cx = params.src_cx - 2;
+        params.dst_cy = params.src_cy - 1;
+        params.dst_width = WIDTH - 4;
+        params.dst_height = HEIGHT - 2;
+        params.model_type = CameraModelType::PINHOLE;
+        params.num_distortion = 5;
+        params.distortion[0] = 0.12f;
+        params.distortion[3] = 0.01f;
+        params.distortion[4] = -0.005f;
+        std::vector<Camera::SfmObservation> observations;
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 5; ++col) {
+                const float x = (col - 2) * 0.4f, y = (row - 1.5f) * 0.4f;
+                const float z = 3.0f + 0.1f * (row + col);
+                const float nx = x / z, ny = y / z, r2 = nx * nx + ny * ny;
+                const float dx = nx * (1 + 0.12f * r2) + 0.02f * nx * ny - 0.005f * (r2 + 2 * nx * nx);
+                const float dy = ny * (1 + 0.12f * r2) + 0.01f * (r2 + 2 * ny * ny) - 0.01f * nx * ny;
+                observations.push_back({55 * dx + params.src_cx, 55 * dy + params.src_cy, x, y, z});
+            }
+        }
+        camera->set_sfm_observations(observations);
+        camera->adopt_undistortion(params);
+        camera->prepare_undistortion();
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            const auto guard = make_sparse_reprojection_guard(*camera);
+            ASSERT_TRUE(guard.active());
+            EXPECT_LT(guard.source_error(), 1e-6);
+            EXPECT_TRUE(guard.allows(identity_transform()));
+            EXPECT_FALSE(guard.allows(exp_se3({0.01f, 0, 0, 0, 0, 0})));
+            ASSERT_EQ(camera->sfm_observations().size(), observations.size());
+            for (size_t i = 0; i < observations.size(); ++i) {
+                EXPECT_EQ(camera->sfm_observations()[i].u, observations[i].u);
+                EXPECT_EQ(camera->sfm_observations()[i].v, observations[i].v);
+            }
+        }
+        EXPECT_EQ(camera->focal_x(), params.dst_fx);
+        EXPECT_EQ(camera->camera_width(), params.dst_width);
+    }
+
+    TEST_F(CameraPosePhotometricTest, UndistortionInverseMappingSupportsModelsCropScaleAndInvalidInputs) {
+        for (const auto model : {CameraModelType::PINHOLE, CameraModelType::FISHEYE,
+                                 CameraModelType::THIN_PRISM_FISHEYE}) {
+            for (const float scale : {1.0f, 0.25f}) {
+                UndistortParams p{};
+                p.model_type = model;
+                p.src_fx = p.src_fy = 800 * scale;
+                p.src_cx = 600 * scale;
+                p.src_cy = 400 * scale;
+                p.src_width = static_cast<int>(1200 * scale);
+                p.src_height = static_cast<int>(800 * scale);
+                p.dst_fx = 820 * scale;
+                p.dst_fy = 810 * scale;
+                p.dst_cx = 580 * scale;
+                p.dst_cy = 390 * scale;
+                p.dst_width = static_cast<int>(1160 * scale);
+                p.dst_height = static_cast<int>(780 * scale);
+                p.num_distortion = 1;
+                p.distortion[0] = 0.1f;
+                const float x = 0.2f, y = -0.15f, r = std::hypot(x, y);
+                const float theta = std::atan(r);
+                const float factor = model == CameraModelType::PINHOLE
+                                         ? 1 + 0.1f * r * r
+                                         : theta * (1 + 0.1f * theta * theta) / r;
+                const float u = p.src_fx * x * factor + p.src_cx;
+                const float v = p.src_fy * y * factor + p.src_cy;
+                float a = -1, b = -1;
+                ASSERT_TRUE(undistort_observation(p, u, v, a, b));
+                EXPECT_NEAR(a, p.dst_fx * x + p.dst_cx, 0.002f);
+                EXPECT_NEAR(b, p.dst_fy * y + p.dst_cy, 0.002f);
+                a = b = -1;
+                EXPECT_FALSE(undistort_observation(p, -1, v, a, b));
+                EXPECT_FALSE(undistort_observation(p, std::numeric_limits<float>::quiet_NaN(), v, a, b));
+                auto invalid = p;
+                invalid.dst_cx = -10000;
+                EXPECT_FALSE(undistort_observation(invalid, u, v, a, b));
+                invalid = p;
+                invalid.src_fx = 0;
+                EXPECT_FALSE(undistort_observation(invalid, u, v, a, b));
+                invalid = p;
+                invalid.model_type = CameraModelType::EQUIRECTANGULAR;
+                EXPECT_FALSE(undistort_observation(invalid, u, v, a, b));
+                invalid = p;
+                invalid.num_distortion = 13;
+                EXPECT_FALSE(undistort_observation(invalid, u, v, a, b));
+                EXPECT_EQ(a, -1);
+                EXPECT_EQ(b, -1);
+            }
+        }
     }
 
     TEST_F(CameraPosePhotometricTest, TiledGradientMatchesFullImage) {

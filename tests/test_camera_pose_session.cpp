@@ -34,6 +34,22 @@ namespace {
         return result;
     }
 
+    TEST(CameraPoseSessionTest, GeometricProposalReachesControllerWithoutChangingImageObjective) {
+        PoseRefinementSession session(7, cameras(), config());
+        const auto result = session.visit(30, 10, 1, [](const Matrix4& pose) {
+            const double residual = pose[3] - 0.002;
+            return PoseImageEvaluation{residual * residual,
+                                       {static_cast<float>(2 * residual), 0, 0, 0, 0, 0},
+                                       Twist{static_cast<float>(-residual), 0, 0, 0, 0, 0}};
+        }, [](const Matrix4& pose) {
+            const double residual = pose[3] - 0.002;
+            return residual * residual;
+        });
+        EXPECT_GE(result.accepted_steps, 1);
+        EXPECT_NEAR(session.current_pose(30)[3], 0.002, 1e-8);
+        EXPECT_EQ(session.current_pose(10), identity_transform());
+    }
+
     TEST(CameraPoseSessionTest, GeometricRejectionDoesNotRenderOrMoveAndExceptionsRollBack) {
         PoseRefinementSession session(7, cameras(), config());
         int renders = 0;

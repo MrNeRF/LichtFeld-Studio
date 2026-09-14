@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -105,6 +106,84 @@ namespace lfs::training::camera_pose {
                 squared_sum += value * value;
             }
             return std::sqrt(squared_sum / static_cast<double>(observations_.size()));
+        }
+
+        // Gauss-Newton proposal from the fixed observations, in the same fresh
+        // left tangent as the photometric gradient. It is only a proposal:
+        // the caller must still enforce photometric descent and pose bounds.
+        [[nodiscard]] std::optional<Twist> proposal(const Matrix4& pose, double scene_scale) const noexcept {
+            if (!active() || !std::isfinite(scene_scale) || scene_scale <= 0)
+                return std::nullopt;
+            using Vector = std::array<double, 6>;
+            using Matrix = std::array<Vector, 6>;
+            Matrix h{};
+            Vector g{};
+            for (const auto& p : observations_) {
+                const double x = pose[0] * p.x + pose[1] * p.y + pose[2] * p.z + pose[3];
+                const double y = pose[4] * p.x + pose[5] * p.y + pose[6] * p.z + pose[7];
+                const double z = pose[8] * p.x + pose[9] * p.y + pose[10] * p.z + pose[11];
+                if (!std::isfinite(z) || z <= 0)
+                    return std::nullopt;
+                const double a = calibration_.fx / (normalization_ * z);
+                const double b = calibration_.fy / (normalization_ * z);
+                const Vector ju{a * scene_scale, 0, -a * x / z * scene_scale,
+                                -a * x * y / z, a * (z + x * x / z), -a * y};
+                const Vector jv{0, b * scene_scale, -b * y / z * scene_scale,
+                                -b * (z + y * y / z), b * x * y / z, b * x};
+                const double ru = (calibration_.fx * x / z + calibration_.cx - p.u) / normalization_;
+                const double rv = (calibration_.fy * y / z + calibration_.cy - p.v) / normalization_;
+                for (int i = 0; i < 6; ++i) {
+                    g[i] += ju[i] * ru + jv[i] * rv;
+                    for (int j = 0; j < 6; ++j)
+                        h[i][j] += ju[i] * ju[j] + jv[i] * jv[j];
+                }
+            }
+            // Normalize the columns before Cholesky so the rank check is not
+            // tied to scene units or image resolution. Reject weak geometry;
+            // regularization must not manufacture an observable pose direction.
+            Vector diagonal{}, rhs{}, solution{};
+            Matrix l{};
+            for (int i = 0; i < 6; ++i) {
+                if (!std::isfinite(h[i][i]) || h[i][i] <= 0 || !std::isfinite(g[i]))
+                    return std::nullopt;
+                diagonal[i] = std::sqrt(h[i][i]);
+                rhs[i] = -g[i] / diagonal[i];
+            }
+            for (int i = 0; i < 6; ++i) {
+                for (int j = 0; j <= i; ++j) {
+                    double value = h[i][j] / (diagonal[i] * diagonal[j]);
+                    for (int k = 0; k < j; ++k)
+                        value -= l[i][k] * l[j][k];
+                    if (!std::isfinite(value))
+                        return std::nullopt;
+                    if (i == j) {
+                        if (value <= 1e-8)
+                            return std::nullopt;
+                        l[i][j] = std::sqrt(value);
+                    } else {
+                        l[i][j] = value / l[j][j];
+                    }
+                }
+            }
+            for (int i = 0; i < 6; ++i) {
+                for (int j = 0; j < i; ++j)
+                    rhs[i] -= l[i][j] * rhs[j];
+                rhs[i] /= l[i][i];
+            }
+            for (int i = 5; i >= 0; --i) {
+                double value = rhs[i];
+                for (int j = i + 1; j < 6; ++j)
+                    value -= l[j][i] * solution[j];
+                solution[i] = value / l[i][i];
+            }
+            Twist step{};
+            for (int i = 0; i < 6; ++i) {
+                const double value = solution[i] / diagonal[i] * (i < 3 ? scene_scale : 1.0);
+                if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+                    return std::nullopt;
+                step[i] = static_cast<float>(value);
+            }
+            return step;
         }
 
     private:

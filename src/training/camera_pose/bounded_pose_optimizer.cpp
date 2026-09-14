@@ -224,38 +224,61 @@ namespace lfs::training::camera_pose {
             result.status = PoseStepStatus::NoDescent;
             return result;
         }
-        const double translation_norm = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
-        const double rotation_norm = std::sqrt(direction[3] * direction[3] + direction[4] * direction[4] + direction[5] * direction[5]);
-        double scale = std::min({1.0, config_.step_center_fraction / std::max(translation_norm, 1e-30),
-                                 config_.step_rotation_radians / std::max(rotation_norm, 1e-30)});
-        for (int attempt = 0; attempt < config_.max_backtracks; ++attempt, scale *= 0.5) {
-            Twist increment{};
+        std::array<Vector, 2> directions{direction, direction};
+        int direction_count = 1;
+        if (baseline.geometric_proposal && config_.max_backtracks >= 2) {
+            Vector geometric{};
             for (int i = 0; i < 6; ++i)
-                increment[i] = static_cast<float>(scale * direction[i] * (i < 3 ? config_.scene_scale : 1.0));
-            const auto candidate = apply_left_increment(increment, state_.current);
-            const double displacement = center_distance(candidate, state_.source);
-            const double rotation = rotation_distance(candidate, state_.source);
-            if (!rigid(candidate) || displacement > config_.max_center_fraction * config_.scene_scale ||
-                rotation > config_.max_rotation_radians || candidate == state_.current)
-                continue;
-            ++result.evaluations;
-            const double loss = candidate_loss(candidate);
-            if (!std::isfinite(loss) || loss < 0)
-                continue;
-            if (loss < baseline.image_loss * (1 - config_.min_relative_improvement) &&
-                loss + prior(candidate) <= objective + 1e-4 * scale * slope) {
-                previous_gradient_ = gradient;
+                geometric[i] = (*baseline.geometric_proposal)[i] / (i < 3 ? config_.scene_scale : 1.0);
+            // Geometry may suggest where to look, but it must be a descent
+            // direction for the same photometric objective and source prior.
+            const double geometric_slope = dot(geometric, gradient);
+            if (std::all_of(geometric.begin(), geometric.end(), [](double v) { return std::isfinite(v); }) &&
+                std::isfinite(geometric_slope) && geometric_slope < -1e-24) {
+                directions[0] = geometric;
+                direction_count = 2;
+            }
+        }
+        int attempts_used = 0;
+        for (int proposal = 0; proposal < direction_count; ++proposal) {
+            direction = directions[proposal];
+            slope = dot(direction, gradient);
+            const int attempt_limit = direction_count == 2 && proposal == 0
+                                          ? config_.max_backtracks / 2
+                                          : config_.max_backtracks - attempts_used;
+            const double translation_norm = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
+            const double rotation_norm = std::sqrt(direction[3] * direction[3] + direction[4] * direction[4] + direction[5] * direction[5]);
+            double scale = std::min({1.0, config_.step_center_fraction / std::max(translation_norm, 1e-30),
+                                     config_.step_rotation_radians / std::max(rotation_norm, 1e-30)});
+            for (int attempt = 0; attempt < attempt_limit; ++attempt, ++attempts_used, scale *= 0.5) {
+                Twist increment{};
                 for (int i = 0; i < 6; ++i)
-                    previous_step_[i] = scale * direction[i];
-                history_valid_ = true;
-                state_.current = candidate;
-                state_.center_displacement = displacement;
-                state_.rotation_displacement = rotation;
-                ++state_.revision;
-                ++state_.accepted_steps;
-                result.status = PoseStepStatus::Accepted;
-                result.image_loss = loss;
-                return result;
+                    increment[i] = static_cast<float>(scale * direction[i] * (i < 3 ? config_.scene_scale : 1.0));
+                const auto candidate = apply_left_increment(increment, state_.current);
+                const double displacement = center_distance(candidate, state_.source);
+                const double rotation = rotation_distance(candidate, state_.source);
+                if (!rigid(candidate) || displacement > config_.max_center_fraction * config_.scene_scale ||
+                    rotation > config_.max_rotation_radians || candidate == state_.current)
+                    continue;
+                ++result.evaluations;
+                const double loss = candidate_loss(candidate);
+                if (!std::isfinite(loss) || loss < 0)
+                    continue;
+                if (loss < baseline.image_loss * (1 - config_.min_relative_improvement) &&
+                    loss + prior(candidate) <= objective + 1e-4 * scale * slope) {
+                    previous_gradient_ = gradient;
+                    for (int i = 0; i < 6; ++i)
+                        previous_step_[i] = scale * direction[i];
+                    history_valid_ = true;
+                    state_.current = candidate;
+                    state_.center_displacement = displacement;
+                    state_.rotation_displacement = rotation;
+                    ++state_.revision;
+                    ++state_.accepted_steps;
+                    result.status = PoseStepStatus::Accepted;
+                    result.image_loss = loss;
+                    return result;
+                }
             }
         }
         clear_history();

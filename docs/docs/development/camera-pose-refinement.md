@@ -6,7 +6,7 @@ unchanged. Camera movement and decreasing training loss do not, by themselves,
 establish improved reconstruction quality.
 
 The implementation consists of SE(3) operations, a bounded per-camera optimizer,
-a multi-camera session and a FastGS evaluator, with opt-in Trainer integration
+a multi-camera session and a 3DGS evaluator, with opt-in Trainer integration
 and embedded checkpoint persistence. Live viewport geometry and Scene Graph
 displacement indicators consume published poses.
 
@@ -107,12 +107,25 @@ candidate-render counters.
 
 The initialization log reports how many movable cameras have this constraint.
 Missing or insufficient observations retain photometric-only acceptance. The
-constraint is currently unavailable for distorted, undistorted or non-pinhole
-cameras: their stored SfM pixels must first be mapped consistently to the
-projection used for scoring. No additional backend or strategy is disabled.
+constraint supports prepared undistortion for pinhole, fisheye and thin-prism
+fisheye models. Imported SfM pixels are inverted with the image undistortion
+parameters, checked by forward reprojection (within 0.01 source pixels), then
+mapped through the destination calibration and crop. Original observations remain
+unchanged. Invalid inversions and observations outside the crop are excluded;
+insufficient remaining support retains photometric-only acceptance. Distorted
+cameras without prepared undistortion and other projection models remain
+unsupported by this constraint. No additional backend or strategy is disabled.
 Restored poses are retained; new proposals use the source constraint reconstructed
 from the loaded dataset. A dataset without sparse observations cannot reconstruct
 that constraint and is reported as photometric-only.
+
+When the fixed observations constrain all six pose dimensions, their reprojection
+Jacobian supplies a Gauss-Newton proposal for coupled translation and rotation.
+The proposal must be a descent direction for the photometric objective and source
+prior, and accepted steps must still reduce the photometric loss and satisfy the
+source reprojection ceiling and motion bounds. Geometric proposals share the
+existing candidate budget with the photometric search. Missing or rank-deficient
+geometry uses the photometric search alone. The sparse points remain fixed.
 
 Sparse reprojection protects the imported geometric evidence; it does not
 establish improvement on unseen images. An accepted update can still compensate

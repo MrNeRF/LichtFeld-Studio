@@ -148,7 +148,7 @@ namespace lfs::training::camera_pose {
                 result.cancelled = true;
                 break;
             }
-            const PoseEvaluation baseline{uid, model_revision, pose.revision, image.loss, image.gradient};
+            const PoseEvaluation baseline{uid, model_revision, pose.revision, image.loss, image.gradient, image.geometric_proposal};
             const auto update = working.step(baseline, [&](const Matrix4& candidate) {
                 if (stop.stop_requested())
                     return std::numeric_limits<double>::quiet_NaN();
