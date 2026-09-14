@@ -688,14 +688,10 @@
     position: relative;
 }
 
-.asset-card {
-    height: 220dp;
-    overflow: hidden;
-}
-
 .asset-card-body {
-    flex: 1;
-    min-height: 0;
+    height: 40dp;
+    min-height: 40dp;
+    max-height: 40dp;
     overflow: hidden;
 }
 

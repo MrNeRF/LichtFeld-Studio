@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Asset Manager geometry in dp; shared by DOM sizing and regression tests."""
+"""Projects geometry in dp; shared by DOM sizing and regression tests."""
+import math
 RESULTS_MIN_HEIGHT = 160.0
 SIDEBAR_PADDING = 16.0
 GALLERY_SECTION_HEIGHT = 140.0
@@ -49,7 +50,11 @@ def grid_slot_width(width, card_width, gap=GRID_GAP, horizontal_padding=GRID_HOR
     """Return the stretched card width for a grid row in dp."""
     content_width = max(0.0, float(width) - horizontal_padding)
     columns = grid_columns(width, card_width, gap, horizontal_padding)
+    # RmlUi lays out inline dp values after converting them to native pixels.
+    # Leave a tenth of a dp of headroom so an exact final slot does not round
+    # up and wrap the last card onto a new row.
     stretched = (content_width - gap * (columns - 1)) / columns
+    stretched = math.floor(max(0.0, stretched) * 10.0) / 10.0
     return max(1.0, min(stretched, card_width * 1.15))
 
 
