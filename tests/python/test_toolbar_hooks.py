@@ -1002,6 +1002,38 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     assert "cropbox_loss_weight" in model.handle.dirty_calls
 
 
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
+    module, *_ = toolbar_module
+    controller = module._ViewportToolbarController()
+    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37))
+
+    controller._sync_crop_roi_params(signature)
+
+    assert not controller._crop_roi_params_available
+    assert controller._cropbox_lr_scale == 0.0
+    assert controller._cropbox_loss_weight == 0.37
+
+
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+def test_crop_roi_stale_slider_events_do_not_write_live_params(
+    toolbar_module, monkeypatch, signature
+):
+    module, *_ = toolbar_module
+    writes = []
+    params = SimpleNamespace(has_params=lambda: True, set=lambda *args: writes.append(args))
+    monkeypatch.setattr(sys.modules["lichtfeld"], "optimization_params", lambda: params, raising=False)
+    controller = module._ViewportToolbarController()
+    # Selection can disappear before the next toolbar poll updates its cached flag.
+    controller._crop_roi_params_available = True
+    monkeypatch.setattr(controller._gizmo, "cropbox_toolbar_signature", lambda: signature)
+
+    controller._set_crop_roi_param("cropbox_lr_scale", "0.1")
+    controller._set_crop_roi_param("cropbox_loss_weight", "0.1")
+
+    assert writes == []
+
+
 def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]

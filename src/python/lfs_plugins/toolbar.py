@@ -1600,16 +1600,15 @@ class _ViewportToolbarController:
         return dirty
 
     def _sync_crop_roi_params(self, cropbox_toolbar_signature):
-        if cropbox_toolbar_signature is None:
-            available = False
-            lr_scale = _CROP_ROI_DEFAULT
-            loss_weight = _CROP_ROI_DEFAULT
-        else:
-            _node_name, _enabled, available, lr_scale, loss_weight = (
-                cropbox_toolbar_signature
-            )
+        available = bool(cropbox_toolbar_signature and cropbox_toolbar_signature[2])
+        dirty = self._sync_flag("crop_roi_params_available", available)
+        if not available:
+            # Range inputs can emit change events when their bound value changes,
+            # even while hidden. Do not replace live values with UI defaults when
+            # training initialization clears selection or detaches the owner.
+            return dirty
+        _node_name, _enabled, _available, lr_scale, loss_weight = cropbox_toolbar_signature
 
-        dirty = self._sync_flag("crop_roi_params_available", bool(available))
         dirty |= self._sync_value("cropbox_lr_scale", float(lr_scale))
         dirty |= self._sync_value("cropbox_loss_weight", float(loss_weight))
         return dirty
@@ -1633,6 +1632,11 @@ class _ViewportToolbarController:
         return True
 
     def _set_crop_roi_param(self, name, value):
+        # Recheck live selection: an event may arrive before the next toolbar
+        # poll has disabled its controls.
+        signature = self._gizmo.cropbox_toolbar_signature()
+        if signature is None or not signature[2]:
+            return
         try:
             parsed = float(value)
         except (TypeError, ValueError):
