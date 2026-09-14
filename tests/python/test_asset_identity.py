@@ -1178,12 +1178,12 @@ def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
     ).read_text(encoding="utf-8")
 
     assert 'data-event-click="on_import_project"' in rml
-    assert 'data-asset-action="gallery"' in rml
+    assert 'data-event-click="gallery_refresh"' in rml
     assert 'data-folder-action="menu"' in rml
     assert '"action": "watch_dirs"' not in panel_source
     assert '"action": "move_to_folder' not in panel_source
     assert "open_folder_dialog" in panel_source
-    assert rml.count('data-event-click="on_import_project"') == 1
+    assert rml.count('data-event-click="on_import_project"') == 2
 
 
 def test_fallback_preview_path_is_cached_in_catalog(monkeypatch, tmp_path: Path):

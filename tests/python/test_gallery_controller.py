@@ -588,8 +588,8 @@ def test_local_file_problems_need_attention_and_check(gallery, panel_module, mon
     from lfs_plugins.gallery_controller import asset_sync_state
 
     monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: {
-        "asset_manager.status.needs_repair": "Needs repair",
-        "asset_manager.status.newer_version": "Saved by a newer version",
+        "projects.status.needs_repair": "Needs repair",
+        "projects.status.newer_version": "Saved by a newer version",
     }.get(key, key))
     project = dict(id="project", status=status, exists=True, error="")
     facts = asset_sync_state(project, {"sceneId": "private-one"}, scene())
@@ -818,7 +818,7 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     from lfs_plugins.gallery_messages import localize_message
     module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: 'localized:' + key)
-    assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:asset_manager.gallery.sidebar.refresh'
+    assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:projects.gallery.sidebar.refresh'
 
 @pytest.mark.parametrize('kind', ['upload', 'download'])
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
@@ -826,7 +826,7 @@ def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, kind
     from lfs_plugins.gallery_transfer_panel import transfer_rows
     module = import_module('lfs_plugins.gallery_transfer_panel')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: {
-        'asset_manager.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
+        'projects.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
     }.get(key, key))
     job = dict(id='job', kind=kind, status=status, completed=1024, total=137114)
     row = transfer_rows({'jobs': [job]})[0]

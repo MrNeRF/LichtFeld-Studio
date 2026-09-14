@@ -8,7 +8,7 @@ import re
 from .portal_security import redact
 
 
-def tr(key, *, prefix="asset_manager.gallery.", **values):
+def tr(key, *, prefix="projects.gallery.", **values):
     import lichtfeld as lf
     from .localization import safe_format
     return safe_format(lf.ui.tr(prefix + key), **values)
@@ -19,7 +19,7 @@ def localize_message(message):
         return ""
     import lichtfeld as lf
     text = redact(message)
-    if text == lf.ui.tr("asset_manager.gallery.error.unsafe_url"):
+    if text == lf.ui.tr("projects.gallery.error.unsafe_url"):
         return text
     if text.startswith("gallery_project_"):
         return text
@@ -73,7 +73,7 @@ def localize_message(message):
         # Text from a modern localized command is already user-ready; external
         # technical diagnostics remain useful as the reason beside its badge.
         return text
-    full_key = 'asset_manager.gallery.' + key
+    full_key = 'projects.gallery.' + key
     translated = lf.ui.tr(full_key)
     if translated == full_key:
         return text

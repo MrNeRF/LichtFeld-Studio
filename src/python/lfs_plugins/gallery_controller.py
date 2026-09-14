@@ -535,7 +535,7 @@ class GalleryController:
                     self._message = error
                 else:
                     lf.ui.set_clipboard_text(checked_portal_url(account, link))
-                    self._message = tr("share.copied", prefix="asset_manager.gallery.")
+                    self._message = tr("share.copied", prefix="projects.gallery.")
                 self._refresh_model()
                 self._schedule_poll()
             lf.ui.schedule_on_ui_thread(finished)
@@ -1583,8 +1583,8 @@ _LOCAL_FILE_PROBLEM_STATUSES = {
     "UNSUPPORTED_NEWER",
 }
 _LOCAL_FILE_PROBLEM_LABELS = {
-    "REPAIR_ONLY": "asset_manager.status.needs_repair",
-    "UNSUPPORTED_NEWER": "asset_manager.status.newer_version",
+    "REPAIR_ONLY": "projects.status.needs_repair",
+    "UNSUPPORTED_NEWER": "projects.status.newer_version",
 }
 
 def get_gallery_controller():

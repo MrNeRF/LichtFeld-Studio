@@ -19,8 +19,8 @@
       <label>{{g_info_filename}}</label><input type="text" data-value="pull_name"/>
     </div>
     <span class="text-muted">{{quota}}</span><span class="status-warning">{{warning}}</span>
-    <span class="status-info" data-if="waiting">@tr:asset_manager.gallery.dialog.waiting</span>
-    <span class="status-info" data-if="disconnected">@tr:asset_manager.gallery.sidebar.sign_in</span>
+    <span class="status-info" data-if="waiting">@tr:projects.gallery.dialog.waiting</span>
+    <span class="status-info" data-if="disconnected">@tr:projects.gallery.sidebar.sign_in</span>
     <span class="status-error" data-if="has_error">{{error}}</span>
     <div class="gallery-file-actions">
       <button class="btn btn--secondary" data-event-click="cancel">{{g_action_cancel}}</button>

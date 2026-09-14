@@ -22,7 +22,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
 
     def tr(key):
         if key == "menu.file.recent_entry":
-            return "{name} — {parent}"
+            return "{name} ({parent})"
         if key == "menu.file.recent_missing_message":
             return "{path} missing"
         return f"tr:{key}"
@@ -140,26 +140,26 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
     tr = file_menu.lf.ui.tr
 
     assert file_menu.format_recent_project_entry(recent_path, tr) == (
-        "project.licht — scans/garden",
+        "garden (scans/garden)",
         recent_path,
     )
     assert file_menu.format_recent_project_entry("/tmp/project.licht", tr) == (
-        "project.licht — tmp",
+        "tmp (tmp)",
         "/tmp/project.licht",
     )
     assert file_menu.format_recent_project_entry("/project.licht", tr) == (
-        "project.licht",
+        "project",
         "/project.licht",
     )
 
     windows_path = r"C:\Users\paja\scans\garden\project.licht"
     assert file_menu.format_recent_project_entry(windows_path, tr) == (
-        "project.licht — scans/garden",
+        "garden (scans/garden)",
         windows_path,
     )
 
     recent_item = file_menu.FileMenu().menu_items()[2]["items"][0]
-    assert recent_item["label"] == "project.licht — scans/garden"
+    assert recent_item["label"] == "garden (scans/garden)"
     assert recent_item["tooltip"] == recent_path
 
 
@@ -170,7 +170,7 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     file_menu.lf.project_clear_recent_files = lambda: cleared.append(True)
 
     populated = file_menu.FileMenu().menu_items()[2]["items"]
-    assert populated[0]["label"] == "project.licht — scans/garden"
+    assert populated[0]["label"] == "garden (scans/garden)"
     assert populated[1]["type"] == "separator"
     assert populated[2]["label"] == "tr:menu.file.clear_recent_projects"
     assert populated[2]["enabled"] is True

@@ -11,7 +11,7 @@ from .gallery_messages import localize_message, tr as gallery_tr
 from .panels import panel_class
 from .types import Panel
 
-tr = partial(gallery_tr, prefix="asset_manager.gallery.")
+tr = partial(gallery_tr, prefix="projects.gallery.")
 __lfs_panel_classes__ = ["GalleryFilePanel"]
 __lfs_panel_ids__ = ["lfs.gallery_file"]
 
