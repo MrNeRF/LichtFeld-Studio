@@ -1020,6 +1020,103 @@ namespace {
         EXPECT_TRUE(params.validate().empty());
     }
 
+    class CameraPoseJointIntegrationTest : public CameraPosePhotometricTest {
+    protected:
+        std::unique_ptr<PoseRefinementSession> joint_session() {
+            auto far = identity_transform();
+            far[3] = 1;
+            PoseSessionConfig config;
+            config.total_iterations = 100;
+            config.warmup_iterations = 0;
+            config.choose_anchors = false;
+            config.optimizer.scene_scale = scene->get_scene_scale();
+            const std::vector<PoseCameraInput> inputs{
+                {camera->uid(), identity_transform(), PoseRole::Train},
+                {camera->uid() + 1, identity_transform(), PoseRole::Anchor},
+                {camera->uid() + 2, far, PoseRole::Anchor}};
+            std::vector<SparseTrackMeasurement> measurements;
+            for (int i = 0; i < 20; ++i) {
+                const SparsePointPosition truth{-0.8 + (i % 5) * 0.4, -0.6 + (i / 5) * 0.4, 4.0 + (i % 3) * 0.2};
+                const SparsePointPosition source{truth[0] + 0.002, truth[1] - 0.001, truth[2] + 0.003};
+                for (const auto& input : inputs) {
+                    measurements.push_back({static_cast<std::uint64_t>(i), source, input.uid, true, input.source, {55, 55, WIDTH / 2.0, HEIGHT / 2.0, WIDTH, HEIGHT}, 55 * (truth[0] + input.source[3]) / truth[2] + WIDTH / 2.0, 55 * truth[1] / truth[2] + HEIGHT / 2.0});
+                }
+            }
+            auto session = std::make_unique<PoseRefinementSession>(1, inputs, config);
+            std::vector<Camera::SfmObservation> observations;
+            for (const auto& m : measurements)
+                if (m.camera_uid == camera->uid())
+                    observations.push_back({static_cast<float>(m.u), static_cast<float>(m.v),
+                                            static_cast<float>(m.source[0]), static_cast<float>(m.source[1]),
+                                            static_cast<float>(m.source[2]), m.point_id});
+            camera->set_sfm_observations(std::move(observations));
+            session->configure_sparse_points(std::move(measurements));
+            return session;
+        }
+    };
+
+    TEST_F(CameraPoseJointIntegrationTest, ProductionEvaluatorCommitsSharedPointsWithoutChangingGaussians) {
+        auto session = joint_session();
+        ASSERT_TRUE(session->joint_geometry_enabled(camera->uid()));
+        const auto before = session->save_state();
+        auto means = scene->means().clone();
+        const auto camera_source = camera->world_view_transform().clone();
+        const PoseObjective objective = [](const RenderOutput& output, bool gradients) {
+            return PoseObjectiveResult{1.0, gradients ? Tensor::zeros_like(output.image) : Tensor{}, {}};
+        };
+        FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background,
+                                      objective, {}, false, session.get());
+        auto candidate = identity_transform();
+        candidate[3] = 0.02f;
+        FastGSPoseEvaluator fixed(*camera, *scene, *optimizer, background, objective);
+        EXPECT_FALSE(fixed.allows(candidate));
+        EXPECT_FALSE(std::isfinite(fixed.loss(candidate)));
+        EXPECT_TRUE(evaluator.allows(candidate));
+        EXPECT_TRUE(std::isfinite(evaluator.loss(candidate)));
+        const auto result = evaluator.visit(*session, 5, 1);
+        EXPECT_TRUE(result.scheduled);
+        EXPECT_EQ(result.accepted_steps, 0);
+        EXPECT_NE(session->save_state().at("points"), before.at("points"));
+        expect_bytes_equal(scene->means(), means);
+        expect_bytes_equal(camera->world_view_transform(), camera_source);
+    }
+
+    TEST_F(CameraPoseJointIntegrationTest, SharedGeometrySurvivesCheckpointEnvelopeAndModelLoad) {
+        auto session = joint_session();
+        (void)session->visit(camera->uid(), 5, 1, [](const Matrix4&) { return PoseImageEvaluation{1.0, {}}; }, [](const Matrix4&) { return 1.0; });
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 100;
+        params.optimization.max_cap = 64;
+        params.camera_pose_state_json = session->save_state().dump();
+        auto source_model = scene->clone();
+        MCMC strategy(source_model);
+        std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+        const auto written = serialize_checkpoint(stream, 5, strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(written.has_value()) << lfs::format_for_developer(written.error());
+        stream.seekg(0);
+        const auto metadata = load_checkpoint_params(stream, written->bytes);
+        ASSERT_TRUE(metadata.has_value()) << metadata.error();
+        EXPECT_EQ(nlohmann::json::parse(metadata->camera_pose_state_json), session->save_state());
+        auto loaded_model = scene->clone();
+        MCMC loaded_strategy(loaded_model);
+        lfs::core::param::TrainingParameters loaded_params;
+        stream.clear();
+        stream.seekg(0);
+        const auto loaded = load_checkpoint(stream, written->bytes, loaded_strategy, loaded_params,
+                                            nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        auto resumed = joint_session();
+        resumed->restore_state(nlohmann::json::parse(loaded_params.camera_pose_state_json));
+        EXPECT_EQ(resumed->save_state().at("points"), session->save_state().at("points"));
+        EXPECT_EQ(resumed->current_pose(camera->uid()), session->current_pose(camera->uid()));
+        expect_bytes_equal(loaded_model.means(), source_model.means());
+        auto bad = nlohmann::json::parse(loaded_params.camera_pose_state_json);
+        bad.erase("points");
+        loaded_params.camera_pose_state_json = bad.dump();
+        EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+    }
+
     class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};
 
     TEST_F(CameraPoseTrainerIntegrationTest, PhotometricObjectiveMatchesTrainerLoss) {

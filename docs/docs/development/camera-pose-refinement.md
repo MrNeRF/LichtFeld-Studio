@@ -63,7 +63,7 @@ Imported source poses remain immutable. Current poses, revisions and displacemen
 are maintained separately and identified by camera UID. Rotation and translation
 are not optimized as unconstrained matrix coefficients.
 
-## FastGS interface
+## 3DGS interface
 
 An optional per-render override supplies contiguous CUDA float32 tensors:
 world-to-camera `[1,4,4]` and camera center `[3]`. Their contents must represent
@@ -91,9 +91,27 @@ MRNF projection fallback and view-based seeding consume that pose, and cached
 seed images retain their matching pose across subsequent camera updates.
 
 Candidate acceptance measures improvement on one training image with the
-Gaussian model held fixed. For pinhole cameras with usable sparse SfM
-observations, it additionally rejects proposals that increase source
-reprojection RMS. This shared constraint applies to MRNF, MCMC and IGS+.
+Gaussian model held fixed. New sessions additionally refine shared sparse points
+when at least three active training cameras observe the same COLMAP point ID.
+The point solve minimizes image-size-normalized Huber reprojection error over
+all training observations in each track. Evaluation and disabled cameras are
+excluded; reference poses remain fixed but their observations constrain points.
+Camera support requires at least 12 observations spanning 10% of both image
+dimensions. The joint constraint applies to MRNF, MCMC and IGS+.
+
+For each pose candidate, incident points are solved with the other camera poses
+fixed. Baseline and candidate solves start from identical positions with the
+same iteration budget. A candidate must not increase shared reprojection cost
+and must improve the photometric objective. Pose and point state commit together;
+exceptions and cancellation discard pending changes. Point-only improvement may
+be retained even when no camera step is accepted. Point displacement is bounded
+relative to imported coordinates by the configured camera-center displacement
+limit in scene units. This is alternating local refinement, not global bundle
+adjustment or a guarantee that incorrect correspondences can be recovered.
+
+Cameras without sufficient shared support retain the fixed-source constraint
+below, or photometric-only acceptance when sparse support is unavailable.
+Legacy pose checkpoints retain their original fixed-source method on resume.
 
 The sparse constraint selects a fixed set of source-visible observations,
 discarding source residuals above the larger of four times the median and four
@@ -120,14 +138,22 @@ from the loaded dataset. A dataset without sparse observations cannot reconstruc
 that constraint and is reported as photometric-only.
 
 Imported observations retain the original 64-bit COLMAP point ID. This identity
-is local to the reconstruction and is not a Gaussian index. Shared-point proposal
+is local to the reconstruction and is not a Gaussian index. Shared-point
 utilities group observations by that ID, exclude non-training views, reject
 duplicate-camera or inconsistent tracks, and require at least three views.
 The point block minimizes robust reprojection error at fixed poses within a
-cumulative displacement bound. These utilities do not currently apply point
-updates to the live session: joint pose/structure acceptance, persistence and
-rollback are required before enabling them. Gaussian positions remain managed by
-their existing optimizer and densification lifecycle.
+cumulative displacement bound. Current shared positions live in the pose session
+and are saved with source positions and graph fingerprints in its checkpoint.
+Resume requires matching source poses, membership, measurements and calibration;
+incompatible geometry is rejected before the loaded model is committed. Original
+COLMAP files and imported Camera observations are never overwritten.
+
+Shared points are geometric constraints, not Gaussian means. Gaussian positions
+remain managed by their existing optimizer and densification lifecycle, using
+the accepted camera poses in normal training. No Gaussian is teleported by
+matching a COLMAP ID to an array index. Reconstruction gains and solve overhead
+must be measured on the dataset; an improved sparse residual alone does not
+establish better novel-view rendering.
 
 When the fixed observations constrain all six pose dimensions, their reprojection
 Jacobian supplies a Gauss-Newton proposal for coupled translation and rotation.

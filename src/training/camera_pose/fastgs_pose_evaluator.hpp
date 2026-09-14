@@ -4,8 +4,8 @@
 
 #include "pose_refinement_session.hpp"
 #include "rasterization/fast_rasterizer.hpp"
-#include "sparse_reprojection_guard.hpp"
 #include "sparse_point_refinement.hpp"
+#include "sparse_reprojection_guard.hpp"
 #include <functional>
 
 namespace lfs::training::camera_pose {
@@ -29,10 +29,13 @@ namespace lfs::training::camera_pose {
     public:
         FastGSPoseEvaluator(lfs::core::Camera& camera, lfs::core::SplatData& model,
                             AdamOptimizer& optimizer, lfs::core::Tensor& background,
-                            PoseObjective objective, lfs::core::Tensor background_image = {}, bool mip_filter = false);
+                            PoseObjective objective, lfs::core::Tensor background_image = {}, bool mip_filter = false,
+                            const PoseRefinementSession* session = nullptr);
         [[nodiscard]] PoseImageEvaluation evaluate(const Matrix4& pose);
         [[nodiscard]] double loss(const Matrix4& pose);
-        [[nodiscard]] bool allows(const Matrix4& pose) const noexcept { return reprojection_guard_.allows(pose); }
+        // A joint session owns its multi-view constraint, evaluated before
+        // rendering. Do not also constrain it against immutable source points.
+        [[nodiscard]] bool allows(const Matrix4& pose) const noexcept { return joint_geometry_ || reprojection_guard_.allows(pose); }
         [[nodiscard]] PoseVisitResult visit(PoseRefinementSession& session, int iteration,
                                             std::uint64_t model_revision, std::stop_token stop = {});
 
@@ -45,6 +48,7 @@ namespace lfs::training::camera_pose {
         PoseObjective objective_;
         lfs::core::Tensor background_image_;
         bool mip_filter_ = false;
+        bool joint_geometry_ = false;
         SparseReprojectionGuard reprojection_guard_;
     };
 

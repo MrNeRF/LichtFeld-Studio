@@ -88,10 +88,19 @@ def read_result(folder, mode):
         raise ValueError(f'Incomplete or failed training: {folder}')
     support = None
     if mode == 'on':
-        match = re.search(r'Camera pose SfM guard: (\d+)/(\d+) movable cameras', log)
-        if not match or int(match[1]) == 0:
+        joint = re.search(r'Camera pose SfM geometry: (\d+) shared points; (\d+)/(\d+) movable cameras use joint reprojection, (\d+) use fixed source reprojection, (\d+) use photometric-only acceptance', log)
+        if joint:
+            points, count, movable, fixed, photo = map(int, joint.groups())
+            if count + fixed + photo != movable or (count > 0 and points == 0):
+                raise ValueError(f'Inconsistent geometric support in ON run: {folder}')
+            support = dict(protected=count + fixed, movable=movable, joint=count,
+                           fixed=fixed, shared_points=points)
+        else:
+            match = re.search(r'Camera pose SfM guard: (\d+)/(\d+) movable cameras', log)
+            if match:
+                support = dict(protected=int(match[1]), movable=int(match[2]))
+        if not support or support['protected'] == 0:
             raise ValueError(f'No verified geometric support in ON run: {folder}')
-        support = dict(protected=int(match[1]), movable=int(match[2]))
         if 'Camera pose refinement frozen at iteration 5000 (scheduled stop 5000)' not in log:
             raise ValueError(f'Missing expected pose freeze: {folder}')
     with (folder / 'metrics.csv').open(encoding='utf-8', newline='') as file:

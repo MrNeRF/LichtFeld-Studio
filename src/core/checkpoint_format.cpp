@@ -291,10 +291,16 @@ namespace lfs::core {
             return {};
         try {
             const auto state = nlohmann::json::parse(params.camera_pose_state_json);
-            if (!state.is_object() || state.at("version") != 1 ||
+            if (!state.is_object() || !state.at("version").is_number_integer() ||
+                (state.at("version") != 1 && state.at("version") != 2) ||
                 !state.at("iteration").is_number_integer() || state.at("iteration") != header.iteration ||
                 !state.at("cameras").is_array() || !state.at("settings").is_object())
                 return invalid("Checkpoint camera pose version, iteration or payload is invalid");
+            // Dataset-dependent graph/pose validation happens transactionally
+            // in the Trainer, before committing the loaded model.
+            if (state.at("version") == 2 &&
+                (!state.contains("points") || !state.at("points").is_array() || state.at("points").empty()))
+                return invalid("Checkpoint shared camera geometry is missing");
         } catch (const std::exception& error) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::DataLoss,

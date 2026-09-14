@@ -14,11 +14,13 @@ namespace lfs::training::camera_pose {
     using namespace lfs::core;
 
     FastGSPoseEvaluator::FastGSPoseEvaluator(Camera& camera, SplatData& model,
-                                             AdamOptimizer& optimizer, Tensor& background, PoseObjective objective, Tensor background_image, bool mip_filter)
-        : camera_(camera), model_(model), optimizer_(optimizer), background_(background), objective_(std::move(objective)), background_image_(std::move(background_image)), mip_filter_(mip_filter) {
+                                             AdamOptimizer& optimizer, Tensor& background, PoseObjective objective, Tensor background_image, bool mip_filter,
+                                             const PoseRefinementSession* session)
+        : camera_(camera), model_(model), optimizer_(optimizer), background_(background), objective_(std::move(objective)), background_image_(std::move(background_image)), mip_filter_(mip_filter), joint_geometry_(session && session->joint_geometry_enabled(camera.uid())) {
         if (!objective_)
             throw std::invalid_argument("Missing camera pose image objective");
-        reprojection_guard_ = make_sparse_reprojection_guard(camera);
+        if (!joint_geometry_)
+            reprojection_guard_ = make_sparse_reprojection_guard(camera);
     }
 
     SparseReprojectionGuard make_sparse_reprojection_guard(const Camera& camera) {
@@ -123,12 +125,12 @@ namespace lfs::training::camera_pose {
         Matrix4 gradient{};
         std::copy_n(cpu.ptr<float>(), gradient.size(), gradient.begin());
         return {objective.loss, left_increment_gradient(pose, gradient),
-                reprojection_guard_.proposal(pose, model_.get_scene_scale())};
+                joint_geometry_ ? std::nullopt : reprojection_guard_.proposal(pose, model_.get_scene_scale())};
     }
 
     double FastGSPoseEvaluator::loss(const Matrix4& pose) {
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
-        if (!reprojection_guard_.allows(pose))
+        if (!allows(pose))
             return std::numeric_limits<double>::infinity();
         auto rendered = forward(pose);
         // Context RAII releases forward scratch on success and exceptions.
@@ -137,6 +139,10 @@ namespace lfs::training::camera_pose {
 
     PoseVisitResult FastGSPoseEvaluator::visit(PoseRefinementSession& session, int iteration,
                                                std::uint64_t model_revision, std::stop_token stop) {
+        // Also support adapters constructed before the session was supplied.
+        joint_geometry_ = session.joint_geometry_enabled(camera_.uid());
+        if (!joint_geometry_)
+            reprojection_guard_ = make_sparse_reprojection_guard(camera_);
         return session.visit(camera_.uid(), iteration, model_revision, [this](const Matrix4& pose) { return evaluate(pose); }, [this](const Matrix4& pose) { return loss(pose); }, stop, [this](const Matrix4& pose) { return allows(pose); });
     }
 

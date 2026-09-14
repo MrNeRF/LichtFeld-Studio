@@ -18,6 +18,7 @@ from check_camera_pose_gate import ACTIVATION_SUITE, ACTIVATION_TESTS, inspect_a
 from check_camera_pose_gate import require_no_report_failures
 from check_camera_pose_gate import SPARSE_POINT_SUITE, SPARSE_POINT_TESTS, inspect_shared_points_gate
 from check_camera_pose_gate import JOINT_SESSION_SUITE, JOINT_SESSION_TESTS, inspect_joint_session_gate
+from check_camera_pose_gate import JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS, inspect_joint_integration_gate
 
 
 class ReportFailureTests(unittest.TestCase):
@@ -32,7 +33,8 @@ class ReportFailureTests(unittest.TestCase):
                                 (CONTROLLER_SUITE, CONTROLLER_TESTS), (SESSION_SUITE, SESSION_TESTS),
                                 (TRAINER_SUITE, TRAINER_TESTS), (REPROJECTION_SUITE, REPROJECTION_TESTS),
                                 (VIEW_SUITE, VIEW_TESTS), (ACTIVATION_SUITE, ACTIVATION_TESTS),
-                                (SPARSE_POINT_SUITE, SPARSE_POINT_TESTS), (JOINT_SESSION_SUITE, JOINT_SESSION_TESTS)):
+                                (SPARSE_POINT_SUITE, SPARSE_POINT_TESTS), (JOINT_SESSION_SUITE, JOINT_SESSION_TESTS),
+                                (JOINT_INTEGRATION_SUITE, JOINT_INTEGRATION_TESTS)):
             with self.subTest(suite=suite):
                 self.assertEqual(found.get(suite), expected)
 
@@ -307,6 +309,39 @@ class CameraPoseJointSessionGateReportTests(unittest.TestCase):
                 ET.SubElement(case, mutation)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 inspect_joint_session_gate(root)
+
+
+class CameraPoseJointIntegrationGateReportTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseJointSessionGateReportTests().report()
+        suite = ET.SubElement(root, "testsuite", name=JOINT_INTEGRATION_SUITE)
+        for name in sorted(JOINT_INTEGRATION_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        return root
+
+    def test_accepts_integration_without_claiming_reconstruction_quality(self):
+        result = inspect_joint_integration_gate(self.report())
+        self.assertEqual(result["tests"], 65)
+        self.assertTrue(result["joint_training_integrated"])
+        self.assertFalse(result["reconstruction_quality_validated"])
+
+    def test_rejects_missing_or_unexecuted_integration(self):
+        with self.assertRaises(ValueError):
+            inspect_joint_integration_gate(CameraPoseJointSessionGateReportTests().report())
+        for defect in ("skipped", "failure", "error", "notrun", "duplicate", "unknown"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{JOINT_INTEGRATION_SUITE}']")
+            case = suite.find("testcase")
+            if defect == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif defect == "notrun":
+                case.set("status", "notrun")
+            elif defect == "unknown":
+                case.set("name", "Unknown")
+            else:
+                ET.SubElement(case, defect)
+            with self.subTest(defect=defect), self.assertRaises(ValueError):
+                inspect_joint_integration_gate(root)
 
 
 class CameraPoseActivationGateReportTests(unittest.TestCase):

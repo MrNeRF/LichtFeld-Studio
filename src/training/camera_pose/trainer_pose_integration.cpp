@@ -117,10 +117,21 @@ namespace lfs::training {
         }
         static std::atomic<std::uint64_t> next_generation{1};
         auto session = std::make_shared<PoseRefinementSession>(next_generation.fetch_add(1), std::move(inputs), config);
+        // Legacy checkpoints retain their original fixed-structure objective.
+        // New sessions and shared-geometry checkpoints use the active training
+        // membership and the already-prepared undistortion calibration.
+        if (saved.is_null() || saved.at("version") == 2) {
+            std::vector<SparseTrackMeasurement> measurements;
+            for (const auto& camera : camera_pose_sources_) {
+                auto observations = make_sparse_track_measurements(*camera, training.contains(camera->uid()));
+                measurements.insert(measurements.end(), observations.begin(), observations.end());
+            }
+            session->configure_sparse_points(std::move(measurements));
+        }
         if (!saved.is_null()) {
             session->restore_state(saved);
         }
-        size_t guarded = 0, movable = 0;
+        size_t guarded = 0, movable = 0, joint = 0;
         const auto snapshot = session->published_snapshot();
         std::unordered_set<int> anchors;
         for (const auto& pose : snapshot->cameras)
@@ -130,10 +141,13 @@ namespace lfs::training {
             if (!training.contains(camera->uid()) || anchors.contains(camera->uid()))
                 continue;
             ++movable;
-            guarded += make_sparse_reprojection_guard(*camera).active();
+            if (session->joint_geometry_enabled(camera->uid()))
+                ++joint;
+            else
+                guarded += make_sparse_reprojection_guard(*camera).active();
         }
-        LOG_INFO("Camera pose SfM guard: {}/{} movable cameras protected by source reprojection; {} use photometric-only acceptance (missing, insufficient or unsupported sparse observations)",
-                 guarded, movable, movable - guarded);
+        LOG_INFO("Camera pose SfM geometry: {} shared points; {}/{} movable cameras use joint reprojection, {} use fixed source reprojection, {} use photometric-only acceptance",
+                 session->shared_point_count(), joint, movable, guarded, movable - guarded - joint);
         LOG_INFO("Camera pose refinement: {} cameras, warmup={}, freeze at={}, steps/visit={}, visits between updates={}, restored={}",
                  session->published_snapshot()->cameras.size(), config.warmup_iterations, static_cast<int>(std::floor(config.total_iterations * config.freeze_fraction)),
                  config.steps_per_visit, config.visits_between_updates, !saved.is_null());

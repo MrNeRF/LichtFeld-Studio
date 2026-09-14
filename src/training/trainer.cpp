@@ -6549,7 +6549,7 @@ namespace lfs::training {
                                         })
                                         : camera_pose::make_pose_photometric_objective(gt_image, opt.lambda_dssim);
                                     pose_evaluator = std::make_unique<camera_pose::FastGSPoseEvaluator>(
-                                        *cam, strategy_->get_model(), strategy_->get_optimizer(), bg, std::move(objective), bg_image, opt.mip_filter);
+                                        *cam, strategy_->get_model(), strategy_->get_optimizer(), bg, std::move(objective), bg_image, opt.mip_filter, pose_session.get());
                                 }
                                 return pose_evaluator->evaluate(pose); }, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->loss(pose); }, stop_token, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->allows(pose); });
                         if (visit.cancelled)

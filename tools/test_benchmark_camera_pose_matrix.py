@@ -67,6 +67,25 @@ def test_result_and_comparison(tmp_path):
         matrix.compare(off, on)
 
 
+@pytest.mark.parametrize('counts,valid', [
+    ('100 shared points; 60/69 movable cameras use joint reprojection, 8 use fixed source reprojection, 1 use photometric-only acceptance', True),
+    ('0 shared points; 60/69 movable cameras use joint reprojection, 8 use fixed source reprojection, 1 use photometric-only acceptance', False),
+    ('100 shared points; 60/69 movable cameras use joint reprojection, 9 use fixed source reprojection, 1 use photometric-only acceptance', False),
+])
+def test_joint_support_log(tmp_path, counts, valid):
+    write_result(tmp_path / 'on')
+    path = tmp_path / 'on/training.log'
+    log = path.read_text(encoding='utf-8')
+    path.write_text(log.replace('Camera pose SfM guard: 69/69 movable cameras',
+                               'Camera pose SfM geometry: ' + counts), encoding='utf-8')
+    if valid:
+        assert matrix.read_result(tmp_path / 'on', 'on')['support'] == dict(
+            protected=68, movable=69, joint=60, fixed=8, shared_points=100)
+    else:
+        with pytest.raises(ValueError, match='Inconsistent geometric support'):
+            matrix.read_result(tmp_path / 'on', 'on')
+
+
 @pytest.mark.parametrize('kwargs,reason', [
     ({'support': '0/69'}, 'geometric support'),
     ({'freeze': False}, 'pose freeze'),
