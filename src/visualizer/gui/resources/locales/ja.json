@@ -2663,5 +2663,13 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "ポータルの処理に予想より時間がかかっています。",
   "asset_manager.gallery.action.keep_waiting": "待機を続ける",
-  "asset_manager.gallery.review.cover_kept": "カバーは保持されます。コンテンツを大幅に変更した後は、ポータルでStoryを確認してください。"
+  "asset_manager.gallery.review.cover_kept": "カバーは保持されます。コンテンツを大幅に変更した後は、ポータルでStoryを確認してください。",
+  "portal.status.connected": "ポータル: 接続済み",
+  "portal.status.disconnected": "ポータル: 未接続",
+  "portal.status.linking": "ポータル: 接続中…",
+  "portal.status.disconnecting": "ポータル: 切断中…",
+  "portal.status.connect": "ポータルに接続",
+  "portal.status.disconnect": "ポータルから切断",
+  "portal.status.cancel": "接続をキャンセル",
+  "gallery.status.progress": "{stage} {percent}%"
 }

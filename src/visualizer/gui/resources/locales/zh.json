@@ -2663,5 +2663,13 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "门户处理所需时间超出预期。",
   "asset_manager.gallery.action.keep_waiting": "继续等待",
-  "asset_manager.gallery.review.cover_kept": "封面将保留。内容发生重大更改后，请在门户中检查Story。"
+  "asset_manager.gallery.review.cover_kept": "封面将保留。内容发生重大更改后，请在门户中检查Story。",
+  "portal.status.connected": "门户：已连接",
+  "portal.status.disconnected": "门户：未连接",
+  "portal.status.linking": "门户：正在连接…",
+  "portal.status.disconnecting": "门户：正在断开…",
+  "portal.status.connect": "连接门户",
+  "portal.status.disconnect": "断开门户连接",
+  "portal.status.cancel": "取消连接",
+  "gallery.status.progress": "{stage} {percent}%"
 }

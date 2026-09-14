@@ -762,19 +762,21 @@ class GalleryController:
             else:
                 stage = "downloading" if running[0].get("kind") == "download" else "uploading"
 
-        label = tr("phase." + stage, prefix="gallery.transfer.") if up or down else tr("sidebar.title")
+        stage_label = tr("phase." + stage, prefix="gallery.transfer.")
+        label = stage_label if up or down else tr("sidebar.title")
         if percent >= 0 and (up or down):
-            label = tr("progress", prefix="gallery.status.", stage=label, percent=percent)
+            label = tr("gallery.status.progress", prefix="", stage=label, percent=percent)
         details = [tr("sidebar.aggregate", uploads=up, downloads=down, attention=attention)]
         if running:
             details.insert(0, running[0].get("metadata", {}).get("title", ""))
             details.append(tr("bytes", prefix="gallery.transfer.", done=format_size(done), total=format_size(total)))
         if snapshot.get("message"):
             details.append(snapshot["message"])
+        tooltip = "\n".join(filter(None, details))
         signal.value = dict(signed_in=snapshot.get("signed_in", False),
             active_uploads=up, active_downloads=down,
             paused=sum(j["status"] == "paused" for j in jobs), attention=attention,
-            percent=percent, label=label, tooltip="\n".join(filter(None, details)),
+            percent=percent, label=label, tooltip=tooltip,
             tone="busy" if up or down else "attention" if attention else "idle", epoch=snapshot.get("version", 0))
 
 

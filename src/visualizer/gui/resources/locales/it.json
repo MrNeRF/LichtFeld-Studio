@@ -2663,5 +2663,13 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "Il portale sta impiegando più tempo del previsto.",
   "asset_manager.gallery.action.keep_waiting": "Continua ad attendere",
-  "asset_manager.gallery.review.cover_kept": "La copertina viene mantenuta. Controlla Story sul portale dopo una modifica sostanziale dei contenuti."
+  "asset_manager.gallery.review.cover_kept": "La copertina viene mantenuta. Controlla Story sul portale dopo una modifica sostanziale dei contenuti.",
+  "portal.status.connected": "Portale: Connesso",
+  "portal.status.disconnected": "Portale: Disconnesso",
+  "portal.status.linking": "Portale: Connessione…",
+  "portal.status.disconnecting": "Portale: Disconnessione…",
+  "portal.status.connect": "Connetti al portale",
+  "portal.status.disconnect": "Disconnetti dal portale",
+  "portal.status.cancel": "Annulla connessione",
+  "gallery.status.progress": "{stage} {percent}%"
 }

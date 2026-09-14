@@ -2663,5 +2663,13 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "Das Portal benötigt länger als erwartet.",
   "asset_manager.gallery.action.keep_waiting": "Weiter warten",
-  "asset_manager.gallery.review.cover_kept": "Das Titelbild bleibt erhalten. Prüfe Story im Portal nach einer wesentlichen Inhaltsänderung."
+  "asset_manager.gallery.review.cover_kept": "Das Titelbild bleibt erhalten. Prüfe Story im Portal nach einer wesentlichen Inhaltsänderung.",
+  "portal.status.connected": "Portal: Verbunden",
+  "portal.status.disconnected": "Portal: Getrennt",
+  "portal.status.linking": "Portal: Verbinden…",
+  "portal.status.disconnecting": "Portal: Trennen…",
+  "portal.status.connect": "Mit Portal verbinden",
+  "portal.status.disconnect": "Vom Portal trennen",
+  "portal.status.cancel": "Verbindung abbrechen",
+  "gallery.status.progress": "{stage} {percent}%"
 }

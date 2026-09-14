@@ -2663,5 +2663,13 @@
   "preferences.gallery.shortcuts_hint": "Asset Manager: Enter opens a local project; Ctrl+Enter runs its gallery action; Ctrl+Shift+C copies its share link; F5 refreshes the active scope. Shortcuts apply when the panel has focus, outside text fields.",
   "asset_manager.gallery.confirm.processing_wait": "Het portaal duurt langer dan verwacht.",
   "asset_manager.gallery.action.keep_waiting": "Blijven wachten",
-  "asset_manager.gallery.review.cover_kept": "De omslag blijft behouden. Controleer Story op het portaal na een ingrijpende inhoudswijziging."
+  "asset_manager.gallery.review.cover_kept": "De omslag blijft behouden. Controleer Story op het portaal na een ingrijpende inhoudswijziging.",
+  "portal.status.connected": "Portal: Verbonden",
+  "portal.status.disconnected": "Portal: Niet verbonden",
+  "portal.status.linking": "Portal: Verbinden…",
+  "portal.status.disconnecting": "Portal: Verbinding verbreken…",
+  "portal.status.connect": "Verbinden met portal",
+  "portal.status.disconnect": "Verbinding met portal verbreken",
+  "portal.status.cancel": "Verbinding annuleren",
+  "gallery.status.progress": "{stage} {percent}%"
 }

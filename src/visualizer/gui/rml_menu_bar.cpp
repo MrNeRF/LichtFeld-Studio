@@ -1061,7 +1061,8 @@ namespace lfs::vis::gui {
                 render_needed_ = true;
             }
         };
-        std::string label = localization.get("portal.status." + connection);
+        const auto connection_key = "portal.status." + connection;
+        std::string label = localization.get(connection_key);
         if (account.linking && !account.label.empty())
             label += " " + account.label;
         set("portal_connection_label", portal_connection_label_, std::move(label));
