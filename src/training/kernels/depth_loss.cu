@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../rasterization/gsplat/Cameras.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "depth_loss.hpp"
@@ -441,6 +442,49 @@ namespace lfs::training::kernels {
 
         // Projects every stride-th point, samples the prior at the landing
         // pixel, and appends (prior value, camera-space depth) pairs.
+        __device__ float2 project_anchor(const DepthCameraProjection& p, float x, float y, float z,
+                                         float fx, float fy, float cx, float cy, int w, int h) {
+            const glm::vec3 point(x, y, z);
+            if (p.model == CameraModelType::EQUIRECTANGULAR) {
+                EquirectangularCameraModel::Parameters k{};
+                k.resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                const auto uv = EquirectangularCameraModel(k).camera_ray_to_image_point(point, 0.f);
+                return make_float2(uv.imagePoint.x, uv.imagePoint.y);
+            }
+            if (p.model == CameraModelType::FISHEYE) {
+                OpenCVFisheyeCameraModel<>::Parameters k{};
+                k.resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                k.focal_length = {fx, fy};
+                k.principal_point = {cx, cy};
+                for (int i = 0; i < 4; ++i)
+                    k.radial_coeffs[i] = p.radial[i];
+                const auto uv = OpenCVFisheyeCameraModel<>(k).camera_ray_to_image_point(point, 0.f);
+                return uv.valid_flag ? make_float2(uv.imagePoint.x, uv.imagePoint.y) : make_float2(-1.f, -1.f);
+            }
+            if (p.model == CameraModelType::THIN_PRISM_FISHEYE) {
+                ThinPrismFisheyeCameraModel<>::Parameters k{};
+                k.resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                k.focal_length = {fx, fy};
+                k.principal_point = {cx, cy};
+                for (int i = 0; i < 4; ++i) {
+                    k.radial_coeffs[i] = p.radial[i];
+                    k.thin_prism_coeffs[i] = p.thin_prism[i];
+                }
+                const auto uv = ThinPrismFisheyeCameraModel<>(k).camera_ray_to_image_point(point, 0.f);
+                return uv.valid_flag ? make_float2(uv.imagePoint.x, uv.imagePoint.y) : make_float2(-1.f, -1.f);
+            }
+            OpenCVPinholeCameraModel<>::Parameters k{};
+            k.resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+            k.focal_length = {fx, fy};
+            k.principal_point = {cx, cy};
+            for (int i = 0; i < 6; ++i)
+                k.radial_coeffs[i] = p.radial[i];
+            for (int i = 0; i < 2; ++i)
+                k.tangential_coeffs[i] = p.tangential[i];
+            const auto uv = OpenCVPinholeCameraModel<>(k).camera_ray_to_image_point(point, 0.f);
+            return uv.valid_flag ? make_float2(uv.imagePoint.x, uv.imagePoint.y) : make_float2(-1.f, -1.f);
+        }
+
         __global__ void depth_anchor_collect_kernel(
             const float* __restrict__ points_xyz,
             const size_t num_samples,
@@ -458,7 +502,8 @@ namespace lfs::training::kernels {
             const float3 aabb_hi,
             float2* __restrict__ pairs_out,
             int* __restrict__ pair_count,
-            const int pair_capacity) {
+            const int pair_capacity,
+            const DepthCameraProjection projection) {
 
             const float4 r1 = make_float4(w2c[0], w2c[1], w2c[2], w2c[3]);
             const float4 r2 = make_float4(w2c[4], w2c[5], w2c[6], w2c[7]);
@@ -480,13 +525,16 @@ namespace lfs::training::kernels {
                     continue;
                 }
                 const float z = r3.x * x + r3.y * y + r3.z * zw + r3.w;
-                if (!(z > near_plane) || !isfinite(z)) {
-                    continue;
-                }
                 const float xc = r1.x * x + r1.y * y + r1.z * zw + r1.w;
                 const float yc = r2.x * x + r2.y * y + r2.z * zw + r2.w;
-                const int u = static_cast<int>(floorf(fx * xc / z + cx));
-                const int v = static_cast<int>(floorf(fy * yc / z + cy));
+                const float depth = projection.model == CameraModelType::PINHOLE ? z : sqrtf(xc * xc + yc * yc + z * z);
+                if (!(depth > near_plane) || !isfinite(depth))
+                    continue;
+                const float2 uv = project_anchor(projection, xc, yc, z, fx, fy, cx, cy, width, height);
+                if (!isfinite(uv.x) || !isfinite(uv.y))
+                    continue;
+                const int u = static_cast<int>(floorf(uv.x));
+                const int v = static_cast<int>(floorf(uv.y));
                 if (u < 0 || u >= width || v < 0 || v >= height) {
                     continue;
                 }
@@ -496,7 +544,7 @@ namespace lfs::training::kernels {
                 }
                 const int slot = atomicAdd(pair_count, 1);
                 if (slot < pair_capacity) {
-                    pairs_out[slot] = make_float2(t, z);
+                    pairs_out[slot] = make_float2(t, depth);
                 }
             }
         }
@@ -668,7 +716,8 @@ namespace lfs::training::kernels {
         const float near_plane,
         const float aabb_lo[3],
         const float aabb_hi[3],
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const DepthCameraProjection& projection) {
         stream = resolve_stream(stream);
 
         if (num_points == 0) {
@@ -698,7 +747,7 @@ namespace lfs::training::kernels {
             prior, width, height, near_plane,
             make_float3(aabb_lo[0], aabb_lo[1], aabb_lo[2]),
             make_float3(aabb_hi[0], aabb_hi[1], aabb_hi[2]),
-            pairs_dev, count_dev, pair_capacity);
+            pairs_dev, count_dev, pair_capacity, projection);
         if (const cudaError_t err = cudaGetLastError(); err != cudaSuccess) {
             LOG_ERROR("depth_anchor_collect_kernel launch failed: {}", cudaGetErrorString(err));
             cudaFreeAsync(pairs_dev, stream);
