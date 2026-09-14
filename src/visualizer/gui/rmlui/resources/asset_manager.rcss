@@ -266,7 +266,7 @@
 #asset-main-row {
     flex: 1;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: stretch;
     min-height: 0;
     min-width: 0;
@@ -274,7 +274,7 @@
 }
 
 #asset-sidebar {
-    height: 280dp;
+    height: auto;
     min-height: 0;
     box-sizing: border-box;
     border-bottom-width: 1dp;
@@ -1080,12 +1080,13 @@
 .asset-shell.is-wide #asset-main-row { flex-direction: row; }
 .asset-shell.is-wide .asset-results-stack { flex-direction: row; }
 .asset-shell.is-floating #asset-popup { min-width: 480dp; min-height: 360dp; }
-.asset-shell.is-wide .asset-navigator { flex-basis: 200dp; }
+.asset-shell.is-wide .asset-navigator { flex: 0 0 200dp; flex-basis: 200dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-wide .inspector-resize-handle { display: block; }
 .asset-shell.is-wide .asset-inspector { flex-basis: 280dp; }
 .asset-shell.is-wide .asset-resize-handle--horizontal { display: none; }
+.asset-shell.is-medium #asset-main-row { flex-direction: row; }
 .asset-shell.is-medium .asset-results-stack { flex-direction: column; }
-.asset-shell.is-medium .asset-navigator { flex-basis: 160dp; }
+.asset-shell.is-medium .asset-navigator { flex: 0 0 160dp; flex-basis: 160dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-medium .asset-inspector { width: auto; height: 200dp; flex: 0 0 200dp; }
 .asset-shell.is-medium .inspector-resize-handle { display: block; width: auto; height: 8dp; }
 .asset-shell.is-medium .inspector-strip { display: none; }
