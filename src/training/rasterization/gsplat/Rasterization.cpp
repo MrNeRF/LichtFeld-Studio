@@ -4,6 +4,7 @@
 
 #include "Rasterization.h"
 #include "Common.h"
+#include "GeometryFeatures.h"
 #include "Ops.h"
 
 #include <cassert>
@@ -256,6 +257,8 @@ namespace gsplat_lfs {
             channels = 1; // Depth only
         } else if (render_mode == 3 || render_mode == 4) {
             channels = 4; // RGB + Depth
+        } else if (render_mode == 5) {
+            channels = 8;
         }
 
         // Use scales directly (scaling_modifier should be applied by caller if needed)
@@ -287,14 +290,18 @@ namespace gsplat_lfs {
         result.flatten_ids = isect_result.flatten_ids;
 
         // Step 3: Compute viewing directions and evaluate SH
-        if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
+        if (render_mode == 0 || render_mode >= 3) {
             if (sh_degree > 0) {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
                 sh_degree, sh_degree > 0 ? result.dirs : nullptr, sh0, shN, nullptr,
                 static_cast<int64_t>(C) * N,
-                result.colors, stream);
+                channels == 3 ? result.colors : result.rgb, stream);
+        }
+        if (channels != 3) {
+            geometry_features_fwd(means, quats, scales, viewmats0, result.rgb, result.colors,
+                                  N, C, channels, camera_model, stream);
         }
 
         // Step 4: Rasterize to pixels. Last-tile range_end is tile_offsets[n_tiles]
@@ -381,6 +388,8 @@ namespace gsplat_lfs {
             channels = 1;
         } else if (render_mode == 3 || render_mode == 4) {
             channels = 4;
+        } else if (render_mode == 5) {
+            channels = 8;
         }
 
         const size_t color_values = checked_multiply(
@@ -391,7 +400,7 @@ namespace gsplat_lfs {
             color_values, sizeof(float), "gsplat backward color gradients");
         // Grow-only TLS high-water — replaces per-backward cudaMallocAsync/Free.
         float* const v_colors =
-            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes, stream));
+            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes + (channels == 3 ? 0 : static_cast<size_t>(C) * N * 3 * sizeof(float)), stream));
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
@@ -412,15 +421,21 @@ namespace gsplat_lfs {
             edge_weight_map, edge_score_out,
             stream);
 
+        float* const v_rgb = channels == 3 ? v_colors : v_colors + color_values;
+        if (channels != 3) {
+            geometry_features_bwd(means, quats, scales, viewmats0, v_colors, v_rgb, v_means, v_quats,
+                                  N, C, channels, camera_model, stream);
+        }
+
         // Backward through SH
-        if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
+        if (render_mode == 0 || render_mode >= 3) {
             spherical_harmonics_swizzled_bwd(
                 K, sh_degree,
                 dirs,
                 sh0,
                 shN,
                 nullptr, // masks
-                v_colors,
+                v_rgb,
                 static_cast<int64_t>(C) * N,
                 false, // compute_v_dirs
                 v_sh_coeffs,

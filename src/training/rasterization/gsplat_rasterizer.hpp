@@ -19,16 +19,18 @@ namespace lfs::training {
 
     // Render modes for gsplat rasterizer
     enum class GsplatRenderMode {
-        RGB = 0,   // RGB only
-        D = 1,     // Depth only
-        ED = 2,    // Expected depth
-        RGB_D = 3, // RGB + depth
-        RGB_ED = 4 // RGB + expected depth
+        RGB = 0,    // RGB only
+        D = 1,      // Depth only
+        ED = 2,     // Expected depth
+        RGB_D = 3,  // RGB + depth
+        RGB_ED = 4, // RGB + expected depth
+        RGB_D_N = 5 // RGB + accumulated depth + camera-space normals
     };
 
     // Forward pass context - holds raw pointers needed for backward (arena allocated)
     struct GsplatRasterizeContext {
         // Raw pointers to arena-allocated intermediate buffers
+        lfs::core::Tensor camera_rays;       // [H,W,3], depth-to-camera-position multiplier
         float* render_colors_ptr = nullptr;  // [C, channels, H, W]
         float* render_alphas_ptr = nullptr;  // [C, 1, H, W]
         int32_t* radii_ptr = nullptr;        // [C, N, 2]
@@ -131,7 +133,10 @@ namespace lfs::training {
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& pixel_error_map = {},
         const lfs::core::Tensor& edge_weight_map = {},
-        lfs::core::Tensor edge_score_out = {});
+        lfs::core::Tensor edge_score_out = {},
+        const lfs::core::Tensor& grad_depth = {},
+        const lfs::core::Tensor& grad_normal = {},
+        float flatten_weight = 0.f);
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_gsplat_rasterizer_thread_local_caches() noexcept;

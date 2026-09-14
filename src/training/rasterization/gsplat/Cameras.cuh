@@ -900,7 +900,7 @@ struct OpenCVFisheyeCameraModel
         }
 
         max_angle =
-            min(max_angle,
+            min(min(max_angle, static_cast<float>(PI)),
                 max(max_radius_pixels / parameters.focal_length[0],
                     max_radius_pixels / parameters.focal_length[1]));
 
@@ -922,7 +922,9 @@ struct OpenCVFisheyeCameraModel
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const& cam_ray, float margin_factor) const -> typename Base::ImagePointReturn {
-        if (cam_ray.z <= 0.f)
+        // A fisheye ray may lie behind the camera plane. Only the rear
+        // optical axis has no unique image azimuth.
+        if (cam_ray.z <= 0.f && cam_ray.x == 0.f && cam_ray.y == 0.f)
             return {{0.f, 0.f}, false};
 
         // Make sure norm is non-vanishing (norm vanishes for points along the
@@ -981,8 +983,8 @@ struct OpenCVFisheyeCameraModel
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor);
         valid &=
-            theta <= max_angle; // explicitly check for strictly smaller angles
-                                // to classify FOV-clamped points as invalid
+            theta_full < max_angle; // explicitly check for strictly smaller angles
+                                    // to classify FOV-clamped points as invalid
 
         return {image_point, valid};
     }
@@ -1116,7 +1118,7 @@ struct ThinPrismFisheyeCameraModel
             }
         }
 
-        max_angle = min(max_angle,
+        max_angle = min(min(max_angle, static_cast<float>(PI)),
                         max(max_radius_pixels / parameters.focal_length[0],
                             max_radius_pixels / parameters.focal_length[1]));
 
@@ -1135,7 +1137,9 @@ struct ThinPrismFisheyeCameraModel
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const& cam_ray, float margin_factor) const -> typename Base::ImagePointReturn {
-        if (cam_ray.z <= 0.f)
+        // A fisheye ray may lie behind the camera plane. Only the rear
+        // optical axis has no unique image azimuth.
+        if (cam_ray.z <= 0.f && cam_ray.x == 0.f && cam_ray.y == 0.f)
             return {{0.f, 0.f}, false};
 
         auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
@@ -1172,7 +1176,7 @@ struct ThinPrismFisheyeCameraModel
         auto valid = true;
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor);
-        valid &= theta <= max_angle;
+        valid &= theta_full < max_angle;
 
         return {image_point, valid};
     }
