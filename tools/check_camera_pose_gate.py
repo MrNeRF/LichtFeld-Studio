@@ -318,6 +318,34 @@ def inspect_shared_points_gate(root: ET.Element) -> dict:
     return result
 
 
+JOINT_SESSION_SUITE = "CameraPoseJointGeometryTest"
+JOINT_SESSION_TESTS = {
+    "PointOnlyRefinementPersistsAndResetRestoresSource",
+    "CancellationAndExceptionsDoNotCommitPointsOrPoses",
+    "AcceptedPoseAndSharedPointsRoundTripTogether",
+    "ChangedMeasurementsRejectRestoreWithoutMutation",
+    "CorruptPointStateCannotPartiallyRestoreSession",
+    "LegacyStateCannotSilentlySwitchGeometryModel",
+    "EvaluationAndDisabledMeasurementsNeverEnterGraph",
+}
+
+
+def inspect_joint_session_gate(root: ET.Element) -> dict:
+    result = inspect_shared_points_gate(root)
+    suites = [s for s in root.iter("testsuite") if s.get("name") == JOINT_SESSION_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated joint-session suite; use a binary compiled from current sources")
+    cases = suites[0].findall("testcase")
+    if len(cases) != len(JOINT_SESSION_TESTS) or {c.get("name") for c in cases} != JOINT_SESSION_TESTS:
+        raise ValueError("Wrong joint-session test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Joint-session test not successfully executed: {case.get('name')}")
+    result.update(tests=result["tests"] + len(cases), joint_session_contracts=True)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -347,12 +375,13 @@ def main() -> int:
     parser.add_argument("--view", action="store_true", help="Require pose, checkpoint and view contracts")
     parser.add_argument("--activation", action="store_true", help="Require pose, checkpoint, view and activation contracts")
     parser.add_argument("--shared-points", action="store_true", help="Also require shared-point proposal contracts; not joint training validation")
+    parser.add_argument("--joint-session", action="store_true", help="Also require joint session transactions and checkpoint contracts; not joint training validation")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
         require_no_report_failures(root)
-        result = inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
+        result = inspect_joint_session_gate(root) if args.joint_session else inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "bounded_pose_optimizer.hpp"
+#include "sparse_point_refinement.hpp"
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -83,6 +84,9 @@ namespace lfs::training::camera_pose {
         PoseRefinementSession(std::uint64_t generation, std::vector<PoseCameraInput> cameras,
                               PoseSessionConfig config = {});
         [[nodiscard]] Matrix4 current_pose(int uid) const;
+        void configure_sparse_points(std::vector<SparseTrackMeasurement> measurements);
+        [[nodiscard]] bool joint_geometry_enabled(int uid) const noexcept { return tracks_by_camera_.contains(uid); }
+        [[nodiscard]] size_t shared_point_count() const noexcept { return sparse_tracks_.size(); }
         // Optional fixed-geometry predicate runs before candidate rendering.
         // A false result rejects the proposal without consuming a render count.
         [[nodiscard]] PoseVisitResult visit(
@@ -119,6 +123,9 @@ namespace lfs::training::camera_pose {
         bool dirty_ = true;
         std::vector<Entry> entries_;
         std::unordered_map<int, size_t> index_;
+        std::vector<SparsePointTrack> sparse_tracks_;
+        std::vector<SparsePointPosition> sparse_positions_;
+        std::unordered_map<int, std::vector<size_t>> tracks_by_camera_;
         std::chrono::steady_clock::time_point next_publish_{};
         std::atomic<std::shared_ptr<const PoseSessionSnapshot>> published_{};
     };

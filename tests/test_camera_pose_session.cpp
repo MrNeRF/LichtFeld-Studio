@@ -40,11 +40,9 @@ namespace {
             const double residual = pose[3] - 0.002;
             return PoseImageEvaluation{residual * residual,
                                        {static_cast<float>(2 * residual), 0, 0, 0, 0, 0},
-                                       Twist{static_cast<float>(-residual), 0, 0, 0, 0, 0}};
-        }, [](const Matrix4& pose) {
+                                       Twist{static_cast<float>(-residual), 0, 0, 0, 0, 0}}; }, [](const Matrix4& pose) {
             const double residual = pose[3] - 0.002;
-            return residual * residual;
-        });
+            return residual * residual; });
         EXPECT_GE(result.accepted_steps, 1);
         EXPECT_NEAR(session.current_pose(30)[3], 0.002, 1e-8);
         EXPECT_EQ(session.current_pose(10), identity_transform());
@@ -287,5 +285,173 @@ namespace {
             EXPECT_THROW(session.restore_state(bad), std::invalid_argument);
             EXPECT_EQ(session.save_state(), saved);
         }
+    }
+    std::vector<SparseTrackMeasurement> shared_measurements() {
+        std::vector<SparseTrackMeasurement> result;
+        const ReprojectionCalibration k{800, 800, 800, 600, 1600, 1200};
+        for (int i = 0; i < 20; ++i) {
+            const SparsePointPosition truth{-0.8 + (i % 5) * 0.4, -0.6 + (i / 5) * 0.4, 4.0 + (i % 3) * 0.2};
+            const SparsePointPosition source{truth[0] + 0.002, truth[1] - 0.001, truth[2] + 0.003};
+            for (const auto& camera : cameras()) {
+                if (camera.role == PoseRole::Evaluation)
+                    continue;
+                result.push_back({static_cast<std::uint64_t>(i), source, camera.uid, true, camera.source, k,
+                                  k.fx * (truth[0] + camera.source[3]) / truth[2] + k.cx,
+                                  k.fy * truth[1] / truth[2] + k.cy});
+            }
+        }
+        return result;
+    }
+
+    TEST(CameraPoseJointGeometryTest, PointOnlyRefinementPersistsAndResetRestoresSource) {
+        PoseRefinementSession session(1, cameras(), config());
+        const auto measurements = shared_measurements();
+        session.configure_sparse_points(measurements);
+        ASSERT_EQ(session.shared_point_count(), 20u);
+        ASSERT_TRUE(session.joint_geometry_enabled(30));
+        const auto before = session.save_state();
+        const auto result = session.visit(30, 10, 1, [](const Matrix4&) { return PoseImageEvaluation{1, {}}; }, [](const Matrix4&) { return 1.0; });
+        EXPECT_EQ(result.accepted_steps, 0);
+        EXPECT_EQ(session.current_pose(30), identity_transform());
+        const auto after = session.save_state();
+        EXPECT_NE(after.at("points"), before.at("points"));
+        const auto tracks = build_sparse_point_tracks(measurements);
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            const auto position = after["points"][i]["current"].get<SparsePointPosition>();
+            EXPECT_LT(sparse_point_cost(tracks[i], position), sparse_point_cost(tracks[i], tracks[i].source));
+        }
+        PoseRefinementSession restored(2, cameras(), pose_session_config_from_state(after));
+        restored.configure_sparse_points(measurements);
+        restored.restore_state(after);
+        // Restore invalidates stale pose evaluations even when coordinates do
+        // not change. Everything else, including shared points, is preserved.
+        auto expected_restored = after;
+        for (auto& camera : expected_restored["cameras"])
+            camera["revision"] = camera["revision"].get<std::uint64_t>() + 1;
+        EXPECT_EQ(restored.save_state(), expected_restored);
+        restored.reset();
+        auto expected_reset = before;
+        for (size_t i = 0; i < expected_reset["cameras"].size(); ++i)
+            expected_reset["cameras"][i]["revision"] = expected_restored["cameras"][i]["revision"].get<std::uint64_t>() + 1;
+        EXPECT_EQ(restored.save_state(), expected_reset);
+    }
+
+    TEST(CameraPoseJointGeometryTest, CancellationAndExceptionsDoNotCommitPointsOrPoses) {
+        for (const bool cancel : {false, true}) {
+            PoseRefinementSession session(1, cameras(), config());
+            session.configure_sparse_points(shared_measurements());
+            const auto before = session.save_state();
+            std::stop_source stop;
+            auto callback = [&](const Matrix4&) -> PoseImageEvaluation {
+                if (!cancel)
+                    throw std::runtime_error("Image evaluation failed");
+                stop.request_stop();
+                return {1, {}};
+            };
+            if (cancel) {
+                const auto result = session.visit(30, 10, 1, callback, loss, stop.get_token());
+                EXPECT_TRUE(result.cancelled);
+            } else {
+                EXPECT_THROW((void)session.visit(30, 10, 1, callback, loss), std::runtime_error);
+            }
+            EXPECT_EQ(session.save_state().at("points"), before.at("points"));
+            EXPECT_EQ(session.save_state().at("cameras"), before.at("cameras"));
+        }
+    }
+
+    TEST(CameraPoseJointGeometryTest, AcceptedPoseAndSharedPointsRoundTripTogether) {
+        auto measurements = shared_measurements();
+        for (auto& m : measurements)
+            if (m.camera_uid == 30)
+                m.u += m.calibration.fx * 0.002 / (m.source[2] - 0.003);
+        PoseRefinementSession session(1, cameras(), config());
+        session.configure_sparse_points(measurements);
+        const auto before = session.save_state();
+        auto objective = [](const Matrix4& pose) {
+            const double residual = pose[3] - 0.002;
+            return residual * residual;
+        };
+        const auto result = session.visit(30, 10, 1, [&](const Matrix4& pose) {
+            PoseImageEvaluation image{objective(pose), {}};
+            image.gradient[0] = static_cast<float>(2 * (pose[3] - 0.002));
+            return image; }, objective);
+        ASSERT_GT(result.accepted_steps, 0);
+        EXPECT_LT(objective(session.current_pose(30)), objective(identity_transform()));
+        const auto after = session.save_state();
+        EXPECT_NE(after.at("points"), before.at("points"));
+        PoseRefinementSession restored(2, cameras(), config());
+        restored.configure_sparse_points(measurements);
+        restored.restore_state(after);
+        auto expected_restored = after;
+        for (auto& camera : expected_restored["cameras"])
+            camera["revision"] = camera["revision"].get<std::uint64_t>() + 1;
+        EXPECT_EQ(restored.save_state(), expected_restored);
+        for (const int uid : {10, 20, 90})
+            EXPECT_EQ(session.current_pose(uid), restored.current_pose(uid));
+    }
+
+    TEST(CameraPoseJointGeometryTest, ChangedMeasurementsRejectRestoreWithoutMutation) {
+        PoseRefinementSession source(1, cameras(), config());
+        source.configure_sparse_points(shared_measurements());
+        auto measurements = shared_measurements();
+        measurements.back().u += 0.01;
+        PoseRefinementSession target(2, cameras(), config());
+        target.configure_sparse_points(measurements);
+        const auto before = target.save_state();
+        EXPECT_THROW(target.restore_state(source.save_state()), std::invalid_argument);
+        EXPECT_EQ(target.save_state(), before);
+    }
+
+    TEST(CameraPoseJointGeometryTest, CorruptPointStateCannotPartiallyRestoreSession) {
+        PoseRefinementSession session(1, cameras(), config());
+        session.configure_sparse_points(shared_measurements());
+        const auto before = session.save_state();
+        for (int defect = 0; defect < 5; ++defect) {
+            auto bad = before;
+            bad["paused"] = true;
+            auto& point = bad["points"].back();
+            if (defect == 0)
+                point["current"][0] = 100.0;
+            if (defect == 1)
+                point["current"][1] = nullptr;
+            if (defect == 2)
+                point["fingerprint"] = 0;
+            if (defect == 3)
+                point["source"][2] = 0.0;
+            if (defect == 4)
+                point["id"] = 0;
+            EXPECT_THROW(session.restore_state(bad), std::invalid_argument);
+            EXPECT_EQ(session.save_state(), before);
+        }
+    }
+
+    TEST(CameraPoseJointGeometryTest, LegacyStateCannotSilentlySwitchGeometryModel) {
+        PoseRefinementSession legacy(1, cameras(), config());
+        PoseRefinementSession joint(2, cameras(), config());
+        joint.configure_sparse_points(shared_measurements());
+        const auto old_state = legacy.save_state(), joint_state = joint.save_state();
+        EXPECT_EQ(old_state.at("version"), 1);
+        EXPECT_EQ(joint_state.at("version"), 2);
+        EXPECT_THROW(joint.restore_state(old_state), std::invalid_argument);
+        EXPECT_THROW(legacy.restore_state(joint_state), std::invalid_argument);
+        EXPECT_EQ(legacy.save_state(), old_state);
+        EXPECT_EQ(joint.save_state(), joint_state);
+    }
+
+    TEST(CameraPoseJointGeometryTest, EvaluationAndDisabledMeasurementsNeverEnterGraph) {
+        auto measurements = shared_measurements();
+        for (auto& m : measurements)
+            if (m.camera_uid == 30)
+                m.camera_uid = 90;
+        PoseRefinementSession session(1, cameras(), config());
+        session.configure_sparse_points(measurements);
+        EXPECT_EQ(session.shared_point_count(), 0u);
+        EXPECT_FALSE(session.joint_geometry_enabled(30));
+        measurements = shared_measurements();
+        for (auto& m : measurements)
+            if (m.camera_uid == 30)
+                m.training = false;
+        session.configure_sparse_points(measurements);
+        EXPECT_EQ(session.shared_point_count(), 0u);
     }
 } // namespace

@@ -101,6 +101,49 @@ namespace lfs::training::camera_pose {
         return entries_.at(index_.at(uid)).optimizer.snapshot().current;
     }
 
+    void PoseRefinementSession::configure_sparse_points(std::vector<SparseTrackMeasurement> measurements) {
+        if (iteration_ != 0 || !sparse_tracks_.empty())
+            throw std::invalid_argument("Configure shared points before starting or restoring the session");
+        std::erase_if(measurements, [&](const auto& m) {
+            const auto found = index_.find(m.camera_uid);
+            return !m.training || found == index_.end() || entries_[found->second].role == PoseRole::Evaluation;
+        });
+        for (const auto& m : measurements)
+            if (m.pose != entries_[index_.at(m.camera_uid)].optimizer.snapshot().source)
+                throw std::invalid_argument("Shared point source pose differs from session source");
+        auto tracks = build_sparse_point_tracks(measurements);
+        std::erase_if(tracks, [](const auto& track) {
+            if (!std::isfinite(sparse_point_cost(track, track.source)))
+                return true;
+            return std::any_of(track.measurements.begin(), track.measurements.end(), [](const auto& m) {
+                return !std::isfinite(m.u) || !std::isfinite(m.v) || m.u < 0 || m.v < 0 ||
+                       m.u >= m.calibration.width || m.v >= m.calibration.height;
+            });
+        });
+        std::unordered_map<int, std::vector<size_t>> by_camera;
+        std::vector<SparsePointPosition> positions;
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            positions.push_back(tracks[i].source);
+            for (const auto& m : tracks[i].measurements)
+                by_camera[m.camera_uid].push_back(i);
+        }
+        std::erase_if(by_camera, [&](const auto& item) {
+            std::vector<ReprojectionObservation> observations;
+            ReprojectionCalibration k{};
+            for (const auto i : item.second) {
+                const auto& track = tracks[i];
+                const auto m = std::find_if(track.measurements.begin(), track.measurements.end(),
+                                            [&](const auto& m) { return m.camera_uid == item.first; });
+                k = m->calibration;
+                observations.push_back({m->u, m->v, track.source[0], track.source[1], track.source[2]});
+            }
+            return !SparseReprojectionGuard(current_pose(item.first), k, observations).active();
+        });
+        sparse_tracks_ = std::move(tracks);
+        sparse_positions_ = std::move(positions);
+        tracks_by_camera_ = std::move(by_camera);
+    }
+
     PoseVisitResult PoseRefinementSession::visit(int uid, int iteration, std::uint64_t model_revision,
                                                  const std::function<PoseImageEvaluation(const Matrix4&)>& evaluate,
                                                  const std::function<double(const Matrix4&)>& candidate_loss, std::stop_token stop,
@@ -137,23 +180,81 @@ namespace lfs::training::camera_pose {
         // training clock even on failure; cancelled work still counts renders.
         auto working = entry.optimizer;
         auto display = PoseDisplayState::Ready;
+        const auto joint = tracks_by_camera_.find(uid);
+        std::vector<SparsePointTrack> joint_tracks;
+        std::vector<SparsePointPosition> points;
+        if (joint != tracks_by_camera_.end()) {
+            for (const auto i : joint->second) {
+                joint_tracks.push_back(sparse_tracks_[i]);
+                points.push_back(sparse_positions_[i]);
+                for (auto& m : joint_tracks.back().measurements)
+                    m.pose = current_pose(m.camera_uid);
+            }
+        }
+        const double point_limit = config_.optimizer.scene_scale * config_.optimizer.max_center_fraction;
+        auto relax_points = [&](const Matrix4& pose, std::vector<SparsePointPosition>& positions) {
+            double cost = 0;
+            for (size_t i = 0; i < joint_tracks.size(); ++i) {
+                if (stop.stop_requested())
+                    return std::numeric_limits<double>::infinity();
+                auto& track = joint_tracks[i];
+                for (auto& m : track.measurements)
+                    if (m.camera_uid == uid)
+                        m.pose = pose;
+                if (const auto proposal = propose_sparse_point(track, point_limit, 2.0, positions[i]))
+                    positions[i] = proposal->position;
+                cost += sparse_point_cost(track, positions[i]);
+            }
+            return cost;
+        };
         for (int step = 0; step < config_.steps_per_visit; ++step) {
             if (stop.stop_requested()) {
                 result.cancelled = true;
                 break;
             }
             const auto pose = working.snapshot();
-            const auto image = evaluate(pose.current);
+            // Baseline and candidates start from identical points and receive
+            // the same solve budget. Extra point iterations must not buy an
+            // otherwise geometrically worse camera update.
+            const auto initial_points = points;
+            const double geometry_baseline = relax_points(pose.current, points);
+            if (stop.stop_requested()) {
+                result.cancelled = true;
+                break;
+            }
+            if (!std::isfinite(geometry_baseline))
+                throw std::runtime_error("Shared point baseline is not projectable");
+            auto image = evaluate(pose.current);
+            if (!joint_tracks.empty()) {
+                std::vector<ReprojectionObservation> observations;
+                ReprojectionCalibration k{};
+                for (size_t i = 0; i < joint_tracks.size(); ++i) {
+                    const auto& track = joint_tracks[i];
+                    const auto m = std::find_if(track.measurements.begin(), track.measurements.end(),
+                                                [&](const auto& m) { return m.camera_uid == uid; });
+                    k = m->calibration;
+                    observations.push_back({m->u, m->v, points[i][0], points[i][1], points[i][2]});
+                }
+                image.geometric_proposal = SparseReprojectionGuard(pose.current, k, observations).proposal(pose.current, config_.optimizer.scene_scale);
+            }
             if (stop.stop_requested()) {
                 result.cancelled = true;
                 break;
             }
             const PoseEvaluation baseline{uid, model_revision, pose.revision, image.loss, image.gradient, image.geometric_proposal};
+            auto candidate_points = points;
             const auto update = working.step(baseline, [&](const Matrix4& candidate) {
                 if (stop.stop_requested())
                     return std::numeric_limits<double>::quiet_NaN();
                 if (candidate_allowed && !candidate_allowed(candidate))
                     return std::numeric_limits<double>::infinity();
+                if (!joint_tracks.empty()) {
+                    candidate_points = initial_points;
+                    const double cost = relax_points(candidate, candidate_points);
+                    if (!std::isfinite(cost) || !std::isfinite(geometry_baseline) ||
+                        cost > geometry_baseline + 1e-12 * joint_tracks.size())
+                        return std::numeric_limits<double>::infinity();
+                }
                 ++result.candidate_renders;
                 return candidate_loss(candidate);
             });
@@ -162,6 +263,7 @@ namespace lfs::training::camera_pose {
                 break;
             }
             if (update.status == PoseStepStatus::Accepted) {
+                points = std::move(candidate_points);
                 ++result.accepted_steps;
                 display = PoseDisplayState::Updated;
             } else {
@@ -173,6 +275,11 @@ namespace lfs::training::camera_pose {
         if (result.cancelled) {
             result.accepted_steps = 0;
         } else {
+            // No allocations after this point: pose and shared positions commit
+            // together. Exceptions/cancellation above leave both live states intact.
+            if (joint != tracks_by_camera_.end())
+                for (size_t i = 0; i < points.size(); ++i)
+                    sparse_positions_[joint->second[i]] = points[i];
             entry.optimizer = std::move(working);
             entry.state = display;
             entry.visits = next_visit;
@@ -191,6 +298,8 @@ namespace lfs::training::camera_pose {
     void PoseRefinementSession::reset() {
         iteration_ = 0;
         paused_ = false;
+        for (size_t i = 0; i < sparse_tracks_.size(); ++i)
+            sparse_positions_[i] = sparse_tracks_[i].source;
         for (auto& entry : entries_) {
             entry.optimizer.reset();
             entry.visits = entry.renders = 0;

@@ -5,6 +5,7 @@
 #include "bounded_pose_optimizer.hpp"
 #include "sparse_reprojection_guard.hpp"
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -65,15 +66,63 @@ namespace lfs::training::camera_pose {
         double source_cost, candidate_cost;
     };
 
-    // Point block for a future joint pose/structure transaction. Produces only a
+    inline double sparse_point_cost(const SparsePointTrack& track, const SparsePointPosition& point,
+                                    const double huber_pixels = 2.0) {
+        if (track.measurements.empty() || !std::isfinite(huber_pixels) || huber_pixels <= 0)
+            return std::numeric_limits<double>::infinity();
+        double cost = 0;
+        for (const auto& m : track.measurements) {
+            const auto& p = m.pose;
+            const auto& k = m.calibration;
+            const double x = p[0] * point[0] + p[1] * point[1] + p[2] * point[2] + p[3];
+            const double y = p[4] * point[0] + p[5] * point[1] + p[6] * point[2] + p[7];
+            const double z = p[8] * point[0] + p[9] * point[1] + p[10] * point[2] + p[11];
+            if (z <= 0 || !std::isfinite(z) || k.width <= 0 || k.height <= 0 || k.fx <= 0 || k.fy <= 0)
+                return std::numeric_limits<double>::infinity();
+            const double scale = std::max(k.width, k.height);
+            const double r = std::hypot(k.fx * x / z + k.cx - m.u, k.fy * y / z + k.cy - m.v) / scale;
+            if (!std::isfinite(r))
+                return std::numeric_limits<double>::infinity();
+            const double delta = huber_pixels / scale;
+            cost += r <= delta ? 0.5 * r * r : delta * (r - 0.5 * delta);
+        }
+        return cost;
+    }
+
+    // Stable source identity, not a security hash. Covers measurements and
+    // calibration as well as IDs, so resume cannot silently change the graph.
+    inline std::uint64_t sparse_track_fingerprint(const SparsePointTrack& track) {
+        std::uint64_t hash = 14695981039346656037ULL;
+        auto add = [&](std::uint64_t value) {
+            for (int i = 0; i < 8; ++i) {
+                hash = (hash ^ (value & 255)) * 1099511628211ULL;
+                value >>= 8;
+            }
+        };
+        add(track.point_id);
+        for (const double x : track.source)
+            add(std::bit_cast<std::uint64_t>(x));
+        for (const auto& m : track.measurements) {
+            add(static_cast<std::uint64_t>(m.camera_uid));
+            for (const float x : m.pose)
+                add(std::bit_cast<std::uint32_t>(x));
+            for (const double x : {m.calibration.fx, m.calibration.fy, m.calibration.cx, m.calibration.cy, m.u, m.v})
+                add(std::bit_cast<std::uint64_t>(x));
+            add(static_cast<std::uint64_t>(m.calibration.width));
+            add(static_cast<std::uint64_t>(m.calibration.height));
+        }
+        return hash;
+    }
+
+    // Point block for a joint pose/structure transaction. Produces only a
     // proposal; it never rewrites COLMAP, Camera, Gaussian means or optimizer
     // moments. All poses and measured pixels stay fixed for this solve.
     inline std::optional<SparsePointProposal> propose_sparse_point(
         const SparsePointTrack& track, const double max_displacement,
-        const double huber_pixels = 2.0) {
+        const double huber_pixels = 2.0, std::optional<SparsePointPosition> initial = {}, const int iterations = 8) {
         if (track.point_id == std::numeric_limits<std::uint64_t>::max() ||
             track.measurements.size() < 3 || !std::isfinite(max_displacement) || max_displacement <= 0 ||
-            !std::isfinite(huber_pixels) || huber_pixels <= 0)
+            !std::isfinite(huber_pixels) || huber_pixels <= 0 || iterations < 1 || iterations > 8)
             return std::nullopt;
         std::set<int> cameras;
         for (const auto& m : track.measurements) {
@@ -124,12 +173,17 @@ namespace lfs::training::camera_pose {
             }
             return cost;
         };
-        SparsePointPosition position = track.source;
+        SparsePointPosition position = initial.value_or(track.source);
+        double initial_distance2 = 0;
+        for (int a = 0; a < 3; ++a)
+            initial_distance2 += std::pow(position[a] - track.source[a], 2);
+        if (!std::isfinite(initial_distance2) || std::sqrt(initial_distance2) > max_displacement)
+            return std::nullopt;
         const double source_cost = evaluate(position, nullptr, nullptr);
         if (!std::isfinite(source_cost))
             return std::nullopt;
         double cost = source_cost;
-        for (int iteration = 0; iteration < 8; ++iteration) {
+        for (int iteration = 0; iteration < iterations; ++iteration) {
             Matrix3 h{}, l{};
             SparsePointPosition g{}, scale{}, step{};
             evaluate(position, &h, &g);

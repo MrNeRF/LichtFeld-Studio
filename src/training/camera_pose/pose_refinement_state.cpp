@@ -46,7 +46,8 @@ namespace lfs::training::camera_pose {
     } // namespace
 
     PoseSessionConfig pose_session_config_from_state(const nlohmann::json& state) {
-        if (integer(state.at("version")) != 1)
+        const int version = integer(state.at("version"));
+        if (version != 1 && version != 2)
             throw std::invalid_argument("Unsupported camera pose state version");
         const auto& saved = state.at("settings");
         const auto& opt = saved.at("optimizer");
@@ -77,13 +78,23 @@ namespace lfs::training::camera_pose {
             const auto pose = entry.optimizer.snapshot();
             cameras.push_back({{"uid", pose.uid}, {"role", static_cast<int>(entry.role)}, {"source", pose.source}, {"current", pose.current}, {"revision", pose.revision}, {"accepted_steps", pose.accepted_steps}, {"rejected_steps", pose.rejected_steps}, {"display_state", static_cast<int>(entry.state)}, {"eligible_visits", entry.visits}, {"candidate_renders", entry.renders}});
         }
-        return {{"version", 1}, {"settings", settings(config_)}, {"iteration", iteration_}, {"paused", paused_}, {"cameras", std::move(cameras)}};
+        Json result = {{"version", sparse_tracks_.empty() ? 1 : 2}, {"settings", settings(config_)}, {"iteration", iteration_}, {"paused", paused_}, {"cameras", std::move(cameras)}};
+        if (!sparse_tracks_.empty()) {
+            auto points = Json::array();
+            for (size_t i = 0; i < sparse_tracks_.size(); ++i) {
+                const auto& track = sparse_tracks_[i];
+                points.push_back({{"id", track.point_id}, {"source", track.source}, {"current", sparse_positions_[i]}, {"fingerprint", sparse_track_fingerprint(track)}});
+            }
+            result["points"] = std::move(points);
+        }
+        return result;
     }
 
     void PoseRefinementSession::restore_state(const nlohmann::json& state) {
         // Parse and validate on copies; no live pose, cadence, generation or
         // snapshot changes until every camera and the new snapshot are ready.
-        if (!state.is_object() || state.size() != 5 || integer(state.at("version")) != 1 ||
+        const int version = sparse_tracks_.empty() ? 1 : 2;
+        if (!state.is_object() || state.size() != (version == 1 ? 5u : 6u) || integer(state.at("version")) != version ||
             state.at("settings") != settings(config_) || !state.at("paused").is_boolean())
             throw std::invalid_argument("Camera pose state version or configuration mismatch");
         const int iteration = integer(state.at("iteration"));
@@ -125,10 +136,46 @@ namespace lfs::training::camera_pose {
             if (entry.renders < pose.accepted_steps)
                 throw std::invalid_argument("Saved pose accepted steps exceed candidate renders");
         }
+        auto positions = sparse_positions_;
+        if (version == 2) {
+            const auto& points = state.at("points");
+            if (!points.is_array() || points.size() != sparse_tracks_.size())
+                throw std::invalid_argument("Shared point state membership mismatch");
+            const double limit = config_.optimizer.scene_scale * config_.optimizer.max_center_fraction;
+            for (size_t i = 0; i < points.size(); ++i) {
+                const auto& point = points[i];
+                const auto& track = sparse_tracks_[i];
+                if (!point.is_object() || point.size() != 4 ||
+                    point.at("id") != Json(track.point_id) || point.at("source") != Json(track.source) ||
+                    point.at("fingerprint") != Json(sparse_track_fingerprint(track)))
+                    throw std::invalid_argument("Shared point source graph changed");
+                const auto& current = point.at("current");
+                if (!current.is_array() || current.size() != 3)
+                    throw std::invalid_argument("Shared point requires three coordinates");
+                double distance = 0;
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    if (!current[axis].is_number())
+                        throw std::invalid_argument("Shared point contains a non-number");
+                    const double x = current[axis].get<double>();
+                    if (!std::isfinite(x))
+                        throw std::invalid_argument("Shared point contains a nonfinite coordinate");
+                    positions[i][axis] = x;
+                    distance = std::hypot(distance, x - track.source[axis]);
+                }
+                if (distance > limit * (1 + 1e-12))
+                    throw std::invalid_argument("Shared point exceeds source-relative displacement limit");
+                auto restored_track = track;
+                for (auto& m : restored_track.measurements)
+                    m.pose = working[index_.at(m.camera_uid)].optimizer.snapshot().current;
+                if (!std::isfinite(sparse_point_cost(restored_track, positions[i])))
+                    throw std::invalid_argument("Shared point cannot be projected with restored poses");
+            }
+        }
         if (sequence_ == std::numeric_limits<std::uint64_t>::max())
             throw std::invalid_argument("Camera pose snapshot sequence exhausted");
         const auto snapshot = make_snapshot(working, iteration, paused, sequence_ + 1);
         entries_ = std::move(working);
+        sparse_positions_ = std::move(positions);
         iteration_ = iteration;
         paused_ = paused;
         ++sequence_;
