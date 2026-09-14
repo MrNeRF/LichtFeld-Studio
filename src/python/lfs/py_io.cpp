@@ -10,6 +10,7 @@
 #include "py_tensor.hpp"
 
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -27,6 +28,8 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "io/project_inspector.hpp"
+#include "io/project_recovery.hpp"
 #include "io/splat_path.hpp"
 #include "training/dataset.hpp"
 
@@ -444,6 +447,27 @@ namespace lfs::python {
             .value("REPAIR_ONLY", project::OpenState::RepairOnly)
             .value("HARD_FAIL", project::OpenState::HardFail);
 
+        nb::enum_<project::CommitKind>(m, "ProjectCommitKind")
+            .value("EXPLICIT", project::CommitKind::Explicit)
+            .value("AUTOSAVE", project::CommitKind::Autosave)
+            .value("RECOVERED", project::CommitKind::Recovered)
+            .value("COMPACTION", project::CommitKind::Compaction);
+
+        nb::enum_<project::RowKind>(m, "ProjectRowKind")
+            .value("LIVE", project::RowKind::Live)
+            .value("TOMBSTONE", project::RowKind::Tombstone)
+            .value("SIDECAR_BASE_REFERENCE", project::RowKind::SidecarBaseReference);
+
+        nb::enum_<project::Compression>(m, "ProjectCompression")
+            .value("STORED", project::Compression::Stored)
+            .value("ZSTD_FRAMED", project::Compression::ZstdFramed)
+            .value("BYTE_SHUFFLE_ZSTD_FRAMED", project::Compression::ByteShuffleZstdFramed);
+
+        nb::class_<project::Version>(m, "ProjectVersion")
+            .def(nb::init<>())
+            .def_ro("major", &project::Version::major)
+            .def_ro("minor", &project::Version::minor);
+
         nb::class_<PyProjectInspection>(m, "ProjectInspection")
             .def_ro("project_uuid", &PyProjectInspection::project_uuid)
             .def_ro("file_uuid", &PyProjectInspection::file_uuid)
@@ -456,6 +480,177 @@ namespace lfs::python {
             .def_ro("open_state", &PyProjectInspection::open_state)
             .def_ro("has_preview", &PyProjectInspection::has_preview)
             .def_ro("fallback_preview_path", &PyProjectInspection::fallback_preview_path);
+
+        nb::class_<project::OpenClassification>(m, "ProjectOpenClassification")
+            .def_ro("state", &project::OpenClassification::state)
+            .def_ro("generation", &project::OpenClassification::generation)
+            .def_ro("diagnostic", &project::OpenClassification::diagnostic);
+
+        nb::class_<project::ProjectStorageStats>(m, "ProjectStorageStats")
+            .def_ro("physical_bytes", &project::ProjectStorageStats::physical_bytes)
+            .def_ro("estimated_live_bytes", &project::ProjectStorageStats::estimated_live_bytes)
+            .def_ro("dead_bytes", &project::ProjectStorageStats::dead_bytes)
+            .def_ro("dead_ratio", &project::ProjectStorageStats::dead_ratio);
+
+        nb::class_<project::ProjectLicense>(m, "ProjectLicense")
+            .def(nb::init<>())
+            .def_rw("identifier", &project::ProjectLicense::identifier)
+            .def_rw("notice", &project::ProjectLicense::notice);
+
+        nb::class_<project::ProjectInspectorCard>(m, "ProjectInspectorCard")
+            .def_ro("path", &project::ProjectInspectorCard::path)
+            .def_prop_ro("project_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.project_uuid.to_string();
+            })
+            .def_prop_ro("file_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.file_uuid.to_string();
+            })
+            .def_prop_ro("commit_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.commit_uuid.to_string();
+            })
+            .def_ro("generation", &project::ProjectInspectorCard::generation)
+            .def_ro("created_at_unix_ns", &project::ProjectInspectorCard::created_at_unix_ns)
+            .def_ro("saved_at_unix_ns", &project::ProjectInspectorCard::saved_at_unix_ns)
+            .def_ro("physical_file_size", &project::ProjectInspectorCard::physical_file_size)
+            .def_ro("role", &project::ProjectInspectorCard::role)
+            .def_ro("open_state", &project::ProjectInspectorCard::open_state)
+            .def_ro("validation_scope", &project::ProjectInspectorCard::validation_scope)
+            .def_ro("has_preview", &project::ProjectInspectorCard::has_preview)
+            .def_ro("preview_bytes", &project::ProjectInspectorCard::preview_bytes)
+            .def_ro("min_reader_version", &project::ProjectInspectorCard::min_reader_version)
+            .def_ro("min_safe_writer_version", &project::ProjectInspectorCard::min_safe_writer_version)
+            .def_ro("commit_kind", &project::ProjectInspectorCard::commit_kind)
+            .def_ro("diagnostic", &project::ProjectInspectorCard::diagnostic);
+
+        nb::class_<project::ProjectInspectorSave>(m, "ProjectInspectorSave")
+            .def_ro("sequence", &project::ProjectInspectorSave::sequence)
+            .def_ro("generation", &project::ProjectInspectorSave::generation)
+            .def_ro("kind", &project::ProjectInspectorSave::kind)
+            .def_ro("saved_at_unix_ns", &project::ProjectInspectorSave::saved_at_unix_ns)
+            .def_ro("bytes_added", &project::ProjectInspectorSave::bytes_added)
+            .def_ro("holds_checkpoint", &project::ProjectInspectorSave::holds_checkpoint)
+            .def_ro("checkpoint_iteration", &project::ProjectInspectorSave::checkpoint_iteration);
+
+        nb::class_<project::ProjectInspectorChapter>(m, "ProjectInspectorChapter")
+            .def_prop_ro("fourcc", [](const project::ProjectInspectorChapter& value) {
+                return value.fourcc.to_string();
+            })
+            .def_prop_ro("instance_uuid", [](const project::ProjectInspectorChapter& value) {
+                return value.instance_uuid.to_string();
+            })
+            .def_ro("row_kind", &project::ProjectInspectorChapter::row_kind)
+            .def_ro("compression", &project::ProjectInspectorChapter::compression)
+            .def_ro("stored_bytes", &project::ProjectInspectorChapter::stored_bytes)
+            .def_ro("uncompressed_bytes", &project::ProjectInspectorChapter::uncompressed_bytes)
+            .def_ro("source_generation", &project::ProjectInspectorChapter::source_generation);
+
+        nb::class_<project::ProjectInspectorCheckpoint>(m, "ProjectInspectorCheckpoint")
+            .def_prop_ro("instance_uuid", [](const project::ProjectInspectorCheckpoint& value) {
+                return value.instance_uuid.to_string();
+            })
+            .def_ro("source_generation", &project::ProjectInspectorCheckpoint::source_generation)
+            .def_ro("iteration", &project::ProjectInspectorCheckpoint::iteration)
+            .def_ro("gaussians", &project::ProjectInspectorCheckpoint::gaussians)
+            .def_ro("sh_degree", &project::ProjectInspectorCheckpoint::sh_degree)
+            .def_ro("binds_scene_graph", &project::ProjectInspectorCheckpoint::binds_scene_graph)
+            .def_ro("header_reachable", &project::ProjectInspectorCheckpoint::header_reachable)
+            .def_ro("retained", &project::ProjectInspectorCheckpoint::retained);
+
+        nb::class_<project::ProjectInspectorSceneGraph>(m, "ProjectInspectorSceneGraph")
+            .def_ro("node_counts_by_type", &project::ProjectInspectorSceneGraph::node_counts_by_type)
+            .def_ro("dataset_node_name", &project::ProjectInspectorSceneGraph::dataset_node_name)
+            .def_prop_ro("training_node_id", [](const project::ProjectInspectorSceneGraph& value) -> std::optional<std::string> {
+                if (!value.training_node_id) {
+                    return std::nullopt;
+                }
+                return value.training_node_id->to_string();
+            });
+
+        nb::class_<project::ProjectInspectorParameters>(m, "ProjectInspectorParameters")
+            .def_ro("active_strategy", &project::ProjectInspectorParameters::active_strategy)
+            .def_ro("embedded_dataset_present", &project::ProjectInspectorParameters::embedded_dataset_present)
+            .def_ro("embedded_dataset_complete", &project::ProjectInspectorParameters::embedded_dataset_complete)
+            .def_ro("embedded_images", &project::ProjectInspectorParameters::embedded_images)
+            .def_ro("embedded_normals", &project::ProjectInspectorParameters::embedded_normals)
+            .def_ro("embedded_sparse", &project::ProjectInspectorParameters::embedded_sparse);
+
+        nb::class_<project::ProjectInspectorReference>(m, "ProjectInspectorReference")
+            .def_ro("key", &project::ProjectInspectorReference::key)
+            .def_ro("kind", &project::ProjectInspectorReference::kind)
+            .def_ro("path", &project::ProjectInspectorReference::path)
+            .def_ro("reachable", &project::ProjectInspectorReference::reachable);
+
+        nb::class_<project::MetricHistorySample>(m, "ProjectMetricHistorySample")
+            .def_ro("iteration", &project::MetricHistorySample::iteration)
+            .def_ro("value", &project::MetricHistorySample::value);
+        nb::class_<project::LastEvaluationMetrics>(m, "ProjectLastEvaluationMetrics")
+            .def_ro("iteration", &project::LastEvaluationMetrics::iteration)
+            .def_ro("psnr", &project::LastEvaluationMetrics::psnr)
+            .def_ro("ssim", &project::LastEvaluationMetrics::ssim);
+        nb::class_<project::ProjectInspectorMetrics>(m, "ProjectInspectorMetrics")
+            .def_ro("loss_samples", &project::ProjectInspectorMetrics::loss_samples)
+            .def_ro("psnr_samples", &project::ProjectInspectorMetrics::psnr_samples)
+            .def_ro("last_loss", &project::ProjectInspectorMetrics::last_loss)
+            .def_ro("last_psnr", &project::ProjectInspectorMetrics::last_psnr)
+            .def_ro("last_evaluation", &project::ProjectInspectorMetrics::last_evaluation);
+
+        nb::class_<project::ProjectInspectorDetails>(m, "ProjectInspectorDetails")
+            .def_ro("card", &project::ProjectInspectorDetails::card)
+            .def_ro("storage", &project::ProjectInspectorDetails::storage)
+            .def_ro("save_history", &project::ProjectInspectorDetails::save_history)
+            .def_ro("chapters", &project::ProjectInspectorDetails::chapters)
+            .def_ro("manifest", &project::ProjectInspectorDetails::manifest)
+            .def_ro("license", &project::ProjectInspectorDetails::license)
+            .def_ro("scene_graph", &project::ProjectInspectorDetails::scene_graph)
+            .def_ro("parameters", &project::ProjectInspectorDetails::parameters)
+            .def_ro("retained_checkpoints", &project::ProjectInspectorDetails::retained_checkpoints)
+            .def_ro("references", &project::ProjectInspectorDetails::references)
+            .def_ro("metrics", &project::ProjectInspectorDetails::metrics)
+            .def_ro("autosave_sidecar_present", &project::ProjectInspectorDetails::autosave_sidecar_present)
+            .def_ro("chapters_requiring_full_read", &project::ProjectInspectorDetails::chapters_requiring_full_read);
+
+        m.def("classify_project", [](const std::filesystem::path& path) {
+            std::optional<project::OpenClassification> result;
+            {
+                nb::gil_scoped_release release;
+                project::ReaderOptions options;
+                options.allow_unsupported_inspection = true;
+                result = project::ProjectReader::classify(path, options);
+            }
+            return *result; }, nb::arg("path"), "Classify a .licht path without throwing for damaged heads.");
+
+        m.def("project_storage_stats", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectStorageStats>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::project_storage_stats(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("inspect_project_card", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_card(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("inspect_project_details", [](const std::filesystem::path& path, const std::uint64_t checkpoint_byte_budget) {
+            std::optional<lfs::Result<project::ProjectInspectorDetails>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_details(path, checkpoint_byte_budget);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_byte_budget") = 8ull * 1024 * 1024);
+
+        m.def("read_preview", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::read_project_preview(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
 
         m.def(
             "inspect_project",

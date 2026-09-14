@@ -198,6 +198,38 @@ class ProjectOpenState(enum.Enum):
 
     HARD_FAIL = 3
 
+class ProjectCommitKind(enum.Enum):
+    EXPLICIT = 1
+
+    AUTOSAVE = 2
+
+    RECOVERED = 3
+
+    COMPACTION = 4
+
+class ProjectRowKind(enum.Enum):
+    LIVE = 0
+
+    TOMBSTONE = 1
+
+    SIDECAR_BASE_REFERENCE = 2
+
+class ProjectCompression(enum.Enum):
+    STORED = 0
+
+    ZSTD_FRAMED = 1
+
+    BYTE_SHUFFLE_ZSTD_FRAMED = 2
+
+class ProjectVersion:
+    def __init__(self) -> None: ...
+
+    @property
+    def major(self) -> int: ...
+
+    @property
+    def minor(self) -> int: ...
+
 class ProjectInspection:
     @property
     def project_uuid(self) -> str: ...
@@ -231,6 +263,291 @@ class ProjectInspection:
 
     @property
     def fallback_preview_path(self) -> str: ...
+
+class ProjectOpenClassification:
+    @property
+    def state(self) -> ProjectOpenState: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def diagnostic(self) -> str: ...
+
+class ProjectStorageStats:
+    @property
+    def physical_bytes(self) -> int: ...
+
+    @property
+    def estimated_live_bytes(self) -> int: ...
+
+    @property
+    def dead_bytes(self) -> int: ...
+
+    @property
+    def dead_ratio(self) -> float: ...
+
+class ProjectLicense:
+    def __init__(self) -> None: ...
+
+    @property
+    def identifier(self) -> str: ...
+
+    @identifier.setter
+    def identifier(self, arg: str, /) -> None: ...
+
+    @property
+    def notice(self) -> str: ...
+
+    @notice.setter
+    def notice(self, arg: str, /) -> None: ...
+
+class ProjectInspectorCard:
+    @property
+    def path(self) -> pathlib.Path: ...
+
+    @property
+    def project_uuid(self) -> str: ...
+
+    @property
+    def file_uuid(self) -> str: ...
+
+    @property
+    def commit_uuid(self) -> str: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def created_at_unix_ns(self) -> int: ...
+
+    @property
+    def saved_at_unix_ns(self) -> int: ...
+
+    @property
+    def physical_file_size(self) -> int: ...
+
+    @property
+    def role(self) -> ProjectContainerRole: ...
+
+    @property
+    def open_state(self) -> ProjectOpenState: ...
+
+    @property
+    def validation_scope(self) -> str: ...
+
+    @property
+    def has_preview(self) -> bool: ...
+
+    @property
+    def preview_bytes(self) -> int: ...
+
+    @property
+    def min_reader_version(self) -> ProjectVersion: ...
+
+    @property
+    def min_safe_writer_version(self) -> ProjectVersion: ...
+
+    @property
+    def commit_kind(self) -> ProjectCommitKind: ...
+
+    @property
+    def diagnostic(self) -> str: ...
+
+class ProjectInspectorSave:
+    @property
+    def sequence(self) -> int: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def kind(self) -> ProjectCommitKind: ...
+
+    @property
+    def saved_at_unix_ns(self) -> int: ...
+
+    @property
+    def bytes_added(self) -> int: ...
+
+    @property
+    def holds_checkpoint(self) -> bool: ...
+
+    @property
+    def checkpoint_iteration(self) -> int | None: ...
+
+class ProjectInspectorChapter:
+    @property
+    def fourcc(self) -> str: ...
+
+    @property
+    def instance_uuid(self) -> str: ...
+
+    @property
+    def row_kind(self) -> ProjectRowKind: ...
+
+    @property
+    def compression(self) -> ProjectCompression: ...
+
+    @property
+    def stored_bytes(self) -> int: ...
+
+    @property
+    def uncompressed_bytes(self) -> int: ...
+
+    @property
+    def source_generation(self) -> int: ...
+
+class ProjectInspectorCheckpoint:
+    @property
+    def instance_uuid(self) -> str: ...
+
+    @property
+    def source_generation(self) -> int: ...
+
+    @property
+    def iteration(self) -> int: ...
+
+    @property
+    def gaussians(self) -> int: ...
+
+    @property
+    def sh_degree(self) -> int: ...
+
+    @property
+    def binds_scene_graph(self) -> bool: ...
+
+    @property
+    def header_reachable(self) -> bool: ...
+
+    @property
+    def retained(self) -> bool: ...
+
+class ProjectInspectorSceneGraph:
+    @property
+    def node_counts_by_type(self) -> dict[str, int]: ...
+
+    @property
+    def dataset_node_name(self) -> str: ...
+
+    @property
+    def training_node_id(self) -> str | None: ...
+
+class ProjectInspectorParameters:
+    @property
+    def active_strategy(self) -> str: ...
+
+    @property
+    def embedded_dataset_present(self) -> bool: ...
+
+    @property
+    def embedded_dataset_complete(self) -> bool: ...
+
+    @property
+    def embedded_images(self) -> int: ...
+
+    @property
+    def embedded_normals(self) -> int: ...
+
+    @property
+    def embedded_sparse(self) -> int: ...
+
+class ProjectInspectorReference:
+    @property
+    def key(self) -> str: ...
+
+    @property
+    def kind(self) -> str: ...
+
+    @property
+    def path(self) -> pathlib.Path: ...
+
+    @property
+    def reachable(self) -> bool: ...
+
+class ProjectMetricHistorySample:
+    @property
+    def iteration(self) -> int: ...
+
+    @property
+    def value(self) -> float: ...
+
+class ProjectLastEvaluationMetrics:
+    @property
+    def iteration(self) -> int: ...
+
+    @property
+    def psnr(self) -> float: ...
+
+    @property
+    def ssim(self) -> float: ...
+
+class ProjectInspectorMetrics:
+    @property
+    def loss_samples(self) -> int: ...
+
+    @property
+    def psnr_samples(self) -> int: ...
+
+    @property
+    def last_loss(self) -> ProjectMetricHistorySample | None: ...
+
+    @property
+    def last_psnr(self) -> ProjectMetricHistorySample | None: ...
+
+    @property
+    def last_evaluation(self) -> ProjectLastEvaluationMetrics | None: ...
+
+class ProjectInspectorDetails:
+    @property
+    def card(self) -> ProjectInspectorCard: ...
+
+    @property
+    def storage(self) -> ProjectStorageStats: ...
+
+    @property
+    def save_history(self) -> list[ProjectInspectorSave]: ...
+
+    @property
+    def chapters(self) -> list[ProjectInspectorChapter]: ...
+
+    @property
+    def manifest(self) -> dict[str, str]: ...
+
+    @property
+    def license(self) -> ProjectLicense | None: ...
+
+    @property
+    def scene_graph(self) -> ProjectInspectorSceneGraph: ...
+
+    @property
+    def parameters(self) -> ProjectInspectorParameters: ...
+
+    @property
+    def retained_checkpoints(self) -> list[ProjectInspectorCheckpoint]: ...
+
+    @property
+    def references(self) -> list[ProjectInspectorReference]: ...
+
+    @property
+    def metrics(self) -> ProjectInspectorMetrics: ...
+
+    @property
+    def autosave_sidecar_present(self) -> bool: ...
+
+    @property
+    def chapters_requiring_full_read(self) -> list[str]: ...
+
+def classify_project(path: str | os.PathLike) -> ProjectOpenClassification:
+    """Classify a .licht path without throwing for damaged heads."""
+
+def project_storage_stats(path: str | os.PathLike) -> ProjectStorageStats: ...
+
+def inspect_project_card(path: str | os.PathLike) -> ProjectInspectorCard: ...
+
+def inspect_project_details(path: str | os.PathLike, checkpoint_byte_budget: int = 8388608) -> ProjectInspectorDetails: ...
+
+def read_preview(path: str | os.PathLike) -> bytes: ...
 
 def inspect_project(path: str | os.PathLike, resolve_preview_fallback: bool = True) -> ProjectInspection:
     """

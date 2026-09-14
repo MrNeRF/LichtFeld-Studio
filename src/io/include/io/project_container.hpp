@@ -413,7 +413,10 @@ namespace lfs::io::project {
         [[nodiscard]] const SuperblockInfo& superblock() const noexcept;
         [[nodiscard]] const HeadInfo& selected_head() const noexcept;
         [[nodiscard]] const CommitInfo& commit() const noexcept;
+        [[nodiscard]] std::vector<CommitInfo> lineage() const;
         [[nodiscard]] const std::vector<ChunkInfo>& chunks() const noexcept;
+        [[nodiscard]] lfs::Result<std::vector<std::vector<ChunkInfo>>>
+        lineage_chunks() const;
         [[nodiscard]] const std::vector<std::string>& warnings() const noexcept;
         [[nodiscard]] const std::optional<PreviewLocator>& preview() const noexcept;
         [[nodiscard]] const ReaderOptions& reader_options() const noexcept;

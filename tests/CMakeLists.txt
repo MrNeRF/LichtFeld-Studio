@@ -96,6 +96,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
+    test_project_inspector.cpp
     licht_format_test_runtime.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
@@ -108,6 +109,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
 )
