@@ -55,6 +55,7 @@ class GalleryAssetMixin:
         self._gallery_pull_review = False
         self._gallery_batch = []
         self._gallery_batch_waiting = False
+        self._gallery_batch_asset = None
         self._gallery_notice = ""
         self._gallery_undo = None
         self._gallery_undo_kind = ""
@@ -128,7 +129,7 @@ class GalleryAssetMixin:
             self._gallery_undo = None
         controller = self._gallery_controller
         if self._gallery_batch_waiting and controller and not controller._panel_busy():
-            facts = self._gallery_facts(self._get_selected_asset() or {})
+            facts = self._gallery_facts(self._gallery_batch_asset or self._get_selected_asset() or {})
             self._gallery_batch_waiting = False
             if facts["activity"] in ("error", "paused", "interrupted") or facts["freshness"] == "diverged" or controller._last_canceled:
                 self._gallery_batch = []
@@ -203,6 +204,12 @@ class GalleryAssetMixin:
             label = tr("state.remote_detail", state=label, size=self._format_size(asset.get("file_size_bytes")),
                        format=asset.get("source_format", "licht").upper())
         job = next((j for j in self._gallery_state.get("jobs", ()) if j["id"] == facts["jobId"]), {})
+        native = facts["activity"] in ("preparing", "applying") and not job
+        can_cancel = native or bool(job and job.get("status") not in ("completed", "canceled"))
+        can_pause = job.get("status") == "running"
+        scene = self._gallery_scene(asset) or {}
+        stored = bool(scene.get("status") == "ready" and self._gallery_state.get("connected")
+                      and self._gallery_state.get("checkedAt") and not self._gallery_state.get("offline"))
         indeterminate = facts["active"] and (facts["activity"] in ("preparing", "processing", "applying")
                                             or (facts["activity"] in ("uploading", "downloading") and not job.get("total")))
         detail = job.get("transferDetail", "")
@@ -211,6 +218,11 @@ class GalleryAssetMixin:
         return {"gallery_state": facts["state"], "gallery_label": label,
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
+                "gallery_stored": stored,
+                "gallery_stored_label": tr("state.stored") + " · " + self._gallery_checked_label() if stored else "",
+                "gallery_can_pause": can_pause, "gallery_can_cancel": can_cancel,
+                "gallery_action_persistent": can_cancel or facts["action"] in ("retry", "resume"),
+                "gallery_has_controls": can_cancel or bool(facts["action"]),
                 "gallery_tooltip": "\n".join(filter(None, (label, byte_label, detail))),
                 "gallery_progress_width": f"{35 if indeterminate else facts['progress']}%",
                 "gallery_indeterminate": indeterminate,
@@ -334,6 +346,7 @@ class GalleryAssetMixin:
             "gallery_linked": lambda: self._has_gallery_link(),
             "gallery_has_portal": lambda: bool(self._gallery_scene(self._get_selected_asset() or {})),
             "gallery_notice": lambda: self._gallery_notice or self._gallery_state.get("message", ""),
+            "gallery_has_notice": lambda: bool(self._gallery_notice or self._gallery_state.get("message", "")),
             "gallery_format_hint": lambda: tr("format." + self._gallery_upload_format + "_hint"),
             "gallery_publish_label": self._gallery_publish_label,
             "gallery_includes": self._gallery_review_includes,
@@ -361,6 +374,7 @@ class GalleryAssetMixin:
                     "action.story", "action.display", "action.manage", "action.submit", "action.cancel", "action.grid", "action.list",
                     "info.format", "state.remote_only", "action.pull_open", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
+        model.bind_func("g_action_pause", lambda: tr("action.pause", prefix="gallery.transfer."))
         for action in ("connect", "connect_cancel", "connect_copy", "connect_browser", "toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "account", "transfers", "toggle", "primary", "publish", "pull", "open", "copy", "more",
                        "unlink", "remove", "story", "display", "manage", "undo", "publish_many", "update_many", "cancel", "pull_open", "open_local", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
@@ -394,11 +408,13 @@ class GalleryAssetMixin:
             items.append({"label": tr("action.pull_open"), "action": "gallery:pull_open"})
         if scene:
             items += [{"label": tr("action.open"), "action": "gallery:open"}, {"label": tr("action.copy"), "action": "gallery:copy"}]
-        if asset.get("id") in self._gallery_state.get("links", {}):
-            items.append({"label": tr("action.more"), "action": "gallery:context_more", "children": [
-                {"label": tr("action.unlink"), "action": "gallery:unlink"},
-                {"label": tr("action.publish_new"), "action": "gallery:publish_new"},
-                *([{"label": tr("action.remove"), "action": "gallery:remove"}] if scene else [])]})
+        badge = self._gallery_badge(asset)
+        if badge["gallery_can_pause"]:
+            items.append({"label": tr("action.pause", prefix="gallery.transfer."), "action": "gallery:pause_transfer"})
+        if badge["gallery_can_cancel"]:
+            items.append({"label": tr("action.cancel"), "action": "gallery:cancel_transfer"})
+        if scene:
+            items.append({"label": tr("action.delete_upstream"), "action": "gallery:remove", "separator_before": True})
         return items
 
     def _gallery_command(self, action, args=()):
@@ -499,18 +515,21 @@ class GalleryAssetMixin:
                     self._controller().refresh()
             elif action == "publish_new":
                 self._confirm_gallery("confirm.publish_new", lambda: self._publish_as_new(asset))
-            elif action == "publish" and not self._gallery_review:
-                self._gallery_upload_format = getattr(self._controller(), "upload_format", self._gallery_upload_format)
-                self._gallery_expanded = self._gallery_review = True
             elif action in ("publish", "update"):
                 if asset.get("remote_only"):
                     self._controller().edit_scene(self._gallery_editor_scene or self._gallery_scene(asset), self._gallery_details())
                 else:
-                    self._begin_gallery_publish(asset, action)
+                    self._open_gallery_review(asset, action)
             elif action == "resolve":
                 self._controller().resolve_asset(asset, self._gallery_details())
             elif action in ("retry", "resume") and facts["jobId"]:
                 self._controller().command("resume", facts["jobId"])
+            elif action in ("pause_transfer", "cancel_transfer"):
+                badge = self._gallery_badge(asset)
+                allowed = badge["gallery_can_pause" if action == "pause_transfer" else "gallery_can_cancel"]
+                if allowed:
+                    command = "pause" if action == "pause_transfer" or not facts["jobId"] else "cancel"
+                    self._controller().command(command, facts["jobId"] or None)
             elif action in ("pull", "pull_open"):
                 self._pull_gallery_asset(asset, open_after=action == "pull_open")
             elif action in ("open", "story", "display", "manage", "copy"):
@@ -741,6 +760,7 @@ class GalleryAssetMixin:
             return
         controller = self._controller()
         self._gallery_batch_waiting = bool(self._gallery_batch)
+        self._gallery_batch_asset = dict(asset)
         try:
             controller.publish_asset(asset, self._gallery_details(), self._gallery_upload_format,
                                      update=action == "update", publish_as_new=self._gallery_publish_new)
@@ -752,7 +772,30 @@ class GalleryAssetMixin:
     def _publish_as_new(self, asset):
         self._gallery_publish_new = True
         self._gallery_visibility = "private"
-        self._gallery_review = self._gallery_expanded = True
+        self._open_gallery_review(asset, "publish")
+
+    def _open_gallery_review(self, asset, action, *, open_after=False):
+        from .gallery_file_panel import open_gallery_file_panel
+        controller = self._controller()
+        self._gallery_upload_format = getattr(controller, "upload_format", self._gallery_upload_format)
+        self._gallery_review = action != "pull"
+        self._gallery_pull_review = action == "pull"
+
+        def done(submitted):
+            self._gallery_review = self._gallery_pull_review = False
+            self._gallery_batch_waiting = bool(submitted and self._gallery_batch)
+            self._gallery_batch_asset = dict(asset) if submitted else None
+            if not submitted:
+                self._gallery_batch = []
+            self._request_model_update()
+
+        open_gallery_file_panel(controller=controller, asset=asset,
+            scene=self._gallery_editor_scene or self._gallery_scene(asset), action=action,
+            fields=dict(self._gallery_details(), upload_format=self._gallery_upload_format,
+                        pull_folder=self._gallery_pull_folder, pull_name=self._gallery_pull_name),
+            includes=self._gallery_review_includes(), quota=self._gallery_quota(),
+            warning=self._gallery_quota_warning() if action != "pull" else "",
+            publish_new=self._gallery_publish_new, open_after=open_after, on_done=done)
 
     def _change_gallery_visibility(self, value):
         if value not in ("private", "public") or value == self._gallery_visibility:
@@ -775,15 +818,9 @@ class GalleryAssetMixin:
         if not scene:
             return
         if asset.get("remote_only") or not asset.get("exists", True):
-            if not self._gallery_pull_review:
-                self._gallery_pull_open = open_after
-                folder = self._asset_index_folders().get(self._gallery_last_folder) or self._asset_index_folders().get(self._default_folder_id(), {})
-                self._gallery_pull_folder = folder.get("path", "")
-                self._gallery_pull_name = self._controller().safe_filename(scene.get("title", ""))
-                self._gallery_pull_review = self._gallery_expanded = True
-                return
-            self._controller().pull_asset(asset, scene, str(Path(self._gallery_pull_folder) / self._gallery_pull_name),
-                open_after=self._gallery_pull_open or open_after)
-            self._gallery_pull_review = False
+            folder = self._asset_index_folders().get(self._gallery_last_folder) or self._asset_index_folders().get(self._default_folder_id(), {})
+            self._gallery_pull_folder = folder.get("path", "")
+            self._gallery_pull_name = self._controller().safe_filename(scene.get("title", ""))
+            self._open_gallery_review(asset, "pull", open_after=open_after)
         else:
             self._controller().pull_asset(asset, scene)

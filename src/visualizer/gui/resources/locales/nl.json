@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "Van portaal verwijderen…",
+  "asset_manager.gallery.action.open_app": "Openen in toepassing",
+  "asset_manager.gallery.share.copied": "Deellink gekopieerd.",
+  "asset_manager.gallery.dialog.upload": "Uploaden naar galerij",
+  "asset_manager.gallery.dialog.download": "Downloaden uit galerij",
+  "asset_manager.gallery.dialog.waiting": "Wachten tot de huidige overdracht is voltooid.",
+  "asset_manager.gallery.state.stored": "Opgeslagen op portaal",
   "asset_manager.gallery.error.unsafe_url": "Deze link hoort niet bij je portaal en is geblokkeerd.",
   "asset_manager.gallery.format.studio_hint": "Geen hercodering.",
   "asset_manager.gallery.format.sog_hint": "Kleinste formaat, snel laden op het web.",

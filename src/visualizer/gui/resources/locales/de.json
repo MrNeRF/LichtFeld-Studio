@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "Im Portal löschen…",
+  "asset_manager.gallery.action.open_app": "In der Anwendung öffnen",
+  "asset_manager.gallery.share.copied": "Freigabelink kopiert.",
+  "asset_manager.gallery.dialog.upload": "In die Galerie hochladen",
+  "asset_manager.gallery.dialog.download": "Aus der Galerie herunterladen",
+  "asset_manager.gallery.dialog.waiting": "Warten auf den Abschluss der aktuellen Übertragung.",
+  "asset_manager.gallery.state.stored": "Im Portal gespeichert",
   "asset_manager.gallery.error.unsafe_url": "Dieser Link gehört nicht zu Ihrem Portal und wurde blockiert.",
   "asset_manager.gallery.format.studio_hint": "Keine Neukodierung.",
   "asset_manager.gallery.format.sog_hint": "Kleinste Größe, schnelles Laden im Web.",

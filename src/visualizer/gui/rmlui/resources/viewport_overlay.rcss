@@ -1150,7 +1150,8 @@ body {
 .viewport-transfer-progress { height: 5dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
 .viewport-transfer-fill { height: 100%; }
 .viewport-transfer-footer { padding-top: 6dp; border-top-width: 1dp; flex-wrap: wrap; }
-.viewport-transfer-queue .btn { min-height: 24dp; font-size: 11dp; }
+.viewport-transfer-queue .btn { box-sizing: border-box; height: 26dp; min-height: 26dp; max-height: 26dp; padding: 0 10dp; line-height: 24dp; font-size: 11dp; white-space: nowrap; }
+.viewport-transfer-queue .viewport-transfer-toggle { padding: 0; width: 24dp; text-align: center; }
 .viewport-transfer-queue.hidden, .viewport-transfer-queue .hidden { display: none; }
 @keyframes transfer-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }
 .viewport-transfer-fill.is-indeterminate { animation: transfer-progress-pulse 0.8s quadratic-in-out infinite alternate; }

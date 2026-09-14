@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "Supprimer du portail…",
+  "asset_manager.gallery.action.open_app": "Ouvrir dans l’application",
+  "asset_manager.gallery.share.copied": "Lien de partage copié.",
+  "asset_manager.gallery.dialog.upload": "Importer dans la galerie",
+  "asset_manager.gallery.dialog.download": "Télécharger depuis la galerie",
+  "asset_manager.gallery.dialog.waiting": "En attente de la fin du transfert en cours.",
+  "asset_manager.gallery.state.stored": "Stocké sur le portail",
   "asset_manager.gallery.error.unsafe_url": "Ce lien n’appartient pas à votre portail et a été bloqué.",
   "asset_manager.gallery.format.studio_hint": "Sans réencodage.",
   "asset_manager.gallery.format.sog_hint": "Taille minimale, chargement web rapide.",

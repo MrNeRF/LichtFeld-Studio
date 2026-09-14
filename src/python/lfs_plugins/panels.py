@@ -58,6 +58,11 @@ PANEL_SPECS = {
         "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
         "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",
     ),
+    "gallery_file": _PanelSpec(
+        "lfs_plugins.gallery_file_panel", "GalleryFilePanel", "lfs.gallery_file", "Gallery",
+        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (500, 0),
+        update_policy="dirty", has_poll=True,
+    ),
     "bug_report": _PanelSpec(
         "lfs_plugins.bug_report_panel", "BugReportPanel", "lfs.bug_report",
         "Report a bug", "FLOATING", 96, "rmlui/bug_report_panel.rml",
@@ -327,6 +332,7 @@ def _build_builtin_panel_steps(lf):
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
         _register_lazy_panel(lf, "gallery_transfer")
+        _register_lazy_panel(lf, "gallery_file")
 
     def overlays():
         from .overlays import register as register_overlays

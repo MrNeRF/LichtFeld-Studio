@@ -43,6 +43,8 @@ class GalleryController:
         self._job_transfer_estimates = {}
         self._transfer_ui_epoch = 0
         self._refresh_pending = False
+        self._refresh_requested = False
+        self._share_copy_pending = None
         self.checked_at = 0.0
         self.offline = False
         self._operation_project = None
@@ -524,12 +526,44 @@ class GalleryController:
     def open_portal(self, scene, action="open"):
         if not scene:
             return
-        url = self.service.account.base_url + "/gallery/scenes/" + str(uuid.UUID(scene["id"])) + "/"
-        if action == "copy" and scene.get("visibility") == "public" and scene.get("viewerUrl"):
-            lf.ui.set_clipboard_text(checked_portal_url(self.service.account, scene["viewerUrl"]))
+        url = self.service.account.base_url + "/gallery/scenes/" + str(uuid.UUID(scene["id"])) + "/open/"
+        if action == "copy":
+            self._copy_share_link(scene)
         else:
-            tab = "manage" if action == "copy" else action if action in ("story", "display", "manage") else "story"
-            lf.ui.open_url(checked_portal_url(self.service.account, url + "?tab=" + tab))
+            tab = "?tab=" + action if action in ("story", "display", "manage") else ""
+            lf.ui.open_url(checked_portal_url(self.service.account, url + tab))
+
+    def _copy_share_link(self, scene):
+        from .portal_gallery import PortalGalleryClient
+        identity = self.service.identity()
+        key = (identity, scene["id"])
+        if self._share_copy_pending == key:
+            return
+        self._share_copy_pending = key
+        account = self.service.account
+
+        def copy_link():
+            link, error = None, None
+            try:
+                link = PortalGalleryClient(account, expected_session=identity[1:3]).share_link(scene["id"])
+            except Exception as exc:
+                error = friendly_error(exc)
+
+            def finished():
+                if self._share_copy_pending != key:
+                    return
+                self._share_copy_pending = None
+                if self.service.identity() != identity:
+                    return
+                if error:
+                    self._message = error
+                else:
+                    lf.ui.set_clipboard_text(checked_portal_url(account, link))
+                    self._message = tr("share.copied", prefix="asset_manager.gallery.")
+                self._refresh_model()
+                self._schedule_poll()
+            lf.ui.schedule_on_ui_thread(finished)
+        threading.Thread(target=copy_link, daemon=True, name="GalleryShareLink").start()
 
     def pull_asset(self, asset, scene, destination=None, *, open_after=False):
         self._check_identity()
@@ -670,12 +704,14 @@ class GalleryController:
         return "idle"
 
     def refresh(self):
+        self._check_identity()
+        self._refresh_requested = True
         if not self.service.busy:
-            self._check_identity()
+            self._refresh_requested = False
             self._message = ""
             self._refresh_pending = True
             self.service.refresh()
-            self._schedule_poll()
+        self._schedule_poll()
 
     def _schedule_poll(self):
         if self._timer is not None:
@@ -699,13 +735,15 @@ class GalleryController:
 
     def _work_pending(self):
         return bool(self.service.busy or self.phase() != "idle" or self._native_use
-                    or self._open_continuation or self._refresh_pending or self._cancel_requests
+                    or self._open_continuation or self._refresh_pending or self._refresh_requested or self._cancel_requests
                     or self._resume_queue or self._update_queue or self._batch_current
                     or getattr(self, "_after_service", None) or self._account_flow().get("linking"))
 
     def _poll_body(self):
         self._check_identity()
         self._advance_phases()
+        if self._refresh_requested and not self.service.busy:
+            self.refresh()
         if self._refresh_pending and not self.service.busy:
             self._refresh_pending = False
             state = self.service.snapshot()
@@ -868,6 +906,8 @@ class GalleryController:
         self._decision_pending = False
         self.checked_at = 0
         self.offline = False
+        self._refresh_pending = False
+        self._refresh_requested = bool(identity[-1])
         self.service.pause()
         if self._export_pending:
             self._cancel_own_export()

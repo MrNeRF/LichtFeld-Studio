@@ -30,6 +30,7 @@ class GalleryTransferOverlay:
             "empty": lambda: not self._state.get("rows"),
             "header": self._header,
             "message": lambda: self._message or self._state.get("message", ""),
+            "message_error": lambda: bool(self._message),
             "toggle_label": lambda: tr("action.expand" if self._collapsed else "action.collapse"),
             "toggle_icon": lambda: "+" if self._collapsed else "−",
             "close_label": lambda: lf.ui.tr("common.close"),

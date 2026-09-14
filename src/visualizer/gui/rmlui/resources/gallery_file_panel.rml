@@ -1,0 +1,30 @@
+<rml><head><link type="text/template" href="floating_window.rml"/><link type="text/rcss" href="gallery_file_panel.rcss"/></head>
+<body template="floating-window" data-model="gallery_file">
+  <div class="gallery-file-content">
+    <span class="text-muted">{{file_name}}</span>
+    <div class="gallery-file-fields" data-if="!is_pull">
+      <label for="gallery-file-title">{{g_review_title}}</label>
+      <input id="gallery-file-title" type="text" maxlength="120" data-value="title"/>
+      <label for="gallery-file-description">{{g_review_description}}</label>
+      <textarea id="gallery-file-description" rows="3" maxlength="5000" data-value="description"/>
+      <div class="setting-row"><span>{{g_review_visibility}}</span><select data-value="visibility"><option value="private">{{g_review_private}}</option><option value="public">{{g_review_public}}</option></select></div>
+      <div class="gallery-file-fields" data-if="show_format">
+        <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
+        <span class="text-muted">{{format_hint}}</span>
+        <span class="text-muted">{{includes}}</span>
+      </div>
+    </div>
+    <div class="gallery-file-fields" data-if="is_pull">
+      <label>{{g_info_folder}}</label><input type="text" data-value="pull_folder"/>
+      <label>{{g_info_filename}}</label><input type="text" data-value="pull_name"/>
+    </div>
+    <span class="text-muted">{{quota}}</span><span class="status-warning">{{warning}}</span>
+    <span class="status-info" data-if="waiting">@tr:asset_manager.gallery.dialog.waiting</span>
+    <span class="status-info" data-if="disconnected">@tr:asset_manager.gallery.sidebar.sign_in</span>
+    <span class="status-error" data-if="has_error">{{error}}</span>
+    <div class="gallery-file-actions">
+      <button class="btn btn--secondary" data-event-click="cancel">{{g_action_cancel}}</button>
+      <button class="btn btn--primary" data-attr-disabled="!can_submit" data-event-click="submit">{{submit_label}}</button>
+    </div>
+  </div>
+</body></rml>

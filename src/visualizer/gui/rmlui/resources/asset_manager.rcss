@@ -859,7 +859,12 @@
 .gallery-card-action { visibility: hidden; box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-card-meta span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 16dp; }
 .asset-card:hover .gallery-card-action, .asset-card:focus .gallery-card-action, .asset-card.is-selected .gallery-card-action { visibility: visible; }
-.gallery-card-transfer { display: flex; flex-direction: column; gap: 5dp; margin-top: auto; padding-top: 6dp; padding-bottom: 5dp; min-width: 0; }
+.gallery-card-transfer { display: flex; flex-direction: column; gap: 4dp; padding-top: 4dp; padding-bottom: 4dp; min-width: 0; }
+.gallery-card-action.is-persistent { visibility: visible; }
+.gallery-stored { position: absolute; left: 7dp; top: 7dp; padding: 1dp 5dp; border-radius: 9dp; background-color: #203b2d; color: #a3e5b5; font-size: 13dp; }
+.gallery-stored-list { color: #a3e5b5; margin-left: 4dp; }
+.gallery-file-action { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 22dp; font-size: 11dp; white-space: nowrap; }
+.asset-col-gallery .gallery-file-action { padding: 0 5dp; min-width: 22dp; overflow: hidden; text-overflow: ellipsis; }
 .gallery-progress { height: 5dp; width: 100%; flex-shrink: 0; overflow: hidden; border-radius: 2dp; }
 .gallery-progress-fill { height: 100%; }
 .gallery-card-metrics { font-size: 10dp; line-height: 14dp; min-height: 14dp; padding-right: 26dp; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

@@ -1,0 +1,8 @@
+.gallery-file-content { display: flex; flex-direction: column; gap: 12dp; padding: 16dp; }
+.gallery-file-fields { display: flex; flex-direction: column; gap: 8dp; }
+.gallery-file-fields input, .gallery-file-fields textarea { width: 100%; box-sizing: border-box; }
+.gallery-file-fields textarea { height: 64dp; }
+.gallery-file-fields .setting-row { display: flex; align-items: center; gap: 12dp; }
+.gallery-file-fields .setting-row select { flex: 1; }
+.gallery-file-actions { display: flex; justify-content: flex-end; gap: 8dp; padding-top: 4dp; }
+.gallery-file-actions .btn { padding: 5dp 12dp; height: 28dp; box-sizing: border-box; }

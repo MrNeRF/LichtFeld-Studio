@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "포털에서 삭제…",
+  "asset_manager.gallery.action.open_app": "애플리케이션에서 열기",
+  "asset_manager.gallery.share.copied": "공유 링크를 복사했습니다.",
+  "asset_manager.gallery.dialog.upload": "갤러리에 업로드",
+  "asset_manager.gallery.dialog.download": "갤러리에서 다운로드",
+  "asset_manager.gallery.dialog.waiting": "현재 전송이 완료되기를 기다리는 중입니다.",
+  "asset_manager.gallery.state.stored": "포털에 저장됨",
   "asset_manager.gallery.error.unsafe_url": "이 링크는 사용 중인 포털에 속하지 않아 차단되었습니다.",
   "asset_manager.gallery.format.studio_hint": "다시 인코딩하지 않습니다.",
   "asset_manager.gallery.format.sog_hint": "최소 크기, 빠른 웹 로딩.",

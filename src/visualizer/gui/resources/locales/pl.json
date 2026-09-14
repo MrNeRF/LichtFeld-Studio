@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "Usuń z portalu…",
+  "asset_manager.gallery.action.open_app": "Otwórz w aplikacji",
+  "asset_manager.gallery.share.copied": "Skopiowano link udostępniania.",
+  "asset_manager.gallery.dialog.upload": "Prześlij do galerii",
+  "asset_manager.gallery.dialog.download": "Pobierz z galerii",
+  "asset_manager.gallery.dialog.waiting": "Oczekiwanie na zakończenie bieżącego transferu.",
+  "asset_manager.gallery.state.stored": "Zapisano w portalu",
   "asset_manager.gallery.error.unsafe_url": "Ten link nie należy do Twojego portalu i został zablokowany.",
   "asset_manager.gallery.format.studio_hint": "Bez ponownego kodowania.",
   "asset_manager.gallery.format.sog_hint": "Najmniejszy rozmiar, szybkie ładowanie w sieci.",

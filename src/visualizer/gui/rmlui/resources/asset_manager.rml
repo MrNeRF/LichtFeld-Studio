@@ -113,6 +113,11 @@
             <span data-if="gallery_empty_pull">@tr:asset_manager.gallery.empty.pull</span>
           </div>
           <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
+          <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}}</div>
+          <div class="gallery-actions">
+            <button class="btn btn--secondary" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button>
+            <button class="btn btn--secondary" data-if="gallery_has_undo" data-event-click="gallery_undo">{{g_action_undo}}</button>
+          </div>
         </div>
 
           <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
@@ -123,6 +128,7 @@
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-class-gallery-remote="asset.remote_only" data-style-decorator="asset.thumbnail_decorator">
+                        <span class="gallery-stored" data-if="asset.gallery_stored" data-attr-data-tooltip="asset.gallery_stored_label">✓</span>
                         <span class="gallery-badge" data-attr-class="'gallery-badge ' + asset.gallery_tone" data-attr-data-tooltip="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
                         <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
@@ -132,15 +138,16 @@
                         </div>
                         <div class="asset-card-meta">
                           <span>{{asset.gallery_label}}</span>
-                          <span data-if="asset.gallery_has_bytes">{{asset.gallery_bytes}}</span>
+                          <span data-if="asset.gallery_has_bytes" data-attr-data-tooltip="asset.gallery_bytes">{{asset.gallery_detail}}</span>
                           <span data-if="!asset.gallery_has_bytes">{{asset.size_label}}</span>
                         </div>
                         <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-data-tooltip="asset.gallery_tooltip">
                           <div class="gallery-progress"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
-                          <span class="gallery-card-metrics">{{asset.gallery_detail}}</span>
                         </div>
-                        <div class="asset-card-actions" data-if="!asset.gallery_active">
-                          <button class="btn btn--primary gallery-card-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
+                        <div class="asset-card-actions">
+                          <button class="btn btn--primary gallery-card-action" data-class-is-persistent="asset.gallery_action_persistent" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
+                          <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_pause" data-attr-data-asset-id="asset.id" data-asset-action="gallery:pause_transfer">{{g_action_pause}}</button>
+                          <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_cancel" data-attr-data-asset-id="asset.id" data-asset-action="gallery:cancel_transfer">{{g_action_cancel}}</button>
                         </div>
                       </div>
                       <button class="asset-button asset-button--small-icon asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
@@ -165,12 +172,18 @@
                   <div data-for="asset : assets">
                     <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <span class="asset-col asset-col-name">
-                        <span class="asset-list-primary">{{asset.display_name}}</span><span class="asset-list-secondary text-muted" data-attr-data-tooltip="asset.gallery_tooltip">{{asset.gallery_label}} {{asset.gallery_detail}}</span>
+                        <span class="asset-list-primary">{{asset.display_name}}<span class="gallery-stored-list" data-if="asset.gallery_stored" data-attr-data-tooltip="asset.gallery_stored_label">✓</span></span><span class="asset-list-secondary text-muted" data-attr-data-tooltip="asset.gallery_tooltip">{{asset.gallery_label}} {{asset.gallery_detail}}</span>
                       </span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
-                      <span class="asset-col asset-col-gallery"><img class="gallery-list-icon" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/><span>{{asset.gallery_label}}</span></span>
+                      <span class="asset-col asset-col-gallery" data-attr-data-tooltip="asset.gallery_tooltip">
+                        <img class="gallery-list-icon" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
+                        <span data-if="!asset.gallery_has_controls">{{asset.gallery_label}}</span>
+                        <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_has_action" data-attr-data-asset-id="asset.id" data-asset-action="gallery">{{asset.gallery_action_label}}</button>
+                        <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_pause" data-attr-data-asset-id="asset.id" data-asset-action="gallery:pause_transfer" data-attr-data-tooltip="g_action_pause">Ⅱ</button>
+                        <button class="btn btn--secondary gallery-file-action" data-if="asset.gallery_can_cancel" data-attr-data-asset-id="asset.id" data-asset-action="gallery:cancel_transfer" data-attr-data-tooltip="g_action_cancel">×</button>
+                      </span>
                       <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
                     </div>
                   </div>
@@ -251,35 +264,9 @@
               </div>
 
               <div class="asset-info-section" data-if="!gallery_supported"><p>@tr:asset_manager.gallery.error.portal_version</p></div>
-              <div class="asset-info-section" id="asset-info-gallery" data-if="gallery_supported">
-                <div class="section-header" data-event-click="gallery_toggle"><span class="section-arrow" data-class-is-expanded="gallery_expanded">▶</span><span>{{g_sidebar_title}}</span><span class="text-muted">{{gallery_selected_state}}</span><span class="text-muted">{{gallery_reupload_reason}}</span></div>
-                <div class="section-content" data-if="gallery_expanded">
-                  <p class="text-muted">{{gallery_exchange_summary}}</p>
-                  <div data-if="gallery_show_editor">
-                    <div class="setting-row"><span>{{g_review_title}}</span><input type="text" data-value="gallery_title"/></div>
-                    <div class="setting-row"><span>{{g_review_description}}</span><input type="text" data-value="gallery_description"/></div>
-                    <div class="setting-row"><span>{{g_review_visibility}}</span><select data-value="gallery_visibility"><option value="private">{{g_review_private}}</option><option value="public">{{g_review_public}}</option></select></div>
-                    <div data-if="!gallery_remote">
-                      <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="gallery_upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
-                      <p class="text-muted">{{gallery_format_hint}}</p>
-                    </div>
-                  </div>
-                  <div data-if="gallery_review"><p class="text-muted">{{gallery_includes}}</p><button class="btn btn--primary" data-event-click="gallery_publish">{{gallery_publish_label}}</button><button class="btn btn--secondary" data-event-click="gallery_cancel">{{g_action_cancel}}</button></div>
-                  <div class="gallery-actions" data-if="gallery_show_primary"><button class="btn btn--primary" data-if="gallery_has_action" data-event-click="gallery_primary">{{gallery_selected_action}}</button></div>
-                  <div data-if="gallery_pull_review">
-                    <div class="setting-row"><span>{{g_info_folder}}</span><input type="text" data-value="gallery_pull_folder"/></div>
-                    <div class="setting-row"><span>{{g_info_filename}}</span><input type="text" data-value="gallery_pull_name"/></div>
-                    <button class="btn btn--primary" data-event-click="gallery_pull">{{gallery_pull_label}}</button><button class="btn btn--secondary" data-event-click="gallery_cancel">{{g_action_cancel}}</button>
-                  </div>
-                  <div data-if="gallery_linked">
-                    <div class="gallery-actions" data-if="gallery_has_portal"><button class="btn btn--secondary" data-event-click="gallery_story">{{g_action_story}}</button><button class="btn btn--secondary" data-event-click="gallery_display">{{g_action_display}}</button><button class="btn btn--secondary" data-event-click="gallery_manage">{{g_action_manage}}</button><button class="btn btn--secondary" data-event-click="gallery_copy">{{g_action_copy}}</button></div>
-                    <p class="text-muted" data-if="gallery_has_portal">{{g_info_portal_hint}}</p>
-                    <button class="btn btn--secondary" data-event-click="gallery_more">{{g_action_more}}</button>
-                    <div class="gallery-actions" data-if="gallery_more"><button class="btn btn--error" data-if="!gallery_remote" data-event-click="gallery_unlink">{{g_action_unlink}}</button><button class="btn btn--error" data-if="gallery_has_portal" data-event-click="gallery_remove">{{g_action_remove}}</button></div>
-                  </div>
-                  <p class="text-muted">{{gallery_quota}}</p><p class="status-warning" data-if="gallery_review">{{gallery_quota_warning}}</p><p class="status-info">{{gallery_notice}}</p><button class="btn btn--secondary" data-if="gallery_has_recovery" data-event-click="gallery_open_recovery">{{g_action_open_recovery}}</button><button class="btn btn--secondary" data-if="gallery_has_pulled_project" data-event-click="gallery_open_local">{{g_action_open_local}}</button><button class="btn btn--secondary" data-if="gallery_has_undo" data-event-click="gallery_undo">{{g_action_undo}}</button>
-                </div>
-                <button class="btn btn--primary" data-if="gallery_collapsed_publish" data-event-click="gallery_primary">{{g_action_publish}}</button>
+              <div class="asset-info-section" id="asset-info-gallery" data-if="gallery_linked">
+                <div class="section-header"><span>{{g_sidebar_title}}</span><span class="text-muted">{{gallery_selected_state}}</span></div>
+                <p class="text-muted">{{gallery_exchange_summary}}</p>
               </div>
             </div>
 

@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "从门户删除…",
+  "asset_manager.gallery.action.open_app": "在应用程序中打开",
+  "asset_manager.gallery.share.copied": "分享链接已复制。",
+  "asset_manager.gallery.dialog.upload": "上传到图库",
+  "asset_manager.gallery.dialog.download": "从图库下载",
+  "asset_manager.gallery.dialog.waiting": "正在等待当前传输完成。",
+  "asset_manager.gallery.state.stored": "已存储在门户",
   "asset_manager.gallery.error.unsafe_url": "此链接不属于您的门户，已被阻止。",
   "asset_manager.gallery.format.studio_hint": "不重新编码。",
   "asset_manager.gallery.format.sog_hint": "体积最小，网页加载快。",

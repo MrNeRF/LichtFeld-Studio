@@ -207,6 +207,13 @@ class PortalGalleryClient:
                 raise
             return self._list_pages(None)
 
+    def share_link(self, scene_id):
+        result = self._request("POST", f"/splats/{_identifier(scene_id)}/share-link", {})
+        if not isinstance(result, dict) or not isinstance(result.get("url"), str):
+            raise PortalProtocolError("Invalid gallery share link")
+        from .portal_security import portal_url
+        return portal_url(self.account.base_url, result["url"])
+
     def _list_pages(self, etag):
         result, cursor, seen = [], None, set()
         while True:

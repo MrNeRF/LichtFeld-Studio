@@ -1162,7 +1162,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         if self._project_available(asset):
-            items.append({"label": tr("menu.file.open_project"), "action": "load"})
+            items.append({"label": tr("asset_manager.gallery.action.open_app"), "action": "load"})
         items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
             return items
@@ -1784,9 +1784,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if action_element is not None:
             action = action_element.get_attribute("data-asset-action", "")
             asset_id = action_element.get_attribute("data-asset-id", "")
-            if action == "gallery":
+            if action == "gallery" or action.startswith("gallery:"):
                 self._select_asset_id(asset_id)
-                self._gallery_command("primary")
+                self._gallery_command(action.partition(":")[2] or "primary")
             elif action == "load":
                 self._load_asset(asset_id)
             elif action == "menu":

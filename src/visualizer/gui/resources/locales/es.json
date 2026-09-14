@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "Eliminar del portal…",
+  "asset_manager.gallery.action.open_app": "Abrir en la aplicación",
+  "asset_manager.gallery.share.copied": "Enlace para compartir copiado.",
+  "asset_manager.gallery.dialog.upload": "Subir a la galería",
+  "asset_manager.gallery.dialog.download": "Descargar de la galería",
+  "asset_manager.gallery.dialog.waiting": "Esperando a que termine la transferencia actual.",
+  "asset_manager.gallery.state.stored": "Guardado en el portal",
   "asset_manager.gallery.error.unsafe_url": "Este enlace no pertenece a tu portal y se ha bloqueado.",
   "asset_manager.gallery.format.studio_hint": "Sin recodificación.",
   "asset_manager.gallery.format.sog_hint": "Menor tamaño, carga web rápida.",

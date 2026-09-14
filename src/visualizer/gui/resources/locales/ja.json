@@ -1,4 +1,11 @@
 {
+  "asset_manager.gallery.action.delete_upstream": "ポータルから削除…",
+  "asset_manager.gallery.action.open_app": "アプリケーションで開く",
+  "asset_manager.gallery.share.copied": "共有リンクをコピーしました。",
+  "asset_manager.gallery.dialog.upload": "ギャラリーにアップロード",
+  "asset_manager.gallery.dialog.download": "ギャラリーからダウンロード",
+  "asset_manager.gallery.dialog.waiting": "現在の転送が完了するまでお待ちください。",
+  "asset_manager.gallery.state.stored": "ポータルに保存済み",
   "asset_manager.gallery.error.unsafe_url": "このリンクはお使いのポータルに属していないため、ブロックされました。",
   "asset_manager.gallery.format.studio_hint": "再エンコードしません。",
   "asset_manager.gallery.format.sog_hint": "小容量で、ウェブで高速読み込み。",
