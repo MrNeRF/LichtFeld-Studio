@@ -469,6 +469,15 @@ class GalleryAssetMixin:
             if action == "check":
                 if facts["relationship"] == "linked":
                     self._controller().resolve_asset(asset, self._gallery_details())
+                elif facts["relationship"] in ("identity_ambiguous", "local_file_problem") or self._gallery_state.get("storage_issue"):
+                    folder_id = str(asset.get("folder_id") or "")
+                    folder = self._asset_index_folders().get(folder_id, {})
+                    directory = str(folder.get("path") or "").strip()
+                    if folder_id and directory:
+                        self.refresh_catalog(scan_folders=False)
+                        self._scan_asset_folders(folder_id=folder_id, directory=directory)
+                    else:
+                        self._controller().refresh()
                 else:
                     self._controller().refresh()
             elif action == "publish_new":

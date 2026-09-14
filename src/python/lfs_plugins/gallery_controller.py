@@ -1485,6 +1485,17 @@ class GalleryController:
 
 _controller = None
 
+_LOCAL_FILE_PROBLEM_STATUSES = {
+    "UNREADABLE",
+    "UNSUPPORTED",
+    "REPAIR_ONLY",
+    "UNSUPPORTED_NEWER",
+}
+_LOCAL_FILE_PROBLEM_LABELS = {
+    "REPAIR_ONLY": "asset_manager.status.needs_repair",
+    "UNSUPPORTED_NEWER": "asset_manager.status.newer_version",
+}
+
 def get_gallery_controller():
     global _controller
     if _controller is None:
@@ -1499,6 +1510,8 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     relationship = "linked" if link else "unlinked" if project else "remote_only"
     if project.get("status") in ("IDENTITY_CONFLICT", "IDENTITY_MISMATCH", "DUPLICATE", "AMBIGUOUS"):
         relationship = "identity_ambiguous"
+    elif project.get("status") in _LOCAL_FILE_PROBLEM_STATUSES:
+        relationship = "local_file_problem"
     elif link and (link.get("remoteDeleted") or (scene and scene.get("status") == "deleted") or (checked and scene is None)):
         relationship = "remote_deleted"
     elif link and not project.get("exists", True):
@@ -1527,7 +1540,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         visible = "diverged"
     elif active:
         visible = activity
-    elif storage_issue or relationship == "identity_ambiguous":
+    elif storage_issue or relationship in ("identity_ambiguous", "local_file_problem"):
         visible = "error"
     elif activity in ("error", "paused", "interrupted"):
         visible = activity
@@ -1558,11 +1571,18 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         action = ""
     if visible == "remote_deleted" and not project.get("exists", True):
         action = "unlink"
-    if relationship == "identity_ambiguous" or storage_issue or (cached_projection and not link):
+    if relationship in ("identity_ambiguous", "local_file_problem") or storage_issue or (cached_projection and not link):
         action = "check"
+    reason = job.get("message") or project.get("error", "")
+    if relationship == "local_file_problem":
+        reason = project.get("error")
+        if not reason:
+            from .asset_manager_panel import tr as asset_tr
+            label = _LOCAL_FILE_PROBLEM_LABELS.get(project["status"])
+            reason = asset_tr(label) if label else project["status"]
     return dict(relationship=relationship, freshness=freshness, activity=activity, state=visible,
                 icon=icons.get(visible, "ring"), tone=tones.get(visible, "primary" if active else "text_dim"),
-                action=action, active=active, jobId=job.get("id", ""), reason=job.get("message") or project.get("error", ""),
+                action=action, active=active, jobId=job.get("id", ""), reason=reason,
                 progress=min(100, int(100 * job.get("completed", 0) / max(1, job.get("total", 0)))),
                 attention=visible in ("diverged", "error", "local_missing", "remote_deleted"))
 

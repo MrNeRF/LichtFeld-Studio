@@ -362,7 +362,6 @@ class AssetIndex:
         self._catalog_epoch = 0
         self._assets_snapshot_epoch: Optional[int] = None
         self._assets_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
-        self._directory_mtimes: Dict[str, int] = {}
         self.load_issues: List[str] = []
 
     @property
@@ -491,17 +490,28 @@ class AssetIndex:
         project.open_state = str(value["open_state"] or "")
         project.has_preview = bool(value["has_preview"])
         project.status = str(value["status"] or "UNVERIFIED")
-        self._set_inspection_runtime_state(project)
+        if project.status in {"MISSING", "UNREADABLE", "IDENTITY_MISMATCH", "UNSUPPORTED"}:
+            project.exists = project.status != "MISSING"
+            project.available = False
+        else:
+            self._set_inspection_runtime_state(project)
         project.inspection_verified = False
         project.inspection_restored = True
 
-    def _clear_runtime(self, project: Project, status: str, error: str = "") -> None:
+    def _clear_runtime(
+        self,
+        project: Project,
+        status: str,
+        error: str = "",
+        *,
+        file_size_bytes: int = 0,
+    ) -> None:
         project.file_uuid = ""
         project.commit_uuid = ""
         project.generation = 0
         project.created_at_unix_ns = 0
         project.saved_at_unix_ns = 0
-        project.file_size_bytes = 0
+        project.file_size_bytes = int(file_size_bytes)
         project.role = ""
         project.open_state = ""
         project.has_preview = False
@@ -544,7 +554,10 @@ class AssetIndex:
         if str(inspection.project_uuid) != expected_uuid:
             return (
                 "IDENTITY_MISMATCH",
-                "The file at this path belongs to a different project",
+                {
+                    "error": "The file at this path belongs to a different project",
+                    "file_size_bytes": int(inspection.physical_file_size),
+                },
             )
         if not self._inspection_is_master(inspection):
             return "UNSUPPORTED", "Not a master project container"
@@ -554,6 +567,14 @@ class AssetIndex:
         if kind == "AVAILABLE":
             project.relocation_candidate = ""
             self._apply_inspection(project, payload)
+            return
+        if kind == "IDENTITY_MISMATCH":
+            self._clear_runtime(
+                project,
+                kind,
+                payload["error"],
+                file_size_bytes=payload["file_size_bytes"],
+            )
             return
         self._clear_runtime(project, kind, str(payload or ""))
 
@@ -644,7 +665,6 @@ class AssetIndex:
         self._folders = {}
         self._projects = {}
         self._project_by_path = {}
-        self._directory_mtimes = {}
         self._ensure_default_folder()
         self._touch_catalog()
 
@@ -656,20 +676,7 @@ class AssetIndex:
         self._folders = {}
         self._projects = {}
         self._project_by_path = {}
-        self._directory_mtimes = {}
-        normalized = set(data) != {
-            "schema_version", "folders", "projects", "directory_mtimes"
-        }
-        raw_directory_mtimes = data.get("directory_mtimes", {})
-        if isinstance(raw_directory_mtimes, dict):
-            self._directory_mtimes = {
-                self._path_key(str(path)): int(mtime)
-                for path, mtime in raw_directory_mtimes.items()
-                if isinstance(path, str) and isinstance(mtime, int)
-            }
-        else:
-            self._directory_mtimes = {}
-            normalized = True
+        normalized = set(data) != {"schema_version", "folders", "projects"}
 
         stored_default_path = ""
         for folder_id, value in folders_data.items():
@@ -1028,7 +1035,6 @@ class AssetIndex:
                     project_uuid: project.to_storage_dict()
                     for project_uuid, project in self._projects.items()
                 },
-                "directory_mtimes": dict(self._directory_mtimes),
             }
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(
@@ -1064,16 +1070,6 @@ class AssetIndex:
     @_synchronized
     def ensure_default_catalog(self) -> None:
         self._initialize_empty()
-
-    @_synchronized
-    def directory_mtime(self, directory: str) -> Optional[int]:
-        return self._directory_mtimes.get(self._path_key(directory))
-
-    @_synchronized
-    def set_directory_mtime(self, directory: str, mtime_ns: int) -> None:
-        key = self._path_key(directory)
-        if self._directory_mtimes.get(key) != int(mtime_ns):
-            self._directory_mtimes[key] = int(mtime_ns)
 
     @_synchronized
     def add_folder(self, directory: str) -> Optional[Folder]:

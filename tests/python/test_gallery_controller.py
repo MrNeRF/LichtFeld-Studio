@@ -587,6 +587,39 @@ def test_missing_remote_and_unknown_never_use_timestamps(gallery):
     assert asset_sync_state(None, None, base)['relationship'] == 'remote_only'
     assert asset_sync_state(dict(project,status='IDENTITY_MISMATCH'), link, base)['relationship'] == 'identity_ambiguous'
 
+
+@pytest.mark.parametrize("status,reason", [
+    ("UNREADABLE", "UNREADABLE"), ("UNSUPPORTED", "UNSUPPORTED"),
+    ("REPAIR_ONLY", "Needs repair"), ("UNSUPPORTED_NEWER", "Saved by a newer version")])
+def test_local_file_problems_need_attention_and_check(gallery, panel_module, monkeypatch, status, reason):
+    from lfs_plugins.gallery_controller import asset_sync_state
+
+    monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: {
+        "asset_manager.status.needs_repair": "Needs repair",
+        "asset_manager.status.newer_version": "Saved by a newer version",
+    }.get(key, key))
+    project = dict(id="project", status=status, exists=True, error="")
+    facts = asset_sync_state(project, {"sceneId": "private-one"}, scene())
+
+    assert facts["relationship"] == "local_file_problem"
+    assert facts["state"] == "error"
+    assert facts["icon"] == "cloud-bang"
+    assert facts["action"] == "check"
+    assert facts["attention"] is True
+    assert facts["reason"] == reason
+
+
+def test_local_file_problem_prefers_project_error(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+
+    facts = asset_sync_state(
+        {"id": "project", "status": "UNREADABLE", "exists": True, "error": "permission denied"},
+        {"sceneId": "private-one"},
+        scene(),
+    )
+
+    assert facts["reason"] == "permission denied"
+
 def test_upload_format_persists_and_defaults_to_sog(gallery, tmp_path):
     panel, _, _ = gallery
     panel.service.root = tmp_path

@@ -974,6 +974,36 @@ def test_identity_mismatch_has_distinct_status(panel_module):
         "asset_manager.status.identity_mismatch"
     )
 
+
+@pytest.mark.parametrize("status", ["IDENTITY_MISMATCH", "UNREADABLE"])
+def test_gallery_check_rescans_registered_folder_for_identity_mismatch(panel_module, status):
+    asset = _project(status=status, exists=True, available=False)
+    calls = []
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    panel._update_selection_type()
+    panel._gallery_controller = SimpleNamespace(
+        refresh=lambda: calls.append("portal_refresh")
+    )
+    panel.refresh_catalog = lambda **kwargs: calls.append(("catalog_refresh", kwargs))
+    panel._scan_asset_folders = lambda **kwargs: calls.append(("folder_scan", kwargs))
+
+    panel._gallery_command("check")
+
+    assert calls == [
+        ("catalog_refresh", {"scan_folders": False}),
+        (
+            "folder_scan",
+            {
+                "folder_id": "default",
+                "directory": "/home/tester/.lichtfeld/assets",
+            },
+        ),
+    ]
+
+
 def test_thumbnail_revision_falls_back_and_releases_stale_source(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index()

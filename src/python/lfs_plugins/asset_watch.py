@@ -4,20 +4,33 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from .asset_index import is_supported_asset_path
+from .asset_index import is_supported_asset_path, resolve_asset_manager_storage_path
 
 SCAN_BATCH_SIZE = 25
 SCAN_BATCH_INTERVAL_S = 0.25
+SCAN_CACHE_FILENAME = "scan_cache.json"
+SCAN_CACHE_MTIME_GUARD_S = 2.0
 
 _log = logging.getLogger(__name__)
+_REINSPECT_STATUSES = frozenset(
+    {
+        "MISSING",
+        "UNREADABLE",
+        "UNVERIFIED",
+        "IDENTITY_MISMATCH",
+        "UNSUPPORTED",
+    }
+)
 _PRUNED_DIRECTORY_NAMES = frozenset(
     {
         "__pycache__",
@@ -100,13 +113,140 @@ def _entry_is_dir(entry: Any) -> bool:
         return entry.is_dir()
 
 
+def _directory_key(directory: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(str(directory)))
+
+
+def _directory_mtime_is_recent(mtime_ns: int) -> bool:
+    return abs(time.time() - (int(mtime_ns) / 1_000_000_000)) < SCAN_CACHE_MTIME_GUARD_S
+
+
+class _DirectoryScanCache:
+    def __init__(self) -> None:
+        self._entries: dict[str, dict[str, Any]] = {}
+        self._loaded = False
+        self._changed = False
+        self._path: Path | None = None
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            self._path = resolve_asset_manager_storage_path() / SCAN_CACHE_FILENAME
+            with self._path.open("r", encoding="utf-8") as stream:
+                raw_entries = json.load(stream)
+            if not isinstance(raw_entries, dict):
+                raise ValueError("scan cache root must be an object")
+            entries: dict[str, dict[str, Any]] = {}
+            for raw_directory, raw_entry in raw_entries.items():
+                if not isinstance(raw_directory, str) or not isinstance(raw_entry, dict):
+                    raise ValueError("invalid scan cache entry")
+                mtime_ns = raw_entry.get("mtime_ns")
+                dirs = raw_entry.get("dirs")
+                licht = raw_entry.get("licht")
+                if (
+                    not isinstance(mtime_ns, int)
+                    or not isinstance(dirs, list)
+                    or not isinstance(licht, list)
+                    or not all(isinstance(name, str) and Path(name).name == name for name in dirs)
+                    or not all(isinstance(name, str) and Path(name).name == name for name in licht)
+                ):
+                    raise ValueError("invalid scan cache entry")
+                entries[_directory_key(raw_directory)] = {
+                    "mtime_ns": int(mtime_ns),
+                    "dirs": list(dirs),
+                    "licht": list(licht),
+                }
+            self._entries = entries
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            self._entries = {}
+            _log.warning("Ignoring invalid Asset Manager scan cache %s: %s", self._path, exc)
+
+    def trusted(self, directory: str, mtime_ns: int) -> dict[str, Any] | None:
+        self._load()
+        key = _directory_key(directory)
+        if _directory_mtime_is_recent(mtime_ns):
+            self.drop(key, recursive=False)
+            return None
+        entry = self._entries.get(key)
+        if entry is None or entry["mtime_ns"] != int(mtime_ns):
+            return None
+        return entry
+
+    def drop(self, directory: str, *, recursive: bool = True) -> None:
+        self._load()
+        key = _directory_key(directory)
+        if not recursive:
+            if self._entries.pop(key, None) is not None:
+                self._changed = True
+            return
+        prefix = key + os.sep
+        removed = [
+            cached_key
+            for cached_key in self._entries
+            if cached_key == key or cached_key.startswith(prefix)
+        ]
+        for cached_key in removed:
+            del self._entries[cached_key]
+        if removed:
+            self._changed = True
+
+    def replace(self, directory: str, mtime_ns: int, dirs: list[str], licht: list[str]) -> None:
+        self._load()
+        key = _directory_key(directory)
+        previous = self._entries.get(key)
+        if previous is not None:
+            current_dirs = set(dirs)
+            for name in previous["dirs"]:
+                if name not in current_dirs:
+                    self.drop(os.path.join(key, name))
+        if _directory_mtime_is_recent(mtime_ns):
+            self.drop(key, recursive=False)
+            return
+        entry = {"mtime_ns": int(mtime_ns), "dirs": list(dirs), "licht": list(licht)}
+        if previous != entry:
+            self._entries[key] = entry
+            self._changed = True
+
+    def persist(self) -> None:
+        self._load()
+        if not self._changed or self._path is None:
+            return
+        temp_path: Path | None = None
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f"{self._path.stem}.",
+                suffix=".tmp",
+                dir=str(self._path.parent),
+            )
+            temp_path = Path(temp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(self._entries, stream, separators=(",", ":"), ensure_ascii=False)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_path, self._path)
+            self._changed = False
+        except Exception as exc:
+            _log.error("Failed to save Asset Manager scan cache %s: %s", self._path, exc)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+
 def iter_licht_projects(
     directory: str,
     cancel_event: threading.Event | None = None,
     progress: AssetFolderScanProgress | None = None,
-    directory_mtimes: dict[str, int] | None = None,
+    *,
+    scan_cache: _DirectoryScanCache | None = None,
 ) -> Iterator[str]:
     """Yield .licht files beneath one Asset Manager folder as they are found."""
+    cache = scan_cache or _DirectoryScanCache()
     root = Path(directory).expanduser()
     if not root.is_dir():
         _log.warning("Asset Manager folder is unavailable: %s", root)
@@ -146,12 +286,16 @@ def iter_licht_projects(
         current = pending.pop()
         if cancel_event is not None and cancel_event.is_set():
             return
+        current_text = _directory_key(current)
+        if current != root and current.is_symlink():
+            cache.drop(current_text)
+            continue
         try:
             stat = current.stat()
         except OSError as exc:
+            cache.drop(current_text)
             _on_error(exc)
             continue
-        current_text = os.path.normcase(os.path.abspath(str(current)))
         visited_directories += 1
         if progress is not None:
             progress.add_directory()
@@ -160,12 +304,25 @@ def iter_licht_projects(
                 "Asset folder %s is very large (>10000 directories); consider a smaller folder",
                 root,
             )
-        if directory_mtimes is not None:
-            directory_mtimes[current_text] = int(stat.st_mtime_ns)
-        kept_directories = []
+        cached = cache.trusted(current_text, int(stat.st_mtime_ns))
+        if cached is not None:
+            for name in cached["licht"]:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                path = current / name
+                if progress is not None:
+                    progress.add_project()
+                yield os.path.abspath(str(path))
+            kept_directories = [current / name for name in cached["dirs"]]
+            pending.extend(reversed(kept_directories))
+            continue
+
+        kept_directories: list[Path] = []
+        licht_names: list[str] = []
         try:
             entries = os.scandir(current)
         except OSError as exc:
+            cache.drop(current_text)
             _on_error(exc)
             continue
         with entries:
@@ -186,12 +343,10 @@ def iter_licht_projects(
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue
-                # The directory cache records scan metadata, but discovery
-                # still runs so missing/unreadable rows can find a repair
-                # candidate. Healthy unchanged rows skip inspection below.
                 path = Path(entry.path)
                 if not is_supported_asset_path(str(path)):
                     continue
+                licht_names.append(name)
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 try:
@@ -201,6 +356,12 @@ def iter_licht_projects(
                     yield resolved
                 except OSError as exc:
                     _log.warning("Could not inspect Asset Manager path %s: %s", path, exc)
+        cache.replace(
+            current_text,
+            int(stat.st_mtime_ns),
+            [path.name for path in kept_directories],
+            licht_names,
+        )
         pending.extend(reversed(kept_directories))
 
 
@@ -210,7 +371,11 @@ def discover_licht_projects(
     progress: AssetFolderScanProgress | None = None,
 ) -> list[str]:
     """Recursively list .licht files beneath one Asset Manager folder."""
-    return list(iter_licht_projects(directory, cancel_event, progress))
+    cache = _DirectoryScanCache()
+    try:
+        return list(iter_licht_projects(directory, cancel_event, progress, scan_cache=cache))
+    finally:
+        cache.persist()
 
 
 def scan_asset_folder(
@@ -225,24 +390,21 @@ def scan_asset_folder(
         return AssetFolderScanResult(cancelled=True)
     if progress is not None:
         progress.report(current_root=directory)
-    directory_mtimes = getattr(index, "_directory_mtimes", None)
-    before_mtimes = dict(directory_mtimes) if isinstance(directory_mtimes, dict) else None
-    result = _register_discovered_streaming(
-        index,
-        (
-            (path, folder_id)
-            for path in iter_licht_projects(
-                directory, cancel_event, progress, directory_mtimes
-            )
-        ),
-        cancel_event,
-        progress,
-    )
-    if isinstance(directory_mtimes, dict) and directory_mtimes != before_mtimes:
-        save = getattr(index, "save", None)
-        if callable(save) and not save():
-            _log.error("Failed to persist Asset Manager directory scan cache")
-    return result
+    cache = _DirectoryScanCache()
+    try:
+        return _register_discovered_streaming(
+            index,
+            (
+                (path, folder_id)
+                for path in iter_licht_projects(
+                    directory, cancel_event, progress, scan_cache=cache
+                )
+            ),
+            cancel_event,
+            progress,
+        )
+    finally:
+        cache.persist()
 
 
 def scan_all_asset_folders(
@@ -276,6 +438,8 @@ def scan_all_asset_folders(
         )
     )
 
+    cache = _DirectoryScanCache()
+
     def _iter_all() -> Iterator[tuple[str, str]]:
         seen_paths: set[str] = set()
         for root, assigned_folder_id in roots:
@@ -283,9 +447,8 @@ def scan_all_asset_folders(
                 return
             if progress is not None:
                 progress.report(current_root=str(root))
-            directory_mtimes = getattr(index, "_directory_mtimes", None)
             for path in iter_licht_projects(
-                str(root), cancel_event, progress, directory_mtimes
+                str(root), cancel_event, progress, scan_cache=cache
             ):
                 path_key = os.path.normcase(path)
                 if path_key in seen_paths:
@@ -295,14 +458,10 @@ def scan_all_asset_folders(
 
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
-    directory_mtimes = getattr(index, "_directory_mtimes", None)
-    before_mtimes = dict(directory_mtimes) if isinstance(directory_mtimes, dict) else None
-    result = _register_discovered_streaming(index, _iter_all(), cancel_event, progress)
-    if isinstance(directory_mtimes, dict) and directory_mtimes != before_mtimes:
-        save = getattr(index, "save", None)
-        if callable(save) and not save():
-            _log.error("Failed to persist Asset Manager directory scan cache")
-    return result
+    try:
+        return _register_discovered_streaming(index, _iter_all(), cancel_event, progress)
+    finally:
+        cache.persist()
 
 
 def verify_catalog_projects(
@@ -451,21 +610,15 @@ def _register_discovered_streaming(
 
 
 def _existing_skips_inspection(existing: Any) -> bool:
-    return getattr(existing, "status", "AVAILABLE") not in {
-        "MISSING",
-        "UNREADABLE",
-        "UNVERIFIED",
-    }
+    return getattr(existing, "status", "AVAILABLE") not in _REINSPECT_STATUSES
 
 
 def _known_path_is_unchanged(index: Any, existing: Any, path: str) -> bool:
-    if getattr(existing, "status", "AVAILABLE") in {
-        "MISSING", "UNREADABLE", "UNVERIFIED"
-    }:
+    if getattr(existing, "status", "AVAILABLE") in _REINSPECT_STATUSES:
         return False
     size = getattr(existing, "path_size_bytes", None)
     mtime_ns = getattr(existing, "path_mtime_ns", None)
-    if size is None or mtime_ns is None or (not size and not mtime_ns):
+    if size is None or mtime_ns is None:
         return True
     try:
         stat = os.stat(path)
