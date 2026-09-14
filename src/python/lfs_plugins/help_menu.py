@@ -72,7 +72,7 @@ class PortalConnectionOperator(Operator):
         if state.linking:
             account.cancel_device_flow()
         elif state.signed_in:
-            account.sign_out_async()
+            account.disconnect_async()
         else:
             account.start_device_flow()
         return {"FINISHED"}

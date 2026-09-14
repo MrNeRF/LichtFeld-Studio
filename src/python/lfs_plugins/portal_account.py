@@ -105,6 +105,7 @@ class _Credentials:
     customer_tier: str = ""
     member_since: str = ""
     connected_since: str = ""
+    connection_enabled: bool = True
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -119,6 +120,7 @@ class _Credentials:
             "customer_tier": self.customer_tier,
             "member_since": self.member_since,
             "connected_since": self.connected_since,
+            "connection_enabled": self.connection_enabled,
         }
 
     @classmethod
@@ -153,6 +155,7 @@ class _Credentials:
             customer_tier=text("customer_tier"),
             member_since=text("member_since"),
             connected_since=text("connected_since"),
+            connection_enabled=value.get("connection_enabled", True) is not False,
         )
 
 
@@ -320,6 +323,7 @@ class PortalAccountService:
         self._sync_thread: Optional[threading.Thread] = None
         self._sign_out_thread: Optional[threading.Thread] = None
         self._initialized = False
+        self._resuming = False
         self._snapshot = AccountSnapshot(
             portal_host=self.portal_host,
             custom_portal=self.is_custom_portal,
@@ -378,7 +382,7 @@ class PortalAccountService:
             if self._initialized:
                 return
             self._initialized = True
-            has_credentials = self._credentials is not None
+            has_credentials = self._credentials is not None and self._credentials.connection_enabled
         if has_credentials:
             self.sync_profile_async()
 
@@ -413,7 +417,7 @@ class PortalAccountService:
         return True
 
     def start_device_flow(self, *, reauthorize: bool = False) -> bool:
-        """Reuse a signed-in session unless additional access needs approval."""
+        """Resume saved authorization before asking the browser for a new approval."""
         with self._lock:
             if self._flow_thread is not None and self._flow_thread.is_alive():
                 return False
@@ -422,6 +426,7 @@ class PortalAccountService:
             if self._credentials is not None and self._snapshot.signed_in and not reauthorize:
                 return False
             self._cancel_event.clear()
+            self._resuming = self._credentials is not None and not reauthorize
             self._snapshot = AccountSnapshot(
                 linking=True,
                 label="",
@@ -429,7 +434,8 @@ class PortalAccountService:
                 portal_host=self.portal_host,
                 custom_portal=self.is_custom_portal,
             )
-            thread = threading.Thread(target=self._device_flow_worker, daemon=True, name="lfs-portal-device")
+            target = self._resume_session_worker if self._resuming else self._device_flow_worker
+            thread = threading.Thread(target=target, daemon=True, name="lfs-portal-device")
             self._flow_thread = thread
         self._publish_account_state()
         thread.start()
@@ -439,9 +445,75 @@ class PortalAccountService:
 
     def cancel_device_flow(self) -> None:
         self._cancel_event.set()
+        if self._resuming:
+            self.disconnect_async()
+            return
         self._finish_device_flow("")
 
     cancel_linking = cancel_device_flow
+
+    def _resume_session_worker(self) -> None:
+        try:
+            self._set_connection_enabled(True)
+            if self._cancel_event.is_set():
+                return
+            if self._current_credentials() is not None:
+                self.sync_profile()
+            if self._current_credentials() is None and not self._cancel_event.is_set():
+                # A revoked or expired saved session needs a fresh browser approval.
+                self._resuming = False
+                with self._lock:
+                    self._snapshot = AccountSnapshot(
+                        linking=True,
+                        label="",
+                        tooltip=self._with_portal_host(""),
+                        portal_host=self.portal_host,
+                        custom_portal=self.is_custom_portal,
+                    )
+                self._publish_account_state()
+                self._device_flow_worker()
+        except (OSError, PortalAccountError):
+            self._finish_device_flow("sign_in_unavailable")
+        finally:
+            self._resuming = False
+
+    def _set_connection_enabled(self, enabled: bool) -> None:
+        with self._refresh_lock:
+            with _locked_sidecar(self._lock_path):
+                if enabled and self._cancel_event.is_set():
+                    return
+                credentials = self._read_credentials_file()
+                if credentials is None or credentials.portal_origin != self.base_url:
+                    self._clear_current_credentials()
+                    self._set_signed_out("")
+                    return
+                updated = replace(credentials, connection_enabled=enabled)
+                self._write_credentials_file(updated)
+                self._set_current_credentials(updated)
+                self._apply_credentials_state(updated)
+
+    def disconnect_async(self) -> None:
+        """Pause portal access without revoking the saved authorization."""
+        self._cancel_event.set()
+        with self._lock:
+            if self._sign_out_thread is not None and self._sign_out_thread.is_alive():
+                return
+            self._snapshot = replace(self._snapshot, disconnecting=True)
+            thread = threading.Thread(target=self.disconnect, daemon=True, name="lfs-portal-disconnect")
+            self._sign_out_thread = thread
+        self._publish_account_state()
+        thread.start()
+
+    def disconnect(self) -> None:
+        self._cancel_event.set()
+        try:
+            self._set_connection_enabled(False)
+        except OSError:
+            _log.warning("Could not save the portal connection preference")
+            with self._lock:
+                if self._credentials is not None:
+                    self._credentials = replace(self._credentials, connection_enabled=False)
+            self._set_signed_out("connection_storage_failed")
 
     def _finish_device_flow(self, error: str) -> None:
         # A canceled or failed access upgrade must not discard a working login.
@@ -490,7 +562,7 @@ class PortalAccountService:
             credentials = self._current_credentials()
             if credentials is not None and credentials.access_expires_at <= time.time():
                 if credentials.refresh_expires_at > time.time():
-                    self._refresh_tokens(credentials.access_token)
+                    self._refresh_tokens(credentials.access_token, allow_disconnected=True)
             with self._refresh_lock:
                 with _locked_sidecar(self._lock_path):
                     disk = self._read_credentials_file()
@@ -646,12 +718,15 @@ class PortalAccountService:
         failed_access_token: str,
         *,
         timeout: Optional[float] = None,
+        allow_disconnected: bool = False,
     ) -> str:
         """Return ``ok``, ``membership_required``, ``invalid``, or ``unavailable``."""
         with self._refresh_lock:
             with _locked_sidecar(self._lock_path):
                 credentials = self._read_credentials_file()
                 if credentials is None or credentials.portal_origin != self.base_url:
+                    return "unavailable"
+                if not credentials.connection_enabled and not allow_disconnected:
                     return "unavailable"
                 if credentials.access_token != failed_access_token:
                     self._set_current_credentials(credentials)
@@ -707,7 +782,7 @@ class PortalAccountService:
         response_options=None,
     ) -> dict[str, object]:
         credentials = self._current_credentials()
-        if credentials is None:
+        if credentials is None or not getattr(credentials, "connection_enabled", True) or self.snapshot().disconnecting:
             raise PortalHTTPError(401, "invalid_token")
         if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
             raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
@@ -741,6 +816,8 @@ class PortalAccountService:
         credentials = self._current_credentials()
         if credentials is None:
             self._set_signed_out("invalid_token")
+            raise PortalHTTPError(401, "invalid_token")
+        if not getattr(credentials, "connection_enabled", True) or self.snapshot().disconnecting:
             raise PortalHTTPError(401, "invalid_token")
         if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
             raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
@@ -889,6 +966,7 @@ class PortalAccountService:
             customer_tier=cached.customer_tier if cached else "",
             member_since=cached.member_since if cached else "",
             connected_since=cached.connected_since if cached else "",
+            connection_enabled=cached.connection_enabled if cached else True,
         )
 
     def _credentials_with_profile(
@@ -937,8 +1015,8 @@ class PortalAccountService:
                 connected_since=profile.connected_since,
             )
             self._write_credentials_file(merged)
-        self._set_current_credentials(merged)
-        self._apply_credentials_state(merged)
+            self._set_current_credentials(merged)
+            self._apply_credentials_state(merged)
 
     def _save_credentials(self, credentials: _Credentials) -> None:
         with _locked_sidecar(self._lock_path):
@@ -1001,11 +1079,15 @@ class PortalAccountService:
         return tooltip
 
     def _apply_credentials_state(self, credentials: _Credentials) -> None:
+        if not credentials.connection_enabled:
+            self._set_signed_out("")
+            return
         name = credentials.display_name or credentials.email
         tooltip = name or "LichtFeld Portal account"
         with self._lock:
             self._snapshot = AccountSnapshot(
                 signed_in=True,
+                disconnecting=self._snapshot.disconnecting,
                 label=_initials(credentials.display_name, credentials.email),
                 tier=_tier_name(credentials.customer_tier),
                 tooltip=self._with_portal_host(tooltip),
@@ -1020,6 +1102,9 @@ class PortalAccountService:
     def _set_membership_required(self, credentials: _Credentials) -> None:
         name = credentials.display_name or credentials.email
         with self._lock:
+            if (self._credentials is None or not self._credentials.connection_enabled
+                    or not credentials.connection_enabled or self._snapshot.disconnecting):
+                return
             self._snapshot = AccountSnapshot(
                 signed_in=True,
                 membership_required=True,
