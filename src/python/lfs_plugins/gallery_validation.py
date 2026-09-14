@@ -118,5 +118,3 @@ def _stamp(source):
     value = os.fstat(source.fileno())
     _require(stat.S_ISREG(value.st_mode), "Gallery node source must be a regular file.")
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
-
-
