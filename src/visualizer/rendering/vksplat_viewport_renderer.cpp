@@ -238,6 +238,9 @@ namespace lfs::vis {
                     const auto token = handoff_token ? *handoff_token : 0;
                     auto frame_id = arena_->try_begin_render_frame_for(15, token);
                     if (!frame_id) {
+                        if (handoff_token) {
+                            *handoff_token = arena_->request_render_handoff(token);
+                        }
                         throw std::runtime_error("rasterizer arena is busy");
                     }
                     if (handoff_token && token != 0) {

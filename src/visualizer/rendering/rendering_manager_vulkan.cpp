@@ -4546,6 +4546,13 @@ namespace lfs::vis {
                     defer_shared_scratch(render_error);
                     return cached_frame_result();
                 }
+                if (render_error.find("arena is busy") != std::string::npos &&
+                    vksplat_viewport_renderer_) {
+                    // Cold start and resize have no matching publication to
+                    // return, but still need the same bounded priority on their
+                    // next attempt.
+                    vksplat_viewport_renderer_->requestArenaHandoff();
+                }
 
                 LOG_DEBUG("{} ({}); skipping viewport frame, retry_dirty=0x{:x}, cached_output={}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
                           "VkSplat shared scratch unavailable",
