@@ -778,6 +778,28 @@
     min-height: 0;
 }
 
+.asset-info-asset-layout {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12dp;
+    min-width: 0;
+}
+
+#asset-info-thumbnail {
+    flex: 0 0 160dp;
+    width: 160dp;
+    height: 100dp;
+    min-width: 160dp;
+    min-height: 100dp;
+    background-color: transparent;
+}
+
+.asset-info-details {
+    flex: 1;
+    min-width: 0;
+}
+
 .asset-info-header {
     display: flex;
     flex-direction: row;

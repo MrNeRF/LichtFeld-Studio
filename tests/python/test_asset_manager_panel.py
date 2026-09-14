@@ -844,6 +844,17 @@ def test_gallery_batches_use_only_visible_filtered_rows(panel_module):
     panel._selected_asset_ids = {local["id"], other["id"]}
     assert panel._gallery_counts()["linked"] == 1
 
+def test_info_thumbnail_uses_fixed_band_and_path_tooltip(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+
+    assert "asset-info-asset-layout" in rml
+    assert 'data-attr-title="selected_asset_path"' in rml
+    assert "flex: 0 0 160dp;" in rcss
+    assert "height: 100dp;" in rcss
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False

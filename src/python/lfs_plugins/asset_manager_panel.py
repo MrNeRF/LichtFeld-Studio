@@ -629,8 +629,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if element is None:
             element = header.parent().insert_before("div", header)
             element.set_id("asset-info-thumbnail")
-            element.set_property("width", "100%")
-            element.set_property("height", "160dp")
+            element.set_property("width", "160dp")
+            element.set_property("height", "100dp")
         changed = source != self._info_thumbnail_source
         if changed:
             release = getattr(lf.ui, "release_rml_texture", None)

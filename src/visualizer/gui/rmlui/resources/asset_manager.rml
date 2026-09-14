@@ -217,36 +217,40 @@
             </div>
 
             <div data-if="show_selection_asset">
-              <div class="asset-info-header">
-                <span class="asset-info-name">{{selected_asset_name}}</span>
-              </div>
+              <div class="asset-info-asset-layout">
+                <div class="asset-info-details">
+                  <div class="asset-info-header">
+                    <span class="asset-info-name">{{selected_asset_name}}</span>
+                  </div>
 
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{asset_details_title}}</div>
-                <div class="parameter-row" data-if="selected_asset_has_folder">
-                  <span class="parameter-label">{{prop_folder_label}}</span>
-                  <span class="parameter-value">{{selected_asset_folder_name}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_size_label}}</span>
-                  <span class="parameter-value">{{selected_asset_size}}</span>
-                </div>
-                <div data-if="gallery_remote">
-                  <div class="parameter-row"><span class="parameter-label">{{g_info_format}}</span><span class="parameter-value">{{gallery_selected_format}}</span></div>
-                  <div class="parameter-row"><span class="parameter-label">{{g_review_visibility}}</span><span class="parameter-value">{{gallery_selected_visibility}}</span></div>
-                  <p class="text-muted">{{g_state_remote_only}}</p>
-                </div>
-                <div class="parameter-row" data-if="!gallery_remote">
-                  <span class="parameter-label">{{prop_path_label}}</span>
-                  <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
-                </div>
-                <div class="parameter-row" data-if="!gallery_remote">
-                  <span class="parameter-label">{{prop_created_label}}</span>
-                  <span class="parameter-value">{{selected_asset_created}}</span>
-                </div>
-                <div class="parameter-row" data-if="!gallery_remote">
-                  <span class="parameter-label">{{prop_modified_label}}</span>
-                  <span class="parameter-value">{{selected_asset_modified}}</span>
+                  <div class="asset-info-section">
+                    <div class="asset-info-section-title">{{asset_details_title}}</div>
+                    <div class="parameter-row" data-if="selected_asset_has_folder">
+                      <span class="parameter-label">{{prop_folder_label}}</span>
+                      <span class="parameter-value">{{selected_asset_folder_name}}</span>
+                    </div>
+                    <div class="parameter-row">
+                      <span class="parameter-label">{{prop_size_label}}</span>
+                      <span class="parameter-value">{{selected_asset_size}}</span>
+                    </div>
+                    <div data-if="gallery_remote">
+                      <div class="parameter-row"><span class="parameter-label">{{g_info_format}}</span><span class="parameter-value">{{gallery_selected_format}}</span></div>
+                      <div class="parameter-row"><span class="parameter-label">{{g_review_visibility}}</span><span class="parameter-value">{{gallery_selected_visibility}}</span></div>
+                      <p class="text-muted">{{g_state_remote_only}}</p>
+                    </div>
+                    <div class="parameter-row" data-if="!gallery_remote">
+                      <span class="parameter-label">{{prop_path_label}}</span>
+                      <span class="parameter-value asset-path-value" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
+                    </div>
+                    <div class="parameter-row" data-if="!gallery_remote">
+                      <span class="parameter-label">{{prop_created_label}}</span>
+                      <span class="parameter-value">{{selected_asset_created}}</span>
+                    </div>
+                    <div class="parameter-row" data-if="!gallery_remote">
+                      <span class="parameter-label">{{prop_modified_label}}</span>
+                      <span class="parameter-value">{{selected_asset_modified}}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
