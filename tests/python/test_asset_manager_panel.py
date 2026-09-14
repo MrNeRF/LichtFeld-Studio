@@ -827,6 +827,23 @@ def test_gallery_checked_completion_is_not_a_notice_or_toast(panel_module):
     assert panel._gallery_state["message"] == ""
     assert panel._gallery_toast is None
 
+def test_gallery_batches_use_only_visible_filtered_rows(panel_module):
+    panel, local, remote = _gallery_fixture(panel_module)
+    other = _project(id="other", project_uuid="other", name="Garden", path="/tmp/garden.licht", folder_id="archive")
+    panel._asset_index.assets[other["id"]] = other
+    panel._asset_index.folders["archive"] = {"id": "archive", "name": "Archive"}
+    local["commit_uuid"] = "changed-local"
+    other["commit_uuid"] = "changed-other"
+    panel._gallery_state["links"][other["id"]] = {
+        "sceneId": "scene", "commitUuid": "old-other",
+        "contentRevision": "r1", "metadataRevision": "r1",
+    }
+    panel._search_query = "bicycle"
+
+    assert [asset["id"] for asset in panel._gallery_update_candidates()] == [local["id"]]
+    panel._selected_asset_ids = {local["id"], other["id"]}
+    assert panel._gallery_counts()["linked"] == 1
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False

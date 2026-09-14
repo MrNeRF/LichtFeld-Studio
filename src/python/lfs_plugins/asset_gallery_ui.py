@@ -237,7 +237,12 @@ class GalleryAssetMixin:
         self._request_model_update()
 
     def _gallery_counts(self):
-        selected = [a for key in self._selected_asset_ids if (a := self._asset_dict(key)) and not a.get("remote_only")]
+        visible = {
+            str(a.get("id") or a.get("project_uuid") or "")
+            for a in self._filtered_assets()
+        }
+        selected = [a for key in self._selected_asset_ids if key in visible
+                    and (a := self._asset_dict(key)) and not a.get("remote_only")]
         return {"count": len(selected),
                 "ready": sum(self._project_available(a) and self._gallery_facts(a)["relationship"] == "unlinked" for a in selected),
                 "linked": sum(self._project_available(a) and self._gallery_facts(a)["relationship"] == "linked" for a in selected),
@@ -518,7 +523,7 @@ class GalleryAssetMixin:
         return tr("quota.warning") if quota is not None and size > max(0, quota - used) else ""
 
     def _gallery_update_candidates(self):
-        return [a for a in self._asset_index_assets().values() if self._project_available(a)
+        return [a for a in self._filtered_assets() if self._project_available(a)
                 and self._gallery_facts(a)["freshness"] == "local"
                 and self._gallery_facts(a)["action"] == "update"]
 
