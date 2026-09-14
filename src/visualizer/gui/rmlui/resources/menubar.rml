@@ -49,6 +49,26 @@
         </div>
         <div id="menu-right">
             <div id="menu-window-controls">
+                <div id="menu-gallery-progress"
+                     class="menu-gallery-progress"
+                     data-class-hidden="!gallery_has_progress"
+                     data-class-indeterminate="gallery_progress_indeterminate"
+                     data-action="gallery_transfers"
+                     data-attr-title="gallery_progress_tooltip">
+                    <span>{{ gallery_progress_label }}</span>
+                    <div class="menu-gallery-progress-track">
+                        <div class="menu-gallery-progress-fill" data-style-width="gallery_progress_width"></div>
+                    </div>
+                </div>
+                <div id="menu-portal-connection"
+                     class="menu-portal-connection"
+                     data-attr-class="'menu-portal-connection ' + portal_connection_tone"
+                     data-action="portal_connection"
+                     data-attr-title="portal_connection_tooltip">
+                    <img data-attr-src="portal_connection_icon" />
+                    <span>{{ portal_connection_label }}</span>
+                </div>
+                <div class="menu-window-separator"></div>
                 <div id="menu-window-split-view"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="toggle_independent_split_view"

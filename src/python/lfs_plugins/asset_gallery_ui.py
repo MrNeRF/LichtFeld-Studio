@@ -393,7 +393,8 @@ class GalleryAssetMixin:
             if action.startswith("connect"):
                 account = self._controller().service.account
                 if action == "connect":
-                    self._gallery_connecting = bool(account.start_device_flow())
+                    self._gallery_connecting = bool(account.start_device_flow(reauthorize=True)
+                        if self._gallery_state.get("relink_required") else account.start_device_flow())
                     self._controller()._schedule_poll()
                 elif action == "connect_cancel":
                     account.cancel_device_flow()
@@ -420,7 +421,7 @@ class GalleryAssetMixin:
                 self._controller().update_all(self._gallery_update_candidates())
                 return
             if action == "account":
-                lf.ui.set_panel_enabled("lfs.account", True)
+                self._controller().service.account.start_device_flow()
                 return
             if action == "transfers":
                 self.on_open_gallery()

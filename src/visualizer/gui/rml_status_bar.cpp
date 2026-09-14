@@ -71,20 +71,6 @@ namespace lfs::vis::gui {
             }
         };
 
-        class AccountPanelOpenListener final : public Rml::EventListener {
-        public:
-            void ProcessEvent(Rml::Event& /*event*/) override {
-                PanelRegistry::instance().set_panel_enabled("lfs.account", true);
-            }
-        };
-
-        class GalleryTransferPanelOpenListener final : public Rml::EventListener {
-        public:
-            void ProcessEvent(Rml::Event& /*event*/) override {
-                PanelRegistry::instance().set_panel_enabled("lfs.gallery_transfer", true);
-            }
-        };
-
         class CallbackListener final : public Rml::EventListener {
         public:
             explicit CallbackListener(std::function<void()> callback)
@@ -544,10 +530,6 @@ namespace lfs::vis::gui {
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
         gpu_icon_listener_ = nullptr;
-        delete account_listener_;
-        account_listener_ = nullptr;
-        delete gallery_listener_;
-        gallery_listener_ = nullptr;
         delete mcp_toggle_listener_;
         mcp_toggle_listener_ = nullptr;
         delete mcp_power_listener_;
@@ -808,16 +790,6 @@ namespace lfs::vis::gui {
             gpu_icon_listener_ = new VramHudToggleListener();
         if (auto* el = document_->GetElementById("gpu-icon"))
             el->AddEventListener(Rml::EventId::Click, gpu_icon_listener_);
-
-        if (!account_listener_)
-            account_listener_ = new AccountPanelOpenListener();
-        if (auto* el = document_->GetElementById("account-chip"))
-            el->AddEventListener(Rml::EventId::Click, account_listener_);
-
-        if (!gallery_listener_)
-            gallery_listener_ = new GalleryTransferPanelOpenListener();
-        if (auto* el = document_->GetElementById("gallery-chip"))
-            el->AddEventListener(Rml::EventId::Click, gallery_listener_);
 
         if (!mcp_toggle_listener_) {
             mcp_toggle_listener_ = new CallbackListener([this] {

@@ -366,9 +366,9 @@ class BugReportPanel(Panel):
         self._toggle("_log_expanded")
 
     def _on_open_account(self, _handle, _event, _args) -> None:
-        self._mark_closed_cycle()
-        lf.ui.set_panel_enabled("lfs.account", True)
-        lf.ui.set_panel_enabled(self.id, False)
+        from .portal_account import get_portal_account_service
+
+        get_portal_account_service().start_device_flow()
 
     def _mark_closed_cycle(self) -> None:
         self._open_cycle_generation = -1

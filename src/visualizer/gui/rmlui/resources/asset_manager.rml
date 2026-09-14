@@ -73,17 +73,6 @@
 
               <button class="btn btn--secondary gallery-refresh" data-event-click="gallery_refresh" data-tooltip="asset_manager.gallery.sidebar.refresh">↻</button>
             </div>
-            <div class="gallery-connect" data-if="!gallery_signed_in">
-              <button class="btn btn--secondary" data-if="!gallery_linking" data-event-click="gallery_connect">{{gallery_connect_label}}</button>
-              <div data-if="gallery_linking">
-                <div class="gallery-user-code">{{gallery_user_code}}</div>
-                <button class="btn btn--secondary" data-event-click="gallery_connect_copy">@tr:asset_manager.gallery.connect.copy</button>
-                <button class="btn btn--secondary" data-event-click="gallery_connect_browser">@tr:asset_manager.gallery.connect.browser</button>
-                <p>{{gallery_waiting}}</p>
-                <button class="btn btn--secondary" data-event-click="gallery_connect_cancel">@tr:asset_manager.gallery.action.cancel</button>
-              </div>
-              <p>{{gallery_connect_error}}</p>
-            </div>
             <div class="text-muted gallery-checked">{{gallery_checked}}</div>
             <div class="asset-filter-row" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__"><span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span></div>
             <div class="asset-filter-row" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__"><span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span></div>

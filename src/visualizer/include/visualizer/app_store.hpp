@@ -106,7 +106,9 @@ namespace lfs::vis {
         struct LFS_VIS_API AccountState {
             bool signed_in = false;
             bool linking = false;
+            bool disconnecting = false;
             bool membership_required = false;
+            std::string error;
             std::string label;
             std::string tier;
             std::string tooltip;

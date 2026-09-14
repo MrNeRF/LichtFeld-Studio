@@ -138,8 +138,6 @@ namespace lfs::vis::gui {
         Rml::DataModelHandle model_handle_;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
-        Rml::EventListener* account_listener_ = nullptr;
-        Rml::EventListener* gallery_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
         Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;

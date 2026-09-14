@@ -276,9 +276,6 @@ def _build_builtin_panel_steps(lf):
     def about_panel():
         _register_lazy_panel(lf, "about")
 
-    def account_panel():
-        _register_lazy_panel(lf, "account")
-
     def bug_report_panel():
         _register_lazy_panel(lf, "bug_report")
 
@@ -288,6 +285,11 @@ def _build_builtin_panel_steps(lf):
         from .portal_account import initialize_portal_account
 
         initialize_portal_account()
+        from .gallery_controller import get_gallery_controller
+
+        gallery = get_gallery_controller()
+        if gallery.service.snapshot().get("signed_in"):
+            gallery.refresh()
 
     def getting_started_panel():
         _register_lazy_panel(lf, "getting_started")
@@ -342,7 +344,6 @@ def _build_builtin_panel_steps(lf):
         ("menus", menus),
         ("export_panel", export_panel),
         ("about_panel", about_panel),
-        ("account_panel", account_panel),
         ("bug_report_panel", bug_report_panel),
         ("portal_account", portal_account),
         ("getting_started_panel", getting_started_panel),

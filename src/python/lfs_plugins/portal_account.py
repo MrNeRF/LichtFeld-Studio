@@ -74,6 +74,7 @@ class AccountSnapshot:
 
     signed_in: bool = False
     linking: bool = False
+    disconnecting: bool = False
     membership_required: bool = False
     label: str = "Sign in"
     tier: str = ""
@@ -411,10 +412,14 @@ class PortalAccountService:
         self._merge_and_save_profile(updated)
         return True
 
-    def start_device_flow(self) -> bool:
-        """Start the device flow on a single daemon worker."""
+    def start_device_flow(self, *, reauthorize: bool = False) -> bool:
+        """Reuse a signed-in session unless additional access needs approval."""
         with self._lock:
             if self._flow_thread is not None and self._flow_thread.is_alive():
+                return False
+            if self._sign_out_thread is not None and self._sign_out_thread.is_alive():
+                return False
+            if self._credentials is not None and self._snapshot.signed_in and not reauthorize:
                 return False
             self._cancel_event.clear()
             self._snapshot = AccountSnapshot(
@@ -434,16 +439,47 @@ class PortalAccountService:
 
     def cancel_device_flow(self) -> None:
         self._cancel_event.set()
-        self._set_signed_out("")
+        self._finish_device_flow("")
 
     cancel_linking = cancel_device_flow
+
+    def _finish_device_flow(self, error: str) -> None:
+        # A canceled or failed access upgrade must not discard a working login.
+        credentials = self._current_credentials()
+        if credentials is None:
+            self._set_signed_out(error)
+        else:
+            self._apply_credentials_state(credentials)
+            with self._lock:
+                self._snapshot = replace(self._snapshot, error=error)
+            self._publish_account_state()
+
+    def _open_verification_in_browser(self, uri: str) -> None:
+        def open_current():
+            snapshot = self.snapshot()
+            if not snapshot.linking or snapshot.verification_uri_complete != uri or self._cancel_event.is_set():
+                return
+            from .portal_security import checked_portal_url
+            try:
+                lf.ui.open_url(checked_portal_url(self, uri))
+            except Exception:
+                _log.warning("Could not open portal approval in the browser")
+
+        # Start links from the service so this works with the Account panel closed.
+        try:
+            import lichtfeld as lf
+            lf.ui.schedule_on_ui_thread(open_current)
+        except Exception:
+            _log.debug("Portal approval browser dispatch is unavailable")
 
     def sign_out_async(self) -> None:
         with self._lock:
             if self._sign_out_thread is not None and self._sign_out_thread.is_alive():
                 return
+            self._snapshot = replace(self._snapshot, disconnecting=True)
             thread = threading.Thread(target=self.sign_out, daemon=True, name="lfs-portal-sign-out")
             self._sign_out_thread = thread
+        self._publish_account_state()
         thread.start()
 
     def sign_out(self) -> None:
@@ -509,13 +545,13 @@ class PortalAccountService:
             expires_in = self._required_number(start, "expires_in")
             interval = self._required_number(start, "interval")
         except PortalHTTPError as exc:
-            self._set_signed_out(exc.error or "sign_in_failed")
+            self._finish_device_flow(exc.error or "sign_in_failed")
             return
         except ValueError:
-            self._set_signed_out("unsafe_portal_url")
+            self._finish_device_flow("unsafe_portal_url")
             return
         except (OSError, PortalProtocolError):
-            self._set_signed_out("sign_in_unavailable")
+            self._finish_device_flow("sign_in_unavailable")
             return
 
         if self._cancel_event.is_set():
@@ -530,17 +566,18 @@ class PortalAccountService:
             expires_at=expires_at,
             interval=interval,
         )
+        self._open_verification_in_browser(verification_uri_complete)
         consecutive_failures = 0
 
         while not self._cancel_event.is_set():
             if time.time() >= expires_at:
-                self._set_signed_out("expired_token")
+                self._finish_device_flow("expired_token")
                 return
             remaining_lifetime = max(0.0, expires_at - time.time())
             if not self._wait_for_poll(min(interval, remaining_lifetime)):
                 return
             if time.time() >= expires_at:
-                self._set_signed_out("expired_token")
+                self._finish_device_flow("expired_token")
                 return
 
             try:
@@ -563,17 +600,17 @@ class PortalAccountService:
                     )
                     continue
                 if exc.error in _TERMINAL_DEVICE_ERRORS:
-                    self._set_signed_out(exc.error)
+                    self._finish_device_flow(exc.error)
                     return
                 consecutive_failures += 1
                 if consecutive_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
-                    self._set_signed_out("sign_in_unavailable")
+                    self._finish_device_flow("sign_in_unavailable")
                     return
                 continue
             except (OSError, PortalProtocolError):
                 consecutive_failures += 1
                 if consecutive_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
-                    self._set_signed_out("sign_in_unavailable")
+                    self._finish_device_flow("sign_in_unavailable")
                     return
                 continue
 
@@ -583,7 +620,7 @@ class PortalAccountService:
             try:
                 credentials = self._credentials_from_token_pair(token_pair)
             except PortalProtocolError:
-                self._set_signed_out("sign_in_failed")
+                self._finish_device_flow("sign_in_failed")
                 return
             self._save_credentials(credentials)
             self._apply_credentials_state(credentials)
@@ -1012,7 +1049,7 @@ class PortalAccountService:
         with self._lock:
             self._snapshot = AccountSnapshot(
                 linking=True,
-                label="",
+                label=user_code,
                 tooltip=self._with_portal_host(f"{remaining // 60}:{remaining % 60:02d}"),
                 user_code=user_code,
                 verification_uri=verification_uri,
@@ -1059,6 +1096,8 @@ class PortalAccountService:
             RuntimeState.account_state.value = {
                 "signed_in": snapshot.signed_in,
                 "linking": snapshot.linking,
+                "disconnecting": snapshot.disconnecting,
+                "error": snapshot.error,
                 "membership_required": snapshot.membership_required,
                 "label": snapshot.label,
                 "tier": snapshot.tier,

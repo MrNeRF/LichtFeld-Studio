@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_ACCOUNT_STATE: dict[str, object] = {
     "signed_in": False,
     "linking": False,
+    "disconnecting": False,
+    "error": "",
     "membership_required": False,
     "label": "",
     "tier": "",

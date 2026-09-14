@@ -160,7 +160,6 @@ class AccountPanel(Panel):
     def _open_verification_uri(self, _event) -> None:
         uri = self._safe_verification_uri()
         if uri:
-            self._opened_verification_uri = uri
             lf.ui.open_url(uri)
 
     def _maybe_open_verification_uri(self) -> None:
@@ -171,7 +170,6 @@ class AccountPanel(Panel):
 
     def _schedule_account_state_update(self) -> None:
         def run_update() -> None:
-            self._maybe_open_verification_uri()
             # bind_func variables only re-evaluate via dirty_all; request_update alone
             # never marks them dirty and the panel keeps rendering the stale state.
             invalidate_panel(self._handle, "*")

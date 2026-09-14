@@ -24,6 +24,51 @@ body {
     background-color: transparent;
 }
 
+.menu-portal-connection:hover,
+.menu-gallery-progress:hover {
+    background-color: @{menu.hover};
+}
+
+.menu-portal-connection.connected {
+    color: @{success};
+}
+
+.menu-portal-connection.connected img {
+    image-color: @{success};
+}
+
+.menu-portal-connection.connecting {
+    color: @{info};
+}
+
+.menu-portal-connection.connecting img {
+    image-color: @{info};
+}
+
+.menu-portal-connection.disconnected {
+    color: @{text_dim};
+}
+
+.menu-portal-connection.disconnected img {
+    image-color: @{text_dim};
+}
+
+.menu-portal-connection.error {
+    color: @{error};
+}
+
+.menu-portal-connection.error img {
+    image-color: @{error};
+}
+
+.menu-gallery-progress-track {
+    background-color: @{border};
+}
+
+.menu-gallery-progress-fill {
+    background-color: @{primary};
+}
+
 .menu-label:hover {
     background-color: @{menu.hover};
 }

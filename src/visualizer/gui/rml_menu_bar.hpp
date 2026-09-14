@@ -152,6 +152,7 @@ namespace lfs::vis::gui {
         int submenuIndexForElement(Rml::Element* element) const;
         int childSubmenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
+        void rebuildPortalStatus();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
         void updateTitlebarDragRegion(int bar_height_px);
@@ -177,6 +178,15 @@ namespace lfs::vis::gui {
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
+        std::string portal_connection_label_;
+        std::string portal_connection_tooltip_;
+        std::string portal_connection_icon_;
+        std::string portal_connection_tone_;
+        std::string gallery_progress_label_;
+        std::string gallery_progress_tooltip_;
+        std::string gallery_progress_width_{"0%"};
+        bool gallery_has_progress_ = false;
+        bool gallery_progress_indeterminate_ = false;
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;

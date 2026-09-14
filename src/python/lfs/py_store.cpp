@@ -164,6 +164,8 @@ namespace lfs::python {
             nb::dict state;
             state["signed_in"] = value.signed_in;
             state["linking"] = value.linking;
+            state["disconnecting"] = value.disconnecting;
+            state["error"] = value.error;
             state["membership_required"] = value.membership_required;
             state["label"] = value.label;
             state["tier"] = value.tier;
@@ -181,6 +183,8 @@ namespace lfs::python {
             lfs::vis::AppStore::AccountState state;
             state.signed_in = dict_value(dict, "signed_in", false);
             state.linking = dict_value(dict, "linking", false);
+            state.disconnecting = dict_value(dict, "disconnecting", false);
+            state.error = dict_value(dict, "error", std::string{});
             state.membership_required = dict_value(dict, "membership_required", false);
             state.label = dict_value(dict, "label", std::string{});
             state.tier = dict_value(dict, "tier", std::string{});

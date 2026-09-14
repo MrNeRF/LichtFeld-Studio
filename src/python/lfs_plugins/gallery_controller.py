@@ -61,6 +61,7 @@ class GalleryController:
         self._batch_current = None
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
+        self._publish_runtime_state(self.snapshot())
 
     def _account_changed(self, _state):
         def update():
@@ -733,21 +734,48 @@ class GalleryController:
     def _publish_runtime_state(self, snapshot):
         """Publish transfer status to the native UI."""
         from .ui import RuntimeState
+        from .asset_format import format_size
         signal = getattr(RuntimeState, "gallery_state", None)
         if signal is None:
             return
-        jobs = snapshot.get("jobs", [])
+        jobs = [j for j in snapshot.get("jobs", []) if not j.get("retired")]
         active = [j for j in jobs if j["status"] in ("running", "queued")]
+        running = [j for j in active if j["status"] == "running"]
+        phase = snapshot.get("phase", "idle")
         up = sum(j.get("kind") != "download" for j in active)
         down = len(active) - up
+        up += phase == "preparing"
+        down += phase == "applying"
         attention = sum(j["status"] in ("conflict", "error") for j in jobs)
         total = sum(j.get("total", 0) for j in active)
-        percent = int(100 * sum(j.get("completed", 0) for j in active) / total) if total else -1
-        signal.value = dict(signed_in=snapshot.get("signed_in", False), active_uploads=up, active_downloads=down,
+        done = sum(min(j.get("total", 0), max(0, j.get("completed", 0))) for j in active)
+        percent = min(100, int(100 * done / total)) if total > 0 and running else -1
+        stage = "queued"
+        if phase != "idle":
+            stage = phase
+            percent = min(100, max(0, int(snapshot.get("preparationProgress", 0)))) if phase == "preparing" else -1
+            if percent == 0:
+                percent = -1
+        elif running:
+            if all(j.get("serverProcessing") for j in running):
+                stage, percent = "processing", -1
+            else:
+                stage = "downloading" if running[0].get("kind") == "download" else "uploading"
+
+        label = tr("phase." + stage, prefix="gallery.transfer.") if up or down else tr("sidebar.title")
+        if percent >= 0 and (up or down):
+            label = tr("progress", prefix="gallery.status.", stage=label, percent=percent)
+        details = [tr("sidebar.aggregate", uploads=up, downloads=down, attention=attention)]
+        if running:
+            details.insert(0, running[0].get("metadata", {}).get("title", ""))
+            details.append(tr("bytes", prefix="gallery.transfer.", done=format_size(done), total=format_size(total)))
+        if snapshot.get("message"):
+            details.append(snapshot["message"])
+        signal.value = dict(signed_in=snapshot.get("signed_in", False),
+            active_uploads=up, active_downloads=down,
             paused=sum(j["status"] == "paused" for j in jobs), attention=attention,
-            percent=min(100, percent), label=tr("sidebar.title"),
-            tooltip=tr("sidebar.aggregate", uploads=up, downloads=down, attention=attention),
-            tone="attention" if attention else "busy" if active else "idle", epoch=snapshot.get("version", 0))
+            percent=percent, label=label, tooltip="\n".join(filter(None, details)),
+            tone="busy" if up or down else "attention" if attention else "idle", epoch=snapshot.get("version", 0))
 
 
     def _dispatch(self, name, args):

@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -429,6 +430,15 @@ namespace lfs::vis::gui {
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_render_buttons", &render_buttons_);
         ctor.Bind("menu_projection_buttons", &projection_buttons_);
+        ctor.Bind("portal_connection_label", &portal_connection_label_);
+        ctor.Bind("portal_connection_tooltip", &portal_connection_tooltip_);
+        ctor.Bind("portal_connection_icon", &portal_connection_icon_);
+        ctor.Bind("portal_connection_tone", &portal_connection_tone_);
+        ctor.Bind("gallery_progress_label", &gallery_progress_label_);
+        ctor.Bind("gallery_progress_tooltip", &gallery_progress_tooltip_);
+        ctor.Bind("gallery_progress_width", &gallery_progress_width_);
+        ctor.Bind("gallery_has_progress", &gallery_has_progress_);
+        ctor.Bind("gallery_progress_indeterminate", &gallery_progress_indeterminate_);
         menu_model_ = ctor.GetModelHandle();
 
         try {
@@ -1027,6 +1037,58 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlMenuBar::rebuildPortalStatus() {
+        if (!menu_model_)
+            return;
+
+        const auto account = lfs::vis::app_store().account_state.get();
+        const auto gallery = lfs::vis::app_store().gallery_state.get();
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        const std::string connection = account.disconnecting ? "disconnecting" : account.linking ? "linking"
+                                                                             : account.signed_in ? "connected"
+                                                                                                 : "disconnected";
+        const bool connected = account.signed_in;
+        const bool checking = account.linking || account.disconnecting;
+        const std::string tone = checking ? "connecting" : !account.error.empty() ? "error"
+                                                       : connected                ? "connected"
+                                                                                  : "disconnected";
+        const std::string icon = checking ? "ring" : connected ? "cloud-check"
+                                                               : "cloud-strike";
+        const auto set = [this](const char* name, auto& current, auto value) {
+            if (current != value) {
+                current = std::move(value);
+                menu_model_.DirtyVariable(name);
+                render_needed_ = true;
+            }
+        };
+        std::string label = localization.get("portal.status." + connection);
+        if (account.linking && !account.label.empty())
+            label += " " + account.label;
+        set("portal_connection_label", portal_connection_label_, std::move(label));
+        std::string tooltip = localization.get(account.linking ? "portal.status.cancel"
+                                               : connected     ? "portal.status.disconnect"
+                                                               : "portal.status.connect");
+        if (!account.tooltip.empty())
+            tooltip += "\n" + account.tooltip;
+        if (!account.error.empty()) {
+            const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
+                                          : account.error == "sign_in_failed"    ? "account.error.generic"
+                                          : account.error == "unsafe_portal_url" ? "asset_manager.gallery.error.unsafe_url"
+                                                                                 : "account.error." + account.error;
+            tooltip += "\n" + std::string(localization.hasKey(error_key) ? localization.get(error_key)
+                                                                         : localization.get("account.error.generic"));
+        }
+        set("portal_connection_tooltip", portal_connection_tooltip_, std::move(tooltip));
+        set("portal_connection_icon", portal_connection_icon_, "../icon/gallery-" + icon + ".png");
+        set("portal_connection_tone", portal_connection_tone_, tone);
+        set("gallery_has_progress", gallery_has_progress_, gallery.active_uploads > 0 || gallery.active_downloads > 0);
+        set("gallery_progress_label", gallery_progress_label_, gallery.label);
+        set("gallery_progress_tooltip", gallery_progress_tooltip_, gallery.tooltip);
+        set("gallery_progress_indeterminate", gallery_progress_indeterminate_, gallery.percent < 0);
+        set("gallery_progress_width", gallery_progress_width_,
+            std::format("{}%", gallery.percent < 0 ? 100 : std::clamp(gallery.percent, 0, 100)));
+    }
+
     void RmlMenuBar::dispatchToolbarAction(const std::string& action, const std::string& value) {
         auto* rm = lfs::vis::services().renderingOrNull();
 
@@ -1078,6 +1140,10 @@ namespace lfs::vis::gui {
         } else if (action == "toggle_independent_split_view") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->toggleIndependentSplitView();
+        } else if (action == "portal_connection") {
+            python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
+        } else if (action == "gallery_transfers") {
+            PanelRegistry::instance().set_panel_enabled("lfs.gallery_transfer", true);
         } else if (action == "window_toggle_ui") {
             lfs::core::events::ui::ToggleUI{}.emit();
         } else if (action == "window_minimize") {
@@ -1110,7 +1176,7 @@ namespace lfs::vis::gui {
                 return nullptr;
             for (int i = 0; i < root->GetNumChildren(); ++i) {
                 auto* child = root->GetChild(i);
-                if (!child || !child->HasAttribute("data-action"))
+                if (!child || child->GetDisplay() == Rml::Style::Display::None || !child->HasAttribute("data-action"))
                     continue;
                 const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
@@ -1281,6 +1347,7 @@ namespace lfs::vis::gui {
             return;
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
+        rebuildPortalStatus();
 
         if (menu_window_split_view_) {
             const bool split_view = [&] {
@@ -1324,6 +1391,13 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+
+        // Portal status and transfer progress can change the right cluster's width.
+        // Lay it out before reserving space for the viewport toolbar.
+        if (render_needed_ || screen_w != last_ctx_w_) {
+            rml_context_->SetDimensions(Rml::Vector2i(screen_w, std::max(bar_h, last_ctx_h_)));
+            rml_context_->Update();
+        }
 
         // Right-align the render/projection toolbar to the viewport edge, but
         // keep it clear of the window-control cluster when there is no dock panel.
