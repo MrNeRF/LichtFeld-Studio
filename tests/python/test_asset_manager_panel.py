@@ -809,6 +809,24 @@ def test_search_empty_state_can_clear_query(panel_module):
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     assert 'data-if="asset_search_empty"' in rml
 
+def test_gallery_completion_toast_expires_in_six_seconds_and_action_dismisses(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    timers = []
+    monkeypatch.setattr(panel_module.threading, "Timer", lambda delay, callback: timers.append((delay, callback)) or SimpleNamespace(start=lambda: None, cancel=lambda: None))
+    panel._show_gallery_toast("done")
+    assert timers[-1][0] == 6
+    assert panel._gallery_toast
+    panel._gallery_controller = SimpleNamespace(refresh=lambda: None)
+    panel._gallery_command("refresh")
+    assert panel._gallery_toast is None
+
+def test_gallery_checked_completion_is_not_a_notice_or_toast(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._gallery_changed({"identity": "account", "message": "Gallery checked.", "scenes": [], "links": {}, "jobs": []})
+
+    assert panel._gallery_state["message"] == ""
+    assert panel._gallery_toast is None
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False

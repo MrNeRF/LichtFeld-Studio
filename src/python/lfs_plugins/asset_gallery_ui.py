@@ -71,6 +71,8 @@ class GalleryAssetMixin:
     def _gallery_changed(self, snapshot):
         previous_identity = self._gallery_state.get("identity")
         previous = self._gallery_state
+        if snapshot.get("message") in ("Gallery checked.", tr("info.checked")):
+            snapshot = {**snapshot, "message": ""}
         self._gallery_state = snapshot
         if snapshot.get("relink_required"):
             self._gallery_notice = snapshot.get("message", "")
@@ -333,6 +335,8 @@ class GalleryAssetMixin:
 
     def _gallery_command(self, action, args=()):
         try:
+            if not action.startswith("toast_"):
+                self._dismiss_gallery_toast()
             if (self._gallery_state.get("unsupported") and action not in
                     ("refresh", "open_recovery", "undo", "toast_open", "toast_portal", "toast_copy")):
                 self._gallery_notice = tr("error.portal_version")
@@ -532,9 +536,19 @@ class GalleryAssetMixin:
                 if self._handle:
                     self._handle.dirty_all()
                 self._request_model_update()
-        self._gallery_toast_timer = threading.Timer(8, lambda: lf.ui.schedule_on_ui_thread(expire))
+        self._gallery_toast_timer = threading.Timer(6, lambda: lf.ui.schedule_on_ui_thread(expire))
         self._gallery_toast_timer.daemon = True
         self._gallery_toast_timer.start()
+
+    def _dismiss_gallery_toast(self):
+        if self._gallery_toast_timer:
+            self._gallery_toast_timer.cancel()
+            self._gallery_toast_timer = None
+        if self._gallery_toast is not None:
+            self._gallery_toast = None
+            if self._handle:
+                self._handle.dirty_all()
+            self._request_model_update()
 
     def _gallery_completions(self, previous, snapshot):
         completion = snapshot.get("completion")
