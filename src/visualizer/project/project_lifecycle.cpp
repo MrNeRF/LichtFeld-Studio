@@ -3125,7 +3125,8 @@ namespace lfs::vis::project {
     ProjectLifecycle::
         waitOutBackgroundAutosaveForExplicitSave() {
         if (!viewer_.jobs().anyRunning(
-                JobType::ProjectWrite)) {
+                JobType::ProjectWrite) &&
+            !viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
             return {};
         }
         if (project_write_purpose_ !=
@@ -3133,16 +3134,17 @@ namespace lfs::vis::project {
             project_write_purpose_ !=
                 ProjectWritePurpose::TrainingAutosave &&
             project_write_purpose_ !=
-                ProjectWritePurpose::GeometryCapture) {
+                ProjectWritePurpose::GeometryCapture &&
+            project_write_purpose_ != ProjectWritePurpose::DatasetEmbed) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "A project write is already in progress.",
                 "Manual save, autosave, and compaction share one exclusive job slot",
                 "project.job");
         }
-        // Autosave occupies the exclusive ProjectWrite
-        // slot. Join and settle it so a user Save / Save
-        // As never loses the slot to a background write.
+        // Join and settle background writes before capturing a Save / Save As
+        // context. Dataset embedding advances the master generation too;
+        // waiting only after snapshot capture leaves stale clean proofs.
         const bool geometry_capture =
             project_write_purpose_ ==
             ProjectWritePurpose::GeometryCapture;

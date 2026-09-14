@@ -334,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -947,7 +947,7 @@ NB_MODULE(lichtfeld, m) {
         "trainer_state",
         []() -> const char* {
             const auto* const tm = lfs::python::get_trainer_manager();
-            if (!tm || !tm->hasTrainer()) {
+            if (!tm || (!tm->hasTrainer() && !tm->isFinished())) {
                 const auto session = stored_training_session();
                 if (session.available) {
                     return session.completed ? "completed" : "paused";

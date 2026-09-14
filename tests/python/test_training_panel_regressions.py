@@ -1519,6 +1519,44 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         runtime.total_iterations._fallback = 0
 
 
+def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "stopped"
+        runtime.iteration.value = 7000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_stopped"][0]() is True
+        assert model.bindings["show_ctrl_completed"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.stopped" in model.bindings["status_mode"][0]()
+        assert "7,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
 def test_resume_on_stored_session_restores_before_resuming(
     training_panel_module, monkeypatch
 ):

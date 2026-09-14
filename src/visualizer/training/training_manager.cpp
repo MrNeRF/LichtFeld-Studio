@@ -136,6 +136,7 @@ namespace lfs::vis {
             bool valid = false;
             bool available = false;
             bool completed = false;
+            bool stopped = false;
             bool hydrated = false;
             int iteration = 0;
             int max_iterations = 0;
@@ -851,6 +852,15 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
+    bool TrainerManager::canPerform(const TrainingAction action) const {
+        if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
+            getState() == TrainingState::Paused) {
+            const auto session = viewer_->projectTrainingSessionState();
+            return session.available && !session.hydrated && !session.restoring;
+        }
+        return state_machine_.canPerform(action);
+    }
+
     TrainingState TrainerManager::getState() const {
         const auto state = state_machine_.getState();
         if (trainer_ || state != TrainingState::Idle) {
@@ -892,6 +902,7 @@ namespace lfs::vis {
                 scene = &viewer_->getScene();
             }
             desired.completed = session.completed;
+            desired.stopped = isFinished() && state_machine_.getFinishReason() == FinishReason::UserStopped;
             desired.hydrated = session.hydrated;
             desired.iteration = session.iteration;
             desired.max_iterations = session.max_iterations;
@@ -915,6 +926,7 @@ namespace lfs::vis {
         if (last.owner == this && last.valid && stored_matches &&
             last.available == desired.available &&
             last.completed == desired.completed &&
+            last.stopped == desired.stopped &&
             last.hydrated == desired.hydrated &&
             last.iteration == desired.iteration &&
             last.max_iterations == desired.max_iterations &&
@@ -949,7 +961,8 @@ namespace lfs::vis {
             session.max_iterations;
         stored_session_presentation_strategy_ = desired.strategy;
         const char* const presented_state =
-            session.completed ? "completed" : "paused";
+            desired.stopped ? "stopped" : session.completed ? "completed"
+                                                            : "paused";
 
         auto& store = app_store();
         {
@@ -981,7 +994,7 @@ namespace lfs::vis {
                     std::max(0, desired.num_gaussians)),
                 .trainer = nullptr},
             session.max_iterations,
-            !session.completed,
+            !session.completed && !desired.stopped,
             false,
             false,
             lfs::training::TrainingPhase::Idle);
@@ -993,7 +1006,7 @@ namespace lfs::vis {
     bool TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
-        const auto state = getState();
+        const auto state = state_machine_.getState();
         if (state == TrainingState::Running || state == TrainingState::Paused) {
             LOG_INFO("Stopping active training before clearing");
             if (state == TrainingState::Paused && trainer_) {
@@ -1036,7 +1049,7 @@ namespace lfs::vis {
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
 
-        if (getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
+        if (state_machine_.getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
         }
 
@@ -1537,6 +1550,15 @@ namespace lfs::vis {
         if (!canStop()) {
             LOG_TRACE("Cannot stop: {}", getActionBlockedReason(TrainingAction::Stop));
             return;
+        }
+
+        // A reopened project presents its checkpoint as paused before a live
+        // trainer exists. Stop that stored session without allocating an
+        // optimizer or executing a training step just to reach Edit Mode.
+        if (!trainer_ && stored_session_presentation_active_) {
+            if (!state_machine_.transitionTo(TrainingState::Paused)) {
+                return;
+            }
         }
 
         LOG_DEBUG("Requesting training stop");
