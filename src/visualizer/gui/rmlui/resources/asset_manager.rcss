@@ -782,6 +782,11 @@
     min-width: 0;
 }
 
+.asset-info-details {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 #asset-info-thumbnail {
     flex: 0 0 160dp;
     width: 160dp;
@@ -1071,7 +1076,8 @@
 .parameter-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: "JetBrains Mono"; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
 .inspector-operations { padding-top: 4dp; }
-.asset-info-empty { padding: 16dp 12dp; }
+.asset-info-empty { display: block; padding: 16dp 12dp; color: rgba(220, 225, 235, 0.72); }
+.inspector-history-empty { padding: 4dp 0; }
 
 .asset-tray { position: relative; display: flex; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
 .asset-tray-label, .asset-tray-detail { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

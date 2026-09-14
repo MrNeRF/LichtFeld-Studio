@@ -268,7 +268,7 @@
     "status.load_failed": "Le catalogue n'a pas pu être chargé. Consultez le journal pour plus de détails.",
     "status.scanning": "Analyse de {name} : {folders} dossiers, {projects} projets trouvés",
     "status.scan_stopped": "Analyse arrêtée",
-    "status.select_item": "Sélectionnez un élément pour voir les détails",
+    "status.select_item": "Sélectionnez un projet pour voir ses détails",
     "status.one_item_selected": "1 élément sélectionné",
     "status.multi_items_selected": "{count} éléments sélectionnés",
     "dialog.rename_asset": "Renommer l'Actif",

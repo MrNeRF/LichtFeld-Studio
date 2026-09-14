@@ -832,7 +832,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         decorator = self._thumbnail_decorator(self._asset_with_poster(asset)) if asset else "none"
         source = self._thumbnail_source_from_decorator(decorator)
         if element is None:
-            element = header.parent().insert_before("div", header)
+            layout = query(".asset-info-asset-layout") if callable(query) else None
+            details = query(".asset-info-details") if callable(query) else None
+            if layout is not None and layout is not header and details is not None and details is not header:
+                element = layout.insert_before("div", details)
+            else:
+                element = header.parent().insert_before("div", header)
             element.set_id("asset-info-thumbnail")
             element.set_property("width", "160dp")
             element.set_property("height", "100dp")

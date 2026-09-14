@@ -268,7 +268,7 @@
     "status.load_failed": "Nie można wczytać katalogu. Szczegóły znajdziesz w dzienniku.",
     "status.scanning": "Skanowanie {name}: {folders} folderów, znaleziono {projects} projektów",
     "status.scan_stopped": "Skanowanie zatrzymane",
-    "status.select_item": "Wybierz element, aby wyświetlić szczegóły",
+    "status.select_item": "Wybierz projekt, aby wyświetlić jego szczegóły",
     "status.one_item_selected": "1 element wybrany",
     "status.multi_items_selected": "{count} elementów wybranych",
     "dialog.rename_asset": "Zmień Nazwę Zasobu",

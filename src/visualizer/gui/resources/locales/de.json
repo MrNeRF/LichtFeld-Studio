@@ -268,7 +268,7 @@
     "status.load_failed": "Der Katalog konnte nicht geladen werden. Details stehen im Protokoll.",
     "status.scanning": "Scanne {name}: {folders} Ordner, {projects} Projekte gefunden",
     "status.scan_stopped": "Scan gestoppt",
-    "status.select_item": "Wählen Sie ein Element aus, um Details anzuzeigen",
+    "status.select_item": "Projekt auswählen, um die Details zu sehen",
     "status.one_item_selected": "1 Element ausgewählt",
     "status.multi_items_selected": "{count} Elemente ausgewählt",
     "dialog.rename_asset": "Asset umbenennen",

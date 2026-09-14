@@ -268,7 +268,7 @@
     "status.load_failed": "No se pudo cargar el catálogo. Consulte el registro para más detalles.",
     "status.scanning": "Explorando {name}: {folders} carpetas, {projects} proyectos encontrados",
     "status.scan_stopped": "Exploración detenida",
-    "status.select_item": "Seleccione un elemento para ver detalles",
+    "status.select_item": "Seleccione un proyecto para ver sus detalles",
     "status.one_item_selected": "1 elemento seleccionado",
     "status.multi_items_selected": "{count} elementos seleccionados",
     "dialog.rename_asset": "Renombrar Activo",

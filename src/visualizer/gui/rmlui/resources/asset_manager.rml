@@ -274,31 +274,35 @@
               <button class="btn btn--secondary" data-if="gallery_can_update_many" data-event-click="gallery_update_many">{{gallery_update_many}}</button>
             </div>
             <div data-if="show_selection_asset">
-              <div class="inspector-header">
-                <span class="inspector-title">{{selected_asset_name}}</span>
-                <span class="inspector-path" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
-                <div class="inspector-actions"><button class="btn btn--primary" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset">{{open_button_label}}</button></div>
-              </div>
-              <div class="inspector-section inspector-problem" data-if="selected_has_problem">
-                <div class="inspector-section-title">{{problem_title}}</div>
-                <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value">{{selected_fix_label}}</span></div>
-                <button class="btn btn--secondary" data-if="selected_asset_can_locate" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
-              </div>
-              <div class="inspector-section"><div class="inspector-section-title">{{project_section_title}}</div>
-                <div class="parameter-row" data-if="selected_asset_has_folder"><span class="parameter-label">{{prop_folder_label}}</span><span class="parameter-value">{{selected_asset_folder_name}}</span></div>
-                <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value">{{selected_asset_size}}</span></div>
-                <div class="parameter-row"><span class="parameter-label">{{prop_modified_label}}</span><span class="parameter-value">{{selected_asset_modified}}</span></div>
-              </div>
-              <div class="inspector-section" data-if="gallery_linked"><div class="inspector-section-title">{{gallery_section_title}}</div>
-                <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value">{{gallery_selected_state}}</span></div>
-                <p class="text-muted">{{gallery_exchange_summary}}</p>
-              </div>
-              <div class="inspector-section"><div class="inspector-section-title">{{file_section_title}}</div>
-                <div class="parameter-row"><span class="parameter-label">{{prop_path_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="selected_asset_path">{{selected_asset_path}}</span></div>
-                <div class="parameter-row" data-if="selected_asset_can_locate"><span class="parameter-label">{{prop_expected_path_label}}</span><span class="parameter-value inspector-ellipsis">{{selected_asset_expected_path}}</span></div>
-              </div>
-              <div class="inspector-section"><div class="inspector-section-title">{{operations_section_title}}</div>
-                <div class="inspector-actions inspector-operations"><button class="btn btn--secondary">@tr:projects.action.save_history</button></div>
+              <div class="asset-info-asset-layout">
+                <div class="asset-info-details">
+                  <div class="inspector-header asset-info-header">
+                    <span class="inspector-title">{{selected_asset_name}}</span>
+                    <span class="inspector-path" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
+                    <div class="inspector-actions"><button class="btn btn--primary" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset">{{open_button_label}}</button></div>
+                  </div>
+                  <div class="inspector-section inspector-problem" data-if="selected_has_problem">
+                    <div class="inspector-section-title">{{problem_title}}</div>
+                    <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value">{{selected_fix_label}}</span></div>
+                    <button class="btn btn--secondary" data-if="selected_asset_can_locate" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+                  </div>
+                  <div class="inspector-section"><div class="inspector-section-title">{{project_section_title}}</div>
+                    <div class="parameter-row" data-if="selected_asset_has_folder"><span class="parameter-label">{{prop_folder_label}}</span><span class="parameter-value">{{selected_asset_folder_name}}</span></div>
+                    <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value">{{selected_asset_size}}</span></div>
+                    <div class="parameter-row"><span class="parameter-label">{{prop_modified_label}}</span><span class="parameter-value">{{selected_asset_modified}}</span></div>
+                  </div>
+                  <div class="inspector-section" data-if="gallery_linked"><div class="inspector-section-title">{{gallery_section_title}}</div>
+                    <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value">{{gallery_selected_state}}</span></div>
+                    <p class="text-muted">{{gallery_exchange_summary}}</p>
+                  </div>
+                  <div class="inspector-section"><div class="inspector-section-title">{{file_section_title}}</div>
+                    <div class="parameter-row"><span class="parameter-label">{{prop_path_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="selected_asset_path">{{selected_asset_path}}</span></div>
+                    <div class="parameter-row" data-if="selected_asset_can_locate"><span class="parameter-label">{{prop_expected_path_label}}</span><span class="parameter-value inspector-ellipsis">{{selected_asset_expected_path}}</span></div>
+                  </div>
+                  <div class="inspector-section"><div class="inspector-section-title">{{operations_section_title}}</div>
+                    <div class="inspector-history-empty text-muted">@tr:projects.action.save_history</div>
+                  </div>
+                </div>
               </div>
             </div>
             <div data-if="show_selection_folder">

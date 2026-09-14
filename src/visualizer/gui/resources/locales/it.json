@@ -268,7 +268,7 @@
     "status.load_failed": "Impossibile caricare il catalogo. Consulta il registro per i dettagli.",
     "status.scanning": "Scansione di {name}: {folders} cartelle, {projects} progetti trovati",
     "status.scan_stopped": "Scansione interrotta",
-    "status.select_item": "Seleziona un elemento per visualizzare i dettagli",
+    "status.select_item": "Seleziona un progetto per visualizzarne i dettagli",
     "status.one_item_selected": "1 elemento selezionato",
     "status.multi_items_selected": "{count} elementi selezionati",
     "dialog.rename_asset": "Rinomina Risorsa",

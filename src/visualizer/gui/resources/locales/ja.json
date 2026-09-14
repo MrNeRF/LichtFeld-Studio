@@ -268,7 +268,7 @@
     "status.load_failed": "カタログを読み込めませんでした。詳細はログを確認してください。",
     "status.scanning": "{name} をスキャン中: {folders} フォルダー、{projects} 件のプロジェクトを検出",
     "status.scan_stopped": "スキャンを停止しました",
-    "status.select_item": "詳細を表示するには項目を選択してください",
+    "status.select_item": "詳細を表示するにはプロジェクトを選択してください",
     "status.one_item_selected": "1 項目選択中",
     "status.multi_items_selected": "{count} 項目選択中",
     "dialog.rename_asset": "アセット名を変更",

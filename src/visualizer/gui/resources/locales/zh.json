@@ -268,7 +268,7 @@
     "status.load_failed": "无法加载目录。请查看日志了解详情。",
     "status.scanning": "正在扫描 {name}：{folders} 个文件夹，找到 {projects} 个项目",
     "status.scan_stopped": "扫描已停止",
-    "status.select_item": "选择文件夹以查看详情",
+    "status.select_item": "选择项目以查看其详细信息",
     "status.one_item_selected": "已选择 1 个文件夹",
     "status.multi_items_selected": "已选择 {count} 个文件夹",
     "dialog.rename_asset": "重命名资源",
