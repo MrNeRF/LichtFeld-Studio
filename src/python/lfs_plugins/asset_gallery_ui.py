@@ -347,6 +347,8 @@ class GalleryAssetMixin:
         try:
             if not action.startswith("toast_"):
                 self._dismiss_gallery_toast()
+            if action != "undo":
+                self._dismiss_gallery_undo()
             if (self._gallery_state.get("unsupported") and action not in
                     ("refresh", "open_recovery", "undo", "toast_open", "toast_portal", "toast_copy")):
                 self._gallery_notice = tr("error.portal_version")
@@ -604,6 +606,12 @@ class GalleryAssetMixin:
         self._gallery_undo_timer = threading.Timer(8, lambda: lf.ui.schedule_on_ui_thread(expire))
         self._gallery_undo_timer.daemon = True
         self._gallery_undo_timer.start()
+
+    def _dismiss_gallery_undo(self):
+        if self._gallery_undo_timer:
+            self._gallery_undo_timer.cancel()
+            self._gallery_undo_timer = None
+        self._gallery_undo = None
 
     def _gallery_details(self, asset=None):
         asset = asset if asset is not None else self._get_selected_asset() or {}

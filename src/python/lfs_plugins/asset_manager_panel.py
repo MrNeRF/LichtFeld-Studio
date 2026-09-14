@@ -2415,6 +2415,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._doc = None
 
     def _on_close_panel(self, _handle=None, _event=None, _args=None):
+        self._dismiss_gallery_undo()
         lf.ui.set_panel_enabled(self.id, False)
 
     @staticmethod

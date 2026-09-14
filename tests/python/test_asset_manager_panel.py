@@ -912,6 +912,18 @@ def test_log_only_asset_manager_failures_show_catalog_notice(panel_module):
     panel._complete_folder_scan()
     assert panel.get_catalog_notice() == "asset_manager.status.folder_unavailable"
 
+def test_pull_undo_expires_and_clears_on_next_gallery_action(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    timers = []
+    monkeypatch.setattr(panel_module.threading, "Timer", lambda delay, callback: timers.append((delay, callback)) or SimpleNamespace(start=lambda: None, cancel=lambda: None))
+    panel._set_gallery_undo(lambda: None, kind="pull")
+
+    assert timers[-1][0] == 8
+    assert panel._gallery_undo is not None
+    panel._gallery_controller = SimpleNamespace(refresh=lambda: None)
+    panel._gallery_command("refresh")
+    assert panel._gallery_undo is None
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False
