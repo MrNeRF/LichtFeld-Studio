@@ -395,3 +395,9 @@ Background sync, multi-account, a master-file backup service on the portal, mana
 | UNSUPPORTED (non-master) | never listed |
 | IDENTITY_MISMATCH | Replaced a published project, or a plain replacement when no scene was published |
 | MISSING | Missing |
+
+## 15. Decisions taken 2026-09-14 (owner: "implement and test everything")
+
+The recommended option of every item in section 13 is taken unless the owner says otherwise: Projects; right-column Inspector when wide; Check gallery on panel open when signed in; Move file to trash in the panel; title, description and visibility editable in the Inspector; CLI tool on the native binding; a dropped .licht is added to the Library; portal Collections rename queued for P5; slider 112 to 320 with defaults per breakpoint; PROJ title added in P3; Repair in P3; prune drops an embedded dataset only when the source folder is reachable.
+
+Execution: Codex gpt-5.6-luna lanes implement each phase from this document; gpt-6-astra lanes click every control in the live app on an isolated test home (`.codex_tmp/am_concept/harness/README.md`), capture before and after, and review the layout and design of every change; the orchestrator verifies diffs and gates; phases iterate until the astra review has no open item.
