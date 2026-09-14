@@ -436,6 +436,7 @@ TEST_F(ColmapImageLayoutTest, SfmObservationsUseExactIntrinsicsScale) {
                 ASSERT_EQ(camera.sfm_observations().size(), count);
                 for (size_t i = 0; i < count; ++i) {
                     const auto& point = camera.sfm_observations()[i];
+                    EXPECT_EQ(point.point3d_id, i + 1);
                     const double x = static_cast<int>(i % 5) - 2;
                     const double y = (static_cast<int>(i / 5) - 1.5) * 0.5;
                     EXPECT_FLOAT_EQ(point.u, (focal * x / 5 + cx) / factor);

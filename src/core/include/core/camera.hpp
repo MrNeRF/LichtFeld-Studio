@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -169,6 +170,9 @@ namespace lfs::core {
             float x = 0.0f;
             float y = 0.0f;
             float z = 0.0f;
+            // Stable within one reconstruction; never a Gaussian array index.
+            // Older/synthetic observations may have no track identity.
+            std::uint64_t point3d_id = std::numeric_limits<std::uint64_t>::max();
         };
 
         void set_sfm_observations(std::vector<SfmObservation> observations) {

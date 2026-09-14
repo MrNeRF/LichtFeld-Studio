@@ -503,7 +503,8 @@ namespace {
                 const float nx = x / z, ny = y / z, r2 = nx * nx + ny * ny;
                 const float dx = nx * (1 + 0.12f * r2) + 0.02f * nx * ny - 0.005f * (r2 + 2 * nx * nx);
                 const float dy = ny * (1 + 0.12f * r2) + 0.01f * (r2 + 2 * ny * ny) - 0.01f * nx * ny;
-                observations.push_back({55 * dx + params.src_cx, 55 * dy + params.src_cy, x, y, z});
+                observations.push_back({55 * dx + params.src_cx, 55 * dy + params.src_cy, x, y, z,
+                                        static_cast<std::uint64_t>(observations.size())});
             }
         }
         camera->set_sfm_observations(observations);
@@ -515,6 +516,14 @@ namespace {
             EXPECT_LT(guard.source_error(), 1e-6);
             EXPECT_TRUE(guard.allows(identity_transform()));
             EXPECT_FALSE(guard.allows(exp_se3({0.01f, 0, 0, 0, 0, 0})));
+            EXPECT_TRUE(make_sparse_track_measurements(*camera, false).empty());
+            const auto measurements = make_sparse_track_measurements(*camera, true);
+            ASSERT_EQ(measurements.size(), observations.size());
+            for (size_t i = 0; i < measurements.size(); ++i) {
+                EXPECT_EQ(measurements[i].point_id, observations[i].point3d_id);
+                EXPECT_NEAR(measurements[i].u, params.dst_fx * observations[i].x / observations[i].z + params.dst_cx, 0.002);
+                EXPECT_NEAR(measurements[i].v, params.dst_fy * observations[i].y / observations[i].z + params.dst_cy, 0.002);
+            }
             ASSERT_EQ(camera->sfm_observations().size(), observations.size());
             for (size_t i = 0; i < observations.size(); ++i) {
                 EXPECT_EQ(camera->sfm_observations()[i].u, observations[i].u);

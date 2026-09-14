@@ -16,6 +16,7 @@ from check_camera_pose_gate import REPROJECTION_SUITE, REPROJECTION_TESTS
 from check_camera_pose_gate import VIEW_SUITE, VIEW_TESTS, inspect_view_gate
 from check_camera_pose_gate import ACTIVATION_SUITE, ACTIVATION_TESTS, inspect_activation_gate
 from check_camera_pose_gate import require_no_report_failures
+from check_camera_pose_gate import SPARSE_POINT_SUITE, SPARSE_POINT_TESTS, inspect_shared_points_gate
 
 
 class ReportFailureTests(unittest.TestCase):
@@ -234,6 +235,41 @@ class CameraPoseViewGateReportTests(unittest.TestCase):
                 ET.SubElement(case, mutation)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 inspect_view_gate(root)
+
+
+class CameraPoseSharedPointGateReportTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseActivationGateReportTests().report()
+        suite = ET.SubElement(root, "testsuite", name=SPARSE_POINT_SUITE)
+        for name in sorted(SPARSE_POINT_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        return root
+
+    def test_accepts_shared_point_contracts_without_claiming_joint_training(self):
+        result = inspect_shared_points_gate(self.report())
+        self.assertEqual(result["tests"], 56)
+        self.assertTrue(result["shared_point_proposals"])
+        self.assertFalse(result["joint_training_integrated"])
+
+    def test_rejects_incomplete_shared_point_report(self):
+        for mutation in ("suite", "missing", "duplicate", "unknown", "notrun", "failure", "error", "skipped"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{SPARSE_POINT_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "suite":
+                root.remove(suite)
+            elif mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "unknown":
+                case.set("name", "Unknown")
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_shared_points_gate(root)
 
 
 class CameraPoseActivationGateReportTests(unittest.TestCase):

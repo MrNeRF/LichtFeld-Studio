@@ -49,6 +49,32 @@ namespace lfs::training::camera_pose {
                                        observations);
     }
 
+    std::vector<SparseTrackMeasurement> make_sparse_track_measurements(const Camera& camera, bool training_member) {
+        if (!training_member || camera.split() == CameraSplit::Eval)
+            return {};
+        const bool rectified = camera.is_undistort_prepared();
+        if (!rectified && (camera.camera_model_type() != CameraModelType::PINHOLE || camera.has_distortion()))
+            return {};
+        const auto tensor = camera.world_view_transform().to(Device::CPU).contiguous();
+        if (tensor.dtype() != DataType::Float32 || tensor.numel() != 16)
+            return {};
+        Matrix4 pose;
+        std::copy_n(tensor.ptr<float>(), pose.size(), pose.begin());
+        const ReprojectionCalibration k{camera.focal_x(), camera.focal_y(), camera.center_x(), camera.center_y(),
+                                        camera.camera_width(), camera.camera_height()};
+        std::vector<SparseTrackMeasurement> result;
+        result.reserve(camera.sfm_observations().size());
+        for (const auto& observation : camera.sfm_observations()) {
+            if (observation.point3d_id == std::numeric_limits<std::uint64_t>::max())
+                continue;
+            float u = observation.u, v = observation.v;
+            if (rectified && !undistort_observation(camera.undistort_params(), u, v, u, v))
+                continue;
+            result.push_back({observation.point3d_id, {observation.x, observation.y, observation.z}, camera.uid(), true, pose, k, u, v});
+        }
+        return result;
+    }
+
     FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose) {
         const GpuBackendScope backend_scope(GpuBackend::CUDA);
         // Reuse the same rigid-source validation as the controller. Do not

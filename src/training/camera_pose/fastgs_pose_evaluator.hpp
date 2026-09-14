@@ -5,6 +5,7 @@
 #include "pose_refinement_session.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "sparse_reprojection_guard.hpp"
+#include "sparse_point_refinement.hpp"
 #include <functional>
 
 namespace lfs::training::camera_pose {
@@ -54,4 +55,8 @@ namespace lfs::training::camera_pose {
     [[nodiscard]] PoseObjective make_pose_photometric_objective(const lfs::core::Tensor& target, float lambda_dssim);
     [[nodiscard]] FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose);
     [[nodiscard]] SparseReprojectionGuard make_sparse_reprojection_guard(const lfs::core::Camera& camera);
+    // Explicit membership must come from the current training dataset, not just
+    // a stored split flag (disabled and evaluation cameras must not contribute).
+    [[nodiscard]] std::vector<SparseTrackMeasurement> make_sparse_track_measurements(
+        const lfs::core::Camera& camera, bool training_member);
 } // namespace lfs::training::camera_pose

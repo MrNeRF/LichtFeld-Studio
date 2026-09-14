@@ -3,6 +3,7 @@
 
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
 #include "training/camera_pose/sparse_reprojection_guard.hpp"
+#include "training/camera_pose/sparse_point_refinement.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
@@ -12,6 +13,97 @@ namespace {
     using namespace lfs::training::camera_pose;
 
     constexpr ReprojectionCalibration calibration{800, 780, 800, 600, 1600, 1200};
+
+    SparsePointTrack point_track(const double scale = 1.0) {
+        const SparsePointPosition truth{0.3 * scale, 0.2 * scale, 4.0 * scale};
+        SparsePointTrack track{123456789012ULL, {0.35 * scale, 0.17 * scale, 4.15 * scale}, {}};
+        for (int i = 0; i < 3; ++i) {
+            auto pose = identity_transform();
+            pose[3] = static_cast<float>((i - 1) * 0.8 * scale);
+            pose[7] = static_cast<float>((i % 2) * 0.3 * scale);
+            track.measurements.push_back({track.point_id, track.source, i, true, pose, calibration,
+                                          calibration.fx * (truth[0] + pose[3]) / truth[2] + calibration.cx,
+                                          calibration.fy * (truth[1] + pose[7]) / truth[2] + calibration.cy});
+        }
+        return track;
+    }
+
+    TEST(CameraPoseSparsePointTest, RecoversPointFromMultipleViewsWithoutMutatingInputs) {
+        for (const double scale : {1.0, 100.0}) {
+            const auto track = point_track(scale);
+            const auto source = track.source;
+            const auto proposal = propose_sparse_point(track, scale);
+            ASSERT_TRUE(proposal.has_value());
+            EXPECT_LT(proposal->candidate_cost, proposal->source_cost * 1e-6);
+            EXPECT_NEAR(proposal->position[0] / scale, 0.3, 1e-5);
+            EXPECT_NEAR(proposal->position[1] / scale, 0.2, 1e-5);
+            EXPECT_NEAR(proposal->position[2] / scale, 4.0, 1e-5);
+            EXPECT_EQ(track.source, source);
+            EXPECT_EQ(track.measurements[0].source, source);
+        }
+    }
+
+    TEST(CameraPoseSparsePointTest, KeepsTrackIdentityAndExcludesEvaluationMeasurements) {
+        auto input = point_track().measurements;
+        const auto duplicate_position = input;
+        for (auto m : duplicate_position) {
+            m.point_id = 0; // Zero is a valid COLMAP point ID, not a missing ID.
+            input.push_back(m);
+        }
+        auto evaluation = input.front();
+        evaluation.training = false;
+        evaluation.source[2] = -100;
+        input.push_back(evaluation);
+        const auto tracks = build_sparse_point_tracks(input);
+        ASSERT_EQ(tracks.size(), 2u);
+        EXPECT_EQ(tracks[0].point_id, 0u);
+        EXPECT_EQ(tracks[1].point_id, 123456789012ULL);
+        EXPECT_EQ(tracks[0].source, tracks[1].source);
+        EXPECT_EQ(tracks[1].measurements.size(), 3u);
+        auto insufficient = point_track().measurements;
+        insufficient.back().training = false;
+        EXPECT_TRUE(build_sparse_point_tracks(insufficient).empty());
+    }
+
+    TEST(CameraPoseSparsePointTest, RejectsAmbiguousTracksAndDegenerateGeometry) {
+        auto duplicate = point_track().measurements;
+        duplicate.push_back(duplicate.front());
+        EXPECT_TRUE(build_sparse_point_tracks(duplicate).empty());
+        auto inconsistent = point_track().measurements;
+        inconsistent.back().source[0] += 0.01;
+        EXPECT_TRUE(build_sparse_point_tracks(inconsistent).empty());
+        auto missing = point_track().measurements;
+        for (auto& m : missing)
+            m.point_id = std::numeric_limits<std::uint64_t>::max();
+        EXPECT_TRUE(build_sparse_point_tracks(missing).empty());
+        auto degenerate = point_track();
+        for (auto& m : degenerate.measurements)
+            m.pose = identity_transform();
+        EXPECT_FALSE(propose_sparse_point(degenerate, 1));
+        auto evaluation = point_track();
+        evaluation.measurements.back().training = false;
+        EXPECT_FALSE(propose_sparse_point(evaluation, 1));
+        auto invalid = point_track();
+        invalid.measurements.front().pose[0] = 2;
+        EXPECT_FALSE(propose_sparse_point(invalid, 1));
+    }
+
+    TEST(CameraPoseSparsePointTest, BoundsCumulativePointMovementAndRejectsInvalidInputs) {
+        const auto track = point_track();
+        const auto proposal = propose_sparse_point(track, 0.005);
+        ASSERT_TRUE(proposal.has_value());
+        double distance2 = 0;
+        for (int i = 0; i < 3; ++i)
+            distance2 += std::pow(proposal->position[i] - track.source[i], 2);
+        EXPECT_LE(std::sqrt(distance2), 0.005);
+        EXPECT_LT(proposal->candidate_cost, proposal->source_cost);
+        EXPECT_FALSE(propose_sparse_point(track, 0));
+        EXPECT_FALSE(propose_sparse_point(track, std::numeric_limits<double>::infinity()));
+        EXPECT_FALSE(propose_sparse_point(track, 1, 0));
+        auto invalid = track;
+        invalid.measurements.front().u = std::numeric_limits<double>::quiet_NaN();
+        EXPECT_FALSE(propose_sparse_point(invalid, 1));
+    }
 
     std::vector<ReprojectionObservation> sparse_points() {
         std::vector<ReprojectionObservation> points;

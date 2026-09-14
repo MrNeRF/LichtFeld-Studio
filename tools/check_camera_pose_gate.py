@@ -292,6 +292,32 @@ def inspect_activation_gate(root: ET.Element) -> dict:
     return result
 
 
+SPARSE_POINT_SUITE = "CameraPoseSparsePointTest"
+SPARSE_POINT_TESTS = {
+    "RecoversPointFromMultipleViewsWithoutMutatingInputs",
+    "KeepsTrackIdentityAndExcludesEvaluationMeasurements",
+    "RejectsAmbiguousTracksAndDegenerateGeometry",
+    "BoundsCumulativePointMovementAndRejectsInvalidInputs",
+}
+
+
+def inspect_shared_points_gate(root: ET.Element) -> dict:
+    result = inspect_activation_gate(root)
+    suites = [s for s in root.iter("testsuite") if s.get("name") == SPARSE_POINT_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated shared-point suite")
+    cases = suites[0].findall("testcase")
+    if len(cases) != len(SPARSE_POINT_TESTS) or {c.get("name") for c in cases} != SPARSE_POINT_TESTS:
+        raise ValueError("Wrong shared-point test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Shared-point test not successfully executed: {case.get('name')}")
+    result.update(tests=result["tests"] + len(cases), shared_point_proposals=True,
+                  joint_training_integrated=False)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -320,12 +346,13 @@ def main() -> int:
     parser.add_argument("--trainer", action="store_true", help="Require pose, loss and checkpoint contracts")
     parser.add_argument("--view", action="store_true", help="Require pose, checkpoint and view contracts")
     parser.add_argument("--activation", action="store_true", help="Require pose, checkpoint, view and activation contracts")
+    parser.add_argument("--shared-points", action="store_true", help="Also require shared-point proposal contracts; not joint training validation")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
         require_no_report_failures(root)
-        result = inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
+        result = inspect_shared_points_gate(root) if args.shared_points else inspect_activation_gate(root) if args.activation else inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

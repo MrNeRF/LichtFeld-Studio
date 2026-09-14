@@ -119,6 +119,16 @@ Restored poses are retained; new proposals use the source constraint reconstruct
 from the loaded dataset. A dataset without sparse observations cannot reconstruct
 that constraint and is reported as photometric-only.
 
+Imported observations retain the original 64-bit COLMAP point ID. This identity
+is local to the reconstruction and is not a Gaussian index. Shared-point proposal
+utilities group observations by that ID, exclude non-training views, reject
+duplicate-camera or inconsistent tracks, and require at least three views.
+The point block minimizes robust reprojection error at fixed poses within a
+cumulative displacement bound. These utilities do not currently apply point
+updates to the live session: joint pose/structure acceptance, persistence and
+rollback are required before enabling them. Gaussian positions remain managed by
+their existing optimizer and densification lifecycle.
+
 When the fixed observations constrain all six pose dimensions, their reprojection
 Jacobian supplies a Gauss-Newton proposal for coupled translation and rotation.
 The proposal must be a descent direction for the photometric objective and source

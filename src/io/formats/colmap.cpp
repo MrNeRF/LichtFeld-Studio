@@ -2700,7 +2700,8 @@ namespace lfs::io {
                 .v = static_cast<float>(point.y) / scale_factor,
                 .x = (*xyz)[0],
                 .y = (*xyz)[1],
-                .z = (*xyz)[2]});
+                .z = (*xyz)[2],
+                .point3d_id = point.point3D_id});
         }
         camera.set_sfm_observations(std::move(observations));
     }
