@@ -22,7 +22,7 @@ namespace lfs::vis {
         // True exactly once, on the attempt that exhausts the cache budget.
         [[nodiscard]] bool onDeferral(
             const DeferralKind kind = DeferralKind::RecoverableFailure) {
-            // An arena handoff request provides bounded forward progress for
+            // An arena handoff request reserves the next idle window for
             // ordinary trainer contention. The displayed publication remains
             // valid while ownership changes, so it must not age out here.
             if (kind == DeferralKind::ArenaContention) {
