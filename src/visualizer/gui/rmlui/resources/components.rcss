@@ -1126,6 +1126,13 @@ crf-curve {
     box-sizing: border-box;
 }
 
+.asset-button--toolbar24 {
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
+}
+
 /* ── Disabled overlay ──────────────────────────────────── */
 
 .disabled-overlay {

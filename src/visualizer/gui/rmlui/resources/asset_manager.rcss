@@ -918,3 +918,214 @@
 .gallery-user-code { font-family: "JetBrains Mono"; font-size: 24dp; margin-bottom: 8dp; }
 .gallery-completion { display: flex; align-items: center; flex-wrap: wrap; gap: 6dp; padding: 6dp; }
 .gallery-empty { padding: 8dp; }
+
+/* Projects panel layout. Region geometry is selected by the root breakpoint class. */
+#asset-shell,
+#asset-popup,
+#asset-main-row {
+    min-width: 0;
+    min-height: 0;
+}
+
+#asset-popup {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+#asset-popup-toolbar {
+    flex-shrink: 0;
+}
+
+.toolbar-row-primary {
+    min-height: 24dp;
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    padding: 8dp;
+    flex-wrap: nowrap;
+}
+
+.asset-search-box {
+    display: flex;
+    align-items: center;
+    min-width: 80dp;
+    height: 24dp;
+    flex: 1 1 120dp;
+    overflow: hidden;
+}
+
+.asset-search-box input {
+    min-width: 0;
+    flex: 1;
+    height: 24dp;
+    border-width: 0;
+}
+
+.asset-search-icon { flex: 0 0 24dp; text-align: center; }
+.asset-toolbar-filter, .asset-toolbar-view, .asset-check-gallery { display: none; }
+.asset-check-gallery .gallery-checked { margin-left: 4dp; }
+.asset-thumbnail-slider { width: 96dp; height: 24dp; flex: 0 0 96dp; }
+.asset-add-existing-icon { display: none; }
+.asset-view-toggle-icons { display: flex; flex: 0 0 auto; }
+.asset-view-button { width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 0; }
+.asset-view-button img { width: 16dp; height: 16dp; }
+
+#asset-main-row {
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
+
+.asset-results-stack { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+
+.asset-navigator {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 12dp 8dp;
+    overflow: hidden;
+}
+
+.asset-navigator-scope { display: none; padding-bottom: 8dp; }
+.asset-navigator-scope select { width: 100%; height: 24dp; }
+.asset-sidebar-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#asset-sidebar-local-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#asset-sidebar-gallery { flex: 0 0 auto; min-height: 0; max-height: none; overflow: visible; }
+.asset-sidebar-section { min-width: 0; }
+.asset-sidebar-title { display: flex; align-items: center; gap: 4dp; min-height: 24dp; margin: 0; white-space: nowrap; overflow: hidden; }
+.asset-sidebar-title .section-arrow { width: 12dp; flex: 0 0 12dp; font-size: 8dp; }
+.asset-sidebar-title > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+.asset-sidebar-title .asset-folder-menu, .asset-sidebar-title .gallery-refresh { margin-left: auto; flex: 0 0 auto; }
+.asset-filter-row { display: flex; align-items: center; gap: 8dp; height: 24dp; min-height: 24dp; padding: 0 8dp; border-radius: 3dp; }
+.asset-row-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-row-count { margin-left: auto; font-family: "JetBrains Mono"; }
+.asset-folder-row-right { display: flex; align-items: center; gap: 4dp; margin-left: auto; }
+.asset-account-chip { padding: 8dp; white-space: normal; }
+
+.asset-resize-handle { flex: 0 0 auto; z-index: 2; }
+.asset-resize-handle--vertical { width: 8dp; min-width: 8dp; margin: 0 2dp; cursor: ew-resize; }
+.asset-resize-handle--horizontal { height: 8dp; min-height: 8dp; cursor: ns-resize; }
+.asset-resize-handle:focus { border-width: 1dp; }
+
+#asset-gallery { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.asset-gallery-header { flex: 0 0 auto; min-width: 0; }
+.asset-gallery-header-row { min-height: 32dp; display: flex; align-items: center; gap: 8dp; padding: 4dp 12dp; }
+.asset-gallery-header-copy { display: flex; align-items: center; gap: 8dp; min-width: 0; flex: 1; }
+.asset-gallery-subtitle, .asset-gallery-scan-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-gallery-header-actions { display: flex; align-items: center; gap: 8dp; min-width: 0; }
+.asset-gallery-empty-search { display: flex; align-items: center; gap: 8dp; white-space: nowrap; }
+.asset-gallery-notice, .gallery-completion, .gallery-empty { padding: 8dp 12dp; }
+.asset-gallery-scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.asset-scroll-shell { min-width: 0; }
+
+.asset-card-grid { display: flex; flex-direction: column; gap: 0; padding: 12dp; }
+.asset-card-grid-window { display: flex; flex-wrap: wrap; gap: 12dp; align-items: flex-start; }
+.asset-card-slot { flex: 0 0 auto; min-width: 0; }
+.asset-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.asset-card-thumb { width: 100%; min-height: 1dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.asset-card-body { min-width: 0; height: 40dp; padding: 4dp 8dp; display: flex; flex-direction: column; justify-content: center; }
+.asset-card-title-row, .asset-card-meta { min-width: 0; height: 16dp; line-height: 16dp; display: flex; gap: 8dp; }
+.asset-card-title-row { margin-bottom: 0; }
+.asset-card-meta { flex-direction: row; }
+.asset-card-title, .asset-card-meta span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-card-title { flex: 1; font-size: 12dp; }
+.asset-card-menu { position: absolute; top: 4dp; right: 4dp; visibility: hidden; }
+.asset-card:hover .asset-card-menu, .asset-card:focus .asset-card-menu, .asset-card.is-selected .asset-card-menu { visibility: visible; }
+.gallery-badge { position: absolute; top: 6dp; right: 6dp; width: 20dp; height: 20dp; display: flex; align-items: center; justify-content: center; border-radius: 10dp; }
+.gallery-badge img { width: 16dp; height: 16dp; }
+.gallery-card-transfer { height: 8dp; padding: 2dp 0; }
+.gallery-progress { height: 4dp; min-height: 4dp; overflow: hidden; border-radius: 2dp; }
+.gallery-progress-fill { height: 100%; }
+
+.asset-scroll-shell-list { padding: 0 12dp; }
+.asset-list-header, .asset-list-row { display: flex; align-items: center; gap: 8dp; min-width: 0; }
+.asset-list-thumb { flex: 0 0 32dp; width: 32dp; height: 20dp; min-width: 32dp; min-height: 20dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.asset-list-thumb .asset-card-placeholder { padding: 0; font-size: 8dp; line-height: 10dp; }
+.asset-list-header { height: 40dp; min-height: 40dp; }
+#asset-gallery > .asset-list-header { padding: 0 12dp; }
+.asset-list-row { position: relative; height: 40dp; min-height: 40dp; border-bottom-width: 1dp; }
+.asset-list-header .asset-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-col-name { flex: 1 1 auto; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
+.asset-col-folder { flex: 0 0 100dp; }
+.asset-col-size { flex: 0 0 72dp; text-align: right; font-family: "JetBrains Mono"; }
+.asset-col-modified { flex: 0 0 96dp; font-family: "JetBrains Mono"; }
+.asset-col-gallery { flex: 0 1 128dp; min-width: 96dp; max-width: 200dp; display: flex; align-items: center; gap: 4dp; }
+.asset-list-primary, .asset-list-secondary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-list-secondary { display: none; height: 16dp; line-height: 16dp; font-size: 10dp; }
+.gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; }
+.gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
+
+.asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.inspector-strip { display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; }
+.inspector-strip-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-header { display: flex; flex-direction: column; gap: 4dp; padding: 12dp; min-width: 0; }
+.inspector-title { font-size: 14dp; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-path { font-size: 10dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8dp; }
+.asset-inspector-content { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
+.inspector-section { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
+.inspector-section-title { height: 24dp; line-height: 24dp; font-weight: 600; }
+.parameter-row { display: flex; align-items: baseline; gap: 8dp; min-height: 20dp; min-width: 0; }
+.parameter-label { flex: 0 0 88dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.parameter-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: "JetBrains Mono"; }
+.inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
+.inspector-operations { padding-top: 4dp; }
+.asset-info-empty { padding: 16dp 12dp; }
+
+.asset-tray { position: relative; display: flex; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: hidden; }
+.asset-tray-label, .asset-tray-detail { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-tray-progress { width: 120dp; height: 4dp; flex: 0 0 120dp; overflow: hidden; border-radius: 2dp; }
+.asset-tray-progress span { display: block; width: 43%; height: 100%; }
+.asset-tray-spacer { flex: 1; }
+
+.asset-shell.is-wide #asset-main-row { flex-direction: row; }
+.asset-shell.is-wide .asset-results-stack { flex-direction: row; }
+.asset-shell.is-floating #asset-popup { min-width: 480dp; min-height: 360dp; }
+.asset-shell.is-wide .asset-navigator { flex-basis: 200dp; }
+.asset-shell.is-wide .inspector-resize-handle { display: block; }
+.asset-shell.is-wide .asset-inspector { flex-basis: 280dp; }
+.asset-shell.is-wide .asset-resize-handle--horizontal { display: none; }
+.asset-shell.is-medium .asset-results-stack { flex-direction: column; }
+.asset-shell.is-medium .asset-navigator { flex-basis: 160dp; }
+.asset-shell.is-medium .asset-inspector { width: auto; height: 200dp; flex: 0 0 200dp; }
+.asset-shell.is-medium .inspector-resize-handle { display: block; width: auto; height: 8dp; }
+.asset-shell.is-medium .inspector-strip { display: none; }
+.asset-shell.is-narrow #asset-main-row, .asset-shell.is-compact #asset-main-row { flex-direction: column; }
+.asset-shell.is-narrow .asset-results-stack, .asset-shell.is-compact .asset-results-stack { flex-direction: column; }
+.asset-shell.is-narrow .asset-navigator, .asset-shell.is-compact .asset-navigator { display: flex; flex: 0 0 32dp; width: auto; padding: 4dp 8dp; }
+.asset-shell.is-narrow .asset-sidebar-inner, .asset-shell.is-compact .asset-sidebar-inner { display: none; }
+.asset-shell.is-narrow .asset-navigator-scope, .asset-shell.is-compact .asset-navigator-scope { display: block; }
+.asset-shell.is-narrow .asset-resize-handle--vertical, .asset-shell.is-compact .asset-resize-handle--vertical { display: none; }
+.asset-shell.is-narrow .asset-inspector, .asset-shell.is-compact .asset-inspector { width: auto; height: 32dp; flex: 0 0 32dp; overflow: visible; }
+.asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }
+.asset-shell.is-narrow .inspector-strip, .asset-shell.is-compact .inspector-strip { display: flex; }
+.asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { position: absolute; left: 0; right: 0; bottom: 32dp; height: 200dp; display: none; z-index: 3; }
+.asset-shell.is-narrow.inspector-expanded .asset-inspector-content, .asset-shell.is-compact.inspector-expanded .asset-inspector-content { display: block; }
+.asset-shell.is-compact .asset-toolbar-filter, .asset-shell.is-compact .asset-sort-button { display: none; }
+.asset-shell.is-compact .asset-toolbar-view { display: block; }
+.asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-compact .asset-thumbnail-slider, .asset-shell.is-compact .asset-check-gallery { display: none; }
+.asset-shell.is-compact .asset-import-button { display: none; }
+.asset-shell.is-compact .asset-add-existing-icon { display: block; }
+.asset-shell.is-narrow .asset-toolbar-filter, .asset-shell.is-narrow .asset-sort-button { display: none; }
+.asset-shell.is-narrow .asset-toolbar-view { display: block; }
+.asset-shell.is-narrow .asset-view-toggle-icons, .asset-shell.is-narrow .asset-thumbnail-slider { display: none; }
+.asset-shell.is-narrow .asset-import-button { display: none; }
+.asset-shell.is-narrow .asset-add-existing-icon { display: block; }
+.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; }
+.asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
+.asset-shell.is-compact .asset-tray, .asset-shell.is-narrow .asset-tray { flex-wrap: wrap; height: auto; min-height: 32dp; }
+.asset-shell.is-compact .asset-col-folder, .asset-shell.is-compact .asset-col-modified, .asset-shell.is-compact .asset-col-size { display: none; }
+.asset-shell.is-compact .asset-col-name { min-width: 80dp; }
+.asset-shell.is-compact .asset-list-row { height: 40dp; min-height: 40dp; }
+.asset-shell.is-compact .asset-list-secondary { display: none; }
+.asset-shell.is-compact .asset-col-gallery { min-width: 24dp; flex: 0 0 24dp; }
+.asset-shell.is-compact .asset-col-gallery span { display: none; }
+.asset-shell.is-narrow .asset-col-folder { display: none; }
+.asset-shell.is-narrow .asset-col-modified { display: none; }
+.asset-shell.is-narrow .asset-col-name { min-width: 120dp; }
+.asset-shell.is-narrow .asset-col-gallery { min-width: 96dp; }
+.asset-shell.is-medium .asset-col-folder { display: none; }
+.asset-shell.is-medium .asset-col-name { min-width: 120dp; }

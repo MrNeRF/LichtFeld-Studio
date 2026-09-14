@@ -60,10 +60,10 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: {
-            "asset_manager.dialog.remove_folder_message": 'Remove "{name}" with {count} projects?',
-            "asset_manager.status.scanning": "Scanning {name}: {folders} folders, {projects} projects found",
-            "asset_manager.action.stop_scan": "Stop scan",
-            "asset_manager.status.scan_stopped": "Scan stopped",
+            "projects.dialog.remove_folder_message": 'Remove "{name}" with {count} projects?',
+            "projects.status.scanning": "Scanning {name}: {folders} folders, {projects} projects found",
+            "projects.action.stop_scan": "Stop scan",
+            "projects.status.scan_stopped": "Scan stopped",
         }.get(key, key),
         get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
@@ -541,7 +541,7 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
 
     assert row["display_name"] == "Bicycle"
     assert "display_subtitle" not in row
-    assert row["status_label"] == "asset_manager.status.available"
+    assert row["status_label"] == "projects.status.available"
     assert row["saved_label"]
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
@@ -721,11 +721,11 @@ def test_add_existing_uses_new_label_tooltip_and_chooser_title(panel_module, mon
 
     panel.on_import_project()
 
-    assert calls == [("", "asset_manager.dialog.choose_existing")]
+    assert calls == [("", "projects.dialog.choose_existing")]
     model = _BindingModel()
     panel.on_bind_model(_BindingContext(model))
-    assert model.func_bindings["import_project_label"]() == "asset_manager.action.add_existing"
-    assert model.func_bindings["import_project_tooltip"]() == "asset_manager.tooltip.add_existing"
+    assert model.func_bindings["import_project_label"]() == "projects.action.add_existing"
+    assert model.func_bindings["import_project_tooltip"]() == "projects.tooltip.add_existing"
 
 def test_add_folder_uses_real_directory_picker(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -922,17 +922,17 @@ def test_log_only_asset_manager_failures_show_catalog_notice(panel_module):
     panel._selected_asset_ids = {"missing"}
     panel_module.lf._test_state.dialog_path = "/tmp/wrong.licht"
     panel.on_locate_file()
-    assert panel.get_catalog_notice() == "asset_manager.status.locate_id_mismatch"
+    assert panel.get_catalog_notice() == "projects.status.locate_id_mismatch"
 
     panel._catalog_notice = ""
     panel_module.lf._test_state.dialog_path = "/tmp/not-a-project.ply"
     panel.on_import_project()
-    assert panel.get_catalog_notice() == "asset_manager.status.import_failed"
+    assert panel.get_catalog_notice() == "projects.status.import_failed"
 
     panel._folder_scan_refresh_pending = True
     panel._folder_scan_unavailable = True
     panel._complete_folder_scan()
-    assert panel.get_catalog_notice() == "asset_manager.status.folder_unavailable"
+    assert panel.get_catalog_notice() == "projects.status.folder_unavailable"
 
 def test_pull_undo_expires_and_clears_on_next_gallery_action(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -1159,19 +1159,19 @@ def test_delete_folder_requires_confirmation_with_project_count(panel_module):
 
     assert deleted == []
     title, message, buttons, callback = panel_module.lf._test_state.confirm_dialogs[-1]
-    assert title == "asset_manager.dialog.remove_folder"
+    assert title == "projects.dialog.remove_folder"
     assert message == 'Remove "Work" with 2 projects?'
-    assert buttons[-1] == "asset_manager.action.remove_folder"
+    assert buttons[-1] == "projects.action.remove_folder"
     callback("common.cancel")
     assert deleted == []
-    callback("asset_manager.action.remove_folder")
+    callback("projects.action.remove_folder")
     assert deleted == ["projects"]
 
 def test_identity_mismatch_has_distinct_status(panel_module):
     panel = panel_module.AssetManagerPanel()
 
     assert panel._project_status_label({"status": "IDENTITY_MISMATCH"}) == (
-        "asset_manager.status.identity_mismatch"
+        "projects.status.identity_mismatch"
     )
 
 
@@ -1305,11 +1305,11 @@ def test_default_folder_links_to_settings_instead_of_removal(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folder_context_menu_items("default") == [
         {
-            "label": "asset_manager.action.show_in_folder",
+            "label": "projects.action.show_in_folder",
             "action": "show",
         },
         {
-            "label": "asset_manager.action.settings",
+            "label": "projects.action.settings",
             "action": "settings",
             "separator_before": True,
         },
@@ -1336,7 +1336,7 @@ def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(load_issues=["bad uuid", "duplicate path"])
 
-    assert panel.get_catalog_notice() == "asset_manager.status.skipped_entries"
+    assert panel.get_catalog_notice() == "projects.status.skipped_entries"
     assert panel.get_has_catalog_notice() is True
 
     panel._asset_index.load_issues = []
@@ -1346,7 +1346,7 @@ def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
 def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     panel._catalog_load_failed = True
-    assert panel.get_catalog_notice() == "asset_manager.status.load_failed"
+    assert panel.get_catalog_notice() == "projects.status.load_failed"
     assert panel.get_has_catalog_notice() is True
 
     monkeypatch.setattr(
@@ -1569,7 +1569,7 @@ def test_refresh_during_scan_cancels_and_shows_stopped_status(panel_module, monk
     assert panel.get_scan_active() is False
     assert panel.get_scan_status() == "Scan stopped"
     assert panel.get_has_scan_status() is True
-    assert panel.get_refresh_action_tooltip() == "asset_manager.tooltip.refresh"
+    assert panel.get_refresh_action_tooltip() == "projects.tooltip.refresh"
     panel.on_unmount(_Document())
 
 def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
@@ -1596,7 +1596,7 @@ def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
         "Scanning mrnf_local: 12 folders, 3 projects found"
     )
     assert panel.get_has_scan_status() is True
-    assert panel.get_refresh_action_tooltip() == "asset_manager.action.stop_scan"
+    assert panel.get_refresh_action_tooltip() == "projects.action.stop_scan"
     panel._published_scan_status = ""
     panel._published_scan_active = False
     assert panel.on_update(_Document()) is True
@@ -1665,7 +1665,7 @@ def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
 
     assert panel.get_selected_asset_can_locate() is True
     assert panel.get_selected_asset_file_missing() is False
-    assert panel.get_locate_section_title() == "asset_manager.status.identity_mismatch"
+    assert panel.get_locate_section_title() == "projects.status.identity_mismatch"
 
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
@@ -1678,10 +1678,10 @@ def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
 def test_repair_only_and_newer_version_status_labels(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._project_status_label({"status": "REPAIR_ONLY"}) == (
-        "asset_manager.status.needs_repair"
+        "projects.status.needs_repair"
     )
     assert panel._project_status_label({"status": "UNSUPPORTED_NEWER"}) == (
-        "asset_manager.status.newer_version"
+        "projects.status.newer_version"
     )
 
 def test_completed_save_registers_new_project_inside_project_location(panel_module):
@@ -2121,7 +2121,7 @@ def test_A4_adaptive_sizes_match_tray_cards_and_info(panel_module, monkeypatch, 
     locale = json.loads((Path(__file__).resolve().parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
     # Use the real localized templates/units instead of checking untranslated keys.
     flattened = dict(locale)
-    flattened.update({'asset_manager.' + key: value for key, value in locale['asset_manager'].items()})
+    flattened.update({'projects.' + key: value for key, value in locale['projects'].items()})
     monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: flattened.get(key, key))
     assert format_size(size) == expected
     panel, local, remote = _gallery_fixture(panel_module)
@@ -2186,7 +2186,7 @@ def test_update_review_explains_cover_preservation(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id(local["id"])
     text = panel._gallery_review_includes()
-    assert "asset_manager.gallery.review.cover_kept" in text
+    assert "projects.gallery.review.cover_kept" in text
 
 @pytest.mark.parametrize('visibility', ['private', 'public'])
 def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibility):

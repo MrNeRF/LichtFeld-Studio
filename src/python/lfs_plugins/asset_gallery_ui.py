@@ -12,6 +12,7 @@ import lichtfeld as lf
 from .gallery_messages import tr
 
 from .gallery_controller import asset_sync_state, get_gallery_controller
+from .asset_index import display_name, last_known_gallery_label, previous_scene_for
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
@@ -88,7 +89,12 @@ class GalleryAssetMixin:
         self._gallery_completions(previous, snapshot)
         pulled = snapshot.get("pulledProject")
         if pulled and pulled["jobId"] != self._gallery_pulled_job and self._asset_index:
-            if self._asset_index.load():
+            loaded = (
+                self._library_command("load")
+                if getattr(self, "_library_service", None)
+                else self._asset_index.load()
+            )
+            if loaded:
                 self._gallery_pulled_job = pulled["jobId"]
                 self._select_folder_id(SCOPE_PUBLISHED)
                 self._select_asset_id(pulled["id"])
@@ -96,14 +102,6 @@ class GalleryAssetMixin:
                 self._gallery_notice = tr("info.pulled")
         self._repair_selection()
         self._refresh_records(assets=True)
-        rebuild = getattr(self._asset_index, "rebuild_gallery_projection", None)
-        if callable(rebuild):
-            # A projection contains no titles, tokens, or private scene cache.
-            projection = {identifier: {"sceneId": link["sceneId"],
-                "state": self._gallery_facts(asset)["state"], "checkedAt": link.get("checkedAt", 0)}
-                for identifier, asset in self._asset_index_assets().items()
-                if (link := snapshot.get("links", {}).get(identifier))}
-            rebuild(projection)
         undo = snapshot.get("undoPull")
         undo_token = (undo.get("backup"), undo.get("attempt", 0)) if undo else None
         if undo and undo_token != self._gallery_undo_backup:
@@ -135,7 +133,10 @@ class GalleryAssetMixin:
 
     def _gallery_scene(self, asset):
         scene_id = asset.get("scene_id") or self._gallery_state.get("links", {}).get(asset.get("id"), {}).get("sceneId")
-        return next((s for s in self._gallery_state.get("scenes", []) if s.get("id") == scene_id), None)
+        scene = next((s for s in self._gallery_state.get("scenes", []) if s.get("id") == scene_id), None)
+        if scene is not None:
+            return scene
+        return previous_scene_for(asset, self._gallery_state)
 
     def _gallery_facts(self, asset):
         remote = asset.get("remote_only", False)
@@ -186,6 +187,9 @@ class GalleryAssetMixin:
         facts = self._gallery_facts(asset)
         state_key = "state." + facts["state"]
         label = tr(state_key, percent=facts["progress"])
+        known_label = last_known_gallery_label(asset, self._gallery_state)
+        if asset.get("id") in self._gallery_state.get("links", {}) and known_label is None:
+            label = tr("projects.gallery.state.not_checked")
         if facts["reason"] and facts["state"] == "error":
             label = tr("state.with_reason", state=label, reason=facts["reason"])
         if facts["relationship"] == "local_file_problem":
@@ -208,7 +212,7 @@ class GalleryAssetMixin:
         gallery_action = facts["action"]
         if facts["relationship"] == "local_file_problem":
             gallery_action = "locate" if asset.get("status") == "MISSING" else ""
-        action_label = tr("asset_manager.action.locate_file") if gallery_action == "locate" else tr("action." + gallery_action) if gallery_action else ""
+        action_label = tr("projects.action.locate_file") if gallery_action == "locate" else tr("action." + gallery_action) if gallery_action else ""
         return {"gallery_state": facts["state"], "gallery_label": label,
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
@@ -315,7 +319,7 @@ class GalleryAssetMixin:
         }
         for name, getter in values.items():
             model.bind_func(name, getter)
-        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers",
+        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers", "sidebar.sign_in_hint",
                     "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel",
                     "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
@@ -334,7 +338,7 @@ class GalleryAssetMixin:
         if asset.get("remote_only"):
             items.append({"label": tr("action.pull_open"), "action": "gallery:pull_open"})
         if facts["relationship"] == "remote_deleted" and facts["action"] != "unlink":
-            items.append({"label": tr("action.unlink"), "action": "gallery:unlink"})
+            items.append({"label": lf.ui.tr("projects.action.unlink"), "action": "gallery:unlink"})
         if scene:
             items += [{"label": tr("action.open"), "action": "gallery:open"}, {"label": tr("action.copy"), "action": "gallery:copy"}]
         if badge["gallery_can_pause"]:
@@ -342,7 +346,7 @@ class GalleryAssetMixin:
         if badge["gallery_can_cancel"]:
             items.append({"label": tr("action.cancel"), "action": "gallery:cancel_transfer"})
         if scene:
-            items.append({"label": tr("action.delete_upstream"), "action": "gallery:remove", "separator_before": True})
+            items.append({"label": lf.ui.tr("projects.action.delete_published_scene"), "action": "gallery:remove", "separator_before": True})
         return items
 
     def _gallery_command(self, action, args=()):
@@ -578,7 +582,7 @@ class GalleryAssetMixin:
         if pulled and pulled != previous.get("pulledProject"):
             path = Path(pulled["path"])
             asset = self._asset_dict(pulled["id"]) or {}
-            self._show_gallery_toast(tr("toast.pulled", title=asset.get("name", path.stem), folder=path.parent.name), path=str(path))
+            self._show_gallery_toast(tr("toast.pulled", title=display_name(asset), folder=path.parent.name), path=str(path))
 
     def _confirm_gallery(self, key, continuation):
         controller = self._controller()
