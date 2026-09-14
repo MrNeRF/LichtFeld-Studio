@@ -894,6 +894,24 @@ def test_file_problems_hide_gallery_verbs(panel_module, status, action):
     assert "gallery:pull" not in actions
     assert ("gallery:locate" in actions) is (status == "MISSING")
 
+def test_log_only_asset_manager_failures_show_catalog_notice(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(relink_asset=lambda *_args: False)
+    panel._selected_asset_ids = {"missing"}
+    panel_module.lf._test_state.dialog_path = "/tmp/wrong.licht"
+    panel.on_locate_file()
+    assert panel.get_catalog_notice() == "asset_manager.status.locate_id_mismatch"
+
+    panel._catalog_notice = ""
+    panel_module.lf._test_state.dialog_path = "/tmp/not-a-project.ply"
+    panel.on_import_project()
+    assert panel.get_catalog_notice() == "asset_manager.status.import_failed"
+
+    panel._folder_scan_refresh_pending = True
+    panel._folder_scan_unavailable = True
+    panel._complete_folder_scan()
+    assert panel.get_catalog_notice() == "asset_manager.status.folder_unavailable"
+
 def test_folder_tree_is_expanded_by_default(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folders_collapsed is False

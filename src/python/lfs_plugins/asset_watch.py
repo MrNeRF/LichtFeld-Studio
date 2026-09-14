@@ -98,6 +98,7 @@ class AssetFolderScanResult:
     added: int = 0
     already_cataloged: int = 0
     failed: int = 0
+    unavailable: bool = False
     cancelled: bool = False
 
 
@@ -388,6 +389,9 @@ def scan_asset_folder(
     """Discover and register .licht projects from one real filesystem folder."""
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
+    if not Path(directory).expanduser().is_dir():
+        _log.warning("Asset Manager folder is unavailable: %s", directory)
+        return AssetFolderScanResult(unavailable=True)
     if progress is not None:
         progress.report(current_root=directory)
     cache = _DirectoryScanCache()

@@ -152,6 +152,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._backend_load_active = False
         self._ui_poll_timer: Optional[threading.Timer] = None
         self._catalog_load_failed = False
+        self._catalog_notice = ""
+        self._folder_scan_error = False
+        self._folder_scan_unavailable = False
         self._drag_payload_token: Optional[int] = None
         self._gallery_drag = None
         self._gallery_drop_element = None
@@ -802,6 +805,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return bool(self._search_query.strip()) and not self._filtered_assets()
 
     def get_catalog_notice(self) -> str:
+        if self._catalog_notice:
+            return self._catalog_notice
         if self._catalog_load_failed:
             return tr("asset_manager.status.load_failed")
         issues = getattr(self._asset_index, "load_issues", None) if self._asset_index else None
@@ -974,6 +979,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if not is_supported_asset_path(path):
             self._log_warn("Asset Manager only supports .licht projects: %s", path)
+            self._catalog_notice = tr("asset_manager.status.import_failed")
             return
         try:
             project, _created = self._asset_index.register_licht_asset(
@@ -984,8 +990,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._selection_cursor_id = project.id
                 self._update_selection_type()
                 self.refresh_catalog(scan_folders=False)
+            else:
+                self._catalog_notice = tr("asset_manager.status.import_failed")
         except Exception as exc:
             self._log_error("Failed to import .licht project %s: %s", path, exc)
+            self._catalog_notice = tr("asset_manager.status.import_failed")
 
     def _select_folder_id(self, folder_id: str) -> bool:
         if folder_id == SCOPE_TRANSFERS:
@@ -1089,8 +1098,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self.refresh_catalog(scan_folders=False)
             else:
                 self._log_warn("Selected file belongs to a different .licht project")
+                self._catalog_notice = tr("asset_manager.status.locate_id_mismatch")
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
+            self._catalog_notice = tr("asset_manager.status.locate_id_mismatch")
 
     def on_use_found_location(self, _handle=None, _ev=None, args=None):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id") or self.get_selected_asset_id()
@@ -1432,6 +1443,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 result = scan_all_asset_folders(
                     index, cancel_event, progress=progress
                 )
+            with self._folder_scan_lock:
+                self._folder_scan_error = bool(result.failed)
+                self._folder_scan_unavailable = bool(getattr(result, "unavailable", False))
             _log.info(
                 "Asset folder scan: discovered=%d added=%d existing=%d failed=%d cancelled=%s",
                 result.discovered,
@@ -1441,6 +1455,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 result.cancelled,
             )
         except Exception:
+            with self._folder_scan_lock:
+                self._folder_scan_error = True
             _log.exception("Asset Manager folder scan failed")
         finally:
             with self._folder_scan_lock:
@@ -1469,6 +1485,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if generation is not None and generation != self._mount_generation:
             return
         self._finish_folder_scan()
+        with self._folder_scan_lock:
+            scan_error = self._folder_scan_error
+            scan_unavailable = self._folder_scan_unavailable
+            self._folder_scan_error = False
+            self._folder_scan_unavailable = False
+        if scan_unavailable:
+            self._catalog_notice = tr("asset_manager.status.folder_unavailable")
+            self._dirty_fields("catalog_notice", "has_catalog_notice")
+        elif scan_error:
+            self._catalog_notice = tr("asset_manager.status.scan_errors")
+            self._dirty_fields("catalog_notice", "has_catalog_notice")
         with self._folder_scan_lock:
             rerun = self._folder_scan_rerun_pending
             target = self._folder_scan_rerun_target
