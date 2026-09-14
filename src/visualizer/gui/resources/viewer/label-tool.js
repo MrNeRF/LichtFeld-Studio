@@ -2,10 +2,11 @@
  * Label tool for the self-contained HTML viewer export.
  *
  * Pick points on the model, name them, and save/load the resulting
- * annotation set as a simple .lbl file (JSON). Placement reuses the
- * viewer's depth-based `Picker` (same as the measure tool); once a label
- * is selected a `TranslateGizmo` is attached so a mis-picked point can be
- * nudged precisely before it is saved.
+ * annotation set as a simple .labels.json file (JSON). Placement reuses
+ * the viewer's depth-based `Picker` (same as the measure tool); once a
+ * label is selected a `TranslateGizmo` is attached so a mis-picked point
+ * can be nudged precisely before it is saved. Labels behind the camera
+ * (negative-facing view space) are hidden and are not hit-testable.
  *
  * IMPORTANT: like gizmo.js and measure-tool.js, this file is NOT
  * self-contained at runtime. It is concatenated (see
@@ -53,6 +54,16 @@ function initLabelTool(global) {
     let picker = null;
 
     const _screen = new Vec3();
+    const _view = new Vec3();
+
+    // A label whose point is behind the camera (positive view-space z,
+    // since the camera looks down -Z) would otherwise still project onto
+    // screen via worldToScreen() and become visible/clickable in the
+    // middle of the view when flying past an annotated point.
+    const isBehindCamera = (position) => {
+        camera.camera.viewMatrix.transformPoint(position, _view);
+        return _view.z >= 0;
+    };
 
     // ---- SVG overlay (leader line + point + text per label) -----------
     const svgNS = 'http://www.w3.org/2000/svg';
@@ -121,8 +132,13 @@ function initLabelTool(global) {
     const refreshVisuals = () => {
         svg.classList.toggle('hidden', labels.length === 0);
         for (let i = 0; i < labels.length; i++) {
-            camera.camera.worldToScreen(labels[i].position, _screen);
             const g = groups[i];
+            if (isBehindCamera(labels[i].position)) {
+                g.classList.add('hidden');
+                continue;
+            }
+            g.classList.remove('hidden');
+            camera.camera.worldToScreen(labels[i].position, _screen);
             const x = String(_screen.x);
             const y = String(_screen.y);
             const ax = String(_screen.x + LABEL_TEXT_DX);
@@ -192,6 +208,11 @@ function initLabelTool(global) {
     // ---- hit testing ------------------------------------------------------
     const findLabelAt = (mx, my) => {
         for (let i = 0; i < labels.length; i++) {
+            // A label hidden behind the camera must not be clickable either
+            // (it would otherwise still project onto the visible screen).
+            if (isBehindCamera(labels[i].position)) {
+                continue;
+            }
             camera.camera.worldToScreen(labels[i].position, _screen);
             if (Math.abs(_screen.x - mx) <= LABEL_PICK_TOLERANCE &&
                 Math.abs(_screen.y - my) <= LABEL_PICK_TOLERANCE) {
@@ -212,7 +233,7 @@ function initLabelTool(global) {
         syncGizmo();
     };
 
-    // ---- .lbl file save/load ----------------------------------------------
+    // ---- .labels.json file save/load ---------------------------------------
     const serializeLabels = () => JSON.stringify({
         format: 'lfs-labels',
         version: 1,
@@ -227,13 +248,13 @@ function initLabelTool(global) {
             const name = decodeURIComponent(new URL(location.href).pathname.split('/').pop() || '');
             const base = name.replace(/\.[^.]*$/, '');
             if (base) {
-                return base + '.lbl';
+                return base + '.labels.json';
             }
         }
         catch (e) {
             // fall through to the default name
         }
-        return 'labels.lbl';
+        return 'labels.json';
     };
 
     const saveLabels = async () => {
@@ -243,7 +264,9 @@ function initLabelTool(global) {
             try {
                 const handle = await window.showSaveFilePicker({
                     suggestedName: name,
-                    types: [{ description: 'LichtFeld labels (.lbl)', accept: { 'application/json': ['.lbl', '.json'] } }]
+                    // .lbl is still accepted (and loadable, see fileInput below) for
+                    // files saved by older exports.
+                    types: [{ description: 'LichtFeld labels (.labels.json)', accept: { 'application/json': ['.labels.json', '.lbl', '.json'] } }]
                 });
                 const writable = await handle.createWritable();
                 await writable.write(text);
@@ -288,7 +311,7 @@ function initLabelTool(global) {
 
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.lbl,.json,application/json';
+    fileInput.accept = '.labels.json,.lbl,.json,application/json';
     fileInput.classList.add('hidden');
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files && fileInput.files[0];
@@ -318,6 +341,42 @@ function initLabelTool(global) {
     let rightTracking = false;
     let downX = 0;
     let downY = 0;
+
+    // The viewer's own input controller (bundled in index.js) also watches
+    // `pointerdown` on this canvas to detect double-clicks/double-taps, and
+    // reacts to them by picking the scene and recentering the orbit camera
+    // on the result. It attaches its listener before this tool does (this
+    // tool initializes after the viewer's own main() call), so on the same
+    // element it always runs first; by the time our own click handling
+    // below sees the second click, the camera may already be mid-recenter,
+    // which shifts the label's on-screen position and makes the hit test
+    // below miss, so the click is misread as an empty-space pick that adds
+    // a brand-new label instead of renaming the one under the cursor.
+    //
+    // Detect the same double-click gesture ourselves, but earlier: a
+    // listener added to `document` with `capture: true` runs while the
+    // event is still travelling *down* to `canvas`, i.e. before any of
+    // canvas's own listeners (including the viewer's). When it lands on an
+    // existing label, stop it there so only this tool's own `dblclick`
+    // handler (native, fired after both clicks resolve) reacts to it.
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    const onPointerDownCapture = (e) => {
+        if (!active || e.target !== canvas || !isPrimary(e)) {
+            return;
+        }
+        const now = Date.now();
+        const isDoubleTap = now - lastTapTime < 300 &&
+            Math.abs(e.clientX - lastTapX) < 8 && Math.abs(e.clientY - lastTapY) < 8;
+        lastTapTime = now;
+        lastTapX = e.clientX;
+        lastTapY = e.clientY;
+        if (isDoubleTap && findLabelAt(e.offsetX, e.offsetY) >= 0) {
+            e.stopPropagation();
+        }
+    };
+    document.addEventListener('pointerdown', onPointerDownCapture, true);
 
     const onPointerDown = (e) => {
         if (!active) {
@@ -384,7 +443,11 @@ function initLabelTool(global) {
     };
 
     const onDoubleClick = (e) => {
-        if (!active || !isPrimary(e)) {
+        // dblclick is always a plain MouseEvent (never a PointerEvent), so
+        // it has neither `pointerType` nor `isPrimary`; reusing the
+        // pointer-event-oriented `isPrimary` helper here always fails and
+        // this handler would never run. Check the button directly instead.
+        if (!active || e.button !== 0) {
             return;
         }
         // Ignore the double-click that immediately follows a placement: the
