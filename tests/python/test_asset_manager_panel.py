@@ -807,7 +807,8 @@ def test_published_sidebar_click_selects_gallery_scope(panel_module):
 
     assert panel._selected_folder_id == "__gallery__"
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
-    assert 'data-event-click="select_folder" data-class-is-active="selected_folder_id == \'__gallery__\'"' in rml
+    assert 'class="asset-filter-row" tabindex="0" data-class-is-active="selected_folder_id == \'__gallery__\'" data-folder-id="__gallery__"' in rml
+    assert 'data-event-click="select_folder"' not in rml
 
 def test_startup_keeps_local_folder_but_rejects_gallery_scope(panel_module):
     panel = panel_module.AssetManagerPanel()
