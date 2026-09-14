@@ -47,17 +47,6 @@ class AboutOperator(Operator):
         return {"FINISHED"}
 
 
-class AccountOperator(Operator):
-    label = "account.menu"
-    description = "Open portal account"
-
-    def execute(self, context) -> set:
-        from .portal_account import get_portal_account_service
-
-        get_portal_account_service().start_device_flow()
-        return {"FINISHED"}
-
-
 class PortalConnectionOperator(Operator):
     label = "portal.status.connect"
     description = "Connect or disconnect the LichtFeld Portal account"
@@ -72,7 +61,12 @@ class PortalConnectionOperator(Operator):
         if state.linking:
             account.cancel_device_flow()
         elif state.signed_in:
-            account.disconnect_async()
+            from .gallery_sync import get_gallery_sync
+
+            if get_gallery_sync().snapshot().get("relink_required"):
+                account.start_device_flow(reauthorize=True)
+            else:
+                account.disconnect_async()
         else:
             account.start_device_flow()
         return {"FINISHED"}
@@ -122,7 +116,6 @@ _operator_classes = [
     GettingStartedOperator,
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,
-    AccountOperator,
     PortalConnectionOperator,
     GalleryTransfersOperator,
     BugReportOperator,

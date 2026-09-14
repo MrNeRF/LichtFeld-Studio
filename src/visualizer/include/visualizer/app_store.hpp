@@ -118,6 +118,7 @@ namespace lfs::vis {
 
         struct LFS_VIS_API GalleryState {
             bool signed_in = false;
+            bool relink_required = false;
             int active_uploads = 0;
             int active_downloads = 0;
             int paused = 0;

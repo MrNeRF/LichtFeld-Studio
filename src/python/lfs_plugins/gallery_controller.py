@@ -58,7 +58,6 @@ class GalleryController:
         self._undo_pull = None
         self._reupload_reason = None
         self._pulled_project = None
-        self._allow_metadata_patch = False
         self._decision_pending = False
         self._last_canceled = False
         self._update_queue = []
@@ -197,10 +196,14 @@ class GalleryController:
                 self._schedule_poll()
             return
         if name == "pause":
+            self._last_canceled = True
             self._update_queue = []
             self._batch_approval = None
             self._action_pause()
         elif name == "cancel":
+            if any(j["id"] == job_id and j.get("project") == self._operation_project
+                   for j in self.service.snapshot()["jobs"]):
+                self._last_canceled = True
             if self.service.busy:
                 self._cancel_requests.add(job_id)
                 if any(j["id"] == job_id and j["status"] == "running" for j in self.service.snapshot()["jobs"]):
@@ -243,9 +246,8 @@ class GalleryController:
             if facts["freshness"] in ("diverged", "remote", "unknown"):
                 self.resolve_asset(asset, details)
                 return
-        self._allow_metadata_patch = update
         self.upload_format = upload_format
-        self._review_publish(scene, details, upload_format, publish_as_new)
+        self._review_publish(scene, details, upload_format, publish_as_new, update=update)
         self._schedule_poll()
 
     def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new):
@@ -305,32 +307,7 @@ class GalleryController:
         self._public_confirmation(scene, start, details=metadata)
         self._schedule_poll()
 
-    def edit_scene(self, scene, details, *, on_started=None):
-        """The one metadata editor path for local links and gallery-only items."""
-        self._check_identity()
-        if self._decision_pending:
-            return
-        if self._metadata_busy():
-            raise ValueError(tr("error.busy"))
-        metadata = copy.deepcopy(details)
-        if ("title" in metadata and (not metadata["title"].strip() or len(metadata["title"].strip()) > 120)
-                or len(metadata.get("description", "")) > 5000
-                or metadata.get("visibility", "private") not in ("private", "public")):
-            raise ValueError(tr("error.details"))
-        if "title" in metadata:
-            metadata["title"] = metadata["title"].strip()
-        scene = copy.deepcopy(scene)
-        identity = self._identity
-        def apply():
-            if self.service.identity() != identity:
-                return
-            self.service.edit(scene["id"], domain_tokens(scene), metadata)
-            if on_started:
-                on_started()
-            self._schedule_poll()
-        self._public_confirmation(scene, apply, details=metadata, metadata_only=True)
-
-    def _public_confirmation(self, scene, action, *, details=None, metadata_only=False):
+    def _public_confirmation(self, scene, action, *, details=None):
         """One public-visibility policy for PATCH and upload commands."""
         details = details or {}
         scene = scene or {}
@@ -340,7 +317,7 @@ class GalleryController:
             key = "confirm.public_update" if was_public else "confirm.public"
             title = details.get("title", scene.get("title", ""))
             self._confirm = (tr(key, title=title), action, tr("action.update" if was_public else "action.submit"))
-            self._show_confirmation(metadata_only=metadata_only)
+            self._show_confirmation()
         else:
             action()
 
@@ -530,8 +507,7 @@ class GalleryController:
         if action == "copy":
             self._copy_share_link(scene)
         else:
-            tab = "?tab=" + action if action in ("story", "display", "manage") else ""
-            lf.ui.open_url(checked_portal_url(self.service.account, url + tab))
+            lf.ui.open_url(checked_portal_url(self.service.account, url))
 
     def _copy_share_link(self, scene):
         from .portal_gallery import PortalGalleryClient
@@ -853,6 +829,7 @@ class GalleryController:
             RuntimeState.gallery_transfers.value = queue
             self._transfer_ui_epoch += 1
         signal.value = dict(signed_in=snapshot.get("signed_in", False),
+            relink_required=snapshot.get("relink_required", False),
             active_uploads=up, active_downloads=down,
             paused=sum(j["status"] == "paused" for j in jobs), attention=attention,
             percent=percent, label=label, detail=detail, tooltip=tooltip,
@@ -1034,7 +1011,7 @@ class GalleryController:
             raise ValueError("The project changed while saving. Your gallery operation was stopped; review your work and try again.")
         pending["continuation"]()
 
-    def _review_publish(self, scene, details, upload_format, publish_as_new):
+    def _review_publish(self, scene, details, upload_format, publish_as_new, *, update=False):
         project = self._project_identity()
         metadata = self._details(details)
         if publish_as_new:
@@ -1046,10 +1023,11 @@ class GalleryController:
         if scene:
             metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
         self._public_confirmation(scene,
-            lambda: self._publish(metadata, expected_project=project, environment_source=environment_source, upload_format=upload_format),
+            lambda: self._publish(metadata, expected_project=project, environment_source=environment_source,
+                                 upload_format=upload_format, update=update),
             details=metadata)
 
-    def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio"):
+    def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio", update=False):
         identity = self.service.identity()
         project_id, path = self._project_identity()
         if expected_project is not None and (project_id, path) != expected_project:
@@ -1063,7 +1041,8 @@ class GalleryController:
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
-        self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity, environment_source, upload_format))
+        self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
+                                                             environment_source, upload_format, update=update))
 
     def _patch_saved_update(self, metadata, project_id, path, *, update):
         from .gallery_project_facts import saved_content_stamp
@@ -1085,11 +1064,10 @@ class GalleryController:
             return True
         return False
 
-    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio"):
+    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio", *, update=False):
         if self.service.identity() != identity or self._project_identity() != (project_id, path):
             raise ValueError("The account or current project changed while saving. Review it before uploading.")
-        if self._patch_saved_update(metadata, project_id, path, update=self._allow_metadata_patch):
-            self._allow_metadata_patch = False
+        if self._patch_saved_update(metadata, project_id, path, update=update):
             return
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
@@ -1114,10 +1092,11 @@ class GalleryController:
         if lf.ui.get_export_state().get("active"):
             raise ValueError("Wait for the current export to finish before uploading.")
         self._export_cancelled = False
-        self._prepared_commit = None
+        self._prepared_commit = metadata["_commitUuid"]
         self._export_identity = identity
         self._export_progress = 0
-        lf.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
+        lf.prepare_gallery_project(path, str(export), "ply" if upload_format == "studio" else upload_format,
+                                   self._prepared_commit)
         if self.service.identity() != identity:
             self._export_cancelled = True
         self._export_pending = (export, metadata, project_id, time.monotonic())

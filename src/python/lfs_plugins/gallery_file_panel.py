@@ -106,7 +106,7 @@ class GalleryFilePanel(Panel):
             "panel_label": lambda: tr("dialog.download" if self._is_pull() else "dialog.upload"),
             "file_name": lambda: (self._review or {}).get("asset", {}).get("name", ""),
             "is_pull": self._is_pull,
-            "show_format": lambda: not self._is_pull() and not (self._review or {}).get("asset", {}).get("remote_only", False),
+            "show_format": lambda: not self._is_pull(),
             "can_submit": self._can_submit,
             "submit_label": self._submit_label,
             "format_hint": lambda: tr("format." + self._fields.get("upload_format", "sog") + "_hint"),
@@ -146,12 +146,9 @@ class GalleryFilePanel(Panel):
                                       open_after=review["open_after"])
             else:
                 details = {k: self._fields[k].strip() for k in ("title", "description", "visibility")}
-                if review["asset"].get("remote_only"):
-                    controller.edit_scene(review["scene"], details)
-                else:
-                    controller.upload_format = self._fields["upload_format"]
-                    controller.publish_asset(review["asset"], details, self._fields["upload_format"],
-                                             update=review["action"] == "update", publish_as_new=review["publish_new"])
+                controller.upload_format = self._fields["upload_format"]
+                controller.publish_asset(review["asset"], details, self._fields["upload_format"],
+                                         update=review["action"] == "update", publish_as_new=review["publish_new"])
             self._close(True)
         except Exception as exc:
             self._error = localize_message(str(exc))
@@ -169,7 +166,9 @@ class GalleryFilePanel(Panel):
         lf.ui.set_panel_enabled(self.id, False)
 
     def on_mount(self, doc):
-        super().on_mount(doc)
+        close_btn = doc.get_element_by_id("close-btn")
+        if close_btn:
+            close_btn.add_event_listener("click", lambda _event: self._close(False))
         from . import rml_widgets
         from .rml_keys import KI_ESCAPE, KI_RETURN
 

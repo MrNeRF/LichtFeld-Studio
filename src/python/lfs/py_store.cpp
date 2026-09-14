@@ -195,6 +195,7 @@ namespace lfs::python {
         nb::dict gallery_state_to_dict(const lfs::vis::AppStore::GalleryState& value) {
             nb::dict state;
             state["signed_in"] = value.signed_in;
+            state["relink_required"] = value.relink_required;
             state["active_uploads"] = value.active_uploads;
             state["active_downloads"] = value.active_downloads;
             state["paused"] = value.paused;
@@ -217,6 +218,7 @@ namespace lfs::python {
             const nb::dict dict = nb::cast<nb::dict>(value);
             lfs::vis::AppStore::GalleryState state;
             state.signed_in = dict_value(dict, "signed_in", false);
+            state.relink_required = dict_value(dict, "relink_required", false);
             state.active_uploads = dict_value(dict, "active_uploads", 0);
             state.active_downloads = dict_value(dict, "active_downloads", 0);
             state.paused = dict_value(dict, "paused", 0);

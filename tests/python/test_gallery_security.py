@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Lane G regressions: exercise storage, wire contracts and durable recovery."""
+"""Gallery storage, wire contract and durable recovery regressions."""
 import hashlib
 import io
 import json

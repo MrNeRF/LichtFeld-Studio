@@ -1003,6 +1003,13 @@ namespace lfs::vis {
         });
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
+        vis::set_set_ortho_scale_callback([this](std::optional<float> scale) {
+            viewport_.ortho_scale_override = scale;
+            if (rendering_manager_)
+                rendering_manager_->markCameraPoseChanged();
+        });
+        callback_cleanup_.add([] { vis::set_set_ortho_scale_callback(nullptr); });
+
         const auto get_screen_positions = [this]() -> std::shared_ptr<lfs::core::Tensor> {
             if (!scene_manager_) {
                 return nullptr;
@@ -3348,7 +3355,7 @@ namespace lfs::vis {
             return;
         }
         if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport();
+            gui_manager_->asyncTasks().cancelImport(false);
         }
 
         pending_view_paths_.clear();
@@ -3478,7 +3485,7 @@ namespace lfs::vis {
             return preflight;
         }
         if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport();
+            gui_manager_->asyncTasks().cancelImport(false);
         }
         pending_view_paths_.clear();
         pending_dataset_path_.clear();
@@ -3597,7 +3604,7 @@ namespace lfs::vis {
             return;
         }
         if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport();
+            gui_manager_->asyncTasks().cancelImport(false);
         }
 
         if (shouldDeferProjectSwitchForTraining()) {

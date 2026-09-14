@@ -361,13 +361,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* GPU = "status_bar.gpu";
         inline constexpr const char* STRATEGY_DEFAULT = "status_bar.strategy_default";
         inline constexpr const char* EXPORT_CANCELLED = "status_bar.export_cancelled";
-        inline constexpr const char* GALLERY_LABEL_BUSY = "status.gallery.label.busy";
-        inline constexpr const char* GALLERY_LABEL_ATTENTION = "status.gallery.label.attention";
-        inline constexpr const char* GALLERY_LABEL_ERROR = "status.gallery.label.error";
-        inline constexpr const char* GALLERY_TOOLTIP_IDLE = "status.gallery.tooltip.idle";
-        inline constexpr const char* GALLERY_TOOLTIP_BUSY = "status.gallery.tooltip.busy";
-        inline constexpr const char* GALLERY_TOOLTIP_ATTENTION = "status.gallery.tooltip.attention";
-        inline constexpr const char* GALLERY_TOOLTIP_ERROR = "status.gallery.tooltip.error";
     } // namespace StatusBar
 
     namespace Preferences {

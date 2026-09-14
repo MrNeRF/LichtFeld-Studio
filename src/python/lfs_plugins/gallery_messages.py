@@ -27,6 +27,7 @@ def localize_message(message):
     if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
         return text  # Keep the explanation of restart versus resume visible.
     rules = (
+        (r'^ready to download', 'action.pull'),
         (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
         (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
         (r'^paused \(connection lost\)$', 'state.connection_lost'),

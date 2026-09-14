@@ -29,9 +29,9 @@
       <span class="setting-row__label-col">{{label_color_tonemapping}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="color_tonemapping">
-          <option value="none">None</option><option value="linear">Linear</option>
-          <option value="filmic">Filmic</option><option value="hejl">Hejl</option>
-          <option value="aces">ACES</option><option value="aces2">ACES 2</option><option value="neutral">Neutral</option>
+          <option value="none">@tr:export.none</option><option value="linear">@tr:scene.keyframe_easing.linear</option>
+          <option value="filmic">@tr:rendering.tonemapping.filmic</option><option value="hejl">Hejl</option>
+          <option value="aces">ACES</option><option value="aces2">ACES 2</option><option value="neutral">@tr:rendering.tonemapping.neutral</option>
         </select>
       </div>
     </div>

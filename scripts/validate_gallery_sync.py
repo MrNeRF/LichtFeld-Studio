@@ -4,7 +4,6 @@
 """Opt-in Linux LichtFeld Studio/portal E2E; uses an existing build and private profile/display.
 
 No app or Django imports at module scope: pure helpers are usable in ordinary CI.
-See docs/docs/development/mcp/recipes/gallery-sync-e2e.md.
 """
 from __future__ import annotations
 

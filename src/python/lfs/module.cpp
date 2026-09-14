@@ -334,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                    -> lfs::Result<void> {
+                -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1880,7 +1880,11 @@ NB_MODULE(lichtfeld, m) {
                 const int degree = nb::cast<int>(node["shDegree"]);
                 if (degree < 0 || degree > 3)
                     throw std::invalid_argument("Invalid gallery SH degree.");
+                const auto node_name = node.contains("name") ? nb::cast<std::string>(node["name"]) : std::string{};
+                if (node_name.size() > 4096 || node_name.find('\0') != std::string::npos)
+                    throw std::invalid_argument("Invalid gallery node name.");
                 command.paths.push_back(python_utf8_path(nb::cast<std::string>(node["path"])));
+                command.names.push_back(node_name);
                 command.transforms.push_back(matrix);
                 command.sh_degrees.push_back(degree);
             }
@@ -2861,8 +2865,10 @@ NB_MODULE(lichtfeld, m) {
                 settings.orthographic = true;
                 settings.ortho_scale = scale;
                 rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
             } else {
                 rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
             }
         },
         nb::arg("ortho"), nb::arg("extent_world") = nb::none(), "Enable or disable orthographic projection, optionally setting its vertical world extent");

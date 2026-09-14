@@ -1,4 +1,4 @@
-"""Stress-harness product regressions (Lane P)."""
+"""Gallery stress-harness product regressions."""
 import copy
 from importlib import import_module
 from types import SimpleNamespace

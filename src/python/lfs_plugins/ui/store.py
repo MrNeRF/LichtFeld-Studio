@@ -30,6 +30,7 @@ DEFAULT_ACCOUNT_STATE: dict[str, object] = {
 
 DEFAULT_GALLERY_STATE: dict[str, object] = {
     "signed_in": False,
+    "relink_required": False,
     "active_uploads": 0,
     "active_downloads": 0,
     "paused": 0,

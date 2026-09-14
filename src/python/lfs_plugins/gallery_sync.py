@@ -135,7 +135,7 @@ def _validate_journal(data):
 def friendly_error(exc):
     if isinstance(exc, PortalHTTPError):
         if exc.error == "gallery_relink_required":
-            return "Sign out and reconnect your LichtFeld Studio account to approve gallery access. Your local work is safe."
+            return "Use the Portal button to approve gallery access. Your local work is safe."
         if exc.status == 400 and exc.error in (
                 "Invalid portable LichtFeld project.", "Project checksum failed.",
                 "Embedded project asset checksum failed."):
@@ -183,7 +183,7 @@ class GallerySync:
         self._poster_entries = {}
         self._poster_identity = None
         self._refresh_ok = False
-        self._relink_required = False
+        self._relink_identity = None
         self.scenes = []
         self._undo_restore = {}
         self.message = "Refresh to connect your gallery."
@@ -330,7 +330,7 @@ class GallerySync:
                 "message": self.message if self._journal_problem or self._stale or same or (snap.signed_in and self._owner is None) else "Sign in and refresh to connect your gallery.",
                 "storage_issue": self._journal_problem,
                 "refresh_ok": self._refresh_ok,
-                "relink_required": self._relink_required if snap.signed_in else False,
+                "relink_required": snap.signed_in and self._relink_identity == self.identity(),
                 "unsupported": self._unsupported_identity == self.identity(),
                 "source_formats": self._source_formats if same else [],
                 "owner": self._owner if same else None,
@@ -363,6 +363,7 @@ class GallerySync:
                 raise ValueError("Wait for the current operation or pause it first.")
             previous_operation, previous_cancel = self._operation, self._cancel
             self._cancel = threading.Event()
+            identity = self.identity()
 
             def worker():
                 try:
@@ -384,7 +385,7 @@ class GallerySync:
                         action()
                 except Exception as exc:
                     with self._lock:
-                        self._relink_required = isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required"
+                        self._relink_identity = identity if isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required" else None
                         self.message = friendly_error(exc)
                 finally:
                     with self._lock:
@@ -460,7 +461,8 @@ class GallerySync:
                 for link in self._bucket()["links"].values():
                     link["checkedAt"] = self._checked_at
                 self._refresh_ok = True
-                self._relink_required = False
+                self._relink_identity = None
+                self._unsupported_identity = None
                 self.message = "Gallery is up to date."
             self._cache_posters(client, self.scenes, (origin, *session, True))
             # Recovered jobs are persisted by the next actual mutation.
@@ -536,6 +538,7 @@ class GallerySync:
                         stale.unlink(missing_ok=True)
                     destination = folder / f"{scene_id}-{revision}.png"
                     destination.write_bytes(data)
+                    os.utime(destination, ns=(time.time_ns(), destination.stat().st_mtime_ns))
                     self._poster_entries[scene_id] = {"path": str(destination), "etag": tag}
                     self._trim_poster_cache(cache_limit)
             except (OSError, ValueError, PortalHTTPError, PortalProtocolError):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Standard-library stress helpers; launcher/MCP helpers live in Lane H's script."""
+"""Shared gallery stress helpers and HTTP fault proxy."""
 from __future__ import annotations
 
 import hashlib

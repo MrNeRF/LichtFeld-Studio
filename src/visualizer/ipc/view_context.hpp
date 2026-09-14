@@ -37,6 +37,7 @@ namespace lfs::vis {
     using SetViewCallback = std::function<void(const SetViewParams&)>;
     using SetViewForPanelCallback = std::function<void(SplitViewPanelId, const SetViewParams&)>;
     using SetFovCallback = std::function<void(float)>;
+    using SetOrthoScaleCallback = std::function<void(std::optional<float>)>;
 
     struct ViewportRender {
         std::shared_ptr<lfs::core::Tensor> image;
@@ -60,9 +61,11 @@ namespace lfs::vis {
     LFS_VIS_API void set_set_view_callback(SetViewCallback callback);
     LFS_VIS_API void set_set_view_for_panel_callback(SetViewForPanelCallback callback);
     LFS_VIS_API void set_set_fov_callback(SetFovCallback callback);
+    LFS_VIS_API void set_set_ortho_scale_callback(SetOrthoScaleCallback callback);
     LFS_VIS_API void apply_set_view(const SetViewParams& params);
     LFS_VIS_API void apply_set_view_for_panel(SplitViewPanelId panel, const SetViewParams& params);
     LFS_VIS_API void apply_set_fov(float fov_degrees);
+    LFS_VIS_API void apply_set_ortho_scale(std::optional<float> scale);
 
     struct RenderSettingsProxy {
         float focal_length_mm = 35.0f;

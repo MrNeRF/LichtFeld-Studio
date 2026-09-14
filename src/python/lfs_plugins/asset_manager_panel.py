@@ -1043,7 +1043,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._select_asset_id(asset_id, multi_select=self._event_multi_select(_ev))
 
     def _dirty_selection(self) -> None:
-        self._gallery_selection_changed()
         if self._handle:
             self._handle.dirty_all()
         self._dirty_fields(

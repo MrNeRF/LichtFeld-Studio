@@ -175,30 +175,6 @@ class PortalGalleryClient:
             raise PortalProtocolError("Missing gallery revision tokens")
         return {"baseRevisions": tokens}
 
-    def _guarded_request(self, method, path, body, *, rebase_budget=None):
-        rebase_budget = [1] if rebase_budget is None else rebase_budget
-        try:
-            return self._request(method, path, body)
-        except PortalHTTPError as exc:
-            retry = self._retry_guards(exc, body)
-            if retry is None or not rebase_budget[0]:
-                raise
-            rebase_budget[0] -= 1
-            # Deliberately outside the try: a second conflict is surfaced.
-            body.update(retry)
-            return self._request(method, path, body)
-
-    def _retry_guards(self, exc, body):
-        guards = body.get("baseRevisions")
-        detail = exc.detail or {}
-        changed, current = detail.get("changedDomains"), detail.get("currentRevisions")
-        if (exc.status != 409 or not guards or not isinstance(changed, list) or not changed
-                or set(changed) != {"presentation"} or set(changed).intersection(guards)
-                or not isinstance(current, dict)
-                or not all(isinstance(current.get(name), str) and current[name] for name in guards)):
-            return None
-        return {**body, "baseRevisions": {name: current[name] for name in guards}}
-
     def list_scenes(self, etag=None):
         try:
             return self._list_pages(etag)
@@ -251,11 +227,11 @@ class PortalGalleryClient:
     def update(self, scene_id, baseline, **metadata):
         view = metadata.get("viewerSettings", {})
         domains = ("content", "metadata") if any(key in view for key in ("camera", "cameraPath", "environment")) else ("metadata",)
-        return self._guarded_request("PATCH", f"/splats/{_identifier(scene_id)}",
+        return self._request("PATCH", f"/splats/{_identifier(scene_id)}",
                                      {**metadata, **self.guards(baseline, domains)})
 
     def delete(self, scene_id, baseline):
-        return self._guarded_request("DELETE", f"/splats/{_identifier(scene_id)}",
+        return self._request("DELETE", f"/splats/{_identifier(scene_id)}",
                                      self.guards(baseline, ("content", "metadata")))
 
     def cancel_upload(self, upload_id):
@@ -299,7 +275,7 @@ class PortalGalleryClient:
         saved = dict(checkpoint or {})
         etag = saved.get('representationId')
         resume = (isinstance(etag, str) and re.fullmatch(r'"[^"\r\n]+"', etag)
-                  and saved.get('scene') == identity and partial.is_file() and 0 < partial.stat().st_size < total)
+                  and saved.get('scene') == identity and partial.is_file() and 0 < partial.stat().st_size <= total)
         if not resume:
             if checkpoint or partial.exists():
                 on_message('This download has no matching pinned representation. Restarting from zero.')
@@ -311,7 +287,8 @@ class PortalGalleryClient:
             def transfer():
                 nonlocal offset, saved, keep_partial
                 # A retry may reuse only bytes tied to the strong storage ETag.
-                offset = partial.stat().st_size if keep_partial and partial.exists() else 0
+                # A completed partial rechecks its final byte against the pinned ETag.
+                offset = min(partial.stat().st_size, total - 1) if keep_partial and partial.exists() else 0
                 headers = {'User-Agent': self.user_agent}
                 tag = saved.get('representationId')
                 if offset:
@@ -353,8 +330,10 @@ class PortalGalleryClient:
                     digest = hashlib.sha256()
                     if offset:
                         with partial.open('rb') as existing:
-                            while chunk := existing.read(1024 * 1024):
+                            remaining = offset
+                            while remaining and (chunk := existing.read(min(1024 * 1024, remaining))):
                                 digest.update(chunk)
+                                remaining -= len(chunk)
                     completed = offset
                     if not offset:
                         if checkpoint or partial.exists():
@@ -368,6 +347,8 @@ class PortalGalleryClient:
                     with os.fdopen(fd, 'ab' if offset else 'wb') as output:
                         if os.fstat(output.fileno()).st_nlink != 1:
                             raise ValueError('Partial download is linked to another file')
+                        if offset:
+                            os.ftruncate(output.fileno(), offset)
                         try:
                             while True:
                                 if cancel.is_set():
@@ -393,11 +374,19 @@ class PortalGalleryClient:
                 validate_download(partial, destination.suffix.lower(), cancel)
             except (ValueError, PortalProtocolError) as exc:
                 raise GalleryTransferInvalid(str(exc)) from exc
-            current = self.scene(scene_id)
-            if domain_tokens(current) != domain_tokens(scene):
-                raise ValueError("The gallery scene changed while downloading. Sync again.")
             saved['sha256'] = checksum
             on_checkpoint(dict(saved))
+            try:
+                current = self.scene(scene_id)
+                current_tokens = domain_tokens(current)
+            except (OSError, PortalHTTPError, PortalProtocolError) as exc:
+                raise ConnectionError("The portal could not verify the download. Resume to check again.") from exc
+            if (current_tokens['contentRevision'] != domain_tokens(scene)['contentRevision']
+                    or current.get('viewerSettings') != scene.get('viewerSettings')):
+                raise ValueError("The gallery scene changed while downloading. Sync again.")
+            if current_tokens['metadataRevision'] != scene['metadataRevision']:
+                scene = {**scene, **{key: current[key] for key in
+                         ('title', 'description', 'visibility', 'metadataRevision') if key in current}}
             os.replace(partial, destination)
             return scene
         except (GalleryTransferCanceled, IncompleteRead, TimeoutError, ConnectionError, urllib.error.URLError) as exc:
@@ -493,8 +482,7 @@ class PortalGalleryClient:
                 raise ValueError("The account, export or details changed. Start a new upload.")
         check_canceled()
         create = {**request, "idempotencyKey": checkpoint["idempotencyKey"]}
-        rebase_budget = [1]
-        upload = self._guarded_request("POST", "/splats/uploads", create, rebase_budget=rebase_budget)
+        upload = self._request("POST", "/splats/uploads", create)
         checkpoint["request"] = {key: value for key, value in create.items() if key != "idempotencyKey"}
         upload_id = _identifier(upload["id"])
         checkpoint["uploadId"] = upload_id
@@ -506,37 +494,10 @@ class PortalGalleryClient:
         if upload.get("status") == "completed":
             on_progress(size, size)
             return upload
-        if checkpoint.get("rebase"):
-            rebase = dict(checkpoint["rebase"])
-            upload = self._guarded_request("POST", f"/splats/uploads/{upload_id}/rebase", rebase, rebase_budget=rebase_budget)
-            checkpoint["rebase"] = rebase
-            on_checkpoint(dict(checkpoint))
-            if upload.get("status") == "completed":
-                on_progress(size, size)
-                return upload
         if upload.get("status") == "failed" and upload.get("processing", {}).get("retryable"):
             upload = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"idempotencyKey": checkpoint["idempotencyKey"], "parts": []})
-        def finish(result):
-            try:
-                return self._await_processing(result, upload_id, size, cancel, on_processing)
-            except PortalHTTPError as exc:
-                guards = checkpoint.get("rebase", checkpoint["request"])
-                retry = self._retry_guards(exc, guards)
-                if retry is None or not rebase_budget[0]:
-                    raise
-                rebase_budget[0] -= 1
-                details = {key: metadata[key] for key in ("title", "description", "visibility", "viewerSettings") if key in metadata}
-                rebase = {"baseRevisions": retry["baseRevisions"], "metadata": guards.get("metadata", details)}
-                checkpoint["rebase"] = rebase
-                on_checkpoint(dict(checkpoint))
-                rebased = self._request("POST", f"/splats/uploads/{upload_id}/rebase", rebase)
-                if rebased.get("status") in ("created", "uploading"):
-                    rebased = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"idempotencyKey": checkpoint["idempotencyKey"], "parts": [
-                        {"partNumber": part["partNumber"], "etag": part["etag"]} for part in rebased.get("uploadedParts", [])]})
-                return self._await_processing(rebased, upload_id, size, cancel, on_processing)
-
         if upload.get("status") in ("processing", "conflict", "failed"):
-            return finish(upload)
+            return self._await_processing(upload, upload_id, size, cancel, on_processing)
         if upload.get("status") not in ("created", "uploading"):
             raise ValueError("This upload was canceled. Start a new upload.")
         part_size = upload.get("partSize")
@@ -593,4 +554,4 @@ class PortalGalleryClient:
             if exc.status != 409:
                 raise
             result = {"id": upload_id, "status": "conflict", "conflict": {"detail": exc.detail}}
-        return finish(result)
+        return self._await_processing(result, upload_id, size, cancel, on_processing)

@@ -137,7 +137,7 @@ namespace lfs::vis {
                 return std::chrono::duration<float>(elapsed).count();
             }
             void dismissImport();
-            void cancelImport();
+            void cancelImport(bool wait_for_worker = true);
             [[nodiscard]] bool canCancelGalleryImport() const { return splat_load_state_.gallery.has_value() && isImporting(); }
             bool requestGalleryImportCancel();
 

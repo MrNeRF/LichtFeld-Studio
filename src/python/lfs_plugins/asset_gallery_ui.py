@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Asset Manager's Gallery projection and inline review controls."""
+"""Gallery file actions and transfer status in the Asset Manager."""
 from __future__ import annotations
 
 import time
 import copy
 import threading
 from pathlib import Path
-from urllib.parse import quote
 
 import lichtfeld as lf
 from .gallery_messages import tr
@@ -41,18 +40,9 @@ class GalleryAssetMixin:
         self._gallery_controller = None
         self._gallery_unsubscribe = None
         self._gallery_state = {"scenes": [], "links": {}, "jobs": [], "signed_in": False}
-        self._gallery_expanded = False
-        self._gallery_review = False
-        self._gallery_more = False
-        self._gallery_edit_id = None
-        self._gallery_editor_scene = None
-        self._gallery_title = ""
-        self._gallery_description = ""
-        self._gallery_visibility = "private"
         self._gallery_upload_format = "sog"
         self._gallery_pull_folder = ""
         self._gallery_pull_name = ""
-        self._gallery_pull_review = False
         self._gallery_batch = []
         self._gallery_batch_waiting = False
         self._gallery_batch_asset = None
@@ -63,13 +53,10 @@ class GalleryAssetMixin:
         self._gallery_last_folder = None
         self._gallery_focus_path = None
         self._gallery_undo_timer = None
-        self._gallery_publish_new = False
-        self._gallery_pull_open = False
         self._gallery_pulled_job = None
         self._gallery_completion_id = None
         self._gallery_toast = None
         self._gallery_toast_timer = None
-        self._gallery_connecting = False
 
     def _controller(self):
         if self._gallery_controller is None:
@@ -88,10 +75,10 @@ class GalleryAssetMixin:
         if snapshot.get("relink_required"):
             self._gallery_notice = snapshot.get("message", "")
         if previous_identity != snapshot.get("identity"):
-            self._gallery_edit_id = None
-            self._gallery_review = self._gallery_pull_review = False
             self._gallery_undo = None
             self._gallery_batch = []
+            self._gallery_batch_waiting = False
+            self._gallery_batch_asset = None
             self._gallery_notice = ""
             self._gallery_pulled_job = None
             self._gallery_toast = None
@@ -107,7 +94,6 @@ class GalleryAssetMixin:
                 self._gallery_notice = tr("info.pulled")
         self._repair_selection()
         self._refresh_records(assets=True)
-        self._gallery_selection_changed()
         rebuild = getattr(self._asset_index, "rebuild_gallery_projection", None)
         if callable(rebuild):
             # A projection contains no titles, tokens, or private scene cache.
@@ -246,34 +232,7 @@ class GalleryAssetMixin:
                 if asset["id"] not in self._gallery_state.get("links", {}):
                     self._select_folder_id("__all__")
                 self._select_asset_id(asset["id"])
-                self._gallery_expanded = True
         self._request_model_update()
-
-    def _gallery_selection_changed(self):
-        asset = self._get_selected_asset()
-        identifier = asset.get("id") if asset else None
-        scene = self._gallery_scene(asset) if asset else None
-        if identifier == self._gallery_edit_id:
-            previous = self._gallery_editor_scene
-            fields = self._gallery_details()
-            if scene and (previous is None or all(fields[k] == previous.get(k, "") for k in fields)):
-                self._gallery_title = scene.get("title", "")
-                self._gallery_description = scene.get("description", "")
-                self._gallery_visibility = scene.get("visibility", "private")
-                self._gallery_editor_scene = copy.deepcopy(scene)
-            elif scene and all(fields[k] == scene.get(k, "") for k in fields):
-                self._gallery_editor_scene = copy.deepcopy(scene)
-            return
-        self._gallery_edit_id = identifier
-        self._gallery_review = self._gallery_pull_review = False
-        self._gallery_more = False
-        self._gallery_publish_new = False
-        scene = self._gallery_scene(asset) if asset else None
-        self._gallery_editor_scene = copy.deepcopy(scene)
-        self._gallery_title = (scene or asset or {}).get("title", (asset or {}).get("name", ""))
-        self._gallery_description = (scene or {}).get("description", "")
-        self._gallery_visibility = (scene or {}).get("visibility", "private")
-        self._gallery_expanded = bool(scene or (asset and asset["id"] in self._gallery_state.get("links", {})))
 
     def _gallery_counts(self):
         selected = [a for key in self._selected_asset_ids if (a := self._asset_dict(key)) and not a.get("remote_only")]
@@ -302,23 +261,12 @@ class GalleryAssetMixin:
                 tr("sidebar.aggregate", uploads=uploads, downloads=downloads, attention=attention))
 
     def _bind_gallery_model(self, model):
-        for name in ("title", "description", "visibility", "upload_format", "pull_folder", "pull_name"):
-            model.bind("gallery_" + name, lambda n=name: getattr(self, "_gallery_" + n),
-                lambda value, n=name: self._set_gallery_field(n, str(value)))
-        for name in ("review", "expanded", "more", "pull_review"):
-            model.bind_func("gallery_" + name, lambda n=name: getattr(self, "_gallery_" + n))
         values = {
             "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
             "gallery_account": lambda: self._gallery_state.get("display_name") or self._gallery_state.get("email", ""),
             "gallery_checked": self._gallery_checked_label,
-            "gallery_linking": lambda: self._gallery_state.get("accountFlow", {}).get("linking", False),
-            "gallery_connect_label": lambda: tr("connect.approve" if self._gallery_state.get("relink_required") else "connect.button"),
-            "gallery_user_code": lambda: self._gallery_state.get("accountFlow", {}).get("user_code", ""),
-            "gallery_waiting": self._gallery_waiting,
-            "gallery_connect_error": lambda: self._gallery_state.get("accountFlow", {}).get("error", ""),
             "gallery_quota": self._gallery_quota,
-            "gallery_quota_warning": self._gallery_quota_warning,
             "gallery_has_toast": lambda: bool(self._gallery_toast),
             "gallery_toast": lambda: (self._gallery_toast or {}).get("text", ""),
             "gallery_toast_portal": lambda: bool((self._gallery_toast or {}).get("scene")),
@@ -335,22 +283,10 @@ class GalleryAssetMixin:
             "gallery_overlay": lambda: self._gallery_aggregate()[0],
             "gallery_tooltip": lambda: " · ".join(filter(None, (self._gallery_aggregate()[1], self._gallery_quota()))),
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
-            "gallery_reupload_reason": lambda: (self._gallery_state.get("reuploadReason") or {}).get("message", "")
-                if (self._gallery_state.get("reuploadReason") or {}).get("project") == (self._get_selected_asset() or {}).get("id") else "",
-            "gallery_selected_action": lambda: tr("action." + self._selected_gallery_action()) if self._selected_gallery_action() else "",
-            "gallery_show_editor": lambda: self._gallery_review or bool(self._gallery_scene(self._get_selected_asset() or {})),
-            "gallery_show_primary": lambda: not self._gallery_review and not self._gallery_pull_review,
-            "gallery_has_action": lambda: bool(self._gallery_badge(self._get_selected_asset())["gallery_action"]) if self._get_selected_asset() else False,
-            "gallery_collapsed_publish": lambda: not self._gallery_expanded and not bool(self._gallery_scene(self._get_selected_asset() or {})),
             "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),
             "gallery_linked": lambda: self._has_gallery_link(),
-            "gallery_has_portal": lambda: bool(self._gallery_scene(self._get_selected_asset() or {})),
             "gallery_notice": lambda: self._gallery_notice or self._gallery_state.get("message", ""),
             "gallery_has_notice": lambda: bool(self._gallery_notice or self._gallery_state.get("message", "")),
-            "gallery_format_hint": lambda: tr("format." + self._gallery_upload_format + "_hint"),
-            "gallery_publish_label": self._gallery_publish_label,
-            "gallery_includes": self._gallery_review_includes,
-            "gallery_published_summary": self._gallery_published_summary,
             "gallery_exchange_summary": lambda: " · ".join(filter(None, (self._gallery_published_summary(), self._gallery_checked_label()))),
             "gallery_selected_format": lambda: ((self._get_selected_asset() or {}).get("source_format") or "licht").upper(),
             "gallery_selected_visibility": lambda: tr("review." + (self._gallery_scene(self._get_selected_asset() or {}) or {}).get("visibility", "private")),
@@ -359,44 +295,20 @@ class GalleryAssetMixin:
             "gallery_update_many": lambda: tr("multi.update", count=self._gallery_counts()["linked"]),
             "gallery_can_publish_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["ready"] > 0,
             "gallery_can_update_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["linked"] > 0,
-            "gallery_has_pulled_project": lambda: bool(self._gallery_state.get("pulledProject")),
-            "gallery_pull_label": lambda: tr("action.pull_open" if self._gallery_pull_open else "action.pull"),
             "gallery_has_undo": lambda: bool(self._gallery_undo and time.monotonic() < self._gallery_undo[0]
                 and not (self._gallery_state.get("undoPull") or {}).get("operation")),
             "gallery_has_recovery": lambda: bool((self._gallery_state.get("undoPull") or {}).get("backupMissing")),
         }
         for name, getter in values.items():
             model.bind_func(name, getter)
-        for key in ("sidebar.title", "sidebar.sign_in", "sidebar.published", "sidebar.attention", "sidebar.transfers", "sidebar.refresh",
-                    "review.title", "review.description", "review.visibility", "review.upload_as", "review.private", "review.public",
-                    "format.studio", "format.sog", "format.ssog", "format.spz", "info.portal_hint", "info.folder", "info.filename",
-                    "action.publish", "action.pull", "action.open", "action.copy", "action.more", "action.unlink", "action.remove", "action.undo",
-                    "action.story", "action.display", "action.manage", "action.submit", "action.cancel", "action.grid", "action.list",
-                    "info.format", "state.remote_only", "action.pull_open", "action.open_local", "action.open_recovery"):
+        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers",
+                    "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel",
+                    "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         model.bind_func("g_action_pause", lambda: tr("action.pause", prefix="gallery.transfer."))
-        for action in ("connect", "connect_cancel", "connect_copy", "connect_browser", "toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "account", "transfers", "toggle", "primary", "publish", "pull", "open", "copy", "more",
-                       "unlink", "remove", "story", "display", "manage", "undo", "publish_many", "update_many", "cancel", "pull_open", "open_local", "open_recovery"):
+        for action in ("toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "undo",
+                       "publish_many", "update_many", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
-
-    def _set_gallery_field(self, name, value):
-        if name == "upload_format":
-            if value not in ("studio", "sog", "ssog", "spz"):
-                return
-            self._controller().upload_format = value
-        if name == "visibility" and self._gallery_scene(self._get_selected_asset() or {}):
-            self._change_gallery_visibility(value)
-            return
-        setattr(self, "_gallery_" + name, value)
-        if self._handle:
-            self._handle.dirty_all()
-
-    def _gallery_publish_label(self):
-        asset = self._get_selected_asset() or {}
-        poll = getattr(lf, "project_poll_write", lambda: {})()
-        if poll.get("path") == asset.get("path") and lf.project_is_dirty():
-            return tr("action.save_publish")
-        return tr("review.publish_public" if self._gallery_visibility == "public" else "review.publish_private")
 
     def _gallery_context_items(self, asset):
         facts = self._gallery_facts(asset)
@@ -406,6 +318,8 @@ class GalleryAssetMixin:
             items.append({"label": tr("action." + facts["action"]), "action": "gallery:" + facts["action"], "separator_before": True})
         if asset.get("remote_only"):
             items.append({"label": tr("action.pull_open"), "action": "gallery:pull_open"})
+        if facts["relationship"] == "remote_deleted" and facts["action"] != "unlink":
+            items.append({"label": tr("action.unlink"), "action": "gallery:unlink"})
         if scene:
             items += [{"label": tr("action.open"), "action": "gallery:open"}, {"label": tr("action.copy"), "action": "gallery:copy"}]
         badge = self._gallery_badge(asset)
@@ -419,25 +333,9 @@ class GalleryAssetMixin:
 
     def _gallery_command(self, action, args=()):
         try:
-            if self._gallery_state.get("unsupported") and action not in ("account", "transfers", "toggle", "more"):
+            if (self._gallery_state.get("unsupported") and action not in
+                    ("refresh", "open_recovery", "undo", "toast_open", "toast_portal", "toast_copy")):
                 self._gallery_notice = tr("error.portal_version")
-                return
-            if action.startswith("connect"):
-                account = self._controller().service.account
-                if action == "connect":
-                    self._gallery_connecting = bool(account.start_device_flow(reauthorize=True)
-                        if self._gallery_state.get("relink_required") else account.start_device_flow())
-                    self._controller()._schedule_poll()
-                elif action == "connect_cancel":
-                    account.cancel_device_flow()
-                    self._gallery_connecting = False
-                elif action == "connect_copy":
-                    lf.ui.set_clipboard_text(account.snapshot().user_code)
-                elif action == "connect_browser":
-                    url = account.snapshot().verification_uri_complete
-                    if url:
-                        from .portal_security import checked_portal_url
-                        lf.ui.open_url(checked_portal_url(account, url))
                 return
             if action.startswith("toast_"):
                 toast = self._gallery_toast or {}
@@ -452,31 +350,11 @@ class GalleryAssetMixin:
             if action == "update_all":
                 self._controller().update_all(self._gallery_update_candidates())
                 return
-            if action == "account":
-                self._controller().service.account.start_device_flow()
-                return
-            if action == "transfers":
-                self.on_open_gallery()
-                return
             if action == "refresh":
                 self._controller().refresh()
                 return
-            if action in ("toggle", "more"):
-                field = "_gallery_expanded" if action == "toggle" else "_gallery_more"
-                setattr(self, field, not getattr(self, field))
-                return
-            if action == "cancel":
-                self._gallery_review = self._gallery_pull_review = False
-                self._gallery_batch = []
-                return
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")
-                return
-            if action == "open_local":
-                pulled = self._gallery_state.get("pulledProject")
-                if pulled:
-                    from .file_menu import open_project_with_confirmation
-                    open_project_with_confirmation(pulled["path"], keep_asset_manager_open=True)
                 return
             if action == "undo" and self._gallery_undo and time.monotonic() < self._gallery_undo[0]:
                 self._gallery_undo[1]()
@@ -516,9 +394,7 @@ class GalleryAssetMixin:
             elif action == "publish_new":
                 self._confirm_gallery("confirm.publish_new", lambda: self._publish_as_new(asset))
             elif action in ("publish", "update"):
-                if asset.get("remote_only"):
-                    self._controller().edit_scene(self._gallery_editor_scene or self._gallery_scene(asset), self._gallery_details())
-                else:
+                if not asset.get("remote_only"):
                     self._open_gallery_review(asset, action)
             elif action == "resolve":
                 self._controller().resolve_asset(asset, self._gallery_details())
@@ -532,11 +408,8 @@ class GalleryAssetMixin:
                     self._controller().command(command, facts["jobId"] or None)
             elif action in ("pull", "pull_open"):
                 self._pull_gallery_asset(asset, open_after=action == "pull_open")
-            elif action in ("open", "story", "display", "manage", "copy"):
+            elif action in ("open", "copy"):
                 self._controller().open_portal(self._gallery_scene(asset), action)
-            elif action == "context_more":
-                items = self._gallery_context_items(asset)[-1].get("children", [])
-                self._show_shared_context_menu(items, lambda command: self._handle_asset_context_action(command, asset["id"]))
             elif action == "unlink":
                 self._confirm_gallery("confirm.unlink", lambda: self._controller().service.unlink(asset["id"]))
             elif action == "remove":
@@ -583,7 +456,6 @@ class GalleryAssetMixin:
                 return False
             self._select_folder_id(SCOPE_PUBLISHED)
             self._select_asset_id(asset["id"])
-            self._gallery_pull_review = False
             self._gallery_command("pull_open")
             return True
         except (ValueError, TypeError, KeyError):
@@ -608,7 +480,6 @@ class GalleryAssetMixin:
                 return
             self._gallery_last_folder = folder
             # The shared pull review and controller validate existence/overwrite.
-            self._gallery_pull_review = False
             self._gallery_command("pull")
         elif folder == SCOPE_PUBLISHED:
             facts = self._gallery_facts(asset)
@@ -623,10 +494,6 @@ class GalleryAssetMixin:
         if self._handle:
             self._handle.dirty_all()
         self._request_model_update()
-
-    def _gallery_waiting(self):
-        remaining = max(0, int(self._gallery_state.get("accountFlow", {}).get("countdown_seconds", 0)))
-        return tr("connect.waiting", time=f"{remaining // 60}:{remaining % 60:02d}")
 
     def _gallery_quota(self):
         quota, used = self._gallery_quota_values()
@@ -670,9 +537,6 @@ class GalleryAssetMixin:
         self._gallery_toast_timer.start()
 
     def _gallery_completions(self, previous, snapshot):
-        if self._gallery_connecting and snapshot.get("connected") and not snapshot.get("relink_required"):
-            self._gallery_connecting = False
-            self._show_gallery_toast(tr("connect.done", name=snapshot.get("display_name") or snapshot.get("email", "")))
         completion = snapshot.get("completion")
         if completion and completion["id"] != self._gallery_completion_id:
             self._gallery_completion_id = completion["id"]
@@ -692,7 +556,7 @@ class GalleryAssetMixin:
             return
         self._gallery_notice = ""
         controller._message = ""
-        controller.confirm_action(key, self._gallery_title, continuation)
+        controller.confirm_action(key, self._gallery_details()["title"], continuation)
 
     def _set_gallery_undo(self, action, *, kind="visibility"):
         self._gallery_undo_kind = kind
@@ -715,12 +579,15 @@ class GalleryAssetMixin:
         self._gallery_undo_timer.daemon = True
         self._gallery_undo_timer.start()
 
-    def _gallery_details(self):
-        return {"title": self._gallery_title, "description": self._gallery_description, "visibility": self._gallery_visibility}
+    def _gallery_details(self, asset=None):
+        asset = asset if asset is not None else self._get_selected_asset() or {}
+        scene = self._gallery_scene(asset) or {}
+        return {"title": scene.get("title", asset.get("name", "")),
+                "description": scene.get("description", ""), "visibility": scene.get("visibility", "private")}
 
-    def _gallery_review_includes(self):
+    def _gallery_review_includes(self, *, publish_new=False):
         text = tr("review.includes", saved=self.get_selected_asset_modified())
-        if self._gallery_scene(self._get_selected_asset() or {}) and not self._gallery_publish_new:
+        if self._gallery_scene(self._get_selected_asset() or {}) and not publish_new:
             text += " " + tr("review.cover_kept")
         return text
 
@@ -740,12 +607,7 @@ class GalleryAssetMixin:
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        facts = self._gallery_facts(asset)
-        scene = self._gallery_scene(asset)
-        if scene and facts["state"] in ("equal", "remote_only"):
-            if any(self._gallery_details()[key] != scene.get(key, "") for key in self._gallery_details()):
-                return "update"
-        return facts["action"]
+        return self._gallery_facts(asset)["action"]
 
     def _begin_gallery_publish(self, asset, action):
         warning = self._gallery_quota_warning()
@@ -763,55 +625,38 @@ class GalleryAssetMixin:
         self._gallery_batch_asset = dict(asset)
         try:
             controller.publish_asset(asset, self._gallery_details(), self._gallery_upload_format,
-                                     update=action == "update", publish_as_new=self._gallery_publish_new)
+                                     update=action == "update")
         except Exception:
             self._gallery_batch_waiting = False
             raise
-        self._gallery_review = False
 
     def _publish_as_new(self, asset):
-        self._gallery_publish_new = True
-        self._gallery_visibility = "private"
-        self._open_gallery_review(asset, "publish")
+        self._open_gallery_review(asset, "publish", publish_new=True)
 
-    def _open_gallery_review(self, asset, action, *, open_after=False):
+    def _open_gallery_review(self, asset, action, *, open_after=False, publish_new=False):
         from .gallery_file_panel import open_gallery_file_panel
         controller = self._controller()
         self._gallery_upload_format = getattr(controller, "upload_format", self._gallery_upload_format)
-        self._gallery_review = action != "pull"
-        self._gallery_pull_review = action == "pull"
 
         def done(submitted):
-            self._gallery_review = self._gallery_pull_review = False
             self._gallery_batch_waiting = bool(submitted and self._gallery_batch)
             self._gallery_batch_asset = dict(asset) if submitted else None
+            if submitted:
+                self._gallery_upload_format = controller.upload_format
             if not submitted:
                 self._gallery_batch = []
             self._request_model_update()
 
+        fields = dict(self._gallery_details(asset), upload_format=self._gallery_upload_format,
+                      pull_folder=self._gallery_pull_folder, pull_name=self._gallery_pull_name)
+        if publish_new:
+            fields["visibility"] = "private"
         open_gallery_file_panel(controller=controller, asset=asset,
-            scene=self._gallery_editor_scene or self._gallery_scene(asset), action=action,
-            fields=dict(self._gallery_details(), upload_format=self._gallery_upload_format,
-                        pull_folder=self._gallery_pull_folder, pull_name=self._gallery_pull_name),
-            includes=self._gallery_review_includes(), quota=self._gallery_quota(),
+            scene=self._gallery_scene(asset), action=action,
+            fields=fields,
+            includes=self._gallery_review_includes(publish_new=publish_new), quota=self._gallery_quota(),
             warning=self._gallery_quota_warning() if action != "pull" else "",
-            publish_new=self._gallery_publish_new, open_after=open_after, on_done=done)
-
-    def _change_gallery_visibility(self, value):
-        if value not in ("private", "public") or value == self._gallery_visibility:
-            return
-        asset = self._get_selected_asset()
-        scene = dict(self._gallery_editor_scene or self._gallery_scene(asset))
-        def started():
-            self._gallery_visibility = value
-            if value == "private":
-                identity = self._controller().service.identity()
-                def undo():
-                    if self._controller().service.identity() == identity:
-                        current = self._gallery_scene(asset)
-                        self._controller().edit_scene(current, {"visibility": "public"})
-                self._set_gallery_undo(undo)
-        self._controller().edit_scene(scene, {"visibility": value}, on_started=started)
+            publish_new=publish_new, open_after=open_after, on_done=done)
 
     def _pull_gallery_asset(self, asset, *, open_after=False):
         scene = self._gallery_scene(asset)

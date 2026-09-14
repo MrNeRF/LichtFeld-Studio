@@ -1256,7 +1256,9 @@ namespace lfs::vis::gui {
         cmd::LoadGalleryScene::when([this](const auto& command) {
             std::vector<std::string> names;
             for (size_t i = 0; i < command.paths.size(); ++i)
-                names.push_back(std::format("Object {}", i + 1));
+                names.push_back(i < command.names.size() && !command.names[i].empty()
+                                    ? command.names[i]
+                                    : std::format("Object {}", i + 1));
             if (!startSplatLoad(command.paths, false, std::move(names), {}, command))
                 throw std::runtime_error("Another import is active. Try the gallery import again when it finishes.");
         });
@@ -2311,7 +2313,15 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void AsyncTaskManager::cancelImport() {
+    void AsyncTaskManager::cancelImport(const bool wait_for_worker) {
+        if (!wait_for_worker && splat_load_state_.gallery && splat_load_state_.thread &&
+            !splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
+            jobs_.requestCancel(splat_load_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+            splat_load_state_.thread->request_stop();
+            ++gallery_scene_epoch_;
+            publishImportOverlayState();
+            return; // Poll joins after staging finishes; project switches do not wait on IO.
+        }
         const auto splat_job = splat_load_state_.job;
         const auto import_job = import_state_.job;
         const bool cancel_gallery = isImporting() && splat_load_state_.gallery_group_uuid.has_value();

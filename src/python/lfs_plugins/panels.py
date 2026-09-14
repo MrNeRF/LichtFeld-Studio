@@ -50,10 +50,6 @@ PANEL_SPECS = {
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
         update_policy="dirty",
     ),
-    "account": _PanelSpec(
-        "lfs_plugins.account_panel", "AccountPanel", "lfs.account", "Account",
-        "FLOATING", 95, "rmlui/account_panel.rml", "CONTENT", (440, 0),
-    ),
     "gallery_transfer": _PanelSpec(
         "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
         "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",

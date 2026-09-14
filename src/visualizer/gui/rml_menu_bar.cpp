@@ -1046,22 +1046,25 @@ namespace lfs::vis::gui {
         const auto account = lfs::vis::app_store().account_state.get();
         const auto gallery = lfs::vis::app_store().gallery_state.get();
         const auto& localization = lfs::event::LocalizationManager::getInstance();
+        const bool needs_approval = account.signed_in && gallery.relink_required;
         const std::string connection = account.disconnecting ? "disconnecting" : account.linking ? "linking"
+                                                                             : needs_approval    ? "approval_needed"
                                                                              : account.signed_in ? "connected"
                                                                                                  : "disconnected";
         const bool connected = account.signed_in;
         const bool checking = account.linking || account.disconnecting;
         const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
-        const std::string tone = checking ? "connecting" : !account.error.empty() ? "error"
-                                                       : transferring             ? "transferring"
-                                                       : connected                ? "connected"
-                                                                                  : "disconnected";
-        const std::string icon = checking       ? "ring"
-                                 : transferring ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
-                                                   : gallery.active_uploads > 0                               ? "cloud-up"
-                                                                                                              : "cloud-down")
-                                 : connected    ? "cloud-check"
-                                                : "cloud-strike";
+        const std::string tone = checking ? "connecting" : needs_approval || !account.error.empty() ? "error"
+                                                       : transferring                               ? "transferring"
+                                                       : connected                                  ? "connected"
+                                                                                                    : "disconnected";
+        const std::string icon = checking         ? "ring"
+                                 : needs_approval ? "cloud-bang"
+                                 : transferring   ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
+                                                     : gallery.active_uploads > 0                               ? "cloud-up"
+                                                                                                                : "cloud-down")
+                                 : connected      ? "cloud-check"
+                                                  : "cloud-strike";
         const auto set = [this](const char* name, auto& current, auto value) {
             if (current != value) {
                 current = std::move(value);
@@ -1071,17 +1074,18 @@ namespace lfs::vis::gui {
         };
         const std::string activity = transferring && !checking
                                          ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
-                                            : gallery.active_uploads > 0                              ? "uploading"
-                                                                                                      : "downloading")
+                                            : gallery.active_uploads > 0                               ? "uploading"
+                                                                                                       : "downloading")
                                          : connection;
         const auto connection_key = "portal.status." + activity;
         std::string label = localization.get(connection_key);
         if (account.linking && !account.label.empty())
             label += " " + account.label;
         set("portal_connection_label", portal_connection_label_, std::move(label));
-        std::string tooltip = localization.get(account.linking ? "portal.status.cancel"
-                                               : connected     ? "portal.status.disconnect"
-                                                               : "portal.status.connect");
+        std::string tooltip = localization.get(account.linking  ? "portal.status.cancel"
+                                               : needs_approval ? "portal.status.reauthorize"
+                                               : connected      ? "portal.status.disconnect"
+                                                                : "portal.status.connect");
         if (!account.tooltip.empty())
             tooltip += "\n" + account.tooltip;
         if (transferring)

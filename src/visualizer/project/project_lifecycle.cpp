@@ -7418,10 +7418,9 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        // A stale import completion must not outlive
-        // a project switch.
+        // Invalidate gallery imports before swapping scenes; their workers drain asynchronously.
         if (auto* const gui = viewer_.getGuiManager()) {
-            gui->asyncTasks().cancelImport();
+            gui->asyncTasks().cancelImport(false);
         }
 
         stopHydrationThreads(false);

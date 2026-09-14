@@ -6,14 +6,12 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import platform as platform_module
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import timezone
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
 
@@ -70,7 +68,7 @@ class PortalOriginMismatchError(PortalAccountError):
 
 @dataclass(frozen=True)
 class AccountSnapshot:
-    """Token-free account state consumed by the account panel."""
+    """Token-free account state consumed by the UI."""
 
     signed_in: bool = False
     linking: bool = False
@@ -441,16 +439,12 @@ class PortalAccountService:
         thread.start()
         return True
 
-    start_linking = start_device_flow
-
     def cancel_device_flow(self) -> None:
         self._cancel_event.set()
         if self._resuming:
             self.disconnect_async()
             return
         self._finish_device_flow("")
-
-    cancel_linking = cancel_device_flow
 
     def _resume_session_worker(self) -> None:
         try:
@@ -537,22 +531,11 @@ class PortalAccountService:
             except Exception:
                 _log.warning("Could not open portal approval in the browser")
 
-        # Start links from the service so this works with the Account panel closed.
         try:
             import lichtfeld as lf
             lf.ui.schedule_on_ui_thread(open_current)
         except Exception:
             _log.debug("Portal approval browser dispatch is unavailable")
-
-    def sign_out_async(self) -> None:
-        with self._lock:
-            if self._sign_out_thread is not None and self._sign_out_thread.is_alive():
-                return
-            self._snapshot = replace(self._snapshot, disconnecting=True)
-            thread = threading.Thread(target=self.sign_out, daemon=True, name="lfs-portal-sign-out")
-            self._sign_out_thread = thread
-        self._publish_account_state()
-        thread.start()
 
     def sign_out(self) -> None:
         """Best-effort server revocation followed by unconditional backend removal."""
@@ -597,6 +580,7 @@ class PortalAccountService:
             thread.join(remaining)
 
     def _device_flow_worker(self) -> None:
+        previous_credentials = self._current_credentials()
         try:
             start = self._request_json(
                 "POST",
@@ -697,6 +681,11 @@ class PortalAccountService:
             self._save_credentials(credentials)
             self._apply_credentials_state(credentials)
             self.sync_profile()
+            if previous_credentials is not None and previous_credentials.portal_origin == self.base_url:
+                try:
+                    self._request_with_bearer("POST", REVOKE_PATH, previous_credentials, {})
+                except (OSError, PortalAccountError):
+                    pass
             return
 
     def _wait_for_poll(self, interval: float) -> bool:

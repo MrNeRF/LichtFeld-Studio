@@ -519,7 +519,7 @@ namespace lfs::vis::gui {
                 "publication",
                 project::SessionJson{{"count", published_count}, {"sh_degree", published.snapshot.active_sh_degree}}));
             nodes.push_back(
-                {{"path", filename}, {"transform", transform}, {"shDegree", published.snapshot.active_sh_degree}});
+                {{"path", filename}, {"name", published.name}, {"transform", transform}, {"shDegree", published.snapshot.active_sh_degree}});
         }
         if (nodes.empty())
             throw std::runtime_error("There are no visible splats to upload.");

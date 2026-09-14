@@ -57,13 +57,17 @@ def read_staging(root, value):
         raise ValueError("Scene preparation metadata is invalid. Prepare the scene again.")
     nodes, total = [], 0
     for number, node in enumerate(data["nodes"]):
-        if (not isinstance(node, dict) or node.keys() != {"path", "transform", "shDegree"}
+        if (not isinstance(node, dict) or node.keys() not in
+                ({"path", "transform", "shDegree"}, {"path", "name", "transform", "shDegree"})
                 or node["path"] not in (f"{number}.ply", f"{number}.sog", f"{number}.ssog", f"{number}.spz")):
             raise ValueError("Scene preparation has an invalid node path.")
+        name = node.get("name", "")
+        if not isinstance(name, str) or len(name.encode("utf-8")) > 4096 or "\0" in name:
+            raise ValueError("Scene preparation has an invalid node name.")
         source = path / node["path"]
         total += source.stat().st_size
         nodes.append({"path": source, "transform": gallery_validation._matrix(node["transform"]),
-                      "shDegree": gallery_validation._degree(node["shDegree"])})
+                      "shDegree": gallery_validation._degree(node["shDegree"]), "name": name})
     background = path / "environment.lfsenv"
     if "environment" in data:
         if data["environment"] != background.name:
@@ -97,7 +101,8 @@ def unpack_project(root, source, destination, *, progress=None):
                 outputs.append(path)
                 with path.open('xb') as output:
                     completed += project.copy_node(index, output, progress=(lambda value: progress(completed + value, total)) if progress else None)
-                nodes.append({'path': path.name, 'transform': node['transform'], 'shDegree': node['shDegree']})
+                nodes.append({'path': path.name, 'transform': node['transform'], 'shDegree': node['shDegree'],
+                              'name': project.chapters[b'SCNG']['nodes'][index]['name']})
             metadata = {'version': 1, 'nodes': nodes}
             if 'environment' in project.manifest:
                 path = destination / 'environment.lfsenv'

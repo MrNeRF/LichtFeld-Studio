@@ -305,7 +305,6 @@ def test_C1_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
     assert panel.gallery_viewport_drop(payload)
     assert calls == ['pull_open'] and panel.get_selected_asset_id() == 'remote:' + identifier
     assert not panel.gallery_viewport_drop(payload.replace('portal.example', 'foreign.example'))
-    # Compile/runtime verification of the added native handoff belongs to the orchestrator.
     root = Path(__file__).parents[2]
     native = (root/'src/visualizer/gui/gui_manager.cpp').read_text()
     adapter = (root/'src/python/lfs/rml_python_panel_adapter.cpp').read_text()
@@ -450,7 +449,7 @@ def test_X5_keep_waiting_real_http_only_polls_existing_upload(tmp_path):
     try:
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     except PermissionError:
-        pytest.skip('Sandbox denies local sockets; run this real HTTP regression on the orchestrator')
+        pytest.skip('Local sockets are unavailable for the HTTP regression')
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

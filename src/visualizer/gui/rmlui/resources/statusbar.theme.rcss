@@ -97,64 +97,6 @@ body,
     background-color: @{statusbar.progress_marker_active};
 }
 
-#gallery-chip {
-    background-color: @{alpha(surface_bright,0.35)};
-    border-color: @{alpha(text_dim,0.55)};
-}
-
-#gallery-chip:hover {
-    background-color: @{alpha(surface_bright,0.70)};
-    border-color: @{text_dim};
-}
-
-#gallery-chip.busy {
-    background-color: @{blend(surface,primary,0.14)};
-    border-color: @{primary};
-}
-
-#gallery-chip.attention {
-    background-color: @{blend(surface,warning,0.14)};
-    border-color: @{warning};
-}
-
-#gallery-chip.error {
-    background-color: @{blend(surface,error,0.14)};
-    border-color: @{error};
-}
-
-#gallery-chip-icon {
-    image-color: @{text_dim};
-}
-
-#gallery-chip.busy #gallery-chip-icon {
-    image-color: @{primary};
-}
-
-#gallery-chip.attention #gallery-chip-icon {
-    image-color: @{warning};
-}
-
-#gallery-chip.error #gallery-chip-icon {
-    image-color: @{error};
-}
-
-#account-chip {
-    background-color: @{alpha(surface_bright,0.35)};
-    border-color: @{alpha(text_dim,0.55)};
-}
-
-#account-chip:hover {
-    background-color: @{alpha(surface_bright,0.70)};
-    border-color: @{text_dim};
-}
-
-#account-chip.warning {
-    background-color: @{blend(surface,warning,0.14)};
-    border-color: @{warning};
-}
-
 #gpu-icon {
     image-color: @{text_dim};
 }
-
-#gallery-chip.compact { background-color: @{alpha(surface,0)}; }
