@@ -5155,6 +5155,13 @@ namespace lfs::vis {
         if (!external_layout) {
             return std::unexpected(external_layout.error());
         }
+        // In-place edits preserve tensor addresses. Invalidate every slot so
+        // each buffered copy is refreshed when that slot is next acquired.
+        if (force_upload) {
+            for (auto& snapshot : ring_uploaded_) {
+                snapshot = {};
+            }
+        }
         const auto current_input_snapshot = makeModelInputSnapshot(splat_data);
         const auto& uploaded_input_snapshot = ring_uploaded_[ring_slot];
         const bool input_snapshot_changed =

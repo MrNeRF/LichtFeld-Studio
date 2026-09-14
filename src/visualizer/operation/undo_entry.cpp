@@ -2452,6 +2452,10 @@ namespace lfs::vis::op {
             } else {
                 node->model->deleted() = lfs::core::Tensor{};
             }
+            // Sparse replay can write the existing allocation in place. Every
+            // renderer ring slot must observe a new mask version after replay.
+            node->model->notify_deleted_mask_changed();
+            node->model->refresh_deleted_count();
             restored_any = true;
         }
 
@@ -2487,6 +2491,8 @@ namespace lfs::vis::op {
             } else {
                 combined->deleted() = lfs::core::Tensor{};
             }
+            combined->notify_deleted_mask_changed();
+            combined->refresh_deleted_count();
             restored_any = true;
         }
 

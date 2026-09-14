@@ -42,6 +42,7 @@
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "training/training_state.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -14003,6 +14004,96 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           StopStoredSessionWithoutResumingKeepsCheckpointAndEntersEditMode) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "stored-session-paused.licht";
+        const auto dataset_path =
+            temporary_.path / "stored-session-paused-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_,
+            viewer.work_queue_));
+        ASSERT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto session =
+            viewer.projectTrainingSessionState();
+        EXPECT_TRUE(session.available);
+        EXPECT_FALSE(session.hydrated);
+        EXPECT_EQ(session.iteration, 11);
+        EXPECT_EQ(session.max_iterations, 30000);
+        EXPECT_FALSE(session.completed);
+        EXPECT_EQ(session.strategy, "mrnf");
+
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+        EXPECT_EQ(manager->getTotalIterations(), 30000);
+        EXPECT_EQ(manager->getState(), TrainingState::Paused);
+        EXPECT_STREQ(manager->getStrategyType(), "mrnf");
+        EXPECT_EQ(manager->getNumSplats(), 2);
+
+        const auto before = bound_checkpoint_identity(project_path);
+        auto* const model = viewer.getScene().getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        ASSERT_TRUE(manager->canStop());
+        manager->stopTraining();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return manager->isFinished();
+        }));
+        EXPECT_EQ(manager->getStateMachine().getFinishReason(), FinishReason::UserStopped);
+        EXPECT_FALSE(manager->hasTrainer());
+        EXPECT_FALSE(manager->hasLiveTrainingThread());
+        EXPECT_FALSE(manager->canStop());
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+        EXPECT_EQ(viewer.getScene().getTrainingModel(), model);
+        manager->publishStoredSessionPresentation();
+        EXPECT_EQ(app_store().training_state.get(), "stopped");
+        EXPECT_FALSE(viewer.projectTrainingSessionState().hydrated);
+        EXPECT_TRUE(viewer.projectTrainingSessionState().available);
+        EXPECT_EQ(bound_checkpoint_identity(project_path), before);
+
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
+        lfs::core::events::cmd::SwitchToEditMode{}.emit();
+        EXPECT_TRUE(viewer.getScene().getTrainingModelNodeUuid().is_nil());
+        EXPECT_FALSE(viewer.projectTrainingSessionState().available);
+        EXPECT_FALSE(manager->hasTrainer());
+        ASSERT_TRUE(viewer.projectSave(false));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        auto saved = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        const auto bound = saved->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        EXPECT_FALSE(*bound);
+        EXPECT_EQ(saved->checkpoint_uuids().size(), 1u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreKeepsCheckpointBytesOnAutosave) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
@@ -14771,6 +14862,11 @@ namespace lfs::vis {
         ASSERT_TRUE(waitForHydrationComplete(
             viewer, viewer.work_queue_mutex_, viewer.work_queue_));
         ASSERT_TRUE(viewer.projectEmbedDataset());
+        // Save must settle embedding before capturing the next generation.
+        // Embedding uses a separate job type but writes to the same master.
+        const auto saved_during_embed = viewer.projectSave(false);
+        ASSERT_TRUE(saved_during_embed)
+            << lfs::format_for_developer(saved_during_embed.error());
         viewer.projectWaitWrite();
 
         auto initial = inspect_embedded_dataset(project_path);

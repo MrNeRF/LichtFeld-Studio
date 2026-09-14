@@ -142,6 +142,7 @@ namespace lfs::vis {
                                            SelectionFilterState filters = {});
         void updatePassiveBrushHoverPreview(glm::vec2 cursor_pos, float brush_radius,
                                             SelectionMode mode);
+        void suppressPassiveHoverPreview();
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
@@ -300,6 +301,7 @@ namespace lfs::vis {
                              bool use_scene_filters = true) const;
         void applyDepthFilter(core::Tensor& selection) const;
         void clearInteractivePreviewState();
+        bool allowPassiveHoverPreview(glm::vec2 cursor_pos);
         [[nodiscard]] std::vector<bool> effectiveNodeMask(bool restrict_to_selected_nodes) const;
         [[nodiscard]] SelectionFilterState defaultFilterState() const;
 
@@ -307,6 +309,8 @@ namespace lfs::vis {
         RenderingManager* rendering_manager_;
 
         bool stroke_active_ = false;
+        std::optional<glm::vec2> last_passive_hover_position_;
+        bool passive_hover_suppressed_ = false;
         core::Tensor stroke_selection_;
         std::shared_ptr<core::Tensor> selection_before_stroke_;
         core::Tensor command_selection_buffer_;

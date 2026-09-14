@@ -100,7 +100,7 @@ namespace lfs::vis {
 
         // State machine access
         [[nodiscard]] const TrainingStateMachine& getStateMachine() const { return state_machine_; }
-        [[nodiscard]] bool canPerform(TrainingAction action) const { return state_machine_.canPerform(action); }
+        [[nodiscard]] bool canPerform(TrainingAction action) const;
         [[nodiscard]] std::string_view getActionBlockedReason(TrainingAction action) const {
             return state_machine_.getActionBlockedReason(action);
         }

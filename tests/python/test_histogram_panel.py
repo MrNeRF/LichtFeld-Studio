@@ -1392,3 +1392,35 @@ def test_mouseup_aborts_drag_when_scene_invalid(histogram_panel_module, monkeypa
     assert panel._dragging_mark is False
     assert reset == [False]
     assert event.stopped is True
+
+
+def test_histogram_worker_runs_without_numpy(lf):
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import sys
+        sys.path[:] = PATHS
+        import importlib.abc
+        class NoNumpy(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'numpy' or fullname.startswith('numpy.'):
+                    raise ModuleNotFoundError("No module named 'numpy'")
+        sys.meta_path.insert(0, NoNumpy())
+        import lichtfeld as lf
+        from lfs_plugins.histogram_panel import HistogramPanel
+        panel = HistogramPanel()
+        values = lf.Tensor.linspace(0.0, 1.0, 5, device='cpu')
+        mask = lf.Tensor.ones([5], dtype='bool', device='cpu')
+        result = panel._build_series_result(values, mask, 'opacity', 4, (None, None))
+        assert result['counts'] == [1, 1, 1, 2], result['counts']
+        assert result['mean_value'] == 0.5
+        assert result['median_value'] == 0.5
+        assert abs(result['p95_value'] - 0.95) < 1e-6
+        compare = panel._build_compare_result(values, values, mask, 'opacity', 'opacity',
+                                             4, 4, (None, None), (None, None))
+        assert compare['counts'] == [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,2], compare['counts']
+    """).replace('PATHS', repr(sys.path))
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

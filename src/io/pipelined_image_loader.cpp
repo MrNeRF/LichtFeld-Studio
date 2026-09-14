@@ -2119,6 +2119,7 @@ namespace lfs::io {
                     mask_item.cache_key = alpha_key;
                     mask_item.jpeg_data = cached_alpha;
                     mask_item.is_mask = true;
+                    mask_item.mask_params = request.alpha_mask_params;
                     mask_item.is_cache_hit = true;
                     hot_queue_.push(std::move(mask_item));
 
@@ -2725,10 +2726,12 @@ namespace lfs::io {
                     }
 
                     float* const alpha_ptr = alpha.ptr<float>();
+                    const size_t alpha_h = alpha.shape()[0];
+                    const size_t alpha_w = alpha.shape()[1];
                     if (item.alpha_mask_params.invert)
-                        cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
+                        cuda::launch_mask_invert(alpha_ptr, alpha_h, alpha_w, nullptr);
                     if (item.alpha_mask_params.threshold > 0)
-                        cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
+                        cuda::launch_mask_threshold(alpha_ptr, alpha_h, alpha_w, item.alpha_mask_params.threshold, nullptr);
                     alpha = process_mask(std::move(alpha), item.alpha_mask_params.threshold);
 
                     try_complete_pair(item.sequence_id, item.loader_generation,
@@ -2849,11 +2852,13 @@ namespace lfs::io {
 
                     if (item.is_mask) {
                         float* const mask_ptr = static_cast<float*>(aux_tensor.data_ptr());
+                        const size_t mask_h = aux_tensor.shape()[0];
+                        const size_t mask_w = aux_tensor.shape()[1];
                         if (item.mask_params.invert) {
-                            cuda::launch_mask_invert(mask_ptr, H, W, aux_stream);
+                            cuda::launch_mask_invert(mask_ptr, mask_h, mask_w, aux_stream);
                         }
                         if (item.mask_params.threshold > 0) {
-                            cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, aux_stream);
+                            cuda::launch_mask_threshold(mask_ptr, mask_h, mask_w, item.mask_params.threshold, aux_stream);
                         }
                         aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold);
                     } else {

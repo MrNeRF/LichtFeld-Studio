@@ -22,7 +22,8 @@
     display: flex;
     flex-direction: column;
     gap: 8dp;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     min-width: 0;
     min-height: 0;
 }
@@ -77,6 +78,7 @@
 
 #histogram-hero {
     display: flex;
+    flex-shrink: 0;
     gap: 22dp;
     align-items: center;
     justify-content: flex-start;
@@ -365,12 +367,12 @@
     display: flex;
     flex-direction: column;
     gap: 10dp;
-    flex: 1;
+    flex: 1 0 230dp;
     overflow-x: hidden;
     overflow-y: auto;
     padding-right: 4dp;
     min-width: 0;
-    min-height: 0;
+    min-height: 230dp;
 }
 
 #histogram-stats {
