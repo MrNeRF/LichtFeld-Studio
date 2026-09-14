@@ -503,7 +503,7 @@ namespace lfs::core {
             size_t row_count = 0;
             int active_sh_degree = 0;
             // Worker-side extraction; never touches the live Scene.
-            [[nodiscard]] std::shared_ptr<lfs::core::SplatData> materialize() const;
+            [[nodiscard]] LFS_CORE_API std::shared_ptr<lfs::core::SplatData> materialize() const;
         };
         // Call at a scene/UI safe point. Owns all copied storage, including
         // inactive SH and deletion masks; safe for subsequent worker-side IO.
