@@ -64,7 +64,7 @@ def test_completion_actions_pin_scene_and_expire_without_focus(convenience, monk
     panel._select_asset_id('remote:remote-only')
     panel._gallery_command('toast_copy')
     assert calls == [(remote, 'copy')]
-    assert panel._gallery_toast_timer.interval == 8
+    assert panel._gallery_toast_timer.interval == 6
     panel._gallery_toast_timer.function()
     assert panel._gallery_toast is None
 
@@ -320,6 +320,7 @@ def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monke
 def test_publish_opens_dialog_with_current_format_and_selected_file(convenience, monkeypatch):
     from lfs_plugins import gallery_file_panel
     panel, asset, _ = convenience
+    panel._gallery_state['links'] = {}
     opened = []
     panel._gallery_controller = SimpleNamespace(upload_format='spz')
     monkeypatch.setattr(gallery_file_panel, 'open_gallery_file_panel', lambda **kw: opened.append(kw))

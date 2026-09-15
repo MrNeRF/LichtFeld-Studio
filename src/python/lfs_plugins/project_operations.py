@@ -55,15 +55,7 @@ class ProjectOperations:
             FileBackend(self.path).write(json.dumps(
                 {"version": 1, "operations": rows}, ensure_ascii=False).encode("utf-8"))
 
-    def clear_finished(self):
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self._lock, _locked_sidecar(self.root / "contents.lock"):
-            rows = {key: row for key, row in self._read().items()
-                    if row["status"] not in ("completed", "canceled")}
-            FileBackend(self.path).write(json.dumps(
-                {"version": 1, "operations": rows}, ensure_ascii=False).encode("utf-8"))
-
-    def run(self, identifier, asset, title, operation, *, backup=True, metadata=None, on_backup=None):
+    def run(self, identifier, asset, title, operation, *, backup=True, metadata=None):
         path = str(Path(asset["path"]).expanduser().absolute())
         if asset.get("operation_path", str(Path(path).resolve())) != str(Path(path).resolve()):
             raise ValueError("The project path changed. Refresh Projects and try again.")
@@ -85,8 +77,6 @@ class ProjectOperations:
             self._put(row)
             if backup:
                 row["backup_path"] = str(self.io.backup_project_file(path))
-                if on_backup:
-                    on_backup(row["backup_path"])
             row["status"] = "running"
             self._put(row)
             result = operation()
@@ -104,16 +94,6 @@ class ProjectOperations:
             raise ProjectOperationFailure(str(exc), row) from exc
         return result, row
 
-    def undo(self, identifier):
-        with self._lock, _locked_sidecar(self.root / "contents.lock"):
-            row = dict(self._read()[identifier])
-        if not row.get("backup_path") or not row.get("output_commit") or row.get("undone"):
-            raise ValueError("This operation has no available Undo.")
-        # The native expected-commit check refuses to overwrite a newer edit.
-        self.io.restore_project_backup(row["path"], row["backup_path"], row["asset_id"], row["output_commit"])
-        row["undone"] = True
-        self._put(row)
-
     def _recover(self, row):
         path = row["path"]
         backup = row.get("backup_path")
@@ -126,7 +106,7 @@ class ProjectOperations:
                 card = self.io.inspect_project_card(path)
                 if str(card.commit_uuid) != row["input_commit"]:
                     self.io.restore_project_backup(path, backup_path, row["asset_id"], str(card.commit_uuid))
-                row["reason"] = row.get("reason") or "The interrupted edit was rolled back. Its recovery copy is available in the transfer tray."
+                row["reason"] = row.get("reason") or "The interrupted edit was rolled back."
             else:
                 row["reason"] = row.get("reason") or "The edit was interrupted before a change was saved."
             row["status"] = "failed"

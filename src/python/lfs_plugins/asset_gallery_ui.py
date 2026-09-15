@@ -18,7 +18,6 @@ from .asset_index import display_name, last_known_gallery_label, previous_scene_
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
-SCOPE_TRANSFERS = "__gallery_transfers__"
 GALLERY_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-gallery-scene"
 GALLERY_SCOPES = (SCOPE_PUBLISHED, SCOPE_ATTENTION)
 
@@ -141,7 +140,6 @@ class GalleryAssetMixin:
                 self._select_asset_id(identifier)
                 self._begin_gallery_publish(self._get_selected_asset(), action)
         if self._handle:
-            self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
             self._handle.dirty_all()
         self._request_model_update()
 
@@ -335,17 +333,6 @@ class GalleryAssetMixin:
             return ""
         return localize_message(self._gallery_state.get("message", ""))
 
-    def _gallery_aggregate(self):
-        jobs = self._gallery_state.get("jobs", [])
-        uploads = sum(j.get("status") in ("queued", "running") and j.get("kind") != "download" for j in jobs)
-        downloads = sum(j.get("status") in ("queued", "running") and j.get("kind") == "download" for j in jobs)
-        phase = self._gallery_state.get("phase", "idle")
-        uploads += phase == "preparing"
-        downloads += phase == "applying"
-        attention = len(self._gallery_rows(True))
-        return (" · ".join(([f"{uploads}↑"] if uploads else []) + ([f"{downloads}↓"] if downloads else [])) or ("!" if attention else ""),
-                tr("sidebar.aggregate", uploads=uploads, downloads=downloads, attention=attention))
-
     def _selected_gallery_badge_value(self, name):
         asset = self._get_selected_asset()
         if not asset:
@@ -372,9 +359,6 @@ class GalleryAssetMixin:
             "gallery_empty_pull": lambda: bool(self._gallery_state.get("scenes")) and not self._asset_index_assets(),
             "gallery_published_count": lambda: len(self._gallery_rows()),
             "gallery_attention_count": lambda: len(self._gallery_rows(True)),
-            "gallery_transfer_count": lambda: sum(j.get("status") not in ("completed", "canceled") for j in self._gallery_state.get("jobs", [])),
-            "gallery_overlay": lambda: self._gallery_aggregate()[0],
-            "gallery_tooltip": lambda: " · ".join(filter(None, (self._gallery_aggregate()[1], self._gallery_quota()))),
             "gallery_selected_reason": lambda: ((self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason") or self._gallery_facts(self._get_selected_asset()).get("reason")) if self._get_selected_asset() else ""),
             "gallery_has_selected_reason": lambda: bool(self._get_selected_asset() and (
                 self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason")
@@ -399,68 +383,22 @@ class GalleryAssetMixin:
         }
         for name, getter in values.items():
             model.bind_func(name, getter)
-        model.bind_record_list("transfer_rows")
-        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers",
-                    "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel", "action.resume",
+        for key in ("sidebar.title", "sidebar.published", "sidebar.attention",
+                    "review.visibility", "action.open", "action.copy",
                     "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
-        model.bind_func("g_action_pause", lambda: tr("action.pause", prefix="gallery.transfer."))
         for action in ("toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "undo",
                        "publish_many", "update_many", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
-        for action in ("pause", "resume", "cancel", "resolve", "undo", "open_recovery"):
-            model.bind_event(
-                "transfer_" + action,
-                lambda _h, _e, args, a=action: self._transfer_command(a, args),
-            )
+        model.bind_event("transfer_open_recovery", lambda _h, _e, args: self._transfer_command("open_recovery", args))
 
     def _transfer_command(self, action, args=()):
         identifier = args[0] if args else None
-        if not identifier and action not in ("resume_all", "clear_finished"):
+        if not identifier:
             return
-        command = "pause" if identifier == "native" else action
         try:
-            if identifier and identifier.startswith("handoff:") and action == "resume":
-                job = next((job for job in self._gallery_state.get("jobs", []) if job["id"] == identifier), {})
-                if not self._select_asset_id(job.get("project", "")):
-                    raise ValueError(tr("error.link"))
-                self._gallery_command("replace_review")
-                return
-            if identifier and identifier.startswith("preparation:") and action == "resume":
-                if not self._select_asset_id(identifier.removeprefix("preparation:")):
-                    raise ValueError(tr("error.link"))
-                self._gallery_command("retry")
-                return
             if action == "open_recovery":
-                operation = self._project_operations.get(identifier, {})
-                if operation.get("backup_path"):
-                    lf.ui.reveal_in_file_manager(operation["backup_path"])
-                    return
                 self._controller().command("show_recovery_folder")
-                return
-            if action == "undo":
-                if identifier in self._project_operations:
-                    self._undo_project_operation(identifier)
-                    return
-                self._controller().undo_pull(identifier)
-                return
-            if action == "resolve":
-                job = next((job for job in self._gallery_state.get("jobs", []) if job["id"] == identifier), {})
-                asset = self._asset_dict(job.get("project", ""))
-                if asset:
-                    self._controller().resolve_asset(asset, self._gallery_details(asset))
-                return
-            if action == "resume":
-                job = next((job for job in self._gallery_state.get("jobs", []) if job["id"] == identifier), {})
-                if job.get("requiresPreparation"):
-                    asset = self._asset_dict(job.get("project", ""))
-                    if not asset:
-                        raise ValueError(tr("error.link"))
-                    self._restart_failed_upload(asset, job)
-                    return
-                if job.get("needsAttention"):
-                    command = "keep_waiting"
-            self._controller().command(command, None if identifier == "native" else identifier)
         except Exception as exc:
             log_failure(action, exc, transfer=identifier)
             from .gallery_messages import localize_message

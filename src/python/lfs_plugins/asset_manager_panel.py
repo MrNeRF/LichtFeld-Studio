@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import lichtfeld as lf
 
-from .asset_gallery_ui import GalleryAssetMixin, GALLERY_SCOPES, SCOPE_PUBLISHED, SCOPE_ATTENTION, SCOPE_TRANSFERS
+from .asset_gallery_ui import GalleryAssetMixin, GALLERY_SCOPES, SCOPE_PUBLISHED, SCOPE_ATTENTION
 from . import rml_widgets
 from .asset_layout import (
     INSPECTOR_COLUMN_MIN,
@@ -36,7 +36,6 @@ from .asset_layout import (
     list_column_widths,
 )
 from .asset_format import format_size
-from .gallery_transfer_ui import transfer_rows
 from .project_inspector import (
     InspectionFactsPipeline,
     dialog_model,
@@ -149,10 +148,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_label_width = 168.0
         self._inspector_width = INSPECTOR_COLUMN_MIN
         self._inspector_preferred_height = 200.0
-        self._tray_height = 120.0
-        self._tray_expanded = False
-        self._tray_show_all = False
-        self._transfer_history_limit = 30
         self._inspector_expanded = False
         self._quick_look_visible = False
         self._thumbnail_menu_visible = False
@@ -261,7 +256,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "navigator_widths": dict(self._navigator_widths),
             "inspector_width": self._inspector_width,
             "inspector_height": self._inspector_preferred_height,
-            "tray_height": self._tray_height,
             "thumbnail_sizes": dict(self._thumbnail_sizes),
             "list_column_overrides": dict(self._list_column_overrides),
             "inspector_sections": dict(self._inspector_sections),
@@ -305,7 +299,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 ("navigator_width", 120.0, 240.0, 200.0),
                 ("inspector_width", INSPECTOR_COLUMN_MIN, 420.0, INSPECTOR_COLUMN_MIN),
                 ("inspector_height", 120.0, 450.0, 200.0),
-                ("tray_height", 32.0, 450.0, 32.0),
             ):
                 number = payload.get(key)
                 if isinstance(number, (int, float)) and math.isfinite(number):
@@ -395,7 +388,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                         self._handle.dirty_all()
                     self._start_catalog_verify()
                     self._scan_asset_folders()
-                self._refresh_transfer_rows()
+                self._request_model_update()
 
             self._schedule_ui(complete)
 
@@ -495,14 +488,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_reserved_height", lambda: (
             f"{self._inspector_band_height() + 8.0:.1f}dp" if self._layout_class == "medium" else "0dp"
         ))
-        model.bind_func("tray_height", lambda: f"{self._tray_height if self._tray_expanded else 32.0:.1f}dp")
-        model.bind_func("tray_expanded", lambda: self._tray_expanded)
-        model.bind_func("tray_toggle_icon", lambda: "−" if self._tray_expanded else "+")
-        model.bind_func("tray_toggle_label", lambda: tr("gallery.transfer.action.collapse" if self._tray_expanded else "gallery.transfer.action.expand"))
-        model.bind_func("tray_all_label", lambda: tr("gallery.transfer.action.details"))
-        model.bind_func("tray_empty", lambda: not self._all_transfer_rows())
-        model.bind_func("tray_empty_label", lambda: tr("gallery.transfer.action.empty"))
-        model.bind_func("tray_menu_label", lambda: tr("common.more"))
         model.bind_func("contents_undo_label", lambda: tr("projects.contents.undo"))
         model.bind_func("sidebar_height", lambda: f"{self._sidebar_height:.1f}dp")
         model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")
@@ -541,10 +526,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func(
             "quick_look_has_thumbnail",
             lambda: self.get_selected_asset_thumbnail_decorator() != "none",
-        )
-        model.bind_func(
-            "has_gallery_transfers",
-            lambda: self._tray_show_all or bool(self._all_transfer_rows()),
         )
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
@@ -706,7 +687,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "resize_navigator_label": "projects.accessibility.resize_navigator",
             "resize_inspector_label": "projects.accessibility.resize_inspector",
             "resize_inspector_height_label": "projects.accessibility.resize_inspector_height",
-            "resize_transfers_tray_label": "projects.accessibility.resize_transfers_tray",
             "inspector_saved_label": "projects.property.saved",
             "inspector_date_label": "projects.property.date",
             "inspector_opened_label": "projects.property.opened",
@@ -727,10 +707,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_record_list("assets")
         model.bind_record_list("contents_rows")
         for event, handler in (
-            ("open_gallery", self.on_open_gallery),
-            ("toggle_transfer_tray", self.toggle_transfer_tray),
-            ("transfer_menu", self.open_transfer_menu),
-            ("transfer_project", self.select_transfer_project),
             ("toggle_folders_collapsed", self.toggle_folders_collapsed),
             ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
@@ -761,7 +737,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         ):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
-        self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
         self._handle.update_record_list("contents_rows", self.get_contents_rows())
 
     def get_search_query(self) -> str:
@@ -801,7 +776,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "is_floating", "navigator_width", "navigator_style_width",
             "inspector_width", "inspector_style_width", "inspector_height",
             "inspector_style_height", "inspector_reserved_height", "thumbnail_size", "asset_card_slot_width",
-            "asset_card_thumbnail_height", "tray_height", "bottom_panel_height",
+            "asset_card_thumbnail_height", "bottom_panel_height",
             "sidebar_height", "main_min_height",
         )
 
@@ -1213,89 +1188,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if facts.get(secondary) not in (None, ""):
             parts.append(prefix + str(facts[secondary]))
         return " · ".join(part for part in parts if part)
-
-    def _all_transfer_rows(self) -> List[Dict[str, Any]]:
-        undo_history = self._gallery_controller.undo_records() if self._gallery_controller else {}
-        rows = list(transfer_rows(dict(self._gallery_state, undoHistory=undo_history), self._transfer_history_limit))
-        projects_by_job = {job["id"]: job.get("project") or "remote:" + job.get("sceneId", "") for job in self._gallery_state.get("jobs", ())}
-        for row in rows:
-            row["project"] = row.get("project") or projects_by_job.get(row["id"], self._gallery_state.get("operationProject", ""))
-        for operation in reversed(list(self._project_operations.values())):
-            status = str(operation.get("status", "running"))
-            progress = 100.0 if status == "completed" else float(operation.get("progress", 0.0) or 0.0)
-            rows.append({
-                "id": operation["id"],
-                "project": operation.get("asset_id", ""),
-                "title": operation.get("project_name") or self._get_asset_display_name(self._asset_dict(operation.get("asset_id", "")) or {}) or operation.get("title", ""),
-                "direction": "→",
-                "status": status,
-                "bytes": "",
-                "phase": self._project_operation_phase(operation),
-                "reason": operation.get("reason", "") if status == "failed" else "",
-                "detail": operation.get("detail", ""),
-                "progress": progress,
-                "progress_width": f"{progress:.1f}%",
-                "indeterminate": status == "running" and progress <= 0,
-                "can_pause": False,
-                "can_resume": False,
-                "can_cancel": False,
-                "can_recover": bool(operation.get("backup_path")),
-                "can_undo": bool(operation.get("backup_path") and operation.get("output_commit")
-                                 and status == "completed" and not operation.get("undone")),
-            })
-        rows.sort(key=lambda row: row["status"] != "running")
-        projects = self._all_display_assets()
-        for row in rows:
-            row["can_select"] = row["project"] in projects
-            row.setdefault("can_undo", False)
-            row.setdefault("can_resolve", False)
-            row.setdefault("can_recover", False)
-            row.setdefault("action_label", "")
-        return rows
-
-    def _project_operation_phase(self, operation):
-        kind = operation.get("operation_kind")
-        status = operation.get("status")
-        part = operation.get("part", {})
-        subject = part.get("label", "")
-        if part.get("kind") == "save":
-            subject = tr("projects.contents.save").format(number=part.get("number", ""), total=part.get("total", ""))
-        elif part.get("kind") == "dataset":
-            subject = tr("projects.contents.dataset_embedded").format(count=part.get("images", ""))
-        if operation.get("undone"):
-            return (tr("projects.contents.undone").format(part=subject) if kind == "remove"
-                    else tr("projects.contents.operation.undo_done"))
-        if status == "failed":
-            return tr("projects.transfer.failed")
-        if kind == "remove":
-            text = tr("projects.contents.removed_part" if status == "completed" else "projects.contents.removing").format(part=subject)
-        elif kind:
-            suffix = "_done" if status == "completed" else ""
-            text = tr(f"projects.contents.operation.{kind}{suffix}")
-        else:
-            text = operation.get("title", "")
-        if status == "running":
-            return tr("projects.contents.progress").format(operation=text, percent=f"{operation.get('progress', 0):.0f}")
-        return text
-
-    def _undo_project_operation(self, identifier):
-        operation = self._project_operations[identifier]
-        from .project_operations import ProjectOperations
-
-        def finished():
-            operation["undone"] = True
-
-        self._start_project_operation(operation["asset_id"], tr("projects.contents.undo"),
-            lambda _progress, _cancel: ProjectOperations(lf.io).undo(identifier),
-            after=finished, operation_kind="undo")
-
-    def _refresh_transfer_rows(self) -> None:
-        if self._handle:
-            self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
-            self._handle.dirty("transfer_rows")
-            self._handle.dirty("has_gallery_transfers")
-            self._handle.dirty("tray_empty")
-        self._request_model_update()
 
     def _schedule_ui(self, callback: Callable[[], None]) -> None:
         scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
@@ -2049,9 +1941,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._set_catalog_notice(tr("projects.status.import_failed"))
 
     def _select_folder_id(self, folder_id: str) -> bool:
-        if folder_id == SCOPE_TRANSFERS:
-            self.on_open_gallery()
-            return True
         if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES}:
             return False
         if folder_id in self._asset_index_folders():
@@ -2522,41 +2411,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         metadata = dict(project_name=self._get_asset_display_name(asset), operation_kind=operation_kind,
                         part={key: (content_row or {}).get(key, "") for key in ("kind", "label", "number", "total", "images")})
         self._project_operations[operation_id] = {
-            **metadata,
-            "id": operation_id,
             "asset_id": asset_id,
-            "title": title,
             "status": "running",
-            "phase": tr("projects.transfer.preparing"),
-            "progress": 0.0,
-            "cancel": cancel,
         }
         self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="running", operation_kind=operation_kind)
         if self._inspection_pipeline is not None:
             self._inspection_pipeline.cancel()
-        self._tray_expanded = True
-        self._dirty_fields("tray_expanded", "tray_height", "tray_toggle_icon", "tray_toggle_label")
-        self._refresh_transfer_rows()
+        self._request_model_update()
         self._dirty_selection()
 
-        def progress(value: Any = 0.0, stage: str = "") -> None:
-            try:
-                percent = max(0.0, min(100.0, float(value) * 100.0 if float(value) <= 1.0 else float(value)))
-            except (TypeError, ValueError):
-                percent = 0.0
-            self._schedule_ui(lambda: self._update_project_operation(operation_id, percent, stage))
-
-        def complete(result=None, error=None, record=None, facts=None, inspection_error="") -> None:
+        def complete(error=None, facts=None, inspection_error="") -> None:
             row = self._project_operations.get(operation_id)
             if row is None:
                 return
-            if record:
-                row["backup_path"] = record.get("backup_path", "")
-                row["output_commit"] = record.get("output_commit", "")
             try:
                 if error is not None:
                     raise error
-                row.update(status="completed", progress=100.0, phase=tr("projects.transfer.done"), result=result)
+                row["status"] = "completed"
                 if self._inspection_pipeline is not None:
                     self._inspection_pipeline.invalidate(asset_id)
                 if facts:
@@ -2566,15 +2437,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     after()
                 self._contents_feedback.pop(asset_id, None)
                 if inspection_error:
-                    row["detail"] = tr("projects.contents.refresh_failed").format(reason=inspection_error)
-                    self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="failed", reason=row["detail"])
+                    self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="failed",
+                        reason=tr("projects.contents.refresh_failed").format(reason=inspection_error))
                 self.refresh_catalog(scan_folders=False)
             except Exception as exc:
                 _log.exception("Complete project operation failed operation=%s path=%s", title, asset["path"])
-                row.update(status="failed", phase=tr("projects.transfer.failed"), reason=str(exc))
+                row["status"] = "failed"
                 self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="failed", reason=str(exc))
             finally:
-                self._refresh_transfer_rows()
+                self._request_model_update()
                 self._dirty_selection()
 
         def worker() -> None:
@@ -2583,41 +2454,25 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             facts = None
             inspection_error = ""
 
-            def backup_ready(path):
-                def update():
-                    self._project_operations[operation_id]["backup_path"] = path
-                    self._refresh_transfer_rows()
-                self._schedule_ui(update)
-
             try:
-                result, record = store.run(operation_id, asset, title,
-                    lambda: operation(progress, cancel.is_set), backup=backup, metadata=metadata, on_backup=backup_ready)
+                store.run(operation_id, asset, title,
+                    lambda: operation(lambda *_args: None, cancel.is_set), backup=backup, metadata=metadata)
                 error = None
             except Exception as exc:
                 _log.exception("Project worker failed operation=%s path=%s", title, asset["path"])
-                result, error, record = None, exc, getattr(exc, "record", None)
+                error = exc
             if error is None and (content_row or operation_kind):
                 try:
                     facts = self._inspect_contents(str(asset["path"]))
                 except Exception as exc:
                     _log.exception("Inspect completed project operation failed path=%s", asset["path"])
                     inspection_error = str(exc)
-            self._schedule_ui(lambda: complete(result, error, record, facts, inspection_error))
+            self._schedule_ui(lambda: complete(error, facts, inspection_error))
 
         try:
             threading.Thread(target=worker, daemon=True, name="ProjectsOperation").start()
         except Exception as exc:
             complete(error=exc)
-
-    def _update_project_operation(self, operation_id: str, progress: float, stage: str) -> None:
-        row = self._project_operations.get(operation_id)
-        if row is None:
-            return
-        if row.get("status") != "running":
-            return
-        row["progress"] = progress
-        row["phase"] = tr("projects.contents.working")
-        self._refresh_transfer_rows()
 
     def native_file_drop(self, path: str) -> bool:
         """Register a native .licht drop when Projects owns the drop target."""
@@ -2637,55 +2492,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._update_selection_type()
         self.refresh_catalog(scan_folders=False)
         return True
-
-    def on_open_gallery(self, _handle=None, _event=None, _args=None):
-        self._tray_show_all = self._tray_expanded = True
-        self._tray_height = max(240.0, self._tray_height)
-        self._dirty_fields("tray_height", "tray_expanded", "tray_toggle_icon", "tray_toggle_label")
-        self._refresh_transfer_rows()
-
-    def toggle_transfer_tray(self, _handle=None, _event=None, _args=None):
-        self._tray_expanded = not self._tray_expanded
-        if not self._tray_expanded:
-            self._tray_show_all = False
-        self._dirty_fields("tray_height", "tray_expanded", "tray_toggle_icon", "tray_toggle_label", "has_gallery_transfers")
-
-    def select_transfer_project(self, _handle=None, _event=None, args=None):
-        project_id = str(args[0]) if args else ""
-        if project_id in self._all_display_assets():
-            self._select_folder_id(SCOPE_PUBLISHED if project_id.startswith("remote:") else SCOPE_ALL)
-            self._set_filter("all")
-            self.set_search_query("")
-            self._select_asset_id(project_id)
-
-    def open_transfer_menu(self, _handle=None, _event=None, _args=None):
-        rows = self._all_transfer_rows()
-        self._show_shared_context_menu([
-            {"label": tr("gallery.transfer.action.details"), "action": "show_all"},
-            {"label": tr("gallery.transfer.action.show_older"), "action": "show_older"},
-            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] and row.get("action") in ("resume", "retry", "keep_waiting") and not row["id"].startswith("preparation:") and not row.get("requiresPreparation") for row in rows), "separator_before": True},
-            {"label": tr("gallery.transfer.action.clear_finished"), "action": "clear_finished", "enabled": any(row["status"] in ("completed", "canceled") for row in rows)},
-        ], self._transfer_tray_command)
-
-    def _transfer_tray_command(self, action):
-        if action in ("show_all", "show_older"):
-            if action == "show_older":
-                self._transfer_history_limit += 30
-            self.on_open_gallery()
-        else:
-            if action == "clear_finished":
-                try:
-                    from .project_operations import ProjectOperations
-                    ProjectOperations(None).clear_finished()
-                except Exception as exc:
-                    _log.exception("Clear Contents history failed path=%s", self.STORAGE_PATH)
-                    self._set_catalog_notice(str(exc))
-                    return
-                self._project_operations = {key: row for key, row in self._project_operations.items() if row.get("status") not in ("completed", "canceled")}
-                self._refresh_transfer_rows()
-                if not any(row["status"] in ("completed", "canceled") for row in transfer_rows(self._gallery_state, self._transfer_history_limit)):
-                    return
-            self._transfer_command(action)
 
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:
@@ -4077,7 +3883,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._resize_start_navigator = self._navigator_width
         self._resize_start_inspector = self._inspector_width
         self._resize_start_height = self._inspector_preferred_height
-        self._resize_start_tray = self._tray_height
         self._bottom_panel_dragging = region == "inspector-height"
         if region.startswith("list-column:"):
             self._resize_start_column = region.partition(":")[2]
@@ -4100,9 +3905,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._info_preferred_height = self._inspector_preferred_height
             self._sync_panel_layout()
             self._dirty_fields("inspector_height", "bottom_panel_height")
-        elif region == "tray":
-            self._tray_height = 120.0
-            self._dirty_fields("tray_height")
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
             self._list_column_overrides.pop(column, None)
@@ -4128,14 +3930,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif region == "inspector":
             self._inspector_width = min(420.0, max(INSPECTOR_COLUMN_MIN, self._resize_start_inspector - delta_x))
             self._dirty_layout_fields()
-        elif region == "tray":
-            popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
-            panel_height = native_to_dp(
-                getattr(popup, "client_height", 0), self._ui_scale()
-            ) if popup else 0.0
-            maximum = max(120.0, min(450.0, panel_height * 0.5))
-            self._tray_height = min(maximum, max(120.0, self._resize_start_tray - delta_y))
-            self._dirty_fields("tray_height")
         elif region == "inspector-height" or self._bottom_panel_dragging:
             popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
             panel_height = native_to_dp(
@@ -4200,7 +3994,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _language_changed(self) -> None:
         self._refresh_records(assets=True, folders=True)
         self._dirty_selection()
-        self._refresh_transfer_rows()
         if self._handle:
             self._handle.dirty_all()
         self._request_model_update()

@@ -579,16 +579,15 @@ def test_splat_picker_imports_ssog_as_splat(monkeypatch):
     assert file_menu.lf.load_file_calls == [((selected,), {"is_dataset": False})]
 
 
-def test_menu_bar_transfer_operator_opens_projects_tray(monkeypatch):
+def test_menu_bar_transfer_operator_opens_projects_panel(monkeypatch):
     import ast
-    _load_file_menu(monkeypatch)
-    from lfs_plugins import gallery_transfer_ui
+    file_menu = _load_file_menu(monkeypatch)
     calls = []
-    monkeypatch.setattr(gallery_transfer_ui, 'show_transfer_tray', lambda: calls.append('tray'))
+    monkeypatch.setattr(file_menu.lf.ui, 'set_panel_enabled', lambda panel_id, enabled: calls.append((panel_id, enabled)), raising=False)
     path = PROJECT_ROOT / 'src/python/lfs_plugins/help_menu.py'
     tree = ast.parse(path.read_text())
     node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'GalleryTransfersOperator')
     scope = {'Operator': object, '__package__': 'lfs_plugins', '__name__': 'lfs_plugins.help_menu'}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), scope)
     assert scope['GalleryTransfersOperator']().execute(None) == {'FINISHED'}
-    assert calls == ['tray']
+    assert calls == [('lfs.asset_manager', True)]

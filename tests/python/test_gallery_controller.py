@@ -574,23 +574,34 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
         panel._finish_local_update(job)
     assert module.lf._test_state.opened == [("/project.licht", True, False, True)]
 
-def test_transfer_tray_tracks_processing_pause_completion_and_cleared_recovery(gallery):
+def test_overlay_rows_track_processing_pause_completion_and_cleared_recovery(gallery, monkeypatch):
     panel, state, _ = gallery
-    from lfs_plugins.gallery_transfer_ui import transfer_rows
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+    from test_asset_manager_panel import _Handle
+    module = import_module('lfs_plugins.gallery_controller')
+    monkeypatch.setattr(module.lf.ui, 'is_panel_enabled', lambda _name: False, raising=False)
+    overlay = GalleryTransferOverlay()
+    overlay._handle = _Handle()
+
+    def rows():
+        panel._publish_runtime_state(panel.snapshot())
+        assert overlay.update()
+        return overlay._handle.records['gallery_transfer_rows']
+
     job = dict(id='transfer', kind='upload', metadata={'title': 'Private garden'},
                status='running', serverProcessing=True, completed=40, total=100, message='Checking scene')
     state['jobs'] = [job]
-    progress = transfer_rows(panel.snapshot())[0]
+    progress = rows()[0]
     assert progress['progress'] == 40 and progress['can_pause']
     assert progress['phase'].endswith('phase.processing')
     job.update(status='paused', message='Stopped waiting')
     panel._state = dict(state, jobs=[dict(job, status='running')])
-    progress = transfer_rows(panel.snapshot())[0]
+    progress = rows()[0]
     assert progress['can_resume'] and not progress['can_pause']
     job.update(status='completed', serverProcessing=False)
-    assert transfer_rows(panel.snapshot())[0]['progress'] == 100
+    assert rows()[0]['progress'] == 100
     job.update(retired=True, total=0, completed=0, message='Transfer cleared. Recovery copy kept.')
-    assert transfer_rows(panel.snapshot()) == []
+    assert rows() == []
     assert state['jobs'][0]['retired']  # Recovery record remains in the journal.
 
 @pytest.mark.parametrize('commit,remote_title,expected', [
@@ -707,7 +718,7 @@ def test_subscribers_are_coalesced_and_unsubscribe_stops_delivery(gallery, monke
     panel._poll()
     assert len(received) == count + 1
 
-def test_tray_has_all_pending_jobs_and_bounded_history(gallery):
+def test_overlay_rows_have_all_pending_jobs_and_bounded_history(gallery):
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     jobs = [dict(id=str(i), metadata={'title':str(i)}, status='completed', completed=1,total=1) for i in range(35)]
     jobs += [dict(id='upload',metadata={'title':'Upload'},status='running',completed=2,total=10),
@@ -883,7 +894,7 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:projects.gallery.sidebar.refresh'
 
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
-def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, status, expected):
+def test_A5_finished_overlay_rows_show_one_adaptive_size(gallery, monkeypatch, status, expected):
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: {
@@ -1046,7 +1057,7 @@ def test_eligibility_uses_only_checks_for_the_saved_commit(gallery):
     ("gallery_project_payload_unavailable: Missing payload", False),
     ("Could not write the prepared copy", True),
 ])
-def test_preparation_retry_in_tray_uses_the_failed_commit(gallery, reason, resumable):
+def test_preparation_retry_in_overlay_uses_the_failed_commit(gallery, reason, resumable):
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     failure = dict(id="preparation:project", project="project", commitUuid="saved", nativePreparation=True,
                    status="error", failureReason=reason, message=reason)
