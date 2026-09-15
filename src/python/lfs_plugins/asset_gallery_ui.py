@@ -277,6 +277,13 @@ class GalleryAssetMixin:
         checked = self._gallery_state.get("checkedAt", 0)
         return tr("sidebar.checked_relative", time=relative_time(checked)) if checked else tr("state.unknown")
 
+    def _gallery_notice_text(self):
+        if self._gallery_notice:
+            return self._gallery_notice
+        if not self._gallery_state.get("signed_in"):
+            return ""
+        return self._gallery_state.get("message", "")
+
     def _gallery_aggregate(self):
         jobs = self._gallery_state.get("jobs", [])
         uploads = sum(j.get("status") in ("queued", "running") and j.get("kind") != "download" for j in jobs)
@@ -313,8 +320,8 @@ class GalleryAssetMixin:
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
             "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),
             "gallery_linked": lambda: self._has_gallery_link(),
-            "gallery_notice": lambda: self._gallery_notice or self._gallery_state.get("message", ""),
-            "gallery_has_notice": lambda: bool(self._gallery_notice or self._gallery_state.get("message", "")),
+            "gallery_notice": self._gallery_notice_text,
+            "gallery_has_notice": lambda: bool(self._gallery_notice_text()),
             "gallery_exchange_summary": lambda: " · ".join(filter(None, (self._gallery_published_summary(), self._gallery_checked_label()))),
             "gallery_selected_format": lambda: ((self._get_selected_asset() or {}).get("source_format") or "licht").upper(),
             "gallery_selected_visibility": lambda: tr("review." + (self._gallery_scene(self._get_selected_asset() or {}) or {}).get("visibility", "private")),

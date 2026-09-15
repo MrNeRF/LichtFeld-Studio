@@ -56,7 +56,11 @@
           <input id="asset-thumbnail-slider" class="asset-thumbnail-slider" type="range" min="112" max="320" step="8"
                  data-value="thumbnail_size" data-tooltip="projects.toolbar.thumbnail_size"
                  aria-label="{{thumbnail_size_label}}"/>
-          <button class="asset-button asset-button--text asset-check-gallery" data-event-click="gallery_refresh">
+          <button class="asset-button asset-button--text asset-check-gallery"
+                  data-event-click="gallery_refresh"
+                  data-attr-title="check_gallery_tooltip"
+                  aria-label="{{check_gallery_label}}">
+            <span class="asset-check-gallery-icon" aria-hidden="true">&#x21BB;</span>
             <span class="asset-button-text">{{check_gallery_label}}</span>
             <span class="gallery-checked">{{gallery_checked}}</span>
           </button>
@@ -64,8 +68,9 @@
                   data-event-click="on_import_project" data-attr-title="import_project_tooltip">
             <span class="asset-button-text">{{import_project_label}}</span>
           </button>
-            <button class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"
+          <button class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"
                   data-event-click="on_import_project" data-attr-title="import_project_tooltip"
+                  data-tooltip="projects.tooltip.add_existing"
                   aria-label="{{import_project_label}}">
             <span class="asset-button-glyph">+</span>
           </button>
@@ -136,7 +141,7 @@
                 <span class="text-muted gallery-account-label" data-if="gallery_signed_in">{{gallery_account}}</span>
                 <span class="text-muted gallery-account-label" data-if="!gallery_signed_in">{{g_sidebar_sign_in_hint}}</span>
                 <button class="asset-button asset-button--text gallery-sign-in" data-if="!gallery_signed_in"
-                        data-event-click="gallery_sign_in">{{g_sidebar_sign_in}}</button>
+                        data-event-click="gallery_sign_in"><span class="asset-button-text">{{g_sidebar_sign_in}}</span></button>
               </div>
               <div class="text-muted gallery-checked" data-if="gallery_signed_in">{{gallery_checked}}</div>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
@@ -187,11 +192,12 @@
                data-class-is-wide="asset_list_wide"
                data-class-show-folder="asset_list_show_folder"
                data-class-gallery-compact="asset_list_gallery_compact">
-            <span class="asset-col asset-col-name" data-style-width="asset_list_name_width">{{col_name_label}}<span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
-            <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width">{{col_gallery_label}}<span class="asset-list-column-handle" data-resize="list-column:gallery"></span></span>
-            <span class="asset-col asset-col-size" data-style-width="asset_list_size_width">{{col_size_label}}<span class="asset-list-column-handle" data-resize="list-column:size"></span></span>
-            <span class="asset-col asset-col-modified" data-style-width="asset_list_modified_width">{{col_modified_label}}<span class="asset-list-column-handle" data-resize="list-column:modified"></span></span>
-            <span class="asset-col asset-col-folder" data-style-width="asset_list_folder_width">{{col_folder_label}}<span class="asset-list-column-handle" data-resize="list-column:folder"></span></span>
+            <span class="asset-list-thumb asset-list-header-spacer" aria-hidden="true"></span>
+            <span class="asset-col asset-col-name" data-style-width="asset_list_name_width"><span class="asset-list-header-label">{{col_name_label}}</span><span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
+            <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width"><span class="asset-list-header-label">{{col_gallery_label}}</span><span class="asset-list-column-handle" data-resize="list-column:gallery"></span></span>
+            <span class="asset-col asset-col-size" data-style-width="asset_list_size_width"><span class="asset-list-header-label">{{col_size_label}}</span><span class="asset-list-column-handle" data-resize="list-column:size"></span></span>
+            <span class="asset-col asset-col-modified" data-style-width="asset_list_modified_width"><span class="asset-list-header-label">{{col_modified_label}}</span><span class="asset-list-column-handle" data-resize="list-column:modified"></span></span>
+            <span class="asset-col asset-col-folder" data-style-width="asset_list_folder_width"><span class="asset-list-header-label">{{col_folder_label}}</span><span class="asset-list-column-handle" data-resize="list-column:folder"></span></span>
           </div>
 
           <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
@@ -277,7 +283,7 @@
           </div>
           <div class="asset-resize-handle asset-resize-handle--horizontal" data-resize="inspector-height"
                tabindex="0" aria-label="{{resize_inspector_height_label}}"></div>
-          <div id="asset-inspector-content" class="asset-inspector-content asset-info-asset-layout">
+          <div id="asset-inspector-content" class="asset-inspector-content">
             <div class="asset-info-empty" data-if="show_selection_none">{{select_item_hint}}</div>
             <div class="asset-info-empty inspector-multi" data-if="show_selection_multiple">
               {{gallery_multi_summary}}
@@ -311,7 +317,7 @@
                     <div class="parameter-row" data-if="selected_asset_can_locate"><span class="parameter-label">{{prop_expected_path_label}}</span><span class="parameter-value inspector-ellipsis">{{selected_asset_expected_path}}</span></div>
                   </div>
                   <div class="inspector-section"><div class="inspector-section-title">{{operations_section_title}}</div>
-                    <div class="inspector-history-empty text-muted">@tr:projects.action.save_history</div>
+                    <div class="inspector-operations"><span class="inspector-history-empty text-muted" data-tooltip="projects.action.save_history">@tr:projects.action.save_history</span></div>
                   </div>
                 </div>
               </div>

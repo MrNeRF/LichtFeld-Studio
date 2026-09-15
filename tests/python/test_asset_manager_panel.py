@@ -2219,6 +2219,68 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
     assert '.asset-col-gallery { width: 200dp; min-width: 96dp; max-width: 200dp; flex: 0 1 200dp; }' in (resources / 'asset_manager.rcss').read_text()
 
+
+def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
+    import xml.etree.ElementTree as ET
+
+    resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
+    root = ET.fromstring((resources / 'asset_manager.rml').read_text())
+    header = root.find('.//*[@class="asset-list-header"]')
+    assert header is not None
+    assert header.find('./span[@class="asset-list-thumb asset-list-header-spacer"]') is not None
+    labels = header.findall('./span/span[@class="asset-list-header-label"]')
+    assert len(labels) == 5
+    assert [label.text for label in labels] == [
+        '{{col_name_label}}', '{{col_gallery_label}}', '{{col_size_label}}',
+        '{{col_modified_label}}', '{{col_folder_label}}',
+    ]
+
+    inspector = root.find('.//*[@id="asset-inspector-content"]')
+    assert inspector is not None
+    assert inspector.get('class') == 'asset-inspector-content'
+    operations = root.find('.//div[@class="inspector-operations"]')
+    assert operations is not None
+    history = operations.find('./span[@class="inspector-history-empty text-muted"]')
+    assert history is not None
+    assert history.get('data-tooltip') == 'projects.action.save_history'
+
+    account_button = root.find('.//button[@class="asset-button asset-button--text gallery-sign-in"]')
+    assert account_button is not None
+    assert account_button.find('./span[@class="asset-button-text"]') is not None
+
+    check_gallery = root.find('.//button[@class="asset-button asset-button--text asset-check-gallery"]')
+    assert check_gallery is not None
+    assert check_gallery.get('data-attr-title') == 'check_gallery_tooltip'
+    assert check_gallery.find('./span[@class="asset-check-gallery-icon"]') is not None
+
+    rcss = (resources / 'asset_manager.rcss').read_text()
+    assert 'color: inherit' not in rcss
+    assert '.asset-inspector-content { display: flex; flex-direction: column;' in rcss
+    assert '.asset-shell.is-narrow .asset-list-header,' in rcss
+    assert '.asset-shell.is-narrow .asset-check-gallery-icon,' in rcss
+    assert '.inspector-actions .btn { box-sizing: border-box;' in rcss
+
+    gui_manager = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/gui_manager.cpp'
+    cpp = gui_manager.read_text()
+    assert 'filesystem_error == std::make_error_code(std::errc::no_such_file_or_directory)' in cpp
+    assert 'LOG_DEBUG("Unable to inspect window state:' in cpp
+
+
+def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module, monkeypatch):
+    class StrictBindingModel(_BindingModel):
+        def bind_func(self, name, getter):
+            assert name not in self.func_bindings, f'duplicate binding: {name}'
+            super().bind_func(name, getter)
+
+    panel = panel_module.AssetManagerPanel()
+    model = StrictBindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings['check_gallery_tooltip']().startswith('projects.action.check_gallery')
+    panel._gallery_state['message'] = 'Sign in'
+    assert panel._gallery_notice_text() == ''
+    panel._gallery_state['signed_in'] = True
+    assert panel._gallery_notice_text() == 'Sign in'
+
 def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
     poster = _write_png(tmp_path / "portal poster.png")

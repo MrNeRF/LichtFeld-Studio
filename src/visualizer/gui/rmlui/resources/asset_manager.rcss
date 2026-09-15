@@ -1040,7 +1040,9 @@
 }
 
 .asset-search-icon { display: block; flex: 0 0 24dp; width: 24dp; text-align: center; overflow: hidden; }
-.asset-toolbar-filter, .asset-toolbar-view, .asset-check-gallery { display: none; }
+.asset-toolbar-filter, .asset-toolbar-view { display: none; }
+.asset-check-gallery { display: flex; align-items: center; max-width: 190dp; }
+.asset-check-gallery-icon { display: none; }
 .asset-check-gallery .gallery-checked { margin-left: 4dp; }
 .asset-thumbnail-slider { width: 96dp; height: 24dp; flex: 0 0 96dp; }
 .asset-add-existing-icon { display: none; }
@@ -1130,6 +1132,8 @@
 #asset-gallery > .asset-list-header { padding: 0 12dp; }
 .asset-list-row { position: relative; height: 40dp; min-height: 40dp; border-bottom-width: 1dp; }
 .asset-list-header .asset-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-list-header-spacer { visibility: hidden; }
+.asset-list-header-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-col-name { flex: 1 1 auto; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
 .asset-col-folder { flex: 0 0 100dp; }
@@ -1167,16 +1171,21 @@
 .inspector-title { font-size: 14dp; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-path { font-size: 10dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8dp; }
-.asset-inspector-content { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
+.asset-inspector-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
+.asset-inspector-content > [data-if] { flex: 1 1 auto; min-width: 0; }
+.asset-info-asset-layout { width: 100%; }
+.asset-info-details { width: 100%; }
 .inspector-section { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
 .inspector-section-title { height: 24dp; line-height: 24dp; font-weight: 600; }
 .parameter-row { display: flex; align-items: baseline; gap: 8dp; min-height: 20dp; min-width: 0; }
 .parameter-label { flex: 0 0 88dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .parameter-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: "JetBrains Mono"; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
-.inspector-operations { padding-top: 4dp; }
+.inspector-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.inspector-actions .btn { box-sizing: border-box; flex: 0 0 auto; height: 24dp; min-height: 24dp; max-height: 24dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspector-operations { display: flex; align-items: center; flex-wrap: nowrap; gap: 8dp; min-width: 0; max-width: 100%; overflow: hidden; padding-top: 4dp; }
 .asset-info-empty { display: block; padding: 16dp 12dp; color: rgba(220, 225, 235, 0.72); }
-.inspector-history-empty { padding: 4dp 0; }
+.inspector-history-empty { display: block; min-width: 0; padding: 4dp 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .asset-tray { position: relative; display: flex; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
 .asset-tray-label, .asset-tray-detail, .asset-tray-title, .asset-tray-phase, .asset-tray-bytes { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -1228,6 +1237,14 @@
 .asset-shell.is-narrow .asset-toolbar-filter, .asset-shell.is-narrow .asset-sort-button { display: none; }
 .asset-shell.is-narrow .asset-toolbar-view { display: block; }
 .asset-shell.is-narrow .asset-view-toggle-icons, .asset-shell.is-narrow .asset-thumbnail-slider { display: none; }
+.asset-shell.is-narrow .asset-check-gallery,
+.asset-shell.is-compact .asset-check-gallery { display: inline-flex; width: 24dp; min-width: 24dp; max-width: 24dp; padding: 0; }
+.asset-shell.is-narrow .asset-check-gallery .asset-button-text,
+.asset-shell.is-compact .asset-check-gallery .asset-button-text,
+.asset-shell.is-narrow .asset-check-gallery .gallery-checked,
+.asset-shell.is-compact .asset-check-gallery .gallery-checked { display: none; }
+.asset-shell.is-narrow .asset-check-gallery-icon,
+.asset-shell.is-compact .asset-check-gallery-icon { display: block; font-size: 16dp; line-height: 16dp; }
 .asset-shell.is-narrow .asset-import-button { display: none; }
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 .asset-shell.is-narrow .gallery-account-row, .asset-shell.is-compact .gallery-account-row { display: none; }
@@ -1244,6 +1261,8 @@
 .asset-shell.is-narrow .asset-col-modified { display: none; }
 .asset-shell.is-narrow .asset-col-name { min-width: 120dp; }
 .asset-shell.is-narrow .asset-col-gallery { min-width: 96dp; }
+.asset-shell.is-narrow .asset-list-header,
+.asset-shell.is-compact .asset-list-header { display: none; }
 .asset-shell.is-narrow #asset-popup-toolbar,
 .asset-shell.is-compact #asset-popup-toolbar { min-height: 96dp; }
 .asset-shell.is-medium .asset-col-folder { display: none; }

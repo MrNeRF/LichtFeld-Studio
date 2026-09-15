@@ -392,6 +392,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
         model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["gallery"] < 140)
         model.bind_func("col_gallery_label", lambda: tr("projects.gallery.sidebar.title"))
+        model.bind_func(
+            "check_gallery_tooltip",
+            lambda: f"{tr('projects.action.check_gallery')} · {self._gallery_checked_label()}",
+        )
         model.bind_func("is_compact", lambda: self._layout_class == "compact")
         model.bind_func("is_narrow", lambda: self._layout_class == "narrow")
         model.bind_func("is_medium", lambda: self._layout_class == "medium")
