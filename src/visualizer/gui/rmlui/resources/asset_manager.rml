@@ -298,17 +298,31 @@
                   <div class="inspector-header asset-info-header">
                     <span class="inspector-title">{{selected_asset_name}}</span>
                     <span class="inspector-path" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
-                    <div class="inspector-actions"><button class="btn btn--primary" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset">{{open_button_label}}</button></div>
+                    <div class="inspector-actions">
+                      <button class="btn btn--primary" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset">{{open_button_label}}</button>
+                      <button class="btn btn--success" data-if="inspector_can_resume" data-event-click="on_load_asset">{{resume_button_label}}</button>
+                    </div>
                   </div>
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
                     <div class="inspector-section-title">{{problem_title}}</div>
                     <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value">{{selected_fix_label}}</span></div>
                     <button class="btn btn--secondary" data-if="selected_asset_can_locate" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+                    <button class="btn btn--secondary" data-if="selected_fix_requires_action" data-event-click="on_selected_fix">{{selected_fix_label}}</button>
+                    <div class="parameter-row" data-if="has_inspector_verify_result"><span class="parameter-label">{{inspector_verify_label}}</span><span class="parameter-value">{{inspector_verify_result}}</span></div>
                   </div>
                   <div class="inspector-section"><div class="inspector-section-title">{{project_section_title}}</div>
+                    <div class="parameter-row" data-if="inspector_has_saved"><span class="parameter-label">{{inspector_saved_label}}</span><span class="parameter-value">{{inspector_saved}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_saved_at"><span class="parameter-label">{{inspector_date_label}}</span><span class="parameter-value">{{inspector_saved_at}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_opened"><span class="parameter-label">{{inspector_opened_label}}</span><span class="parameter-value">{{inspector_opened}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_iteration"><span class="parameter-label">{{inspector_training_label}}</span><span class="parameter-value">{{inspector_iteration}} <span data-if="inspector_has_strategy">· {{inspector_strategy}}</span></span></div>
+                    <div class="parameter-row" data-if="inspector_has_gaussians"><span class="parameter-label">{{inspector_model_label}}</span><span class="parameter-value">{{inspector_gaussians}} <span data-if="inspector_has_sh_degree">· SH {{inspector_sh_degree}}</span></span></div>
+                    <div class="parameter-row" data-if="inspector_has_dataset"><span class="parameter-label">{{inspector_dataset_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_dataset">{{inspector_dataset}}</span></div>
                     <div class="parameter-row" data-if="selected_asset_has_folder"><span class="parameter-label">{{prop_folder_label}}</span><span class="parameter-value">{{selected_asset_folder_name}}</span></div>
                     <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value">{{selected_asset_size}}</span></div>
                     <div class="parameter-row"><span class="parameter-label">{{prop_modified_label}}</span><span class="parameter-value">{{selected_asset_modified}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_metrics"><span class="parameter-label">{{inspector_metrics_label}}</span><span class="parameter-value">{{inspector_metrics}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_license"><span class="parameter-label">{{inspector_license_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_license_notice">{{inspector_license}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_title"><span class="parameter-label">{{inspector_title_label}}</span><span class="parameter-value inspector-ellipsis">{{selected_project_title}}</span></div>
                   </div>
                   <div class="inspector-section" data-if="gallery_linked"><div class="inspector-section-title">{{gallery_section_title}}</div>
                     <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value">{{gallery_selected_state}}</span></div>
@@ -317,9 +331,18 @@
                   <div class="inspector-section"><div class="inspector-section-title">{{file_section_title}}</div>
                     <div class="parameter-row"><span class="parameter-label">{{prop_path_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="selected_asset_path">{{selected_asset_path}}</span></div>
                     <div class="parameter-row" data-if="selected_asset_can_locate"><span class="parameter-label">{{prop_expected_path_label}}</span><span class="parameter-value inspector-ellipsis">{{selected_asset_expected_path}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_physical_size"><span class="parameter-label">@tr:projects.property.size</span><span class="parameter-value">{{inspector_physical_size}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_dead_bytes"><span class="parameter-label">{{inspector_reclaimable_label}}</span><span class="parameter-value">{{inspector_dead_bytes}} ({{inspector_reclaimable}})</span></div>
+                    <div class="parameter-row" data-if="inspector_has_saves"><span class="parameter-label">{{inspector_saves_label}}</span><span class="parameter-value">{{inspector_saves}}</span></div>
+                    <div class="parameter-row" data-if="inspector_autosave_newer"><span class="parameter-label">{{inspector_autosave_label}}</span><span class="parameter-value">{{inspector_autosave_newer_label}}</span></div>
                   </div>
-                  <div class="inspector-section"><div class="inspector-section-title">{{operations_section_title}}</div>
-                    <div class="inspector-operations"><span class="inspector-history-empty text-muted" data-tooltip="projects.action.save_history">@tr:projects.action.save_history</span></div>
+                  <div class="inspector-section"><div class="inspector-section-title" data-event-click="toggle_operations">{{operations_section_title}}</div>
+                    <div class="inspector-operations" data-if="inspector_operations_expanded">
+                      <span class="inspector-history-empty text-muted" data-tooltip="projects.action.save_history">@tr:projects.action.save_history</span>
+                      <button class="btn btn--secondary inspector-operation" data-for="operation : inspector_operation_rows"
+                              data-attr-data-project-operation="operation.action"
+                              data-event-click="open_project_operation(operation.action)">{{operation.label}}</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -350,6 +373,39 @@
             <span>{{selected_asset_size}}</span><span>{{selected_asset_modified}}</span>
             <span class="text-muted" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
           </div>
+        </div>
+      </div>
+
+      <div class="project-operation-modal" data-if="dialog_visible">
+        <div class="project-operation-dialog">
+          <div class="project-operation-header"><span class="inspector-title">{{dialog_title}}</span><button class="asset-button asset-button--small-icon" data-event-click="dialog_cancel" data-tooltip="common.close" aria-label="{{close_label}}">&#215;</button></div>
+          <div class="project-operation-body" data-if="dialog_busy"><span class="text-muted">{{dialog_message}}</span></div>
+          <div class="project-operation-body" data-if="!dialog_busy">
+            <div class="parameter-row" data-if="dialog_has_path"><span class="parameter-label">{{dialog_path_label}}</span><span class="parameter-value inspector-ellipsis">{{dialog_path}}</span></div>
+            <div data-if="dialog_is_save_history">
+              <div class="project-dialog-table" data-for="row : dialog_rows"><button class="asset-button asset-button--text project-dialog-table-row" data-attr-data-generation="row.generation" data-event-click="dialog_select_generation(row.generation)"><span>{{row.kind}}</span><span>{{row.date}}</span><span>{{row.iteration}}</span><span>{{row.bytes_added}}</span></button></div>
+              <span class="text-muted">{{dialog_recovery_note}}</span>
+              <input class="project-dialog-input" data-value="dialog_destination" data-attr-placeholder="dialog_destination_placeholder" />
+              <button class="btn btn--secondary" data-event-click="dialog_choose_destination">{{dialog_choose_destination_label}}</button>
+            </div>
+            <div data-if="dialog_is_reduce_size">
+              <div class="parameter-row"><span class="parameter-label">{{dialog_reclaimable_label}}</span><span class="parameter-value">{{dialog_reclaimable_bytes}}</span></div>
+              <label class="project-dialog-check"><input type="checkbox" data-checked="dialog_drop_checkpoints" data-event-click="dialog_toggle_checkpoints" /> {{dialog_keep_latest_label}}</label>
+              <label class="project-dialog-check"><input type="checkbox" data-checked="dialog_drop_dataset" data-event-click="dialog_toggle_dataset" /> {{dialog_drop_embedded_label}}</label>
+              <div class="parameter-row"><span class="parameter-label">{{dialog_projected_label}}</span><span class="parameter-value">{{dialog_projected_size}}</span></div>
+            </div>
+            <div data-if="dialog_is_export_as">
+              <select data-value="dialog_format"><option value="ply">PLY</option><option value="sog">SOG</option><option value="ssog">SSOG</option><option value="spz">SPZ</option></select>
+              <input class="project-dialog-input" data-value="dialog_destination" data-attr-placeholder="dialog_destination_placeholder" />
+              <button class="btn btn--secondary" data-event-click="dialog_choose_destination">{{dialog_choose_destination_label}}</button>
+            </div>
+            <div data-if="dialog_is_update_thumbnail"><select data-value="dialog_source"><option value="viewport">{{dialog_current_viewport_label}}</option><option value="first_dataset">{{dialog_first_dataset_label}}</option><option value="first_embedded">{{dialog_first_embedded_label}}</option><option value="image_file">{{dialog_image_file_label}}</option></select></div>
+            <div data-if="dialog_is_set_license"><input class="project-dialog-input" data-value="dialog_identifier" data-attr-placeholder="dialog_identifier_placeholder" /><input class="project-dialog-input" data-value="dialog_notice" data-attr-placeholder="dialog_notice_placeholder" /></div>
+            <div data-if="dialog_is_rename"><input class="project-dialog-input" data-value="dialog_name" data-attr-placeholder="dialog_name_placeholder" /></div>
+            <div data-if="dialog_is_repair"><input class="project-dialog-input" data-value="dialog_destination" data-attr-placeholder="dialog_destination_placeholder" /><button class="btn btn--secondary" data-event-click="dialog_choose_destination">{{dialog_choose_destination_label}}</button></div>
+            <span class="project-dialog-message text-muted" data-if="dialog_has_message">{{dialog_message}}</span>
+          </div>
+          <div class="project-operation-footer"><button class="btn btn--secondary" data-event-click="dialog_cancel">{{dialog_cancel_label}}</button><button class="btn btn--primary" data-if="dialog_save_ready" data-event-click="dialog_restore_new">{{dialog_open_new_label}}</button><button class="btn btn--success" data-if="dialog_save_ready" data-event-click="dialog_resume_here">{{dialog_resume_label}}</button><button class="btn btn--primary" data-if="dialog_other_ready" data-event-click="dialog_confirm">{{dialog_confirm_label}}</button></div>
         </div>
       </div>
 
