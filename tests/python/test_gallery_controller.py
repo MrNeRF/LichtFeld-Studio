@@ -108,6 +108,28 @@ def test_project_open_rechecks_other_native_work_after_staging(gallery, monkeypa
         panel._finish_import()
     assert not actions
 
+
+@pytest.mark.parametrize("finished_generation,allowed", [(8, True), (9, False)])
+def test_publish_save_accounts_for_a_thumbnail_save_before_it_starts(gallery, monkeypatch, finished_generation, allowed):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    poll = dict(running=False, generation=5, path="/project.licht", error="")
+    monkeypatch.setattr(panel, "_project_identity", lambda: ("project", poll["path"]))
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda _: SimpleNamespace(generation=7))
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: dict(poll), raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **_: True, raising=False)
+    panel._save_current_project(lambda: actions.append("upload"))
+    poll["generation"] = finished_generation
+    if allowed:
+        panel._finish_current_project_save()
+        assert actions == ["upload"]
+    else:
+        with pytest.raises(ValueError, match="changed while saving"):
+            panel._finish_current_project_save()
+        assert not actions
+
 def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")

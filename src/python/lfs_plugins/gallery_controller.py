@@ -1162,6 +1162,10 @@ class GalleryController:
         if poll.get("running"):
             raise ValueError("Wait for the current project save before continuing.")
         generation = poll["generation"]
+        # File operations can append a save before the open document rebases.
+        saved_generation = getattr(lf.io.inspect_project(project[1]), "generation", None)
+        if type(saved_generation) is int:
+            generation = max(generation, saved_generation)
         if not lf.project_save(wait=False, regenerate_preview=False):
             raise ValueError("The project could not be saved. Resolve the save error before uploading.")
         self._save_pending = {"project": project, "identity": identity, "generation": generation + 1,
