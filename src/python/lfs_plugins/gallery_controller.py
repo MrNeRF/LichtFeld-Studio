@@ -457,7 +457,7 @@ class GalleryController:
             self._operation_project, self._operation_title = project[0], metadata["title"]
             self._schedule_poll()
         if lf.project_is_dirty():
-            self._save_current_project(saved)
+            self._save_current_project(saved, expected_project=project)
         else:
             saved()
 
@@ -495,7 +495,7 @@ class GalleryController:
                     str(lf.io.inspect_project(pending["project"][1]).commit_uuid), stamp,
                     pending["metadata"], acknowledge=not pending["publish"])
                 pending.update(phase="linking", applied_stamp=stamp)
-            self._save_current_project(saved)
+            self._save_current_project(saved, expected_project=pending["project"])
             return
         if pending["phase"] != "linking":
             return
@@ -1159,11 +1159,13 @@ class GalleryController:
     def _project_identity(self):
         if not lf.project_has_path():
             raise ValueError("Save the current project first so gallery updates stay linked to it.")
-        path = lf.project_poll_write()["path"]
+        path = str(Path(lf.project_poll_write()["path"]).resolve())
         return str(lf.io.inspect_project(path).project_uuid), path
 
-    def _save_current_project(self, continuation):
+    def _save_current_project(self, continuation, *, expected_project=None):
         project = self._project_identity()
+        if expected_project is not None and project != expected_project:
+            raise ValueError("The project identity or path changed before saving. Refresh Projects and try again.")
         identity = self.service.identity()
         poll = lf.project_poll_write()
         if poll.get("running"):
@@ -1188,6 +1190,8 @@ class GalleryController:
             return
         self._save_pending = None
         if poll.get("error"):
+            if self._project_identity() != pending["project"]:
+                raise ValueError("The project identity or path changed before saving. Refresh Projects and try again.")
             raise ValueError("The project could not be saved. Your gallery operation was stopped; resolve the save error before retrying.")
         if pending.get("canceled") or self.service.identity() != pending["identity"]:
             self._message = "Project save finished. The gallery operation was canceled."
@@ -1486,17 +1490,21 @@ class GalleryController:
             index = AssetIndex()
             if not index.load():
                 raise ValueError(tr("error.storage"))
+            if file_stamp(path) != stage.get("projectStamp"):
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
             inspection = lf.io.inspect_project(path)
+            if str(inspection.project_uuid) != stage.get("projectId"):
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
             previous = index.get_asset(str(inspection.project_uuid))
             if previous and Path(previous.path).resolve() != Path(path).resolve() and Path(previous.path).exists():
                 # Never move an existing catalog entry to an unrelated copy.
                 raise ValueError(tr("error.link"))
             project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
             if project is None:
-                raise ValueError(tr("error.storage"))
+                raise ValueError(index.last_error or tr("error.storage"))
             self._mark_viewing_copy(index, project)
             pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
-                operation=self._link_saved_download(job["id"], path))
+                operation=self._link_saved_download(job["id"], path, str(inspection.project_uuid)))
             return
         operation = current.get("linkOperation", {})
         self._import_pending = None
@@ -1544,11 +1552,17 @@ class GalleryController:
             from .asset_index import AssetIndex
             index = AssetIndex()
             if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
-            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"])
-            if project is None: raise ValueError("The project opened but could not be added to Asset Manager.")
+            if file_stamp(expected["path"]) != expected["projectStamp"]:
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
+            inspection = lf.io.inspect_project(expected["path"])
+            if str(inspection.project_uuid) != expected["projectId"]:
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
+            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"], inspection=inspection)
+            if project is None:
+                raise ValueError(index.last_error or "The project opened but could not be added to Asset Manager.")
             self._mark_viewing_copy(index, project)
             restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
-            operation = self._link_saved_download(job["id"], expected["path"])
+            operation = self._link_saved_download(job["id"], expected["path"], expected["projectId"])
             job.pop("_native_project")
             job["_link"] = operation
             job["_registered_project"] = {"id": str(project.project_uuid), "path": expected["path"], "jobId": job["id"]}
@@ -1578,7 +1592,8 @@ class GalleryController:
                 prepared = ProjectFile(source)
                 count = sum(node["count"] for node in prepared.manifest["nodes"])
             lf.project_open(stage["projectPath"], keep_asset_manager_open=True)
-            job["_native_project"] = {"path": stage["projectPath"], "count": count}
+            job["_native_project"] = {"path": stage["projectPath"], "count": count,
+                "projectId": stage["projectId"], "projectStamp": stage["projectStamp"]}
             opening["phase"] = "opened"
             self._import_started = time.monotonic()
             self._message = "Opening .licht project…"
@@ -1603,15 +1618,16 @@ class GalleryController:
             return
     @staticmethod
     def _mark_viewing_copy(index, project):
-        project.extra["viewing_copy"] = True
-        if not index.save():
-            raise ValueError(tr("error.storage"))
+        if index.update_asset(project.id, viewing_copy=True) is None:
+            raise ValueError(index.last_error or tr("error.storage"))
 
-    def _link_saved_download(self, job_id, path):
+    def _link_saved_download(self, job_id, path, expected_project_id):
         inspected = lf.io.inspect_project(path)
+        if str(inspected.project_uuid) != expected_project_id:
+            raise ValueError("The project identity changed before linking. Refresh Projects and try again.")
         commit = str(getattr(inspected, "commit_uuid", ""))
         args = (job_id, str(inspected.project_uuid))
-        return self.service.link_download(*args, commit)
+        return self.service.link_download(*args, commit, project_path=path)
 
     def _action_update_local(self, job_id):
         job = next(j for j in self._state["jobs"] if j["id"] == job_id)
@@ -1724,7 +1740,7 @@ class GalleryController:
             update["incoming"] = incoming.uuid
             update["old_nodes"] = [n.uuid for n in self._visible_splats() if n.uuid != incoming.uuid]
             update["phase"] = "save_before_backup"
-            self._save_current_project(lambda: self._prepare_update_backup(job))
+            self._save_current_project(lambda: self._prepare_update_backup(job), expected_project=project)
             return
         backup = current_job.get("localUpdate", {})
         if backup.get("id") != update["backup_id"] or backup.get("state") != "ready":
@@ -1781,7 +1797,7 @@ class GalleryController:
             return
         update["phase"] = "linking"
         try:
-            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1])
+            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1], update["project"][0])
         except Exception as exc:
             log_failure("link_saved_download", exc, job_id=job["id"])
             raise ValueError("The project was updated and its recovery copy was kept, but the gallery link could not be saved. Refresh your gallery before continuing.") from exc
@@ -1810,6 +1826,8 @@ class GalleryController:
         if scene.get_node(title) is not None:
             title += " (gallery " + incoming.uuid[:8] + ")"
         scene.rename_node(incoming.name, title)
+        if self._project_identity() != update["project"] or file_stamp(update["project"][1]) != update["stamp"]:
+            raise ValueError("The project identity or path changed before saving. Your recovery copy was kept.")
         if not lf.project_save(wait=False):
             raise ValueError("The updated project could not be saved. Your recovery copy is available in the recovery folder.")
 

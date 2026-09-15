@@ -318,6 +318,8 @@ class PortalGalleryClient:
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
                  checkpoint=None, on_checkpoint=lambda value: None, on_message=lambda message: None,
                  final_destination=None):
+        from .project_identity import ProjectPathIdentity
+        destination_identity = ProjectPathIdentity.capture(destination)
         cancel = cancel or threading.Event()
         if self.max_file_bytes is None:
             self._request("GET", "/me")
@@ -336,7 +338,7 @@ class PortalGalleryClient:
                 if choice.get("status") != "ready":
                     raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
                 return self._download_representation(scene_id, choice, destination, cancel,
-                    checkpoint, on_checkpoint, on_progress, on_message, final_destination)
+                    checkpoint, on_checkpoint, on_progress, on_message, final_destination, destination_identity)
         payload = self._request("GET", f"/splats/{_identifier(scene_id)}/download")
         scene = payload["scene"]
         total = scene["contentLength"]
@@ -473,6 +475,7 @@ class PortalGalleryClient:
             if current_tokens['metadataRevision'] != scene['metadataRevision']:
                 scene = {**scene, **{key: current[key] for key in
                          ('title', 'description', 'visibility', 'metadataRevision') if key in current}}
+            destination_identity.validate()
             os.replace(partial, destination)
             log_stage("download_complete", scene_id=scene["id"], bytes=total,
                       sha256=checksum, status="completed", path=destination.name)
@@ -490,7 +493,7 @@ class PortalGalleryClient:
             raise
 
     def _download_representation(self, scene_id, choice, destination, cancel, checkpoint,
-                                 on_checkpoint, on_progress, on_message, final_destination):
+                                 on_checkpoint, on_progress, on_message, final_destination, destination_identity):
         identifier, total, expected_hash = (choice.get(key) for key in ("representationId", "size", "sha256"))
         if (not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,160}", identifier)
                 or type(total) is not int or total <= 0 or total > self.max_file_bytes
@@ -557,6 +560,7 @@ class PortalGalleryClient:
             if domain_tokens(current) != domain_tokens(scene) or current.get("presentationRevision") != scene.get("presentationRevision"):
                 raise GalleryTransferInvalid("The gallery scene changed while downloading. Check gallery again.")
             on_checkpoint({**pin, "sha256": checksum})
+            destination_identity.validate()
             os.replace(partial, destination)
             return scene
         except (GalleryTransferCanceled, OSError, PortalHTTPError):

@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Transfer boundaries: redirects, local files, account changes and pagination."""
 import io
+import hashlib
+import os
+from pathlib import Path
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +16,59 @@ import pytest
 
 from lfs_plugins import http, portal_gallery
 from lfs_plugins.portal_account import PortalHTTPError, PortalProtocolError
+
+
+@pytest.mark.parametrize("representation", [False, True], ids=["legacy", "representation"])
+@pytest.mark.parametrize("swap", ["identity", "path", "appeared"])
+def test_download_rechecks_destination_before_replacement(tmp_path, monkeypatch, representation, swap):
+    from lichtfeld import io as native_io
+
+    data = (Path(__file__).parents[1] / "data" / "portable-sog.licht").read_bytes()
+    target = tmp_path / "项目-é.licht"
+    target.write_bytes(data)
+    replacement = tmp_path / "replacement.licht"
+    native_io.restore_save(target, 1, replacement)
+    replacement_bytes = replacement.read_bytes()
+    if swap == "appeared":
+        target.unlink()
+    identifier = str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p",
+                 contentLength=len(data), sourceFormat="licht", viewerSettings={})
+    choice = dict(representationId="pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                  format="licht", status="ready")
+
+    def request(method, path, body=None, **kwargs):
+        if path.endswith("download-options"):
+            return {"representations": [choice]} if representation else {}
+        if path.endswith("/download"):
+            return {"url": "https://portal.lichtfeld.io/data", "scene": scene}
+        return scene
+
+    def response(method, path, **kwargs):
+        start, end = map(int, kwargs["headers"]["Range"].removeprefix("bytes=").split("-"))
+        return 206, {"Content-Range": f"bytes {start}-{end}/{len(data)}"}, data[start:end + 1]
+
+    account = SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=request,
+                              request_response_authenticated=response)
+    client = portal_gallery.PortalGalleryClient(account)
+    client.max_file_bytes = len(data) * 2
+    monkeypatch.setattr(portal_gallery, "urlopen", lambda *args, **kwargs: io.BytesIO(data))
+    swapped = False
+
+    def progress(*_args):
+        nonlocal swapped
+        if swapped:
+            return
+        swapped = True
+        if swap == "path":
+            target.unlink()
+            target.symlink_to(replacement)
+        else:
+            os.replace(replacement, target)
+
+    with pytest.raises(ValueError, match="identity or path changed"):
+        client.download(identifier, target, on_progress=progress)
+    assert swapped and target.read_bytes() == replacement_bytes
 
 def test_upload_resumes_server_processing_without_sending_parts(tmp_path):
     identifier = str(uuid.uuid4())

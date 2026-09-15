@@ -24,6 +24,7 @@ from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, Galle
 from .portal_retry import transfer_attempts, is_transient
 from .portal_security import redact, safe_filename
 from .credential_storage import FileBackend
+from .project_identity import ProjectPathIdentity
 from . import gallery_validation, gallery_preparation
 from .gallery_logging import failure as log_failure, safe_url, safe_text, stage as log_stage
 
@@ -123,7 +124,7 @@ def _validate_journal(data):
             require(all(type(job.get(key)) is int and 0 <= job[key] <= 2**63-1 for key in ("completed", "total")))
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId"))
-            optional_text(job, ("failureReason", "previewPng"))
+            optional_text(job, ("failureReason", "previewPng", "destinationPath", "downloadProject"))
             require(len(job.get("previewPng", "")) <= 3 * 1024**2)
             if "handoff" in job:
                 handoff = job["handoff"]
@@ -155,6 +156,10 @@ def _validate_journal(data):
 
 
 def friendly_error(exc):
+    import lichtfeld as lf
+
+    if isinstance(exc, getattr(lf, "Error", ())):
+        return redact(exc.user_message)
     status = getattr(exc, "status", getattr(exc, "code", None))
     if isinstance(exc, PortalHTTPError):
         if exc.error == "gallery_relink_required":
@@ -177,7 +182,17 @@ def friendly_error(exc):
 
 def file_stamp(path):
     stat = Path(path).stat()
-    return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+    return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, str(Path(path).resolve())]
+
+
+def _project_uuid(path):
+    import lichtfeld as lf
+    return str(lf.io.inspect_project_card(path).project_uuid)
+
+
+def _require_project(path, project_id):
+    if _project_uuid(path) != project_id:
+        raise ValueError(f"The project identity changed at {path}. Refresh Projects and try again.")
 
 
 class GallerySync:
@@ -277,7 +292,7 @@ class GallerySync:
                 for job in pending_cleanup:
                     self._retire_export(job)
 
-    def _save(self):
+    def _save(self, *, project_checks=()):
         with self._persist_lock:
             with self._lock:
                 self._check_journal_ready()
@@ -295,6 +310,10 @@ class GallerySync:
                 previous = self._journal_bytes()
                 if previous is not None:
                     FileBackend(self._journal.with_suffix(".json.bak")).write(previous)
+                for path_identity, project_id in project_checks:
+                    path_identity.validate()
+                    _require_project(path_identity.path, project_id)
+                    path_identity.validate()
                 os.replace(temporary, self._journal)
                 self._journal_seen = True
                 self._disk_digest = hashlib.sha256(encoded.encode()).hexdigest()
@@ -803,6 +822,7 @@ class GallerySync:
                     raise ValueError("Choose an unused .licht filename in an existing folder.")
                 job["destination"] = str(target)
             final_path = self._download_destination(job)
+            job["destinationPath"] = str(final_path.resolve())
             disk_preflight([(path, total * 2), (final_path, total)])
             guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
             try:
@@ -1019,7 +1039,9 @@ class GallerySync:
                     self._client()
                     with self._lock:
                         self._completion = {"id": str(uuid.uuid4()), "kind": "download"}
-                        job.update(status="completed", sha256=(job.get("checkpoint") or {}).get("sha256", ""), result=scene, message="Downloaded. Open as a new project when ready.")
+                        job.update(status="completed", sha256=(job.get("checkpoint") or {}).get("sha256", ""),
+                                   downloadProject=_project_uuid(job["path"]), result=scene,
+                                   message="Downloaded. Open as a new project when ready.")
                         self.message = job["message"]
                     log_stage("download_complete", scene_id=scene["id"],
                               bytes=job.get("total", 0), status="completed")
@@ -1088,7 +1110,7 @@ class GallerySync:
                 action()
         self._launch(run)
 
-    def link_download(self, job_id, project_id, commit_uuid=""):
+    def link_download(self, job_id, project_id, commit_uuid="", *, project_path=None):
         self._client()
         job, bucket = self._job(job_id), self._bucket()
         if job.get("kind") != "download" or job["status"] != "completed" or job.get("retired") or job.get("cleanupPending"):
@@ -1097,8 +1119,13 @@ class GallerySync:
         if linked and linked["sceneId"] != job["result"]["id"]:
             raise ValueError("This project is linked to a different gallery item.")
         operation = str(uuid.uuid4())
+        project_path = project_path or job.get("localUpdate", {}).get("path") or job.get("stagedImport", {}).get("projectPath")
+        if not project_path:
+            raise ValueError("The saved project path is missing. Prepare the download again before linking.")
+        path_identity = ProjectPathIdentity.capture(project_path)
         def action():
             previous, previous_project = copy.deepcopy(bucket["links"].get(project_id)), job["project"]
+            previous_update = copy.deepcopy(job.get("localUpdate"))
             try:
                 self._client()
                 with self._lock:
@@ -1112,7 +1139,7 @@ class GallerySync:
                         bucket["links"][project_id]["viewingCopy"] = True
                     job["project"] = project_id
                     job["linkOperation"] = {"id": operation, "state": "ready"}
-                self._save()
+                self._save(project_checks=((path_identity, project_id),))
             except Exception as exc:
                 log_failure("link_saved", exc, project_id=project_id, operation_id=operation)
                 with self._lock:
@@ -1121,6 +1148,8 @@ class GallerySync:
                     else:
                         bucket["links"][project_id] = previous
                     job["project"] = previous_project
+                    if previous_update is not None:
+                        job["localUpdate"] = previous_update
                     job["linkOperation"] = {"id": operation, "state": "failed", "message": friendly_error(exc)}
                 raise
         self._launch(action)
@@ -1137,6 +1166,9 @@ class GallerySync:
         if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in bucket["jobs"]):
             raise ValueError("Finish or discard this project's pending transfer before updating it.")
         update_id = str(uuid.uuid4())
+        source_identity = ProjectPathIdentity.capture(project_path)
+        backup = self.root / "backups" / (update_id + ".licht")
+        backup_identity = ProjectPathIdentity.capture(backup)
         record = {"id": update_id, "state": "preparing", "project": project_id,
             "path": str(project_path), "sourceStamp": list(expected_stamp), "previousLink": copy.deepcopy(linked)}
 
@@ -1151,12 +1183,15 @@ class GallerySync:
                 if domain_tokens(remote) != domain_tokens(job["result"]):
                     raise ValueError("The gallery item changed since this download. Download its latest version before updating.")
                 directory = self.root / "backups"
-                backup = directory / (update_id + ".licht")
+                if backup.exists():
+                    raise ValueError("The recovery copy destination already exists. Try again.")
                 disk_preflight([(backup, Path(project_path).stat().st_size),
                                 (project_path, expected_stamp[2] + job['total'])])
                 directory.mkdir(mode=0o700, exist_ok=True)
                 if file_stamp(project_path) != expected_stamp:
                     raise ValueError("The local project changed. Review it before updating.")
+                source_identity.validate()
+                _require_project(project_path, project_id)
                 digest = hashlib.sha256()
                 with open(project_path, "rb") as source, tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
                     temporary = Path(output.name)
@@ -1172,6 +1207,9 @@ class GallerySync:
                 self._client()
                 if self._cancel.is_set():
                     raise GalleryTransferCanceled()
+                source_identity.validate()
+                _require_project(project_path, project_id)
+                backup_identity.validate()
                 os.replace(temporary, backup)
                 temporary = None
                 with self._lock:
@@ -1196,6 +1234,12 @@ class GallerySync:
             raise ValueError("Finish downloading this scene first.")
         identifier = str(uuid.uuid4())
         record = {"id": identifier, "state": "preparing"}
+        source_identity = ProjectPathIdentity.capture(job["path"])
+        source_project = job.get("downloadProject") or _project_uuid(job["path"])
+        from .asset_index import resolve_default_asset_directory
+        project_path = (Path(job["destination"]) if job.get("destination") else
+                        resolve_default_asset_directory() / ("Gallery-" + identifier + ".licht"))
+        destination_identity = ProjectPathIdentity.capture(project_path)
 
         def action():
             target = self.root / "imports" / (identifier + ".scene")
@@ -1236,17 +1280,25 @@ class GallerySync:
                 from .asset_index import resolve_default_asset_directory
                 assets = resolve_default_asset_directory()
                 assets.mkdir(parents=True, exist_ok=True)
-                project_path = Path(job["destination"]) if job.get("destination") else assets / ("Gallery-" + identifier + ".licht")
                 if project_path.exists():
                     raise ValueError("The destination already exists. Choose another file name.")
                 import lichtfeld as lf
                 self._client()
-                retained_project = project_path
                 # A download is a new project each time, even when the same
                 # representation is downloaded twice on this machine.
-                lf.io.restore_save(job["path"], 1, project_path)
+                source_identity.validate()
+                _require_project(job["path"], source_project)
+                destination_identity.validate()
+                planned_destination = Path(job.get("destinationPath", str(project_path.resolve())))
+                if ((job.get("destination") and planned_destination != project_path.resolve()) or
+                        planned_destination.parent != project_path.resolve().parent):
+                    raise ValueError("The download destination path changed. Choose it again.")
+                restored = lf.io.restore_save(job["path"], 1, project_path)
+                retained_project = ProjectPathIdentity.capture(project_path)
                 with self._lock:
                     record["projectPath"] = str(project_path)
+                    record["projectId"] = str(restored.project_uuid)
+                    record["projectStamp"] = file_stamp(project_path)
                 background = target / "environment.lfsenv"
                 if background.exists():
                     # Keep a private asset independently of disposable import
@@ -1275,7 +1327,11 @@ class GallerySync:
             except Exception as exc:
                 log_failure("download_staging", exc, job_id=job["id"])
                 if retained_project is not None:
-                    retained_project.unlink(missing_ok=True)
+                    try:
+                        retained_project.validate()
+                        retained_project.path.unlink(missing_ok=True)
+                    except (OSError, ValueError) as cleanup_error:
+                        log_failure("download_staging_cleanup", cleanup_error, job_id=job["id"])
                 if retained_asset is not None:
                     retained_asset.unlink(missing_ok=True)
                 for path in gallery_preparation.staging_files(target.parent, target):
@@ -1310,9 +1366,12 @@ class GallerySync:
         """Undo one completed pull without overwriting a later saved project."""
         self._client()
         target, source = Path(path), Path(backup)
+        target_identity = ProjectPathIdentity.capture(target)
+        backup_identity = ProjectPathIdentity.capture(source)
         record = next((j.get("localUpdate", {}) for j in self._bucket()["jobs"]
-                       if j.get("localUpdate", {}).get("backupPath") == str(source)), None)
-        if not record or source.parent != self.root / "backups":
+                       if j.get("localUpdate", {}).get("backupPath") and
+                       Path(j["localUpdate"]["backupPath"]).resolve() == source.resolve()), None)
+        if not record or source.resolve().parent != (self.root / "backups").resolve():
             raise ValueError("The saved backup is no longer available.")
         if record.get("appliedIdentity") and tuple(record["appliedIdentity"]) != self.identity():
             raise ValueError("The account changed. Keep the backup for recovery.")
@@ -1329,7 +1388,7 @@ class GallerySync:
                 if file_stamp(target) != expected_stamp:
                     raise ValueError("The local project changed. Keep the backup and review both files.")
                 digest = hashlib.sha256()
-                with source.open("rb") as incoming, tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                with source.open("rb") as incoming, tempfile.NamedTemporaryFile(dir=target_identity.canonical_path.parent, delete=False) as output:
                     temporary = Path(output.name)
                     while chunk := incoming.read(gallery_validation.CHUNK_BYTES):
                         self._client()
@@ -1340,7 +1399,12 @@ class GallerySync:
                 self._client()
                 if digest.hexdigest() != record.get("sha256") or file_stamp(target) != expected_stamp:
                     raise ValueError("The backup or local project changed. No file was restored.")
-                os.replace(temporary, target)
+                target_identity.validate()
+                backup_identity.validate()
+                expected_project = record.get("project") or _project_uuid(source)
+                _require_project(source, expected_project)
+                _require_project(target, expected_project)
+                os.replace(temporary, target_identity.canonical_path)
                 restored = True
                 record["undoRestored"] = True
                 if record.get("previousLink") and record.get("appliedLink"):
@@ -1669,9 +1733,11 @@ class GallerySync:
             link = bucket["links"].get(job["project"])
             if not link or link["sceneId"] != job["sceneId"]:
                 raise ValueError("The Gallery link changed. Its recovery copy was kept.")
+            path_identity = ProjectPathIdentity.capture(update["path"])
             remote = self._client().scene(job["sceneId"])
             if domain_tokens(remote) != domain_tokens(job["result"]):
                 raise ValueError("The gallery item changed while applying settings. Its recovery copy was kept.")
+            _require_project(update["path"], job["project"])
             before_link, before_update = copy.deepcopy(link), copy.deepcopy(update)
             link["localFields"] = fields
             if acknowledge:
@@ -1683,7 +1749,7 @@ class GallerySync:
             job.update(message="Gallery changes applied. Recovery copy kept.")
             self.message = job["message"]
             try:
-                self._save()
+                self._save(project_checks=((path_identity, job["project"]),))
             except Exception:
                 link.clear()
                 link.update(before_link)

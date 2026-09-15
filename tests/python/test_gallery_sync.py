@@ -36,6 +36,7 @@ def finish(service):
 
 def connected(tmp_path, monkeypatch):
     monkeypatch.setattr(gallery_sync, "PortalGalleryClient", Client)
+    monkeypatch.setattr(gallery_sync, "_project_uuid", lambda _path: "project")
     service = gallery_sync.GallerySync(Account(), tmp_path)
     service.refresh()
     finish(service)
@@ -55,6 +56,198 @@ def test_identity_reads_current_account_without_traversing_private_history(tmp_p
     service.account.email = "two@example.com"
     assert service.identity() == ("https://portal.example", "two@example.com", "session", True)
     assert service.snapshot()["jobs"] == []  # Previous account stays inaccessible.
+
+
+def _native_local_project(tmp_path, monkeypatch):
+    from pathlib import Path
+    from lichtfeld import io
+
+    service = connected(tmp_path / "sync", monkeypatch)
+    from lfs_plugins import asset_index
+    monkeypatch.setattr(asset_index, "resolve_default_asset_directory", lambda: tmp_path / "assets")
+    monkeypatch.setattr(gallery_sync, "_project_uuid", lambda path: str(io.inspect_project_card(path).project_uuid))
+    path = tmp_path / "项目-é.licht"
+    path.write_bytes((Path(__file__).parents[1] / "data" / "portable-sog.licht").read_bytes())
+    card = io.inspect_project_card(path)
+    job = downloaded_job(service)
+    service._bucket()["links"][str(card.project_uuid)] = service._bucket()["links"].pop("project")
+    return service, job, path, card, io
+
+
+def test_gallery_apply_backup_rechecks_selected_project_id(tmp_path, monkeypatch):
+    service, job, path, card, io = _native_local_project(tmp_path, monkeypatch)
+    replacement = tmp_path / "replacement.licht"
+    io.restore_save(path, 1, replacement)
+    path.write_bytes(replacement.read_bytes())
+    before = path.read_bytes()
+    service.prepare_local_update(job["id"], str(card.project_uuid), path, gallery_sync.file_stamp(path))
+    finish(service)
+    assert job["localUpdate"]["state"] == "failed"
+    assert "identity changed" in job["localUpdate"]["message"]
+    assert path.read_bytes() == before and not job["localUpdate"].get("backupPath")
+
+
+def test_gallery_backup_refuses_destination_that_appears_during_copy(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    service, job, path, card, _ = _native_local_project(tmp_path, monkeypatch)
+    original = gallery_sync.tempfile.NamedTemporaryFile
+    occupied = []
+
+    @contextmanager
+    def appeared(**kwargs):
+        with original(**kwargs) as output:
+            yield output
+        if kwargs.get("dir") == service.root / "backups":
+            destination = service.root / "backups" / (job["localUpdate"]["id"] + ".licht")
+            destination.write_bytes(b"another project")
+            occupied.append(destination)
+
+    monkeypatch.setattr(gallery_sync.tempfile, "NamedTemporaryFile", appeared)
+    service.prepare_local_update(job["id"], str(card.project_uuid), path, gallery_sync.file_stamp(path))
+    finish(service)
+    assert job["localUpdate"]["state"] == "failed"
+    assert "identity or path changed" in job["localUpdate"]["message"]
+    assert occupied[0].read_bytes() == b"another project"
+
+
+def test_gallery_undo_refuses_a_different_project_with_a_fresh_stamp(tmp_path, monkeypatch):
+    service, job, path, card, io = _native_local_project(tmp_path, monkeypatch)
+    service.prepare_local_update(job["id"], str(card.project_uuid), path, gallery_sync.file_stamp(path))
+    finish(service)
+    backup = job["localUpdate"]["backupPath"]
+    replacement = tmp_path / "replacement.licht"
+    io.restore_save(path, 1, replacement)
+    path.write_bytes(replacement.read_bytes())
+    before = path.read_bytes()
+    service.restore_local_backup(path, backup, gallery_sync.file_stamp(path))
+    finish(service)
+    assert service._undo_restore["state"] == "failed"
+    assert "identity changed" in service._undo_restore["message"]
+    assert path.read_bytes() == before
+
+
+def test_gallery_undo_preserves_unicode_alias(tmp_path, monkeypatch):
+    service, job, path, card, io = _native_local_project(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    alias = tmp_path / "别名-é.licht"
+    alias.symlink_to(path)
+    service.prepare_local_update(job["id"], str(card.project_uuid), alias, gallery_sync.file_stamp(alias))
+    finish(service)
+    io.set_project_title(path, "Edited")
+    service.restore_local_backup(alias, job["localUpdate"]["backupPath"], gallery_sync.file_stamp(alias))
+    finish(service)
+    assert service._undo_restore["state"] == "restored"
+    assert alias.is_symlink() and path.read_bytes() == original
+
+
+@pytest.mark.parametrize("swap", ["source", "destination", "directory", "none"])
+def test_download_staging_refuses_changed_source_or_destination(tmp_path, monkeypatch, swap):
+    import shutil
+    import uuid
+    from pathlib import Path
+    from lfs_plugins import gallery_preparation
+
+    service, job, path, card, io = _native_local_project(tmp_path, monkeypatch)
+    identifier = str(uuid.uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    shutil.copyfile(path, source)
+    destination = tmp_path / "输出" / "项目.licht"
+    destination.parent.mkdir()
+    job.update(id=identifier, path=str(source), total=source.stat().st_size,
+               destination=str(destination), destinationPath=str(destination.resolve()),
+               downloadProject=str(card.project_uuid))
+    job["result"]["title"] = "Downloaded"
+    replacement = tmp_path / "replacement.licht"
+    io.restore_save(path, 1, replacement)
+    other_bytes = replacement.read_bytes()
+    original_unpack = gallery_preparation.unpack_project
+    original_restore = io.restore_save
+
+    def unpack(*args, **kwargs):
+        result = original_unpack(*args, **kwargs)
+        if swap == "source":
+            source.write_bytes(other_bytes)
+        elif swap == "directory":
+            redirected = tmp_path / "redirected"
+            redirected.mkdir()
+            destination.parent.rename(tmp_path / "original-output")
+            destination.parent.symlink_to(redirected, target_is_directory=True)
+        return result
+
+    def restore(source_path, generation, output):
+        Path(output).write_bytes(other_bytes)
+        return original_restore(source_path, generation, output)
+
+    monkeypatch.setattr(gallery_preparation, "unpack_project", unpack)
+    if swap == "destination":
+        monkeypatch.setattr(io, "restore_save", restore)
+    service.stage_download(identifier)
+    finish(service)
+    stage = job["stagedImport"]
+    if swap == "none":
+        assert stage["state"] == "ready", stage.get("message")
+        assert stage["projectId"] == str(io.inspect_project_card(destination).project_uuid)
+        assert stage["projectId"] != str(card.project_uuid)
+        assert stage["projectStamp"] == gallery_sync.file_stamp(destination)
+        return
+    assert stage["state"] == "failed"
+    assert ("already exists" if swap == "destination" else "changed") in stage["message"]
+    if swap == "destination":
+        assert destination.read_bytes() == other_bytes
+    else:
+        assert not destination.exists()
+
+
+@pytest.mark.parametrize("operation", ["download_link", "settings_link"])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_gallery_link_rechecks_project_at_journal_replacement(tmp_path, monkeypatch, operation, swap):
+    import copy
+    import os
+
+    service, job, path, card, io = _native_local_project(tmp_path, monkeypatch)
+    project_id = str(card.project_uuid)
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    service.prepare_local_update(job["id"], project_id, alias, gallery_sync.file_stamp(alias))
+    finish(service)
+    job["project"] = project_id
+    service._save()
+    original_link = copy.deepcopy(service._bucket()["links"][project_id])
+    original_update = copy.deepcopy(job["localUpdate"])
+    saved_journal = service._journal.read_bytes()
+    replacement = tmp_path / "replacement.licht"
+    if swap == "identity":
+        io.restore_save(path, 1, replacement)
+    else:
+        replacement.write_bytes(path.read_bytes())
+    original_fsync = gallery_sync.os.fsync
+    swapped = False
+
+    def fsync(fd):
+        nonlocal swapped
+        original_fsync(fd)
+        if swapped:
+            return
+        swapped = True
+        if swap == "identity":
+            os.replace(replacement, path)
+        else:
+            alias.unlink()
+            alias.symlink_to(replacement)
+
+    monkeypatch.setattr(gallery_sync.os, "fsync", fsync)
+    if operation == "download_link":
+        service.link_download(job["id"], project_id, "new", project_path=alias)
+    else:
+        service.finish_settings_update(job["id"], "new", gallery_sync.file_stamp(alias), {})
+    finish(service)
+    assert swapped
+    assert "identity or path changed" in service.snapshot()["actionFailure"]["message"]
+    assert service._bucket()["links"][project_id] == original_link
+    assert job["localUpdate"] == original_update
+    assert service._journal.read_bytes() == saved_journal
 
 
 def test_metadata_failure_survives_refresh_and_stays_with_its_account(tmp_path, monkeypatch):
@@ -628,8 +821,10 @@ def test_local_update_rejects_a_download_superseded_on_the_portal(tmp_path, monk
 def test_failed_link_save_is_not_reported_as_a_completed_update(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     job = downloaded_job(service)
-    monkeypatch.setattr(service, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
-    operation = service.link_download(job["id"], "project")
+    path = tmp_path / "saved.licht"
+    path.write_bytes(b"saved project")
+    monkeypatch.setattr(service, "_save", lambda **kw: (_ for _ in ()).throw(OSError("disk full")))
+    operation = service.link_download(job["id"], "project", project_path=path)
     finish(service)
     assert job["linkOperation"]["id"] == operation
     assert job["linkOperation"]["state"] == "failed"

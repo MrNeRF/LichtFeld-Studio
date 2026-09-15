@@ -4,6 +4,7 @@
 from importlib import import_module
 from contextlib import nullcontext
 from types import SimpleNamespace
+from pathlib import Path
 import copy
 import struct
 
@@ -37,6 +38,96 @@ def gallery(monkeypatch, panel_module):
 def scene(**fields):
     return dict(id="private-one", title="My scene", description="Private description",
         visibility="private", revision="original", status="ready", **fields, contentRevision="original", metadataRevision="original")
+
+
+@pytest.mark.parametrize("operation", ["contents", "settings"])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_gallery_apply_rechecks_project_after_scene_changes(gallery, monkeypatch, tmp_path, operation, swap):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "项目.licht"
+    path.write_text("project", encoding="utf-8")
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(alias), "generation": 1}, raising=False)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda p: SimpleNamespace(project_uuid=Path(p).read_text()))
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **kw: actions.append("saved") or True, raising=False)
+    monkeypatch.setattr(module.lf, "set_node_visibility", lambda *args: None, raising=False)
+    project = panel._project_identity()
+    stamp = module.file_stamp(path)
+
+    def swap_project(*args, **kwargs):
+        if swap == "identity":
+            path.write_text("other-project")
+        else:
+            other = tmp_path / "other.licht"
+            other.write_text("project")
+            alias.unlink()
+            alias.symlink_to(other)
+
+    if operation == "contents":
+        monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: None)
+        panel.service.environment_path = lambda job: None
+        scene_tree = SimpleNamespace(get_node=lambda name: None, rename_node=swap_project)
+        incoming = SimpleNamespace(name="incoming", uuid="incoming-id")
+        with pytest.raises(ValueError, match="identity or path changed before saving"):
+            panel._apply_local_update(scene_tree, incoming, {"result": {"title": "Gallery"}},
+                {"old_nodes": [], "project": project, "stamp": stamp})
+    else:
+        monkeypatch.setattr(module, "restore_view", swap_project)
+        state["jobs"] = [{"id": "settings", "localUpdate": {"id": "backup", "state": "ready"}}]
+        panel._settings_pending = dict(job="settings", project=project, identity=state["identity"],
+            phase="backup", backup="backup", stamp=stamp, metadata={"viewerSettings": {}})
+        with pytest.raises(ValueError, match="identity or path changed before saving"):
+            panel._finish_settings_apply()
+    assert "saved" not in actions
+
+
+@pytest.mark.parametrize("open_project", [False, True])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_download_registration_refuses_changed_project(gallery, monkeypatch, tmp_path, open_project, swap):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "项目.licht"
+    path.write_text("downloaded-project")
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    stage = dict(id="stage", state="ready", projectPath=str(alias), projectId="downloaded-project",
+                 projectStamp=module.file_stamp(alias))
+    if swap == "identity":
+        path.write_text("other-project")
+        # A current stat must not substitute for the planned project UUID.
+        stage["projectStamp"] = module.file_stamp(alias)
+    else:
+        other = tmp_path / "other.licht"
+        other.write_bytes(path.read_bytes())
+        alias.unlink()
+        alias.symlink_to(other)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda p: SimpleNamespace(project_uuid=Path(p).read_text()))
+    index = SimpleNamespace(load=lambda: True,
+        register_licht_asset=lambda *a, **kw: pytest.fail("Changed project was registered"))
+    monkeypatch.setattr(import_module("lfs_plugins.asset_index"), "AssetIndex", lambda: index)
+    job = dict(id="download", result={"title": "Gallery"}, stagedImport=stage, _accountIdentity=state["identity"])
+    state["jobs"] = [job]
+    if open_project:
+        job["_native_project"] = dict(path=str(alias), projectId=stage["projectId"], projectStamp=stage["projectStamp"], count=1)
+        monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(total_gaussian_count=1), raising=False)
+        monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(alias)}, raising=False)
+    else:
+        job["_register"] = dict(phase="staging", stage_id="stage")
+    panel._import_pending = job
+    with pytest.raises(ValueError, match="downloaded project identity.*changed"):
+        panel._finish_import()
+
+
+def test_download_link_keeps_the_planned_project_id(gallery):
+    panel, _, actions = gallery
+    panel.service.link_download = lambda *args, **kwargs: actions.append("linked")
+    with pytest.raises(ValueError, match="identity changed before linking"):
+        panel._link_saved_download("download", "/project.licht", "previous-project")
+    assert "linked" not in actions
 
 def test_per_frame_account_check_does_not_copy_transfer_history(gallery):
     panel, state, actions = gallery
@@ -146,7 +237,7 @@ def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch,
     monkeypatch.setattr(module.lf, "get_scene", lambda: native_scene, raising=False)
     monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"generation": 3}, raising=False)
-    panel.service.link_download = lambda *args: (_ for _ in ()).throw(ValueError("Account changed"))
+    panel.service.link_download = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Account changed"))
     panel._finish_local_update(job)
     assert update["phase"] == "save_updated"
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"generation": 4}, raising=False)
@@ -167,7 +258,7 @@ def test_update_final_save_links_only_its_clean_committed_project(gallery, monke
     monkeypatch.setattr(module.lf, "project_is_dirty", lambda: outcome == "edited", raising=False)
     monkeypatch.setattr(panel, "_project_identity", lambda: ("other", "/other.licht") if outcome == "project" else project)
     monkeypatch.setattr(panel, "_recover_failed_update", lambda *a: (_ for _ in ()).throw(ValueError("recovery available")))
-    panel.service.link_download = lambda *a: actions.append("linked") or "operation"
+    panel.service.link_download = lambda *a, **kw: actions.append("linked") or "operation"
     panel._finish_update_save(job)
     assert not actions
     poll.update(running=False, generation=5 if outcome == "generation" else 4, error="disk full" if outcome == "failed" else "")
@@ -677,25 +768,28 @@ def test_default_pull_registers_links_without_touching_open_document(gallery, mo
     panel, state, actions = gallery
     module = import_module('lfs_plugins.gallery_controller')
     path = str(tmp_path / 'pulled.licht')
+    Path(path).write_bytes(b"downloaded project")
     job = dict(id='pull', kind='download', status='completed', path='download.licht',
                metadata={'title': 'Portal'}, result={'title': 'Portal'})
     state['jobs'] = [job]
     panel.service.stage_download = lambda identifier: 'stage'
-    panel.service.link_download = lambda *args: actions.append(('link', args)) or 'link'
+    panel.service.link_download = lambda *args, **kwargs: actions.append(('link', args, kwargs)) or 'link'
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     for name in ('project_open', 'project_save', 'new_project', 'get_scene'):
         monkeypatch.setattr(module.lf, name, lambda *a, **k: pytest.fail('Default Pull must leave the open document alone'), raising=False)
     monkeypatch.setattr(module.lf, 'project_is_dirty', lambda: True)
     monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(project_uuid='fresh-project', commit_uuid='fresh-commit'))
     registered = []
-    index = SimpleNamespace(load=lambda: True, save=lambda: True, get_asset=lambda _: None,
-        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (SimpleNamespace(project_uuid='fresh-project', extra={}), True))
+    project = SimpleNamespace(id='fresh-project', project_uuid='fresh-project', extra={})
+    index = SimpleNamespace(load=lambda: True, update_asset=lambda *a, **kw: project, get_asset=lambda _: None,
+        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (project, True))
     monkeypatch.setattr(import_module('lfs_plugins.asset_index'), 'AssetIndex', lambda: index)
     panel._register_download(job, state['identity'])
-    job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': path}
+    job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': path, 'projectId': 'fresh-project',
+                          'projectStamp': module.file_stamp(path)}
     panel._finish_import()
     assert registered[0][0] == path
-    assert actions == [('link', ('pull', 'fresh-project', 'fresh-commit'))]
+    assert actions == [('link', ('pull', 'fresh-project', 'fresh-commit'), {'project_path': path})]
     assert panel._pulled_project is None
     job['linkOperation'] = {'id': 'link', 'state': 'ready'}
     panel._finish_import()
@@ -988,7 +1082,7 @@ def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, mo
     monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
     monkeypatch.setattr(panel, "_begin_local_update", lambda *_: pytest.fail("Settings entered geometry replacement"))
     monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: actions.append("view"))
-    monkeypatch.setattr(panel, "_save_current_project", lambda callback: (actions.append("save"), callback()))
+    monkeypatch.setattr(panel, "_save_current_project", lambda callback, **kwargs: (actions.append("save"), callback()))
     job = dict(id="settings", status="completed", project="project",
                localUpdate={"id": "backup", "state": "preparing", "backupPath": str(tmp_path / "backup.licht")})
     state["jobs"] = [job]

@@ -18,6 +18,7 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     from test_gallery_sync import finish
     controller, _, _ = gallery
     sync = import_module('lfs_plugins.gallery_sync')
+    monkeypatch.setattr(sync, '_project_uuid', lambda _path: 'downloaded-project')
     portal = import_module('lfs_plugins.portal_gallery')
     account_module = import_module('lfs_plugins.portal_account')
     module = import_module('lfs_plugins.gallery_controller')
@@ -410,7 +411,7 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
     monkeypatch.setattr(module, 'restore_view', lambda _lf, selected, **kw:
         pytest.fail('Lost HDR source') if kw.get('environment_path') != '/saved.lfsenv' else None)
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
-    monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
+    monkeypatch.setattr(panel, '_save_current_project', lambda callback, **kwargs: callback())
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
     monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *a: actions.append(a), raising=False)
@@ -642,7 +643,7 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
     monkeypatch.setattr(module.lf.ui, 'set_camera_path', native_restore, raising=False)
     monkeypatch.setattr(module.lf.ui, 'clear_keyframes', lambda: None, raising=False)
     monkeypatch.setattr(module, 'restore_view', lambda lf, view, **kw: restore_camera_path(lf, view.get('cameraPath')))
-    monkeypatch.setattr(panel, '_save_current_project', lambda callback: callback())
+    monkeypatch.setattr(panel, '_save_current_project', lambda callback, **kwargs: callback())
     monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='geometry')])
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     export_state = dict(active=False)
