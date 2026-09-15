@@ -45,6 +45,7 @@ namespace lfs::vis::gui {
                    element->GetTagName() != "#root" &&
                    element->GetId() != "overlay-body" &&
                    element->GetId() != "dm-root" &&
+                   element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
                    !element->IsClassSet("left-dock-resize-indicator");
         }
@@ -363,6 +364,7 @@ namespace lfs::vis::gui {
         if (std::abs(viewport_content_offset_ - x) > 0.5f) {
             viewport_content_offset_ = x;
             viewport_content_offset_dirty_ = true;
+            toolbar_roots_dirty_ = true;
             markRenderNeeded(RenderReason::ViewportResize);
         }
     }
@@ -610,7 +612,7 @@ namespace lfs::vis::gui {
                                     const float width,
                                     const bool visible) {
             if (auto* const element = document_->GetElementById(element_id)) {
-                element->SetProperty("left", std::format("{:.1f}px", x));
+                element->SetProperty("left", std::format("{:.1f}px", x - viewport_content_offset_));
                 element->SetProperty("width", std::format("{:.1f}px", std::max(width, 0.0f)));
                 element->SetClass("hidden", !visible);
             }
@@ -882,6 +884,7 @@ namespace lfs::vis::gui {
         if (auto* const border = document_->GetElementById("left-frame-border"))
             border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
         applyLeftDockResizeIndicator();
+        applySplitDividerOverlay();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
     }
@@ -893,7 +896,7 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("split-divider-overlay")) {
             overlay->SetClass("hidden", !split_divider_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x));
+            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x - viewport_content_offset_));
             overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y));
             overlay->SetProperty("width", std::format("{:.1f}px", std::max(split_divider_overlay_.width, 0.0f)));
             overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
@@ -1007,10 +1010,6 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("project-drop-overlay")) {
             overlay->SetClass("hidden", !project_drag_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
-            overlay->SetProperty(
-                "width",
-                std::format("{:.1f}px", std::max(vp_size_.x - viewport_content_offset_, 0.0f)));
         }
         if (auto* const title = document_->GetElementById("project-drop-title"))
             title->SetClass("hidden", project_drag_overlay_.gallery_scene);
@@ -1327,6 +1326,9 @@ namespace lfs::vis::gui {
         for (auto* child : children_to_move)
             wrapper->AppendChild(body->RemoveChild(child));
 
+        viewport_content_offset_dirty_ = true;
+        toolbar_roots_dirty_ = true;
+        updateViewportContentOffset();
         applyGTMetricsOverlay();
         applySplitDividerOverlay();
         applyLeftDockResizeIndicator();
@@ -1465,7 +1467,7 @@ namespace lfs::vis::gui {
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
         const bool builtin_document_sync_due = document_sync_dirty_ ||
-                                                lfs::python::has_pending_rml_document_updates(document_);
+                                               lfs::python::has_pending_rml_document_updates(document_);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);

@@ -14,6 +14,15 @@ body {
     height: 100%;
 }
 
+#viewport-content {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
 .viewport-split-divider {
     position: absolute;
     pointer-events: none;
@@ -41,6 +50,8 @@ body {
 
 .project-drop-overlay {
     position: absolute;
+    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     display: flex;
@@ -359,7 +370,7 @@ body {
     position: absolute;
     top: 5dp;
     left: 52dp;
-    right: 12dp;
+    right: 52dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -370,7 +381,7 @@ body {
     position: absolute;
     top: 5dp;
     left: 52dp;
-    right: 12dp;
+    right: 52dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -381,7 +392,7 @@ body {
     position: absolute;
     top: 5dp;
     left: 52dp;
-    right: 12dp;
+    right: 52dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -686,7 +697,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 5dp;
     min-width: 0;
 }
@@ -1006,13 +1017,13 @@ body {
 
 #transform-block .viewport-transform-fields,
 #transform-block .viewport-transform-group {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 4dp;
 }
 
 #transform-block .viewport-transform-fields {
     justify-content: flex-start;
-    flex-shrink: 0;
+    flex-shrink: 1;
 }
 
 .viewport-transform-axis-label {
