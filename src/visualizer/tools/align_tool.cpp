@@ -2,19 +2,26 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/align_tool.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/string_keys.hpp"
 #include "internal/viewport.hpp"
+#include "operator/operator_registry.hpp"
+#include "operator/ops/align_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <optional>
-#include <string_view>
+#include <string>
+#include <vector>
 
 namespace lfs::vis::tools {
 
@@ -26,11 +33,71 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::shutdown() {
+        if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
+        }
+        restoreGridIfNeeded();
         tool_context_ = nullptr;
         services().clearAlignPickedPoints();
     }
 
-    void AlignTool::update([[maybe_unused]] const ToolContext& ctx) {}
+    void AlignTool::forceGridOn() {
+        if (!tool_context_) {
+            return;
+        }
+        auto* const rm = tool_context_->getRenderingManager();
+        if (!rm) {
+            return;
+        }
+        auto settings = rm->getSettings();
+        saved_show_grid_ = settings.show_grid;
+        user_changed_grid_ = false;
+        if (!settings.show_grid) {
+            settings.show_grid = true;
+            rm->updateSettings(settings);
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+        grid_override_active_ = true;
+    }
+
+    void AlignTool::restoreGridIfNeeded() {
+        if (!grid_override_active_) {
+            return;
+        }
+        grid_override_active_ = false;
+        if (user_changed_grid_ || !tool_context_) {
+            return;
+        }
+        auto* const rm = tool_context_->getRenderingManager();
+        if (!rm) {
+            return;
+        }
+        auto settings = rm->getSettings();
+        if (settings.show_grid != saved_show_grid_) {
+            settings.show_grid = saved_show_grid_;
+            rm->updateSettings(settings);
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+    }
+
+    void AlignTool::update(const ToolContext& ctx) {
+        auto* const rm = ctx.getRenderingManager();
+        const bool has_status = services().getAlignStatusMessage() != nullptr;
+        if (had_align_status_ && !has_status && rm) {
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+        had_align_status_ = has_status;
+
+        if (!isEnabled() || !grid_override_active_ || user_changed_grid_) {
+            return;
+        }
+        if (!rm) {
+            return;
+        }
+        if (!rm->getSettings().show_grid) {
+            user_changed_grid_ = true;
+        }
+    }
 
     namespace {
 
@@ -45,6 +112,40 @@ namespace lfs::vis::tools {
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
             return rm ? rm->getScreenOverlayRenderer() : nullptr;
+        }
+
+        void drawLabel(lfs::rendering::ScreenOverlayRenderer& overlay, const glm::vec2& pos,
+                       const char* text, const lfs::rendering::OverlayColor& color, float size) {
+            const auto extent = overlay.measureText(text, size);
+            const glm::vec2 padding(4.0f, 3.0f);
+            overlay.addRectFilled(pos - padding, pos + extent + padding,
+                                  toOverlay(theme().overlay.background, 0.96f));
+            overlay.addText(pos, text, color, size);
+        }
+
+        std::vector<std::string> wrapHint(lfs::rendering::ScreenOverlayRenderer& overlay,
+                                          std::string_view text, float size, float width) {
+            std::vector<std::string> lines;
+            while (!text.empty()) {
+                size_t end = 0, last_space = 0;
+                while (end < text.size()) {
+                    size_t next = end + 1;
+                    while (next < text.size() && (static_cast<unsigned char>(text[next]) & 0xc0) == 0x80)
+                        ++next;
+                    if (end > 0 && overlay.measureText(text.substr(0, next), size).x > width)
+                        break;
+                    if (text[end] == ' ')
+                        last_space = end;
+                    end = next;
+                }
+                if (end < text.size() && last_space > 0)
+                    end = last_space;
+                lines.emplace_back(text.substr(0, end));
+                text.remove_prefix(end);
+                while (!text.empty() && text.front() == ' ')
+                    text.remove_prefix(1);
+            }
+            return lines;
         }
 
         struct PanelProjection {
@@ -108,7 +209,13 @@ namespace lfs::vis::tools {
                     proj.info.y + render_point.y * proj.screen_scale_y};
         }
 
-        [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos) {
+        struct ProjectedScreen {
+            glm::vec2 pos{-1000.0f, -1000.0f};
+            bool valid = false;
+        };
+
+        [[nodiscard]] ProjectedScreen projectToScreenChecked(const PanelProjection& proj,
+                                                             const glm::vec3& world_pos) {
             const auto projected = lfs::rendering::projectWorldPoint(
                 proj.viewport.camera.R,
                 proj.viewport.camera.t,
@@ -118,33 +225,165 @@ namespace lfs::vis::tools {
                 proj.orthographic,
                 proj.ortho_scale);
             if (!projected) {
-                return {-1000.0f, -1000.0f};
+                return {};
+            }
+            return {renderToScreen(proj, glm::vec2(projected->x, projected->y)), true};
+        }
+
+        [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos) {
+            return projectToScreenChecked(proj, world_pos).pos;
+        }
+
+        void drawEdgeLengthLabels(lfs::rendering::ScreenOverlayRenderer& overlay,
+                                  const PanelProjection& panel_proj,
+                                  const std::vector<glm::vec3>& points,
+                                  const lfs::rendering::OverlayColor& text_color,
+                                  const float label_size) {
+            if (points.size() < 2) {
+                return;
             }
 
-            return renderToScreen(proj, glm::vec2(projected->x, projected->y));
+            std::vector<ProjectedScreen> screens;
+            screens.reserve(points.size());
+            for (const auto& p : points) {
+                screens.push_back(projectToScreenChecked(panel_proj, p));
+            }
+
+            glm::vec2 centroid_screen(0.0f);
+            int valid_count = 0;
+            for (const auto& s : screens) {
+                if (s.valid) {
+                    centroid_screen += s.pos;
+                    ++valid_count;
+                }
+            }
+            if (valid_count > 0) {
+                centroid_screen /= static_cast<float>(valid_count);
+            }
+
+            const size_t n = points.size();
+            for (size_t i = 0; i < n; ++i) {
+                const size_t j = (i + 1) % n;
+                if (!screens[i].valid || !screens[j].valid) {
+                    continue;
+                }
+                if (n == 2 && i > 0) {
+                    break;
+                }
+
+                const glm::vec2 mid = (screens[i].pos + screens[j].pos) * 0.5f;
+                glm::vec2 outward = mid - centroid_screen;
+                const float outward_len = glm::length(outward);
+                if (outward_len > 1e-3f) {
+                    outward = outward / outward_len * 10.0f;
+                } else {
+                    outward = glm::vec2(0.0f, -10.0f);
+                }
+                const glm::vec2 label_pos = mid + outward;
+                const float len = glm::length(points[j] - points[i]);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(len));
+                drawLabel(overlay, label_pos, buf, text_color, label_size);
+            }
+        }
+
+        void drawTrianglePreview(lfs::rendering::ScreenOverlayRenderer& overlay,
+                                 const PanelProjection& panel_proj,
+                                 const glm::vec3& p0,
+                                 const glm::vec3& p1,
+                                 const glm::vec3& p2,
+                                 const glm::vec3& camera_pos,
+                                 const float label_size,
+                                 const bool filled,
+                                 const std::optional<glm::mat4>& snap_target_world) {
+            const glm::vec3 v01 = p1 - p0;
+            const glm::vec3 v02 = p2 - p0;
+            const glm::vec3 cross_v = glm::cross(v01, v02);
+            const float cross_len = glm::length(cross_v);
+            if (cross_len <= 1e-6f) {
+                return;
+            }
+
+            glm::vec3 normal = cross_v / cross_len;
+            const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
+            if (services().getAlignPreviewEnabled()) {
+                if (normal.y < 0.0f)
+                    normal = -normal;
+            } else {
+                op::faceNormalTowardCamera(normal, center, camera_pos);
+            }
+
+            bool snapped = false;
+            if (services().getAlignAxisSnapEnabled() && snap_target_world) {
+                snapped = op::snapAlignNormalToNodeAxes(normal, *snap_target_world);
+            }
+
+            const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
+            const glm::vec3 normal_end = center + normal * line_length;
+
+            if (!projectToScreenChecked(panel_proj, p0).valid ||
+                !projectToScreenChecked(panel_proj, p1).valid ||
+                !projectToScreenChecked(panel_proj, p2).valid ||
+                !projectToScreenChecked(panel_proj, normal_end).valid) {
+                return;
+            }
+            const glm::vec2 center_screen = projectToScreen(panel_proj, center);
+            const glm::vec2 normal_screen = projectToScreen(panel_proj, normal_end);
+            const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
+            const glm::vec2 p1_screen = projectToScreen(panel_proj, p1);
+            const glm::vec2 p2_screen = projectToScreen(panel_proj, p2);
+
+            constexpr lfs::rendering::OverlayColor YELLOW{1.0f, 1.0f, 0.0f, 1.0f};
+            constexpr lfs::rendering::OverlayColor TRI_RED{1.0f, 0.0f, 0.0f, 200.0f / 255.0f};
+            constexpr lfs::rendering::OverlayColor TRI_GREEN{0.0f, 1.0f, 0.0f, 200.0f / 255.0f};
+            constexpr lfs::rendering::OverlayColor TRI_BLUE{0.0f, 0.0f, 1.0f, 200.0f / 255.0f};
+
+            const auto& t = theme();
+            const auto up_color = snapped ? toOverlay(t.palette.primary) : YELLOW;
+
+            if (filled) {
+                overlay.addTriangleFilled(p0_screen, p1_screen, p2_screen, toOverlay(t.palette.info, 0.15f));
+            }
+
+            overlay.addLine(center_screen, normal_screen, up_color, 4.0f);
+            overlay.addCircleFilled(normal_screen, 10.0f, up_color);
+            drawLabel(overlay, {normal_screen.x + 12.0f, normal_screen.y - 8.0f},
+                      LOC(lichtfeld::Strings::Align::UP), up_color, label_size);
+            if (snapped) {
+                drawLabel(overlay, {normal_screen.x + 12.0f, normal_screen.y + label_size + 2.0f},
+                          LOC(lichtfeld::Strings::Align::SNAPPED), up_color, label_size);
+            }
+
+            if (services().getAlignEdgeToAxisEnabled()) {
+                // Target direction for the first edge after apply: world +X from centroid.
+                const float tick_len = glm::max(line_length * 0.75f, 0.08f);
+                const glm::vec3 x_end = center + glm::vec3(tick_len, 0.0f, 0.0f);
+                const glm::vec2 x_screen = projectToScreen(panel_proj, x_end);
+                constexpr lfs::rendering::OverlayColor X_COLOR{1.0f, 0.35f, 0.35f, 1.0f};
+                overlay.addLine(center_screen, x_screen, X_COLOR, 3.0f);
+                overlay.addCircleFilled(x_screen, 7.0f, X_COLOR);
+                drawLabel(overlay, {x_screen.x + 10.0f, x_screen.y - 6.0f}, "X", X_COLOR, label_size);
+            }
+
+            overlay.addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
+            overlay.addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
+            overlay.addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
+
+            drawEdgeLengthLabels(overlay, panel_proj, {p0, p1, p2},
+                                 toOverlay(t.overlay.text), label_size);
         }
     } // namespace
 
-    static float calculateScreenRadius(const glm::vec3& world_pos,
-                                       const float world_radius,
-                                       const PanelProjection& panel_proj) {
-        const glm::mat4 view = panel_proj.viewport.getViewMatrix();
-        const glm::vec4 view_pos = view * glm::vec4(world_pos, 1.0f);
-        const float depth = -view_pos.z;
-
-        if (depth <= 0.0f)
-            return 0.0f;
-
-        if (panel_proj.orthographic) {
-            if (!std::isfinite(panel_proj.ortho_scale) || panel_proj.ortho_scale <= 0.0f) {
-                return 0.0f;
-            }
-            return world_radius * panel_proj.ortho_scale;
-        }
-
-        const glm::mat4 proj = panel_proj.viewport.getProjectionMatrix(panel_proj.focal_length_mm);
-        const float screen_radius = (world_radius * proj[1][1] * panel_proj.viewport.windowSize.y) / (2.0f * depth);
-        return screen_radius;
+    [[nodiscard]] static float markerScreenRadius(const glm::vec3& world_pos, const PanelProjection& panel_proj) {
+        return op::alignMarkerScreenRadius(
+            world_pos,
+            panel_proj.viewport.getViewMatrix(),
+            panel_proj.viewport.getProjectionMatrix(panel_proj.focal_length_mm),
+            static_cast<float>(panel_proj.viewport.windowSize.y),
+            panel_proj.orthographic,
+            panel_proj.ortho_scale,
+            panel_proj.screen_scale_x,
+            panel_proj.screen_scale_y);
     }
 
     void AlignTool::renderUI([[maybe_unused]] const lfs::vis::gui::UIContext& ui_ctx,
@@ -209,30 +448,89 @@ namespace lfs::vis::tools {
             {bounds.x, bounds.y},
             {bounds.x + bounds.width, bounds.y + bounds.height});
 
-        constexpr float SPHERE_RADIUS = 0.05f;
-        constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
         const auto& t = theme();
+        const float ui_scale = t.fonts.base_size / 13.0f;
+        const float info_x = panel_proj.info.x + 56.0f * ui_scale;
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const auto SPHERE_OUTLINE = toOverlay(t.overlay.text);
+        const auto SELECTED_OUTLINE = toOverlay(t.palette.primary);
         const auto PREVIEW_COLOR = toOverlay(t.palette.error, 0.6f);
         const auto CROSSHAIR_COLOR = toOverlay(t.palette.error, 0.8f);
-        const float label_size = t.fonts.base_size;
+        const float label_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
 
         const auto& picked_points = services().getAlignPickedPoints();
+        const auto selected_point = services().getAlignSelectedPoint();
+        const bool in_review = picked_points.size() == 3;
+        const glm::vec3 camera_pos = in_review ? services().getAlignCameraPosition()
+                                               : panel_proj.viewport.camera.t;
+        auto* const sm = tool_context_->getSceneManager();
+        const auto snap_target_world =
+            sm ? op::resolveAlignSnapTargetWorld(*sm) : std::optional<glm::mat4>{};
 
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
-            const float radius_render = calculateScreenRadius(
-                picked_points[i], SPHERE_RADIUS, panel_proj);
-            const float screen_radius =
-                glm::clamp(radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
+            const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
+            const bool is_selected = selected_point && *selected_point == static_cast<int>(i);
             overlay->addCircleFilled(screen_pos, screen_radius, SPHERE_COLOR, 32);
-            overlay->addCircle(screen_pos, screen_radius, SPHERE_OUTLINE, 32, 1.5f);
+            overlay->addCircle(screen_pos, screen_radius,
+                               is_selected ? SELECTED_OUTLINE : SPHERE_OUTLINE,
+                               32, is_selected ? 2.5f : 1.5f);
 
             const char label[2] = {static_cast<char>('1' + static_cast<char>(i)), '\0'};
             overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
                              label, toOverlay(t.overlay.text), label_size);
+        }
+
+        if (in_review) {
+            drawTrianglePreview(*overlay, panel_proj,
+                                picked_points[0], picked_points[1], picked_points[2],
+                                camera_pos, label_size, true, snap_target_world);
+        }
+
+        const float hud_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
+        const float padding = 10.0f * ui_scale;
+        const float max_width = std::max(40.0f, std::min(560.0f * ui_scale,
+                                                         panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding));
+        const char* hint_key = services().getAlignPreviewEnabled() ? "align.hint_preview"
+                               : in_review                         ? lichtfeld::Strings::Align::HINT_REVIEW
+                                                                   : lichtfeld::Strings::Align::HINT_PICKING;
+        const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto option_lines = in_review
+                                      ? wrapHint(*overlay, LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help"), hud_size, max_width)
+                                      : std::vector<std::string>{};
+        const auto count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, picked_points.size());
+        const auto* status = services().getAlignStatusMessage();
+        float width = overlay->measureText(count_text, t.fonts.large_size).x;
+        for (const auto& line : lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
+        const auto status_lines = status ? wrapHint(*overlay, *status, hud_size, max_width)
+                                         : std::vector<std::string>{};
+        for (const auto& line : status_lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
+        for (const auto& line : option_lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
+        const float line_height = hud_size + 5.0f * ui_scale;
+        const float height = t.fonts.large_size + 8.0f * ui_scale +
+                             (lines.size() + option_lines.size() + status_lines.size()) * line_height;
+        const glm::vec2 hud_pos(info_x, std::max(panel_proj.info.y + padding,
+                                                 panel_proj.info.y + panel_proj.info.height - height - padding - 12.0f * ui_scale));
+        overlay->addRectFilled(hud_pos - glm::vec2(padding),
+                               hud_pos + glm::vec2(width + padding, height + padding),
+                               toOverlay(t.overlay.background, 0.96f));
+        overlay->addText(hud_pos, count_text.c_str(), toOverlay(t.overlay.text), t.fonts.large_size);
+        glm::vec2 text_pos(hud_pos.x, hud_pos.y + t.fonts.large_size + 8.0f * ui_scale);
+        for (const auto& line : lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
+            text_pos.y += line_height;
+        }
+        for (const auto& line : option_lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
+            text_pos.y += line_height;
+        }
+        for (const auto& line : status_lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.palette.warning), hud_size);
+            text_pos.y += line_height;
         }
 
         if (over_gui)
@@ -240,116 +538,78 @@ namespace lfs::vis::tools {
 
         overlay->addCircle(mouse_pos, 5.0f, CROSSHAIR_COLOR, 16, 2.0f);
 
-        if (picked_points.size() < 3 && rendering_manager) {
+        // Share one depth sample between the hover marker and triangle.
+        std::optional<float> hover_depth;
+        if (!in_review && rendering_manager) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
+            const int depth_x = static_cast<int>(render_point.x);
+            const int depth_y = static_cast<int>(render_point.y);
             const float depth = rendering_manager->getDepthAtPixel(
-                static_cast<int>(render_point.x),
-                static_cast<int>(render_point.y),
+                depth_x,
+                depth_y,
                 panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
-
             if (depth > 0.0f && depth < 1e9f) {
-                const glm::vec3 preview_point = panel_proj.viewport.unprojectPixel(
-                    render_point.x,
-                    render_point.y,
-                    depth,
-                    panel_proj.focal_length_mm,
-                    panel_proj.orthographic,
-                    panel_proj.ortho_scale);
-                if (Viewport::isValidWorldPosition(preview_point)) {
-                    const glm::vec2 screen_pos = projectToScreen(panel_proj, preview_point);
-                    const float radius_render = calculateScreenRadius(
-                        preview_point, SPHERE_RADIUS, panel_proj);
-                    const float screen_radius = glm::clamp(
-                        radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
+                hover_depth = depth;
+            }
+        }
 
-                    overlay->addCircleFilled(screen_pos, screen_radius, PREVIEW_COLOR, 32);
-                    overlay->addCircle(screen_pos, screen_radius, toOverlay(t.palette.text, 0.6f), 32, 1.5f);
+        bool drew_live_triangle = false;
+        if (hover_depth && picked_points.size() < 3) {
+            const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
+            const glm::vec3 preview_point = panel_proj.viewport.unprojectPixel(
+                render_point.x,
+                render_point.y,
+                *hover_depth,
+                panel_proj.focal_length_mm,
+                panel_proj.orthographic,
+                panel_proj.ortho_scale);
+            if (Viewport::isValidWorldPosition(preview_point)) {
+                const glm::vec2 screen_pos = projectToScreen(panel_proj, preview_point);
+                const float screen_radius = markerScreenRadius(preview_point, panel_proj);
 
-                    const char label[2] = {static_cast<char>('1' + static_cast<char>(picked_points.size())), '\0'};
-                    overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
-                                     label, toOverlay(t.palette.text, 0.7f), label_size);
+                overlay->addCircleFilled(screen_pos, screen_radius, PREVIEW_COLOR, 32);
+                overlay->addCircle(screen_pos, screen_radius, toOverlay(t.palette.text, 0.6f), 32, 1.5f);
+
+                const char label[2] = {static_cast<char>('1' + static_cast<char>(picked_points.size())), '\0'};
+                overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
+                                 label, toOverlay(t.palette.text, 0.7f), label_size);
+
+                if (picked_points.size() == 2) {
+                    drawTrianglePreview(*overlay, panel_proj,
+                                        picked_points[0], picked_points[1], preview_point,
+                                        camera_pos, label_size, false, snap_target_world);
+                    drew_live_triangle = true;
                 }
             }
         }
 
-        if (picked_points.size() == 2 && rendering_manager) {
-            const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
-            const float depth = rendering_manager->getDepthAtPixel(
-                static_cast<int>(render_point.x),
-                static_cast<int>(render_point.y),
-                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
-
-            if (depth > 0.0f && depth < 1e9f) {
-                const glm::vec3 p2 = panel_proj.viewport.unprojectPixel(
-                    render_point.x,
-                    render_point.y,
-                    depth,
-                    panel_proj.focal_length_mm,
-                    panel_proj.orthographic,
-                    panel_proj.ortho_scale);
-                if (Viewport::isValidWorldPosition(p2)) {
-                    const glm::vec3& p0 = picked_points[0];
-                    const glm::vec3& p1 = picked_points[1];
-
-                    const glm::vec3 v01 = p1 - p0;
-                    const glm::vec3 v02 = p2 - p0;
-                    const glm::vec3 cross_v = glm::cross(v01, v02);
-                    const float cross_len = glm::length(cross_v);
-                    if (cross_len > 1e-6f) {
-                        glm::vec3 normal = cross_v / cross_len;
-                        constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
-                        if (glm::dot(normal, kTargetUp) < 0.0f)
-                            normal = -normal;
-
-                        const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-                        const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
-                        const glm::vec3 normal_end = center + normal * line_length;
-
-                        const glm::vec2 center_screen = projectToScreen(panel_proj, center);
-                        const glm::vec2 normal_screen = projectToScreen(panel_proj, normal_end);
-
-                        constexpr lfs::rendering::OverlayColor YELLOW{1.0f, 1.0f, 0.0f, 1.0f};
-                        constexpr lfs::rendering::OverlayColor TRI_RED{1.0f, 0.0f, 0.0f, 200.0f / 255.0f};
-                        constexpr lfs::rendering::OverlayColor TRI_GREEN{0.0f, 1.0f, 0.0f, 200.0f / 255.0f};
-                        constexpr lfs::rendering::OverlayColor TRI_BLUE{0.0f, 0.0f, 1.0f, 200.0f / 255.0f};
-
-                        overlay->addLine(center_screen, normal_screen, YELLOW, 4.0f);
-                        overlay->addCircleFilled(normal_screen, 10.0f, YELLOW);
-                        overlay->addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
-                                         "UP", YELLOW, label_size);
-
-                        const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
-                        const glm::vec2 p1_screen = projectToScreen(panel_proj, p1);
-                        const glm::vec2 p2_screen = projectToScreen(panel_proj, p2);
-                        overlay->addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
-                        overlay->addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
-                        overlay->addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
-                    }
-                }
-            }
+        if (!in_review && !drew_live_triangle && picked_points.size() == 2) {
+            drawEdgeLengthLabels(*overlay, panel_proj,
+                                 {picked_points[0], picked_points[1]},
+                                 toOverlay(t.overlay.text), label_size);
         }
 
-        const char* instruction = nullptr;
+        const char* instruction_key = nullptr;
         switch (picked_points.size()) {
-        case 0: instruction = "Click 1st point"; break;
-        case 1: instruction = "Click 2nd point"; break;
-        case 2: instruction = "Click 3rd point"; break;
+        case 0: instruction_key = lichtfeld::Strings::Align::CLICK_1ST; break;
+        case 1: instruction_key = lichtfeld::Strings::Align::CLICK_2ND; break;
+        case 2: instruction_key = lichtfeld::Strings::Align::CLICK_3RD; break;
         default: break;
         }
-        if (instruction) {
-            overlay->addText({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
-                             instruction, CROSSHAIR_COLOR, label_size);
+        if (instruction_key) {
+            drawLabel(*overlay, {mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
+                      LOC(instruction_key), toOverlay(t.overlay.text), label_size);
         }
-
-        char count_text[16];
-        snprintf(count_text, sizeof(count_text), "Points: %zu/3", picked_points.size());
-        overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f},
-                                   count_text, toOverlay(t.overlay.text), kShadow,
-                                   t.fonts.large_size);
     }
 
     void AlignTool::onEnabledChanged(bool enabled) {
-        if (!enabled) {
+        if (enabled) {
+            forceGridOn();
+        } else {
+            if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+                op::operators().cancelModalOperator();
+            }
+            restoreGridIfNeeded();
             services().clearAlignPickedPoints();
         }
         if (tool_context_) {

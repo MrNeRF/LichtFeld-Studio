@@ -2512,6 +2512,29 @@
     "colmap_min_track_length": "min-track-length no se puede usar con --init; no se aplicará el filtrado de puntos dispersos de COLMAP porque la inicialización usa '{}'",
     "no_splat_node_named": "No hay ningún nodo splat llamado '{}'"
   },
+  "align": {
+    "preview": "Vista previa de alineación",
+    "hint_preview": "Vista previa: cambia las opciones para comparar. Desactiva la vista previa para editar puntos. Aplicar: conservar el resultado. Esc: restaurar el original.",
+    "click_1st": "Clic en el 1.er punto",
+    "click_2nd": "Clic en el 2.º punto",
+    "click_3rd": "Clic en el 3.er punto",
+    "points_count": "Puntos: {}/3",
+    "up": "ARRIBA",
+    "hint_picking": "Clic: colocar/seleccionar. Arrastrar marca: mover. Supr: quitar seleccionada. Retroceso: última. Esc: cancelar.",
+    "hint_review": "Vista previa: ver el resultado. Aplicar: conservarlo. Arrastra los puntos para ajustar. Esc: cancelar.",
+    "status_targets_changed": "La selección cambió. Vuelve a elegir los puntos de alineación.",
+    "status_colinear": "Los puntos están casi en línea. Mueve un punto.",
+    "status_no_surface": "No hay superficie bajo el cursor.",
+    "status_no_target": "No hay un objetivo transformable para alinear.",
+    "snapped": "ajustado",
+    "apply": "Aplicar",
+    "clear": "Borrar",
+    "snap": "Ajuste a ejes",
+    "edge_to_axis": "Nivela el plano y gira el borde de 1 a 2 hacia la flecha X roja. Usa la vista previa para comparar.",
+    "edge_label": "1 → 2 sobre X",
+    "edge_on_help": "Borde de 1 a 2 sobre X: SÍ. Nivela el plano y gira la escena para que el borde siga la flecha X roja.",
+    "edge_off_help": "Borde de 1 a 2 sobre X: NO. Nivela el plano sin el giro adicional."
+  },
   "toast": {
     "trainer_not_restored": {
       "title": "Entrenador no restaurado",

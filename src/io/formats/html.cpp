@@ -76,14 +76,17 @@ namespace lfs::io {
             return result;
         }
 
-        // Vendored gizmo.js + measure-tool.js, wrapped in an IIFE so their
-        // top-level declarations can't collide with index.js's own (they
-        // share index.js's classes/constants only via closure), and exposed
-        // via a single `window` hook the template calls after `main()` resolves.
-        Result<std::string> build_measure_tool_script(const std::string& gizmo_js,
+        // Vendored gizmo.js + measure-tool.js + label-tool.js, wrapped in an
+        // IIFE so their top-level declarations can't collide with index.js's
+        // own (they share index.js's classes/constants only via closure), and
+        // exposed via `window` hooks the template calls after `main()`
+        // resolves.
+        Result<std::string> build_viewer_tools_script(const std::string& gizmo_js,
                                                       const std::string& measure_tool_js,
+                                                      const std::string& label_tool_js,
                                                       const std::filesystem::path& gizmo_path,
-                                                      const std::filesystem::path& measure_tool_path) {
+                                                      const std::filesystem::path& measure_tool_path,
+                                                      const std::filesystem::path& label_tool_path) {
             auto gizmo_body = strip_trailing_export(gizmo_js, "export { Gizmo, TranslateGizmo };", gizmo_path);
             if (!gizmo_body) {
                 return std::unexpected(gizmo_body.error());
@@ -93,14 +96,21 @@ namespace lfs::io {
             if (!measure_body) {
                 return std::unexpected(measure_body.error());
             }
+            auto label_body = strip_trailing_export(label_tool_js, "export { initLabelTool };",
+                                                    label_tool_path);
+            if (!label_body) {
+                return std::unexpected(label_body.error());
+            }
 
             std::string wrapped;
-            wrapped.reserve(gizmo_body->size() + measure_body->size() + 128);
+            wrapped.reserve(gizmo_body->size() + measure_body->size() + label_body->size() + 160);
             wrapped += "\n(function () {\n";
             wrapped += *gizmo_body;
             wrapped += "\n";
             wrapped += *measure_body;
-            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\n})();\n";
+            wrapped += "\n";
+            wrapped += *label_body;
+            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\nwindow.__lfsInitLabelTool = initLabelTool;\n})();\n";
             return wrapped;
         }
 
@@ -183,16 +193,20 @@ namespace lfs::io {
             auto measure_tool_result = read_text_file(resource_dir / "measure-tool.js");
             if (!measure_tool_result)
                 return std::unexpected(measure_tool_result.error());
+            auto label_tool_result = read_text_file(resource_dir / "label-tool.js");
+            if (!label_tool_result)
+                return std::unexpected(label_tool_result.error());
 
-            auto measure_script_result = build_measure_tool_script(*gizmo_result, *measure_tool_result,
-                                                                   resource_dir / "gizmo.js",
-                                                                   resource_dir / "measure-tool.js");
-            if (!measure_script_result)
-                return std::unexpected(measure_script_result.error());
+            auto tools_script_result = build_viewer_tools_script(*gizmo_result, *measure_tool_result, *label_tool_result,
+                                                                 resource_dir / "gizmo.js",
+                                                                 resource_dir / "measure-tool.js",
+                                                                 resource_dir / "label-tool.js");
+            if (!tools_script_result)
+                return std::unexpected(tools_script_result.error());
 
             const auto& tmpl = *tmpl_result;
             const auto& css = *css_result;
-            const std::string js = *js_result + *measure_script_result;
+            const std::string js = *js_result + *tools_script_result;
 
             std::string html{tmpl};
 

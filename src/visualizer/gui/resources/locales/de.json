@@ -2512,6 +2512,29 @@
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
   },
+  "align": {
+    "preview": "Ausrichtung vorschauen",
+    "hint_preview": "Vorschau: Ausrichtungsoptionen zum Vergleichen umschalten. Vorschau ausschalten, um Punkte zu bearbeiten. Anwenden: Ergebnis behalten. Esc: Original wiederherstellen.",
+    "click_1st": "1. Punkt klicken",
+    "click_2nd": "2. Punkt klicken",
+    "click_3rd": "3. Punkt klicken",
+    "points_count": "Punkte: {}/3",
+    "up": "OBEN",
+    "hint_picking": "Klick: setzen/auswählen. Marker ziehen: bewegen. Entf: Auswahl. Rücktaste: letzter. Esc: abbrechen.",
+    "hint_review": "Vorschau: Ergebnis ansehen. Anwenden: übernehmen. Punkte zum Anpassen ziehen. Esc: abbrechen.",
+    "status_targets_changed": "Auswahl geändert. Wählen Sie die Ausrichtungspunkte erneut.",
+    "status_colinear": "Punkte liegen fast auf einer Linie. Punkt verschieben.",
+    "status_no_surface": "Keine Oberfläche unter dem Cursor.",
+    "status_no_target": "Kein transformierbares Ziel zum Ausrichten.",
+    "snapped": "eingerastet",
+    "apply": "Anwenden",
+    "clear": "Löschen",
+    "snap": "Achsen-Snap",
+    "edge_to_axis": "Ebene ausrichten und Kante 1–2 zum roten X-Pfeil drehen. Mit der Vorschau vergleichen.",
+    "edge_label": "1 → 2 entlang X",
+    "edge_on_help": "Kante 1–2 entlang X: AN. Richtet die Ebene aus und dreht die Szene, sodass Kante 1–2 dem roten X-Pfeil folgt.",
+    "edge_off_help": "Kante 1–2 entlang X: AUS. Richtet die Ebene ohne die zusätzliche Drehung aus."
+  },
   "toast": {
     "trainer_not_restored": {
       "title": "Trainer nicht wiederhergestellt",

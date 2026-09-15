@@ -9,8 +9,8 @@ body {
 
 #content-wrap {
     min-width: 0;
-    height: 0;
-    flex-grow: 1;
+    min-height: 0;
+    flex: 1;
     padding: 6dp;
     overflow-x: hidden;
     overflow-y: auto;
@@ -18,6 +18,16 @@ body {
 
 #content {
     min-width: 0;
+    flex-shrink: 0;
+}
+
+/* Match the training panel's visible scroll track. */
+#content-wrap scrollbarvertical {
+    width: 4dp;
+}
+
+#content-wrap scrollbarvertical sliderbar {
+    min-height: 12dp;
 }
 .color-picker-popup {
     display: none;

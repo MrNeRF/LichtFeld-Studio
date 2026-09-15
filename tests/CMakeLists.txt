@@ -518,6 +518,7 @@ set(TEST_FILES
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
+    test_align_transform.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
@@ -1004,7 +1005,6 @@ set(LFS_PYTHON_FAST_TESTS
 )
 
 set(LFS_PYTHON_SLOW_TESTS
-    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_alignment_overlay_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_manager_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_async_plugin_loading.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_capability_thread_safety.py

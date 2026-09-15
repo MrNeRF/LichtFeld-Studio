@@ -47,12 +47,14 @@
 #include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/core/services.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/operator/ops/align_ops.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
@@ -4347,6 +4349,97 @@ namespace lfs::python {
                 }
             },
             "Apply the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "can_apply_align",
+            []() -> bool {
+                const auto* scene = lfs::vis::services().sceneOrNull();
+                return scene &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
+            },
+            "True when the align tool has 3 non-degenerate points ready to apply");
+
+        m.def(
+            "apply_align",
+            []() -> bool {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return false;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+                return true;
+            },
+            "Request the running align modal to apply the current triangle");
+
+        m.def(
+            "clear_align_points",
+            []() {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running align modal to clear all picked points");
+
+        m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
+        m.def("toggle_align_preview", [] {
+            if (lfs::vis::op::operators().activeModalId() !=
+                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                return;
+            }
+            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
+            lfs::vis::op::ModalEvent event{};
+            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
+
+        m.def(
+            "get_align_axis_snap",
+            []() -> bool { return lfs::vis::services().getAlignAxisSnapEnabled(); },
+            "Whether align plane-normal axis snap is enabled");
+
+        m.def(
+            "set_align_axis_snap",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignAxisSnapEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align plane-normal axis snap (session lifetime)");
+
+        m.def(
+            "get_align_edge_to_axis",
+            []() -> bool { return lfs::vis::services().getAlignEdgeToAxisEnabled(); },
+            "Whether align edge-to-+X in-plane yaw is enabled");
+
+        m.def(
+            "set_align_edge_to_axis",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
 
         m.def(
             "fit_crop_tool",

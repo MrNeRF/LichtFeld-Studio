@@ -147,6 +147,7 @@ namespace lfs::vis {
                                  double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::KEY;
+            evt.over_gui = over_gui;
             evt.data = KeyEvent{key, scancode, action, mods};
 
             if (op::operators().hasModalOperator()) {
@@ -172,6 +173,7 @@ namespace lfs::vis {
                                          double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_BUTTON;
+            evt.over_gui = over_gui;
             evt.data = MouseButtonEvent{button, action, mods, {x, y}};
 
             if (op::operators().hasModalOperator()) {
@@ -197,6 +199,7 @@ namespace lfs::vis {
                                        [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_MOVE;
+            evt.over_gui = over_gui;
             evt.data = MouseMoveEvent{{x, y}, {delta_x, delta_y}};
 
             if (op::operators().hasModalOperator()) {
@@ -221,6 +224,7 @@ namespace lfs::vis {
                                     [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_SCROLL;
+            evt.over_gui = over_gui;
             evt.data = MouseScrollEvent{xoff, yoff};
 
             if (op::operators().hasModalOperator()) {
@@ -1052,14 +1056,15 @@ namespace lfs::vis {
                             }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
-                    } else if (align_tool_ && align_tool_->isEnabled()) {
+                    } else if (align_tool_ && align_tool_->isEnabled() &&
+                               !op::operators().hasModalOperator()) {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
                         props.set("button", button);
                         props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                        if (result.status != op::OperatorResult::CANCELLED) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             return;
                         }
                     }
@@ -1076,14 +1081,15 @@ namespace lfs::vis {
 
             case input::Action::NONE:
             default:
-                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
+                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui &&
+                    !op::operators().hasModalOperator()) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
                     props.set("button", button);
                     props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                    if (result.status != op::OperatorResult::CANCELLED) {
+                    if (result.status == op::OperatorResult::RUNNING_MODAL) {
                         return;
                     }
                 }

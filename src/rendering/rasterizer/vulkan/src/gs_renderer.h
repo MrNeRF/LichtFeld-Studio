@@ -145,7 +145,7 @@ PACK_STRUCT(struct VulkanGSLodSelectUniforms {
     // Frame clock + fade window for newly streamed pages (0 disables fading).
     uint32_t current_frame;
     uint32_t fade_frames;
-    uint32_t pad4;
+    uint32_t budget_pass;
 });
 static_assert(sizeof(VulkanGSLodSelectUniforms) == 144);
 
@@ -212,6 +212,7 @@ public:
         bool count_overflow = false;
     };
     struct LodSelectionStats {
+        float threshold_scale = 1.0f;
         size_t candidate_count = 0;
         size_t rendered_capacity = 0;
         size_t overflow_count = 0;
