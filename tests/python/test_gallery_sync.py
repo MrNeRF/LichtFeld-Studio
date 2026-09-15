@@ -1099,3 +1099,36 @@ def test_settings_only_refuses_remote_changes_during_apply(tmp_path, monkeypatch
     assert service._job(job)["localUpdate"]["state"] == "ready"
     assert "changed" in service.message
 
+
+
+def test_replacement_choice_is_durable_before_native_preparation(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    path, metadata = handoff_upload(service, tmp_path)
+    handoff = service.remember_replacement(metadata["_handoff"])
+    assert not service.snapshot()["jobs"]
+    assert set(service.snapshot()["links"]) == {"old"}
+    saved = json.loads(service._journal.read_text())
+    assert saved["version"] == 3
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh(); finish(restarted)
+    assert restarted.remember_replacement(metadata["_handoff"]) == handoff
+    with pytest.raises(ValueError, match="saved replacement choice"):
+        restarted.queue_upload(path, dict(title="Old project update", replaceSceneId="scene"), "old")
+    metadata["_handoff"] = handoff
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(id="scene", title="Title", contentRevision="new-c", metadataRevision="m")}, raising=False)
+    restarted.queue_upload(path, metadata, "new"); finish(restarted)
+    assert set(restarted.snapshot()["links"]) == {"new"}
+    assert restarted.snapshot()["handoffIntents"] == {}
+
+
+
+def test_reviewed_replacement_keeps_separate_local_and_gallery_guards(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    path, metadata = handoff_upload(service, tmp_path)
+    raw = dict(metadata["_handoff"], oldLinkRevisions={"content": "c", "metadata": "m"},
+               baseRevisions={"content": "new-remote-c", "metadata": "new-remote-m"})
+    handoff = service.remember_replacement(raw)
+    metadata.update(_handoff=handoff, baseRevisions=handoff["baseRevisions"])
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(id="scene", title="Title", contentRevision="published-c", metadataRevision="new-remote-m")}, raising=False)
+    service.queue_upload(path, metadata, "new"); finish(service)
+    assert set(service.snapshot()["links"]) == {"new"}
