@@ -1250,7 +1250,8 @@
 .asset-scroll-shell-list.gallery-compact .asset-col-gallery { min-width: 24dp; }
 .asset-list-primary, .asset-list-secondary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-list-secondary { display: none; height: 16dp; line-height: 16dp; font-size: 10dp; }
-.gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; }
+.gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; margin: 0; }
+.asset-list-row .asset-col-gallery { gap: 8dp; }
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
 .asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
