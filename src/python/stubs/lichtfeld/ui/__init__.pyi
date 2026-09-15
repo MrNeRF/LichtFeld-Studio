@@ -2781,6 +2781,9 @@ def set_mouse_cursor_hand() -> None:
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
 
+def resource_directory() -> str:
+    """Directory containing the bundled UI resources"""
+
 def get_current_language() -> str:
     """Get current language code"""
 
