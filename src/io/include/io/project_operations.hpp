@@ -16,6 +16,9 @@
 
 namespace lfs::io::project {
 
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
+    undo_contents_removal(const std::filesystem::path& path, const std::string& id);
+
     using ProjectOperationProgress =
         std::function<void(float progress, const std::string& stage)>;
     using ProjectOperationCancel = std::function<bool()>;

@@ -469,7 +469,8 @@ namespace lfs::python {
             .value("EXPLICIT", project::CommitKind::Explicit)
             .value("AUTOSAVE", project::CommitKind::Autosave)
             .value("RECOVERED", project::CommitKind::Recovered)
-            .value("COMPACTION", project::CommitKind::Compaction);
+            .value("COMPACTION", project::CommitKind::Compaction)
+            .value("CONTENTS", project::CommitKind::Contents);
 
         nb::enum_<project::RowKind>(m, "ProjectRowKind")
             .value("LIVE", project::RowKind::Live)
@@ -548,7 +549,14 @@ namespace lfs::python {
             .def_ro("saved_at_unix_ns", &project::ProjectInspectorSave::saved_at_unix_ns)
             .def_ro("bytes_added", &project::ProjectInspectorSave::bytes_added)
             .def_ro("holds_checkpoint", &project::ProjectInspectorSave::holds_checkpoint)
-            .def_ro("checkpoint_iteration", &project::ProjectInspectorSave::checkpoint_iteration);
+            .def_ro("checkpoint_iteration", &project::ProjectInspectorSave::checkpoint_iteration)
+            .def_ro("planned_iterations", &project::ProjectInspectorSave::planned_iterations)
+            .def_ro("strategy", &project::ProjectInspectorSave::strategy)
+            .def_ro("gaussians", &project::ProjectInspectorSave::gaussians)
+            .def_ro("operation", &project::ProjectInspectorSave::operation)
+            .def_ro("source_save_generation", &project::ProjectInspectorSave::source_save_generation)
+            .def_ro("source_saved_at_unix_ns", &project::ProjectInspectorSave::source_saved_at_unix_ns)
+            .def_ro("source_save_kind", &project::ProjectInspectorSave::source_save_kind);
 
         nb::class_<project::ProjectInspectorChapter>(m, "ProjectInspectorChapter")
             .def_prop_ro("fourcc", [](const project::ProjectInspectorChapter& value) {
@@ -587,6 +595,7 @@ namespace lfs::python {
 
         nb::class_<project::ProjectInspectorParameters>(m, "ProjectInspectorParameters")
             .def_ro("active_strategy", &project::ProjectInspectorParameters::active_strategy)
+            .def_ro("planned_iterations", &project::ProjectInspectorParameters::planned_iterations)
             .def_ro("embedded_dataset_present", &project::ProjectInspectorParameters::embedded_dataset_present)
             .def_ro("embedded_dataset_complete", &project::ProjectInspectorParameters::embedded_dataset_complete)
             .def_ro("embedded_images", &project::ProjectInspectorParameters::embedded_images)
@@ -813,6 +822,14 @@ namespace lfs::python {
                 result = project::plan_reduce_size(path);
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("undo_contents_removal", [](const std::filesystem::path& path, const std::string& id) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::undo_contents_removal(path, id);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("id"));
 
         m.def("reduce_size", [](const std::filesystem::path& path, const nb::dict& options, nb::object progress, nb::object cancel) {
             const auto read_option = [&](const char* name, const bool fallback) {

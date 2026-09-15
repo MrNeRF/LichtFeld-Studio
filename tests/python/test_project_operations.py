@@ -104,7 +104,9 @@ def test_contents_removals_persist_until_compaction(native_io, tmp_path):
     assert 'contents_removals' not in native_io.inspect_project_details(path).manifest
 
 
-def test_restore_replaces_same_path_with_new_identity(native_io,tmp_path):
+def test_restore_same_path_preserves_identity_and_history(native_io,tmp_path):
+    if not hasattr(native_io, 'undo_contents_removal'):
+        pytest.skip('in-place Restore requires the rebuilt Contents native module')
     source=_fixture()
     if not source.is_file():pytest.skip(f'operations fixture is unavailable: {source}')
     path=tmp_path/'restore.licht'
@@ -112,8 +114,12 @@ def test_restore_replaces_same_path_with_new_identity(native_io,tmp_path):
     native_io.set_project_title(path,'Old title')
     old=native_io.inspect_project_card(path)
     native_io.set_project_title(path,'New title')
+    before=native_io.inspect_project_details(path)
     restored=native_io.restore_save(path,old.generation,path)
-    assert restored.project_uuid!=old.project_uuid
+    assert restored.project_uuid==old.project_uuid
+    after=native_io.inspect_project_details(path)
+    assert len(after.save_history)==len(before.save_history)+1
+    assert after.save_history[-1].kind==native_io.ProjectCommitKind.CONTENTS
     assert restored.title=='Old title'
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
     assert len(list(tmp_path.glob('*.licht')))==1

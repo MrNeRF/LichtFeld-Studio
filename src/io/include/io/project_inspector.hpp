@@ -47,6 +47,13 @@ namespace lfs::io::project {
         std::uint64_t bytes_added = 0;
         bool holds_checkpoint = false;
         std::optional<std::int32_t> checkpoint_iteration;
+        std::optional<std::uint64_t> planned_iterations;
+        std::string strategy;
+        std::optional<std::uint32_t> gaussians;
+        std::string operation;
+        std::uint64_t source_save_generation = 0;
+        std::uint64_t source_saved_at_unix_ns = 0;
+        CommitKind source_save_kind = CommitKind::Explicit;
     };
 
     struct LFS_IO_API ProjectInspectorChapter {
@@ -78,6 +85,7 @@ namespace lfs::io::project {
 
     struct LFS_IO_API ProjectInspectorParameters {
         std::string active_strategy;
+        std::optional<std::uint64_t> planned_iterations;
         bool embedded_dataset_present = false;
         bool embedded_dataset_complete = false;
         std::uint64_t embedded_images = 0;

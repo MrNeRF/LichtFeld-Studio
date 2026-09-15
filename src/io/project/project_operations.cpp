@@ -152,9 +152,44 @@ namespace lfs::io::project {
             return inspect_project_card(path);
         }
 
+        JsonChapterDom::Json save_origin(const ProjectInspectorSave& head) {
+            const bool derived = head.kind == CommitKind::Contents || head.kind == CommitKind::Compaction;
+            JsonChapterDom::Json source{
+                {"generation", derived ? head.source_save_generation : head.generation},
+                {"saved_at_unix_ns", derived ? head.source_saved_at_unix_ns : head.saved_at_unix_ns},
+                {"kind", static_cast<std::uint32_t>(derived ? head.source_save_kind : head.kind)},
+                {"strategy", head.strategy},
+            };
+            if (head.checkpoint_iteration)
+                source["checkpoint_iteration"] = *head.checkpoint_iteration;
+            if (head.planned_iterations)
+                source["planned_iterations"] = *head.planned_iterations;
+            if (head.gaussians)
+                source["gaussians"] = *head.gaussians;
+            return source;
+        }
+
+        lfs::Result<void> mark_contents_edit(ProjectDocument& document,
+                                             const std::string_view operation, const std::uint64_t generations = 1) {
+            const auto* reader = document.source_reader();
+            auto details = inspect_project_details(reader->path());
+            if (!details)
+                return std::move(details).error();
+            if (details->save_history.empty())
+                return {};
+            return document.edit_project().dom().set_json("contents_edit", {
+                                                                               {"file_uuid", reader->superblock().file_uuid.to_string()},
+                                                                               {"first_generation", reader->commit().generation + 1},
+                                                                               {"last_generation", reader->commit().generation + generations},
+                                                                               {"operation", operation},
+                                                                               {"source_save", save_origin(details->save_history.back())},
+                                                                           });
+        }
+
         template <typename Mutator>
         lfs::Result<ProjectInspectorCard> mutate_document(
             const std::filesystem::path& path,
+            const std::string_view operation,
             Mutator&& mutator,
             const std::span<const std::byte> preview = {}) {
             auto lease = acquire_operation_lock(path);
@@ -177,6 +212,8 @@ namespace lfs::io::project {
                 !changed) {
                 return std::move(changed).error();
             }
+            if (auto marked = mark_contents_edit(*document, operation); !marked)
+                return std::move(marked).error();
             ProjectDocumentSaveOptions options;
             options.commit.kind = CommitKind::Explicit;
             options.regenerate_dataset_preview = false;
@@ -1149,6 +1186,80 @@ namespace lfs::io::project {
         if (!project) {
             return std::move(project).error();
         }
+        if (replace_source) {
+            // Restore in place appends the selected state. The catalog identity
+            // and other saves stay available until the user removes/compacts them.
+            auto details = inspect_project_details(path);
+            if (!details)
+                return std::move(details).error();
+            auto current = ProjectDocument::open(path);
+            if (!current)
+                return std::move(current).error();
+            if (auto changed = project->dom().set_json("contents_removals", pending_contents(*current)); !changed)
+                return std::move(changed).error();
+            if (auto changed = project->dom().set_json("contents_edit", {
+                                                                            {"file_uuid", reader->superblock().file_uuid.to_string()},
+                                                                            {"first_generation", reader->commit().generation + 1},
+                                                                            {"last_generation", reader->commit().generation + 1},
+                                                                            {"operation", "restored"},
+                                                                            {"source_save", save_origin(details->save_history[generation - 1])},
+                                                                        });
+                !changed)
+                return std::move(changed).error();
+            const auto restored_project = project->to_bytes();
+            std::uint64_t bytes = restored_project.size();
+            for (const auto& [key, row] : selected_rows) {
+                if (key != project_row->first) {
+                    if (row.stored_bytes > std::numeric_limits<std::uint64_t>::max() - bytes)
+                        return fail<ProjectInspectorCard>(lfs::ErrorCode::ResourceExhausted, path,
+                                                          "The restored project is too large.", "restore payload byte total overflowed", "restore.preflight");
+                    bytes += row.stored_bytes;
+                }
+            }
+            auto recovery = backup_locked_project_file(path);
+            if (!recovery)
+                return std::move(recovery).error();
+            auto appended = ProjectWriter::append(path, AppendOptions{.writer_lock_lease = *source_lock});
+            if (!appended)
+                return std::move(appended).error();
+            auto writer = std::move(*appended);
+            const auto& selected_commit = lineage[generation - 1];
+            if (auto planned = writer.plan_commit(CommitOptions{
+                    .kind = CommitKind::Explicit,
+                    .snapshot_uuid = selected_commit.snapshot_uuid,
+                    .min_reader_version = reader->commit().min_reader_version,
+                    .min_safe_writer_version = reader->commit().min_safe_writer_version,
+                    .extra_reader_capabilities = reader->commit().required_reader_capabilities,
+                    .extra_writer_capabilities = reader->commit().required_writer_capabilities,
+                });
+                !planned)
+                return std::move(planned).error();
+            if (auto planned = writer.preflight(bytes); !planned)
+                return std::move(planned).error();
+            for (const auto& [key, row] : selected_rows) {
+                if (key == project_row->first) {
+                    if (auto written = writer.write_chunk(key, restored_project); !written)
+                        return std::move(written).error();
+                } else if (key.fourcc == FOURCC_THMB) {
+                    auto preview = selected_reader->read_chunk(row);
+                    if (!preview)
+                        return std::move(preview).error();
+                    if (auto written = writer.set_preview(*preview); !written)
+                        return std::move(written).error();
+                } else if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row); !copied) {
+                    return std::move(copied).error();
+                }
+            }
+            for (const auto& row : reader->chunks()) {
+                if (row.is_live() && !selected_rows.contains(row.key)) {
+                    if (auto erased = writer.erase(row.key); !erased)
+                        return std::move(erased).error();
+                }
+            }
+            if (auto committed = writer.commit(); !committed)
+                return std::move(committed).error();
+            return inspect_after_save(path);
+        }
         if (auto changed = project->set_project_uuid(new_project_uuid); !changed) {
             return std::move(changed).error();
         }
@@ -1348,6 +1459,8 @@ namespace lfs::io::project {
         auto recovery = backup_locked_project_file(path);
         if (!recovery)
             return std::move(recovery).error();
+        if (auto marked = mark_contents_edit(*document, "checkpoint_rebound"); !marked)
+            return std::move(marked).error();
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
@@ -1366,10 +1479,16 @@ namespace lfs::io::project {
         auto lease = acquire_operation_lock(path);
         if (!lease)
             return std::move(lease).error();
+        auto document = ProjectDocument::open(path);
+        if (!document)
+            return std::move(document).error();
+        if (auto marked = mark_contents_edit(*document, "compacted"); !marked)
+            return std::move(marked).error();
         CompactionOptions options;
         options.writer_lock_lease = *lease;
         options.progress = std::move(progress);
         options.cancel = std::move(cancel);
+        options.project_chapter_override = document->project().to_bytes();
         auto compacted = ProjectWriter::compact(path, std::move(options));
         if (!compacted) {
             if (compacted.error().code() == lfs::ErrorCode::Unavailable) {
@@ -1585,12 +1704,20 @@ namespace lfs::io::project {
                 }
             }
         }
+        const auto operation = drop_embedded_dataset       ? "dataset_removed"
+                               : selection.save_generation ? "save_removed"
+                               : selection.checkpoint      ? "checkpoint_removed"
+                               : selection.thumbnail       ? "thumbnail_removed"
+                               : selection.metrics         ? "metrics_removed"
+                                                           : "changed";
+        if (auto marked = mark_contents_edit(*document, operation, drop_embedded_dataset ? 3 : 1); !marked)
+            return std::move(marked).error();
         ProjectDocumentSaveOptions save_options;
         save_options.commit.kind = CommitKind::Explicit;
         save_options.regenerate_dataset_preview = false;
         save_options.writer_lock_lease = *lease;
         save_options.remove_preview = selection.thumbnail;
-        if (result.checkpoints_removed != 0 || !selection.compact) {
+        {
             auto saved = document->save(path, save_options);
             if (!saved) {
                 return std::move(saved).error();
@@ -1845,6 +1972,10 @@ namespace lfs::io::project {
         options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         options.disk_reserve_bytes = 64ull * 1024 * 1024;
+        if (auto marked = mark_contents_edit(*document, "dataset_embedded", 2); !marked)
+            return std::move(marked).error();
+        if (auto marked = document->save(path, options); !marked)
+            return std::move(marked).error();
         auto saved = document->embed_dataset_batch(manifest, sources, options);
         if (!saved) {
             return std::move(saved).error();
@@ -1955,6 +2086,8 @@ namespace lfs::io::project {
             !selected) {
             return std::move(selected).error();
         }
+        if (auto marked = mark_contents_edit(*document, "dataset_located"); !marked)
+            return std::move(marked).error();
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
@@ -2294,7 +2427,7 @@ namespace lfs::io::project {
     lfs::Result<ProjectInspectorCard>
     set_project_preview(const std::filesystem::path& path,
                         const std::span<const std::byte> png_bytes) {
-        return mutate_document(path, [](ProjectDocument&) -> lfs::Result<void> { return {}; }, png_bytes);
+        return mutate_document(path, "thumbnail_changed", [](ProjectDocument&) -> lfs::Result<void> { return {}; }, png_bytes);
     }
 
     lfs::Result<ProjectInspectorCard>
@@ -2320,6 +2453,8 @@ namespace lfs::io::project {
         if (!png) {
             return std::move(png).error();
         }
+        if (auto marked = mark_contents_edit(*document, "thumbnail_changed"); !marked)
+            return std::move(marked).error();
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
@@ -2377,6 +2512,8 @@ namespace lfs::io::project {
         if (!png) {
             return std::move(png).error();
         }
+        if (auto marked = mark_contents_edit(*document, "thumbnail_changed"); !marked)
+            return std::move(marked).error();
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
@@ -2390,17 +2527,33 @@ namespace lfs::io::project {
     }
 
     lfs::Result<ProjectInspectorCard>
+    undo_contents_removal(const std::filesystem::path& path, const std::string& id) {
+        return mutate_document(path, "removal_undone", [&](ProjectDocument& document) -> lfs::Result<void> {
+            auto pending = pending_contents(document);
+            auto& rows = pending["rows"];
+            auto removed = std::find_if(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.value("id", std::string{}) == id && row.value("kind", std::string{}) == "save";
+            });
+            if (removed == rows.end())
+                return fail<void>(lfs::ErrorCode::NotFound, path,
+                                  "This removal can no longer be undone.", "the save was compacted or is not removed", "contents.undo");
+            rows.erase(removed);
+            return document.edit_project().dom().set_json("contents_removals", std::move(pending));
+        });
+    }
+
+    lfs::Result<ProjectInspectorCard>
     set_project_license(const std::filesystem::path& path,
                         const std::string& identifier,
                         const std::string& notice) {
-        return mutate_document(path, [&](ProjectDocument& document) {
+        return mutate_document(path, "license_changed", [&](ProjectDocument& document) {
             return document.set_license(ProjectLicense{identifier, notice});
         });
     }
 
     lfs::Result<ProjectInspectorCard>
     clear_project_license(const std::filesystem::path& path) {
-        return mutate_document(path, [](ProjectDocument& document) -> lfs::Result<void> {
+        return mutate_document(path, "license_removed", [](ProjectDocument& document) -> lfs::Result<void> {
             auto license = document.project().license();
             if (!license)
                 return lfs::Result<void>::failure(std::move(license).error());
@@ -2417,7 +2570,7 @@ namespace lfs::io::project {
     lfs::Result<ProjectInspectorCard>
     set_project_title(const std::filesystem::path& path,
                       const std::string& title) {
-        return mutate_document(path, [&](ProjectDocument& document) {
+        return mutate_document(path, "title_changed", [&](ProjectDocument& document) {
             auto& dom = document.edit_project().dom();
             if (title.empty()) {
                 auto removed = dom.remove("title");

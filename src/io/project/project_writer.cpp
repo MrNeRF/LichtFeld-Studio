@@ -3333,7 +3333,7 @@ namespace lfs::io::project {
                 continue;
             }
             auto next = detail::checked_add(
-                planned_bytes, row.stored_bytes, path, row.payload_offset,
+                planned_bytes, row.key.fourcc == FOURCC_PROJ && !options.project_chapter_override.empty() ? options.project_chapter_override.size() : row.stored_bytes, path, row.payload_offset,
                 "compaction.planned_payload_bytes");
             if (!next) {
                 return status_failure(std::move(next).error());
@@ -3360,6 +3360,15 @@ namespace lfs::io::project {
                         "Project compaction was canceled.",
                         "the caller requested cancellation while copying payloads",
                         "compaction.cancel"));
+                }
+                if (source_row.key.fourcc == FOURCC_PROJ && !options.project_chapter_override.empty()) {
+                    if (auto written = writer.write_chunk(source_row.key, options.project_chapter_override,
+                                                          ChunkWriteOptions{.chunk_version = source_row.chunk_version,
+                                                                            .compression = source_row.compression});
+                        !written)
+                        return written;
+                    ++copied_rows;
+                    continue;
                 }
                 auto copied =
                     writer.impl_->copy_stored_chunk(*source_result, source_row);
