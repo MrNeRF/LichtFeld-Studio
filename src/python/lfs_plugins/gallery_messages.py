@@ -35,7 +35,7 @@ def localize_message(message):
         (r'unsafe portal url|unsafe_portal_url', 'error.unsafe_url'),
         (r'account changed|account or .*changed|previous account', 'error.account_changed'),
         (r'sign out and reconnect|approve gallery', 'error.access'),
-        (r'sign in|account details.*loading', 'sidebar.sign_in'),
+        (r'sign in|account details.*loading', 'account.connect_menu_bar'),
         (r'access.*unavailable', 'error.access'),
         (r'project.*changed|camera track changed|preview changed|hdr background changed|preparation.*changed', 'error.project_changed'),
         (r'could not be saved|could not.*save|save.*error', 'error.save'),

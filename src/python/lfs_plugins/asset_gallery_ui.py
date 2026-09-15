@@ -283,6 +283,8 @@ class GalleryAssetMixin:
         return ""
 
     def _gallery_notice_text(self):
+        if self._gallery_notice == tr("account.connect_menu_bar"):
+            return ""
         if self._gallery_notice:
             return self._gallery_notice
         if not self._gallery_state.get("signed_in"):
