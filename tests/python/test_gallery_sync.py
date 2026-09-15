@@ -56,6 +56,24 @@ def test_identity_reads_current_account_without_traversing_private_history(tmp_p
     assert service.identity() == ("https://portal.example", "two@example.com", "session", True)
     assert service.snapshot()["jobs"] == []  # Previous account stays inaccessible.
 
+
+def test_metadata_failure_survives_refresh_and_stays_with_its_account(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    def fail():
+        raise ValueError("The cover changed. Check the gallery before trying again.")
+    service._launch_metadata(fail)
+    finish(service)
+    failure = service.snapshot()["actionFailure"]
+    assert failure["message"].startswith("The cover changed.")
+    service.refresh()
+    finish(service)
+    assert service.snapshot()["actionFailure"] == failure
+    service._launch_metadata(fail)
+    finish(service)
+    assert service.snapshot()["actionFailure"]["id"] != failure["id"]
+    service.account.email = "two@example.com"
+    assert service.snapshot()["actionFailure"] is None
+
 def test_resume_after_restart_reuses_checkpoint_and_links_project(tmp_path, monkeypatch):
     def pause(self, path, metadata, **kwargs):
         kwargs["on_checkpoint"]({"uploadId": "pending", "idempotencyKey": "stable"})

@@ -78,7 +78,8 @@ class GalleryAssetMixin:
         if snapshot.get("message") in ("Gallery checked.", tr("info.checked")):
             snapshot = {**snapshot, "message": ""}
         self._gallery_state = snapshot
-        if snapshot.get("actionError") and snapshot.get("actionError") != previous.get("actionError"):
+        if snapshot.get("actionError") and (snapshot.get("actionError") != previous.get("actionError")
+                or snapshot.get("actionErrorId") != previous.get("actionErrorId")):
             self._gallery_notice = snapshot["actionError"]
         if snapshot.get("relink_required"):
             self._gallery_notice = snapshot.get("message", "")

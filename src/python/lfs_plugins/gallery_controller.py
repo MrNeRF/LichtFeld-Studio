@@ -620,6 +620,7 @@ class GalleryController:
                     return
                 if error:
                     self._message = error
+                    self._failure_notice = error
                 else:
                     lf.ui.set_clipboard_text(checked_portal_url(account, link["url"]))
                     self._message = tr("share.expiry", prefix="projects.gallery.",
@@ -729,6 +730,7 @@ class GalleryController:
         return dict(state, checkedAt=self.checked_at or state.get("checkedAt", 0), offline=self.offline,
                     message=localize_message(self._message or state.get("message", "")),
                     actionError=localize_message(self._failure_notice),
+                    actionErrorId=(state.get("actionFailure") or {}).get("id", ""),
                     accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
                     undoPull=copy.deepcopy(self._undo_pull), undoHistory=undo_history,
                     operationProject=self._operation_project,
@@ -866,6 +868,10 @@ class GalleryController:
 
     def _poll_body(self):
         self._check_identity()
+        failure = self.service.snapshot().get("actionFailure")
+        if failure and failure["id"] != getattr(self, "_reported_action_failure", None):
+            self._reported_action_failure = failure["id"]
+            self._failure_notice = failure["message"]
         self._advance_phases()
         try:
             self._finish_settings_apply()
@@ -1007,6 +1013,7 @@ class GalleryController:
         except Exception as exc:
             log_failure("dispatch", exc, action=name)
             self._message = friendly_error(exc)
+            self._failure_notice = self._message
         self._refresh_model()
 
     def _panel_busy(self):

@@ -201,6 +201,7 @@ class GallerySync:
         self._hdr_backgrounds = None
         self._change_sequence = None
         self._completion = None
+        self._action_failure = None
         self._unsupported_identity = None
         self._revision_domains = 0
         self._list_etag = None
@@ -370,6 +371,7 @@ class GallerySync:
                 "changeSequence": self._change_sequence if same else None,
                 "established": bool(same and self._owner and self._checked_at),
                 "completion": self._completion if same else None,
+                "actionFailure": self._action_failure if self._action_failure and self._action_failure["identity"] == self.identity() else None,
                 "revisionDomains": self._revision_domains if same else 0,
                 "checkedAt": self._checked_at if same else 0,
                 "posters": {key: value["path"] for key, value in self._poster_entries.items()} if same else {},
@@ -421,6 +423,7 @@ class GallerySync:
                     with self._lock:
                         self._relink_identity = identity if isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required" else None
                         self.message = friendly_error(exc)
+                        self._action_failure = dict(id=str(uuid.uuid4()), identity=identity, message=self.message)
                 finally:
                     with self._lock:
                         self.version += 1
