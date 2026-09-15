@@ -19,6 +19,7 @@ import lichtfeld as lf
 from .asset_gallery_ui import GalleryAssetMixin, GALLERY_SCOPES, SCOPE_PUBLISHED, SCOPE_ATTENTION, SCOPE_TRANSFERS
 from . import rml_widgets
 from .asset_layout import (
+    INSPECTOR_COLUMN_MIN,
     breakpoint_metrics,
     breakpoint_for_width,
     card_geometry,
@@ -137,7 +138,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._info_preferred_height = 220.0
         self._navigator_width = 200.0
         self._navigator_widths = {"medium": 160.0, "wide": 200.0}
-        self._inspector_width = 280.0
+        self._inspector_width = INSPECTOR_COLUMN_MIN
         self._inspector_preferred_height = 200.0
         self._tray_height = 120.0
         self._tray_expanded = False
@@ -294,7 +295,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._inspector_preferred_height = self._info_preferred_height
             for key, low, high, default in (
                 ("navigator_width", 120.0, 240.0, 200.0),
-                ("inspector_width", 240.0, 420.0, 280.0),
+                ("inspector_width", INSPECTOR_COLUMN_MIN, 420.0, INSPECTOR_COLUMN_MIN),
                 ("inspector_height", 120.0, 450.0, 200.0),
                 ("tray_height", 32.0, 450.0, 32.0),
             ):
@@ -586,6 +587,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_saved_at": lambda: self._selected_details_rows().get("saved_at", ""),
             "inspector_opened": lambda: self._selected_details_rows().get("opened", ""),
             "inspector_iteration": lambda: self._selected_details_rows().get("iteration", ""),
+            "inspector_training_summary": lambda: self._inspector_fact_summary("iteration", "strategy"),
+            "inspector_model_summary": lambda: self._inspector_fact_summary("gaussians", "sh_degree", "SH "),
             "inspector_strategy": lambda: self._selected_details_rows().get("strategy", ""),
             "inspector_resumable": lambda: bool(self._selected_details_rows().get("resumable")),
             "inspector_gaussians": lambda: self._selected_details_rows().get("gaussians", ""),
@@ -1204,6 +1207,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset_id = self.get_selected_asset_id()
         if asset_id:
             self._show_asset_context_menu(asset_id)
+
+    def _inspector_fact_summary(self, primary, secondary, prefix="") -> str:
+        facts = self._selected_details_rows()
+        parts = [str(facts.get(primary, ""))]
+        if facts.get(secondary) not in (None, ""):
+            parts.append(prefix + str(facts[secondary]))
+        return " · ".join(part for part in parts if part)
 
     def _all_transfer_rows(self) -> List[Dict[str, Any]]:
         rows = list(transfer_rows(self._gallery_state, self._transfer_history_limit))
@@ -2087,6 +2097,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "quick_look_has_thumbnail",
             "inspector_saved", "inspector_saved_at", "inspector_opened",
             "inspector_iteration", "inspector_strategy", "inspector_resumable",
+            "inspector_training_summary", "inspector_model_summary",
             "inspector_gaussians", "inspector_sh_degree", "inspector_dataset",
             "inspector_dataset_path", "inspector_dataset_reachable",
             "inspector_embedded", "inspector_has_metrics", "inspector_metrics",
@@ -3410,7 +3421,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 if layout_metrics["navigator_mode"] == "column":
                     self._navigator_width = self._navigator_widths[self._layout_class]
                 if self._layout_class == "wide":
-                    self._inspector_width = min(420.0, max(240.0, self._inspector_width))
+                    self._inspector_width = min(420.0, max(INSPECTOR_COLUMN_MIN, self._inspector_width))
                 self._dirty_layout_fields()
             elif abs(width - self._content_width) > 0.5:
                 self._content_width = width
@@ -4061,7 +4072,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._navigator_widths[self._layout_class] = self._navigator_width
             self._dirty_fields("navigator_width", "navigator_style_width")
         elif region == "inspector":
-            self._inspector_width = min(420.0, max(240.0, self._resize_start_inspector - delta_x))
+            self._inspector_width = min(420.0, max(INSPECTOR_COLUMN_MIN, self._resize_start_inspector - delta_x))
             self._dirty_layout_fields()
         elif region == "tray":
             popup = self._doc.get_element_by_id("asset-popup") if self._doc else None

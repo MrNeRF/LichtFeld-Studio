@@ -19,6 +19,7 @@ GRID_GAP = 12.0
 GRID_HORIZONTAL_PADDING = 24.0
 THUMBNAIL_MIN = 112.0
 THUMBNAIL_MAX = 320.0
+INSPECTOR_COLUMN_MIN = 320.0
 THUMBNAIL_DEFAULTS = {
     "compact": 112.0,
     "narrow": 136.0,
@@ -117,8 +118,8 @@ def breakpoint_metrics(width):
             "navigator_min": 160.0,
             "navigator_max": 240.0,
             "inspector_placement": "column",
-            "inspector_default": 280.0,
-            "inspector_min": 240.0,
+            "inspector_default": INSPECTOR_COLUMN_MIN,
+            "inspector_min": INSPECTOR_COLUMN_MIN,
             "inspector_max": 420.0,
         },
     }[name].copy()
