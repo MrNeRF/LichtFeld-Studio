@@ -97,12 +97,13 @@ def transfer_rows(snapshot, history_limit=30):
         phase = transfer_phase(job)
         progress = 100 if status == "completed" else min(100, 100 * done / max(1, total))
         indeterminate = status == "running" and (phase in ("preparing", "processing") or total <= 0)
+        settings_only = job.get("settingsOnly", False)
         phase_label = tr("phase." + phase)
         if status == "running" and not indeterminate:
             phase_label = gallery_tr("gallery.status.progress", prefix="", stage=phase_label, percent=int(progress))
         row = {"id": job["id"], "title": job.get("metadata", {}).get("title", "") or tr("title"),
                "direction": "↓" if job.get("kind") == "download" else "↑", "status": status,
-               "bytes": ("" if job.get("settingsOnly") else format_size(total) if status == "completed" else format_size(done) if status == "canceled"
+               "bytes": ("" if settings_only else format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else "" if job.get("batchQueued") else tr("bytes", done=format_size(done), total=format_size(total))),
                "phase": phase_label,
                "reason": localize_message(job.get("message", "")) if phase in ("error", "conflict", "paused", "interrupted") else "",
