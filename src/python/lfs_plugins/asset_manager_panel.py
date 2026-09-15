@@ -1437,8 +1437,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self.refresh_catalog(scan_folders=False)
             else:
                 self._set_catalog_notice(tr("projects.status.import_failed"))
-        except Exception as exc:
-            self._log_error("Failed to import .licht project %s: %s", path, exc)
+        except Exception:
             self._set_catalog_notice(tr("projects.status.import_failed"))
 
     def _select_folder_id(self, folder_id: str) -> bool:
@@ -1567,10 +1566,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if self._library_command("relink_asset", asset_id, path):
                 self.refresh_catalog(scan_folders=False)
             else:
-                self._log_warn("Selected file belongs to a different .licht project")
                 self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
-        except Exception as exc:
-            self._log_error("Failed to relink .licht project: %s", exc)
+        except Exception:
             self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
 
     def on_use_found_location(self, _handle=None, _ev=None, args=None):
