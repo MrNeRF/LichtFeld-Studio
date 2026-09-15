@@ -35,6 +35,12 @@ def _inspection(project_uuid, commit_uuid=None):
     )
 
 
+def _observe(index, observations, **kwargs):
+    inspections = {str(Path(item.path).resolve()): item.inspection for item in observations}
+    index._inspect_path = lambda path: inspections[str(Path(path).resolve())]
+    return index.reconcile_observations(observations, **kwargs)
+
+
 def test_reconcile_is_order_independent_and_keeps_replacement_reference(tmp_path):
     p = tmp_path / "p.licht"
     q = tmp_path / "q.licht"
@@ -45,7 +51,7 @@ def test_reconcile_is_order_independent_and_keeps_replacement_reference(tmp_path
     def build(order):
         index = AssetIndex(tmp_path / f"{order}-library.json", tmp_path)
         index.load()
-        index.reconcile_observations(
+        _observe(index,
             [AssetObservation(str(p), "default", _inspection(old_id, "old"))],
             folder_ids=["default"],
         )
@@ -55,7 +61,7 @@ def test_reconcile_is_order_independent_and_keeps_replacement_reference(tmp_path
         ]
         if order == "q-first":
             observations.reverse()
-        index.reconcile_observations(observations, folder_ids=["default"])
+        _observe(index, observations, folder_ids=["default"])
         return index
 
     first, second = build("p-first"), build("q-first")
@@ -71,14 +77,14 @@ def test_overwrite_records_previous_uuid_and_joins_only_the_old_journal_link(tmp
     old_id, new_id = str(uuid.uuid4()), str(uuid.uuid4())
     index = AssetIndex(tmp_path / "library.json", tmp_path)
     index.load()
-    index.reconcile_observations(
+    _observe(index,
         [AssetObservation(str(path), "default", _inspection(old_id, "old"))],
         folder_ids=["default"],
     )
     original_stat = path.stat()
     path.write_bytes(b"abcdefghij")
     os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
-    index.reconcile_observations(
+    _observe(index,
         [AssetObservation(str(path), "default", _inspection(new_id, "new"))],
         folder_ids=["default"],
     )
@@ -99,7 +105,7 @@ def test_same_uuid_aliases_and_divergent_commits_are_stored(tmp_path):
     project_id = str(uuid.uuid4())
     index = AssetIndex(tmp_path / "library.json", tmp_path)
     index.load()
-    index.reconcile_observations(
+    _observe(index,
         [
             AssetObservation(str(first), "default", _inspection(project_id, "one")),
             AssetObservation(str(second), "default", _inspection(project_id, "two")),

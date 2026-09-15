@@ -1718,10 +1718,20 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
 
+def test_library_identity_failure_is_visible_in_projects(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(last_error="The project identity changed. Refresh Projects and try again.",
+                                        update_asset=lambda *_args, **_kwargs: None)
+    assert panel._library_command("update_asset", "project", name="Renamed") is None
+    assert "project identity changed" in panel._catalog_notice
+    assert "project identity changed" in panel.get_catalog_notice()
+
+
 def test_on_mount_shows_cached_rows_without_inspecting(
     panel_module, monkeypatch, tmp_path
 ):
     from lfs_plugins.asset_index import AssetIndex
+    monkeypatch.setattr(panel_module, "resolve_default_asset_directory", lambda: tmp_path)
 
     inspect_calls = []
     projects = {}

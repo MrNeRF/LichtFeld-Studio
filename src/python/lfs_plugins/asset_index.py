@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .asset_storage import prune_previews
+from .project_identity import ProjectPathIdentity
 from .environment import flag as environment_flag, value as environment_value
 
 _log = logging.getLogger(__name__)
@@ -223,8 +224,8 @@ def fix_action_for_health(state: str) -> Optional[str]:
 
 def _path_is_within(path: str, directory: str) -> bool:
     try:
-        return Path(_normalize_path(path)).is_relative_to(
-            Path(_normalize_path(directory))
+        return Path(AssetIndex._path_key(path)).is_relative_to(
+            Path(AssetIndex._path_key(directory))
         )
     except (OSError, ValueError):
         return False
@@ -455,6 +456,11 @@ class AssetObservation:
     inspection: Any = None
     error: str = ""
     stat_identity: Dict[str, int] = field(default_factory=dict)
+    path_identity: Optional[ProjectPathIdentity] = None
+
+    def __post_init__(self):
+        if self.path and self.path_identity is None:
+            object.__setattr__(self, "path_identity", ProjectPathIdentity.capture(self.path))
 
     @property
     def project_uuid(self) -> str:
@@ -477,7 +483,8 @@ class AssetIndex:
         library_path: Optional[Path] = None,
         default_folder_path: Optional[Path] = None,
     ):
-        self._library_path = library_path or resolve_asset_manager_library_path()
+        self._library_locator = Path(library_path or resolve_asset_manager_library_path()).expanduser().absolute()
+        self._library_path = self._library_locator.resolve()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
         self._uses_default_library_path = library_path is None
         if default_folder_path is None:
@@ -506,6 +513,9 @@ class AssetIndex:
         self._assets_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         self._catalog_extra: Dict[str, Any] = {}
         self.load_issues: List[str] = []
+        self.last_error = ""
+        self._write_checks: Dict[str, Tuple[ProjectPathIdentity, Optional[str]]] = {}
+        self._library_canonical_path = self._library_path.resolve()
 
     @property
     def library_path(self) -> Path:
@@ -555,7 +565,7 @@ class AssetIndex:
 
     @staticmethod
     def _path_key(path: str) -> str:
-        normalized = _normalize_path(path)
+        normalized = os.path.realpath(_normalize_path(path))
         return normalized if _filesystem_is_case_sensitive(normalized) else normalized.casefold()
 
     @staticmethod
@@ -649,6 +659,8 @@ class AssetIndex:
         return self._catalog_epoch
 
     def _apply_inspection(self, project: Project, inspection: Any) -> None:
+        if self._projects.get(project.project_uuid) is project:
+            self._remember_identity(project.path, project.project_uuid)
         project.file_uuid = str(inspection.file_uuid)
         project.commit_uuid = str(inspection.commit_uuid)
         project.generation = int(inspection.generation)
@@ -852,12 +864,34 @@ class AssetIndex:
             inspection = self._inspect_path(project.path, False)
         except TypeError:
             inspection = self._inspect_path(project.path)
-        except Exception:
+        except Exception as exc:
+            self.last_error = f"Could not check project identity at {project.path}: {exc}"
+            _log.warning(self.last_error)
             return False
         if str(getattr(inspection, "project_uuid", "")) != project.project_uuid:
+            self.last_error = f"The project identity changed at {project.path}. Refresh Projects and try again."
             return False
         expected_commit = str(project.commit_uuid or "")
-        return not expected_commit or str(getattr(inspection, "commit_uuid", "")) == expected_commit
+        if expected_commit and str(getattr(inspection, "commit_uuid", "")) != expected_commit:
+            self.last_error = f"The project changed at {project.path}. Refresh Projects and try again."
+            return False
+        return True
+
+    def _remember_identity(self, path: str, project_uuid: Optional[str], *, allow_missing: bool = False) -> None:
+        identity = ProjectPathIdentity.capture(path)
+        expected = None if allow_missing and identity.identity is None else project_uuid
+        self._write_checks.setdefault(path, (identity, expected))
+
+    def _check_write_identities(self) -> None:
+        if self._library_locator.resolve() != self._library_canonical_path:
+            raise ValueError("The library path changed. Reopen Projects and try again.")
+        for path, (identity, expected) in self._write_checks.items():
+            identity.validate()
+            if expected is not None:
+                inspection = self._inspect_path(path)
+                if str(inspection.project_uuid) != expected:
+                    raise ValueError(f"The project identity changed at {path}. Refresh Projects and try again.")
+                identity.validate()
 
     def _rebuild_path_lookup(self) -> None:
         self._project_by_path = {
@@ -873,6 +907,7 @@ class AssetIndex:
                 inspection=value.inspection,
                 error=value.error,
                 stat_identity=dict(value.stat_identity),
+                path_identity=value.path_identity,
             )
         if isinstance(value, dict):
             path = str(value.get("path") or "")
@@ -886,6 +921,7 @@ class AssetIndex:
                 inspection=inspection,
                 error=str(value.get("error") or ""),
                 stat_identity=dict(value.get("stat_identity") or _stat_identity(path) or {}),
+                path_identity=value.get("path_identity"),
             )
         path = str(getattr(value, "path", "") or "")
         effective_folder = self._folder_id_for_path(path) or str(
@@ -897,6 +933,7 @@ class AssetIndex:
             inspection=getattr(value, "inspection", None),
             error=str(getattr(value, "error", "") or ""),
             stat_identity=dict(getattr(value, "stat_identity", None) or _stat_identity(path) or {}),
+            path_identity=getattr(value, "path_identity", None),
         )
 
     def reconcile_observations(
@@ -910,6 +947,7 @@ class AssetIndex:
         normalized = [self._observation_from(item) for item in observations]
         normalized = [item for item in normalized if item.path]
         with self._lock:
+            previous_state = self._snapshot_state(project_ids=list(self._projects))
             before_ids = set(self._projects)
             observed_by_uuid: Dict[str, List[AssetObservation]] = {}
             observed_paths: Dict[str, AssetObservation] = {}
@@ -919,6 +957,7 @@ class AssetIndex:
                 project_uuid = item.project_uuid
                 if not project_uuid:
                     continue
+                self._write_checks[item.path] = (item.path_identity, project_uuid)
                 observed_by_uuid.setdefault(project_uuid, []).append(item)
                 observed_paths[self._path_key(item.path)] = item
 
@@ -1040,6 +1079,7 @@ class AssetIndex:
             if changed:
                 self._touch_catalog()
                 if save and not self.save():
+                    self._restore_state(previous_state)
                     return {"added": 0, "replaced": 0, "aliases": 0, "failed": 1}
             return {
                 "added": added,
@@ -1089,7 +1129,7 @@ class AssetIndex:
         self,
         project_ids: Optional[List[str]] = None,
         folder_ids: Optional[List[str]] = None,
-    ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]]:
+    ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str], Dict[str, Tuple[ProjectPathIdentity, Optional[str]]]]:
         """Capture only records a mutation may edit for save rollback."""
         folders = self._folders.copy()
         for folder_id in folder_ids or []:
@@ -1099,13 +1139,13 @@ class AssetIndex:
         for project_id in project_ids or []:
             if project_id in projects:
                 projects[project_id] = copy(projects[project_id])
-        return folders, projects, self._project_by_path.copy()
+        return folders, projects, self._project_by_path.copy(), self._write_checks.copy()
 
     def _restore_state(
         self,
-        state: Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]],
+        state: Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str], Dict[str, Tuple[ProjectPathIdentity, Optional[str]]]],
     ) -> None:
-        self._folders, self._projects, self._project_by_path = state
+        self._folders, self._projects, self._project_by_path, self._write_checks = state
         self._touch_catalog()
 
     def _ensure_default_folder(self) -> bool:
@@ -1126,6 +1166,7 @@ class AssetIndex:
         self._projects = {}
         self._project_by_path = {}
         self._catalog_extra = {}
+        self._write_checks.clear()
         self._ensure_default_folder()
         self._touch_catalog()
 
@@ -1473,6 +1514,7 @@ class AssetIndex:
     def load(self) -> bool:
         self.load_issues = []
         previous_state = self._snapshot_state()
+        self._write_checks = {}
         source_path = self._library_path
         migrating_legacy_location = False
         if not source_path.exists():
@@ -1568,10 +1610,14 @@ class AssetIndex:
                         os.replace(backup_temp, backup)
                     finally:
                         backup_temp.unlink(missing_ok=True)
+                self._check_write_identities()
                 os.replace(temp_path, self._library_path)
+            self._write_checks.clear()
+            self.last_error = ""
             self._touch_catalog()
             return True
         except Exception as exc:
+            self.last_error = str(exc)
             _log.error("Failed to save Asset Manager library %s: %s", self._library_path, exc)
             return False
         finally:
@@ -1610,6 +1656,9 @@ class AssetIndex:
         )
         del self._folders[folder_id]
         removed_ids = [project.project_uuid for project in self._projects.values() if project.folder_id == folder_id]
+        for identifier in removed_ids:
+            project = self._projects[identifier]
+            self._remember_identity(project.path, identifier, allow_missing=True)
         self._projects = {
             project_uuid: project
             for project_uuid, project in self._projects.items()
@@ -1684,6 +1733,7 @@ class AssetIndex:
             if resolved_folder is None:
                 resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
             project.folder_id = resolved_folder
+            self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         if self.save():
             return True
         self._default_folder_path = previous_default_path
@@ -1705,6 +1755,7 @@ class AssetIndex:
         previous_state = (
             self._snapshot_state(project_ids=[asset_id]) if save else None
         )
+        self._remember_identity(project.path, asset_id, allow_missing=True)
         if "folder_id" in kwargs:
             target = self._folders.get(str(kwargs["folder_id"]))
             resolved_folder_id = self._folder_id_for_path(project.path)
@@ -1714,6 +1765,8 @@ class AssetIndex:
         if "name" in kwargs:
             project.name = str(kwargs["name"])
             project.name_origin = "user"
+        if "viewing_copy" in kwargs:
+            project.extra = {**project.extra, "viewing_copy": bool(kwargs["viewing_copy"])}
         if not save:
             self._touch_catalog()
         if save and not self.save():
@@ -1728,18 +1781,19 @@ class AssetIndex:
 
     @_synchronized
     def delete_assets(self, asset_ids: List[str]) -> int:
+        previous_state = self._snapshot_state()
         removed: Dict[str, Project] = {}
         for asset_id in dict.fromkeys(asset_ids):
             project = self._projects.pop(asset_id, None)
             if project is None:
                 continue
+            self._remember_identity(project.path, asset_id, allow_missing=True)
             self._project_by_path.pop(self._path_key(project.path), None)
             removed[asset_id] = project
         if not removed:
             return 0
         if not self.save():
-            self._projects.update(removed)
-            self._rebuild_path_lookup()
+            self._restore_state(previous_state)
             return 0
         self._touch_catalog()
         prune_previews(removed)
@@ -1760,6 +1814,7 @@ class AssetIndex:
         inspection: Any = None,
     ) -> Tuple[Optional[Project], bool]:
         path = _normalize_path(project_path)
+        planned_path = ProjectPathIdentity.capture(path)
         if not is_supported_asset_path(path):
             _log.warning("Asset Manager only supports .licht projects: %s", path)
             return None, False
@@ -1830,6 +1885,7 @@ class AssetIndex:
                     project.folder_id = target_folder_id
                     persisted_changed = True
 
+            self._write_checks[path] = (planned_path, project_uuid)
             if save and persisted_changed and not self.save():
                 assert previous_state is not None
                 self._restore_state(previous_state)
@@ -1856,14 +1912,17 @@ class AssetIndex:
                 project.inspection_verified = True
                 project.inspection_restored = False
             else:
+                previous_state = self._snapshot_state(project_ids=[asset_id])
                 self._apply_runtime_result(project, kind, payload)
-                self.save()
-            return project
+                if not self.save():
+                    self._restore_state(previous_state)
+            return self._projects[asset_id]
 
     @_synchronized
     def relink_asset(self, asset_id: str, new_path: str) -> bool:
         project = self._projects.get(asset_id)
         path = _normalize_path(new_path)
+        planned_path = ProjectPathIdentity.capture(path)
         if project is None or not is_supported_asset_path(path) or not Path(path).is_file():
             return False
         inspection = self._inspect_path(path)
@@ -1871,6 +1930,7 @@ class AssetIndex:
             not self._inspection_is_master(inspection)
             or str(inspection.project_uuid) != project.project_uuid
         ):
+            self.last_error = f"The project identity changed at {path}. Choose the matching project."
             return False
 
         path_key = self._path_key(path)
@@ -1887,6 +1947,7 @@ class AssetIndex:
         project.relocation_candidate = ""
         self._project_by_path[path_key] = asset_id
         self._apply_inspection(project, inspection)
+        self._write_checks[path] = (planned_path, asset_id)
         if self.save():
             return True
         self._restore_state(previous_state)
@@ -1921,6 +1982,7 @@ class AssetIndex:
                 )
             )
         with self._lock:
+            previous_state = self._snapshot_state(project_ids=list(self._projects))
             verified = 0
             changed = False
             for asset_id, path, expected_uuid, (kind, payload) in results:
@@ -1938,8 +2000,9 @@ class AssetIndex:
                     self._apply_runtime_result(project, kind, payload)
                     changed = True
                 verified += 1
-            if changed:
-                self.save()
+            if changed and not self.save():
+                self._restore_state(previous_state)
+                return 0
             return verified
 
     @_synchronized

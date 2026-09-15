@@ -14,6 +14,123 @@ from lfs_plugins.asset_index import AssetIndex, Project
 from lfs_plugins.asset_watch import scan_asset_folder
 
 
+@pytest.mark.parametrize("operation", [
+    "register", "relink", "rename", "viewing_copy", "delete", "delete_batch",
+    "delete_folder", "default_folder", "reconcile", "verify", "verify_batch", "clean_missing",
+])
+def test_library_rechecks_identity_at_json_replacement(monkeypatch, tmp_path, operation):
+    from lfs_plugins import asset_index
+
+    folder = tmp_path / "项目"
+    folder.mkdir()
+    path = folder / "é.licht"
+    path.write_bytes(b"original project")
+    original = _inspection(str(uuid.uuid4()))
+    current = original
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: current))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path))
+    alternate = folder / "new.licht"
+    shutil.copyfile(path, alternate)
+    if operation == "clean_missing":
+        path.unlink()
+    before = index.library_path.read_bytes()
+    rows = index.assets.copy()
+    real_fsync = asset_index.os.fsync
+
+    def replace_identity(fd):
+        nonlocal current
+        real_fsync(fd)
+        current = _inspection(str(uuid.uuid4()))
+        if operation == "clean_missing":
+            path.write_bytes(b"a new project appeared")
+
+    monkeypatch.setattr(asset_index.os, "fsync", replace_identity)
+    actions = {
+        "register": lambda: index.register_licht_asset(str(alternate), inspection=original),
+        "relink": lambda: index.relink_asset(project.id, str(alternate)),
+        "rename": lambda: index.update_asset(project.id, name="New title"),
+        "viewing_copy": lambda: index.update_asset(project.id, viewing_copy=True),
+        "delete": lambda: index.delete_asset(project.id),
+        "delete_batch": lambda: index.delete_assets([project.id]),
+        "delete_folder": lambda: index.delete_folder(project.folder_id),
+        "default_folder": lambda: index.set_default_folder_path(str(tmp_path / "new-default")),
+        "reconcile": lambda: index.reconcile_observations([
+            asset_index.AssetObservation(str(path), project.folder_id, original)]),
+        "verify": lambda: index.verify_asset(project.id),
+        "verify_batch": lambda: index.verify_projects_batch([project.id]),
+        "clean_missing": lambda: index.clean_missing_entries(project.folder_id),
+    }
+    actions[operation]()
+    assert "changed" in index.last_error
+    assert index.library_path.read_bytes() == before
+    assert index.assets == rows
+
+
+def test_library_rejects_redirected_project_and_library_paths(monkeypatch, tmp_path):
+    path = tmp_path / "项目.licht"
+    path.write_bytes(b"original project")
+    other = tmp_path / "other.licht"
+    shutil.copyfile(path, other)
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(alias))
+    assert index.find_asset_by_path(str(path)).id == project.id
+    before = index.library_path.read_bytes()
+    index.update_asset(project.id, save=False, name="Pending")
+    alias.unlink()
+    alias.symlink_to(other)
+    assert not index.save()
+    assert "path changed" in index.last_error and index.library_path.read_bytes() == before
+
+    redirected = tmp_path / "other-library.json"
+    redirected.write_bytes(before)
+    index.library_path.unlink()
+    index.library_path.symlink_to(redirected)
+    assert not index.save()
+    assert "library path changed" in index.last_error and redirected.read_bytes() == before
+
+
+def test_reconciliation_refuses_an_alias_redirected_after_observation(monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetObservation
+
+    path, other, alias = (tmp_path / name for name in ("a.licht", "b.licht", "alias.licht"))
+    path.write_bytes(b"same identity")
+    shutil.copyfile(path, other)
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    observation = AssetObservation(str(alias), "default", inspection)
+    before = index.library_path.read_bytes()
+    alias.unlink()
+    alias.symlink_to(other)
+    assert index.reconcile_observations([observation])["failed"] == 1
+    assert "path changed" in index.last_error and index.library_path.read_bytes() == before
+
+
+def test_library_writes_preserve_unicode_symlinks(monkeypatch, tmp_path):
+    path = tmp_path / "项目-é.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library = tmp_path / "library.json"
+    assert AssetIndex(library, tmp_path).load()
+    alias = tmp_path / "图书馆.json"
+    alias.symlink_to(library)
+    index = AssetIndex(alias, tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path), name="项目 é")
+    assert alias.is_symlink()
+    assert json.loads(library.read_text())["projects"][project.id]["name"] == "项目 é"
+
+
 def _inspection(
     project_uuid: str,
     *,
@@ -682,7 +799,7 @@ def test_v4_restored_inspection_is_verified_before_becoming_available(
     assert project.has_preview is True
     assert project.commit_uuid == "cached-commit"
     assert project.inspection_verified is True
-    assert inspect_calls == [True]
+    assert inspect_calls == [True, True]  # Inspection and the guarded library write.
 
 
 def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
@@ -693,11 +810,11 @@ def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
     project_uuid = str(uuid.uuid4())
     mismatch = _inspection(str(uuid.uuid4()))
     mismatch.physical_file_size = 500 * 1024 * 1024
-    inspections = [_inspection(project_uuid), mismatch]
+    inspection = _inspection(project_uuid)
     monkeypatch.setattr(
         AssetIndex,
         "_inspect_path",
-        staticmethod(lambda _path: inspections.pop(0)),
+        staticmethod(lambda _path: inspection),
     )
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path)
@@ -705,6 +822,7 @@ def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
     project, _ = index.register_licht_asset(str(project_path))
 
     project_path.write_bytes(b"changed container")
+    inspection = mismatch
     result = index.verify_asset(project.id)
 
     assert result.status == "IDENTITY_MISMATCH"
@@ -783,7 +901,7 @@ def test_v4_cached_inspection_with_changed_stat_refreshes_fields(
     assert project.status == "AVAILABLE"
     assert project.inspection_restored is False
     assert project.inspection_verified is True
-    assert len(inspect_calls) == 1
+    assert len(inspect_calls) == 2  # Inspection and the guarded library write.
 
 
 def test_v4_cached_inspection_missing_field_is_inspected(
@@ -823,7 +941,7 @@ def test_v4_cached_inspection_missing_field_is_inspected(
     assert project is not None
     assert project.commit_uuid == "refreshed-commit"
     assert project.inspection_verified is True
-    assert len(inspect_calls) == 1
+    assert len(inspect_calls) == 2  # Inspection and the guarded library write.
 
 
 def test_malformed_v3_catalog_restores_previous_catalog(monkeypatch, tmp_path: Path):
@@ -1132,7 +1250,7 @@ def test_asset_snapshot_is_cached_but_explicit_verify_reinspects(monkeypatch, tm
     assert index.assets is snapshot
     calls_before_verify = len(calls)
     index.verify_asset(project.id)
-    assert len(calls) == calls_before_verify + 1
+    assert len(calls) == calls_before_verify + 2
     index.update_asset(project.id, save=False, name="Renamed")
     assert index.assets is not snapshot
 

@@ -994,8 +994,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _library_command(self, command: str, *args: Any, **kwargs: Any) -> Any:
         if self._library_service is not None:
-            return self._library_service._call(command, *args, **kwargs)
-        return getattr(self._asset_index, command)(*args, **kwargs)
+            result = self._library_service._call(command, *args, **kwargs)
+        else:
+            result = getattr(self._asset_index, command)(*args, **kwargs)
+        reason = getattr(self._asset_index, "last_error", "")
+        if reason:
+            self._set_catalog_notice(reason)
+        return result
 
     @staticmethod
     def _native_io_call(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -1640,6 +1645,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return bool(self._search_query.strip()) and not self._filtered_assets()
 
     def get_catalog_notice(self) -> str:
+        if self._asset_index and getattr(self._asset_index, "last_error", ""):
+            return self._asset_index.last_error
         if self._catalog_notice:
             return self._catalog_notice
         if self._catalog_load_failed:

@@ -103,6 +103,8 @@ def test_cached_scan_reinspects_in_place_overwrite_with_cleared_status(
     new_uuid = str(uuid.uuid4())
     new_inspection = _inspection(new_uuid)
     storage = tmp_path / "storage"
+    old_inspection = _inspection(old_uuid)
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: old_inspection))
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(storage))
     index = AssetIndex(
         library_path=tmp_path / "library.json",
@@ -184,7 +186,7 @@ def test_scan_reregisters_identity_mismatch_with_cleared_metadata(
     monkeypatch.setattr(
         AssetIndex,
         "_inspect_path",
-        staticmethod(lambda _path: new_inspection),
+        staticmethod(lambda _path: _inspection(old_uuid)),
     )
 
     index = AssetIndex(
@@ -196,6 +198,7 @@ def test_scan_reregisters_identity_mismatch_with_cleared_metadata(
         str(project), inspection=_inspection(old_uuid)
     )
     assert created is True
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: new_inspection))
     index._clear_runtime(old_project, "IDENTITY_MISMATCH", "stale project")
     assert old_project.path_size_bytes == 0
     assert old_project.path_mtime_ns == 0
