@@ -206,8 +206,8 @@ namespace lfs::vis::gui {
         }
 
         float clampedFloatingPanelWidth(const float initial_width, const float anchor_width,
-                                        const float dpi) {
-            const float min_panel_width = 320.0f * dpi;
+                                        const float dpi, const float minimum_width = 320.0f) {
+            const float min_panel_width = minimum_width * dpi;
             const float max_panel_width = std::max(min_panel_width, anchor_width);
             const float w = initial_width > 0.0f ? initial_width : 560.0f * dpi;
             return std::clamp(w, min_panel_width, max_panel_width);
@@ -228,8 +228,9 @@ namespace lfs::vis::gui {
                                                  const bool auto_center,
                                                  const bool park_at_bottom,
                                                  const float dpi,
-                                                 const float override_height = 0.0f) {
-            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi);
+                                                 const float override_height = 0.0f,
+                                                 const float minimum_width = 320.0f) {
+            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi, minimum_width);
             const float h = override_height > 0.0f
                                 ? override_height
                                 : (initial_height > 0.0f ? initial_height : 400.0f * dpi);
@@ -717,7 +718,8 @@ apply_registered_chrome:
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi);
+            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi,
+                                                snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             const float max_h = snap.initial_height > 0
                                     ? std::min(snap.initial_height, anchor.height)
                                     : anchor.height;
@@ -800,7 +802,8 @@ apply_registered_chrome:
                                                      auto_center,
                                                      in_viewport,
                                                      dpi,
-                                                     h);
+                                                     h,
+                                                     snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             w = box.width;
             h = box.height;
             px = box.x;
@@ -912,7 +915,7 @@ apply_registered_chrome:
                         float drawn_h = layout.drawn_height;
                         bool has_user_height = layout.has_user_height;
 
-                        const float kMinPanelWidth = 320.0f * dpi;
+                        const float kMinPanelWidth = (snap.id == "lfs.asset_manager" ? 260.0f : 320.0f) * dpi;
                         const float kMinPanelHeight = 180.0f * dpi;
 
                         {

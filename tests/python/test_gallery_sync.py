@@ -820,6 +820,36 @@ def test_old_portal_walk_keeps_exchange_baseline(tmp_path, monkeypatch):
     assert snap["checkedAt"] >= old
     assert service._list_etag == 'W/"fresh"'
 
+def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = {"contentRevision": "legacy", "metadataRevision": "legacy", "id": "scene", "revision": "legacy", "title": "Title"}
+    link = gallery_sync.exchange_link(scene, "commit")
+    service._bucket()["links"]["project"] = link
+    service.scenes = [scene]
+    old = link["checkedAt"]
+    service._list_etag = 'W/"cached"'
+    # P4 accepts 304 only for an owner-wide listing with a known sequence.
+    service._change_sequence = 10
+    def unavailable(*_):
+        raise gallery_sync.PortalHTTPError(404, "Not found")
+    def listing(self, etag=None, *, owner_wide=False):
+        assert etag == 'W/"cached"' and owner_wide
+        self.list_etag = etag
+        return None
+    monkeypatch.setattr(Client, "changes_since", unavailable, raising=False)
+    monkeypatch.setattr(Client, "list_scenes", listing)
+    monkeypatch.setattr(Client, "_request", lambda self, *args: {"storageHosts": ["portal.example"], "id": "one", "gallerySyncVersion": 1, "revisionDomains": 1})
+    service.refresh()
+    finish(service)
+    snap = service.snapshot()
+    assert snap["refresh_ok"] and snap["revisionDomains"] == 1
+    assert snap["scenes"] == [scene]
+    assert snap["links"]["project"]["checkedAt"] >= old
+    assert snap["links"]["project"]["exchangedAt"] == link["exchangedAt"]
+    assert snap["links"]["project"]["commitUuid"] == "commit"
+    assert snap["checkedAt"] >= old and snap["changeSequence"] == 10
+    assert service._list_etag == 'W/"cached"'
+
 def _poster_scene():
     import uuid
     return {"id": str(uuid.uuid4()), "status": "ready", "posterRevision": "poster1", "thumbnailUrl": "https://portal.example/ignored"}

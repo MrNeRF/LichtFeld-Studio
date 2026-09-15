@@ -234,17 +234,20 @@ class GalleryAssetMixin:
 
     def _gallery_badge(self, asset):
         facts = self._gallery_facts(asset)
-        state_key = "state." + facts["state"]
+        from .gallery_messages import localize_message
+        facts["reason"] = localize_message(facts["reason"]) if facts["reason"] else ""
+        state_key = "state." + (facts["activity"] if facts["active"] else facts["state"])
         label = tr(state_key, percent=facts["progress"])
+        known_label = last_known_gallery_label(asset, self._gallery_state)
+        if (asset.get("id") in self._gallery_state.get("links", {}) and known_label is None
+                and not facts["active"] and facts["activity"] not in ("paused", "interrupted", "error")):
+            label = tr("state.not_checked")
         if facts.get("viewingCopy"):
             label = tr("state.viewing_copy") + " · " + label
         if facts["reason"] and facts["state"] == "error":
             label = tr("state.with_reason", state=label, reason=facts["reason"])
-        if facts["relationship"] == "local_file_problem":
+        if facts["health_icon"]:
             label = getattr(self, "_project_status_label", lambda _asset: label)(asset)
-        if asset.get("remote_only"):
-            label = tr("state.remote_detail", state=label, size=self._format_size(asset.get("file_size_bytes")),
-                       format=asset.get("source_format", "licht").upper())
         job = next((j for j in self._gallery_state.get("jobs", ()) if j["id"] == facts["jobId"]), {})
         actions = facts["actions"]
         verbs = {action["id"] for action in actions if action["enabled"]}
@@ -261,6 +264,7 @@ class GalleryAssetMixin:
         gallery_action = primary.get("id", "")
         action_label = primary.get("label", "")
         return {"gallery_state": facts["state"], "gallery_label": label,
+                "gallery_reason": facts["reason"], "gallery_has_reason": bool(facts["reason"]),
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
                 "gallery_stored": stored,
@@ -268,12 +272,16 @@ class GalleryAssetMixin:
                 "gallery_can_pause": can_pause, "gallery_can_cancel": can_cancel,
                 "gallery_action_persistent": can_cancel or gallery_action in ("retry", "resume"),
                 "gallery_has_controls": can_cancel or bool(gallery_action),
-                "gallery_tooltip": "\n".join(filter(None, (label, byte_label, detail, primary.get("reason")))),
+                "gallery_tooltip": "\n".join(filter(None, (label, facts["reason"], byte_label, detail, primary.get("reason")))),
+                "health_badge": bool(facts["health_icon"]),
+                "health_tone": "asset-health-" + facts["health_tone"],
+                "gallery_ring": facts["active"],
+                "gallery_progress_value": (0.25 if indeterminate else facts["progress"] / 100.0),
                 "gallery_progress_width": f"{35 if indeterminate else facts['progress']}%",
                 "gallery_indeterminate": indeterminate,
                 "gallery_icon": "../icon/gallery-" + facts["icon"] + ".png",
                 "gallery_tone": "gallery-tone-" + facts["tone"],
-                "gallery_has_badge": facts["relationship"] != "local_file_problem",
+                "gallery_has_badge": not facts["health_icon"] and not facts["active"],
                 "gallery_has_action": bool(gallery_action), "gallery_action": gallery_action, "gallery_action_label": action_label,
                 "gallery_action_enabled": primary.get("enabled", False), "gallery_action_reason": primary.get("reason", ""),
                 "gallery_progress": facts["progress"], "gallery_active": facts["active"],
@@ -337,7 +345,15 @@ class GalleryAssetMixin:
         return (" · ".join(([f"{uploads}↑"] if uploads else []) + ([f"{downloads}↓"] if downloads else [])) or ("!" if attention else ""),
                 tr("sidebar.aggregate", uploads=uploads, downloads=downloads, attention=attention))
 
+    def _selected_gallery_badge_value(self, name):
+        asset = self._get_selected_asset()
+        if not asset:
+            return False if name in ("gallery_has_badge", "gallery_ring", "health_badge", "gallery_has_reason") else 0.0 if name == "gallery_progress_value" else ""
+        return self._gallery_badge(asset).get(name, "")
+
     def _bind_gallery_model(self, model):
+        for name in ("gallery_icon", "gallery_tone", "gallery_tooltip", "gallery_reason", "gallery_has_reason", "gallery_has_badge", "gallery_ring", "gallery_progress_value", "health_badge", "health_tone"):
+            model.bind_func("selected_" + name, lambda name=name: self._selected_gallery_badge_value(name))
         values = {
             "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
@@ -359,6 +375,9 @@ class GalleryAssetMixin:
             "gallery_overlay": lambda: self._gallery_aggregate()[0],
             "gallery_tooltip": lambda: " · ".join(filter(None, (self._gallery_aggregate()[1], self._gallery_quota()))),
             "gallery_selected_reason": lambda: ((self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason") or self._gallery_facts(self._get_selected_asset()).get("reason")) if self._get_selected_asset() else ""),
+            "gallery_has_selected_reason": lambda: bool(self._get_selected_asset() and (
+                self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason")
+                or self._gallery_facts(self._get_selected_asset()).get("reason"))),
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
             "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),
             "gallery_linked": lambda: self._has_gallery_link(),

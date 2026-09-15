@@ -12,6 +12,7 @@
 #include <RmlUi/Core/DataTypeRegister.h>
 #include <RmlUi/Core/DataVariable.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/FontEngineInterface.h>
 #include <RmlUi/Core/StyleSheetSpecification.h>
 #include <RmlUi/Core/Tween.h>
 #include <cassert>
@@ -770,6 +771,20 @@ namespace lfs::python {
         elem_->SetScrollTop(v);
         mark_document_dirty(elem_);
     }
+    std::string PyRmlElement::get_property(const std::string& name) {
+        const auto* property = elem_->GetProperty(name);
+        return property ? property->ToString() : std::string{};
+    }
+
+    float PyRmlElement::measure_text(const std::string& text) {
+        auto* engine = Rml::GetFontEngineInterface();
+        const auto face = elem_->GetFontFaceHandle();
+        if (!engine || !face)
+            return 0.0f;
+        const Rml::TextShapingContext shaping{elem_->GetComputedValues().language()};
+        return static_cast<float>(engine->GetStringWidth(face, text, shaping));
+    }
+
     float PyRmlElement::scroll_width() { return elem_->GetScrollWidth(); }
     float PyRmlElement::scroll_height() { return elem_->GetScrollHeight(); }
     float PyRmlElement::client_width() { return elem_->GetClientWidth(); }
@@ -1126,6 +1141,18 @@ namespace lfs::python {
         if (it != documents_.end() && it->second != doc)
             release_rml_document_state(it->second);
         documents_[name] = doc;
+
+        // Language reload binds models while the previous document still exists.
+        // Once the replacement is mounted, send model updates to its document.
+        Rml::ElementList model_elements;
+        doc->QuerySelectorAll(model_elements, "[data-model]");
+        model_elements.push_back(doc);
+        for (const auto* element : model_elements) {
+            const auto model_name = element->GetAttribute<Rml::String>("data-model", "");
+            const auto context = s_model_contexts.find(model_name);
+            if (context != s_model_contexts.end() && context->second == doc->GetContext())
+                s_model_documents[model_name] = doc;
+        }
     }
 
     void RmlDocumentRegistry::unregister_document(const std::string& name) {
@@ -1234,6 +1261,9 @@ namespace lfs::python {
             .def("get_class_names", &PyRmlElement::get_class_names)
             .def("set_property", &PyRmlElement::set_property)
             .def("remove_property", &PyRmlElement::remove_property)
+            .def("get_property", &PyRmlElement::get_property)
+            .def("measure_text", &PyRmlElement::measure_text, nb::arg("text"),
+                 "Measure text in pixels using this element's current font and scale")
             .def("animate", &PyRmlElement::animate, nb::arg("property"),
                  nb::arg("target_value"), nb::arg("duration"),
                  nb::arg("tween") = "quadratic-out", nb::arg("start_value") = nb::none(),

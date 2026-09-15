@@ -112,6 +112,10 @@ namespace lfs::io::project {
         // Explicit GUI saves may replace THMB. An empty span means carry the
         // current preview forward without regenerating it.
         std::span<const std::byte> preview_png;
+        bool remove_preview = false;
+        // Closed-file edits preserve the chosen preview unless explicitly
+        // replacing it. Ordinary scene saves keep their dataset preview policy.
+        bool regenerate_dataset_preview = true;
         // Optional deterministic seam for Save As's internal compaction
         // generation. Normal callers leave these unset.
         lfs::core::Uuid save_as_compaction_commit_uuid = {};

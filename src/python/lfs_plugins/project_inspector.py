@@ -9,6 +9,8 @@ be tested without starting LichtFeld Studio.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
@@ -194,7 +196,8 @@ class InspectionFactsPipeline:
 
 
 def _latest_checkpoint(details: Any) -> Any:
-    checkpoints = list(value(details, "retained_checkpoints", []) or [])
+    checkpoints = [checkpoint for checkpoint in value(details, "retained_checkpoints", []) or []
+                   if value(checkpoint, "retained", True)]
     return max(checkpoints, key=lambda item: int(value(item, "iteration", 0) or 0), default=None)
 
 
@@ -342,9 +345,163 @@ def dialog_model(kind: str, *, entry: Any = None, details: Any = None, plan: Any
         base.update({"sources": ["viewport", "first_dataset", "first_embedded", "image_file"], "source": "first_dataset"})
     elif kind == "set_license":
         license_obj = value(details, "license", None)
-        base.update({"identifier": str(value(license_obj, "identifier", "") or ""), "notice": str(value(license_obj, "notice", "") or "")})
+        base.update(license_fields(license_obj))
     elif kind == "rename":
         base["title"] = str(value(value(details, "card", None), "title", "") or "")
     elif kind == "repair":
         base.update({"destination": "", "summary": ""})
     return base
+
+
+LICENSES = (
+    ("CC0-1.0", "cc0"), ("CC-BY-4.0", "by"), ("CC-BY-SA-4.0", "by_sa"),
+    ("CC-BY-NC-4.0", "by_nc"), ("CC-BY-NC-SA-4.0", "by_nc_sa"),
+    ("CC-BY-ND-4.0", "by_nd"), ("CC-BY-NC-ND-4.0", "by_nc_nd"),
+    ("LicenseRef-Proprietary", "proprietary"), ("custom", "custom"),
+)
+
+
+def license_name(identifier: str, tr: Callable[[str], str]) -> str:
+    key = next((key for ident, key in LICENSES if ident == identifier), None)
+    return tr("projects.license." + key) if key else identifier.removeprefix("LicenseRef-")
+
+
+def license_fields(license_obj: Any) -> dict[str, str]:
+    identifier = str(value(license_obj, "identifier", "") or "")
+    notice = str(value(license_obj, "notice", "") or "")
+    known = {ident for ident, _key in LICENSES if ident != "custom"}
+    text, sep, credit = notice.rpartition("\nCredit: ")
+    if not sep:
+        text, credit = ("", notice[8:]) if notice.startswith("Credit: ") else (notice, "")
+    return dict(license_choice=identifier if identifier in known else "custom" if identifier else "CC-BY-4.0",
+                license_name=identifier.removeprefix("LicenseRef-") if identifier not in known else "",
+                license_text=text, attribution=credit)
+
+
+def license_value(fields: dict[str, Any]) -> tuple[str, str]:
+    choice = str(fields.get("license_choice") or "CC-BY-4.0")
+    notice = ""
+    if choice == "custom":
+        name = str(fields.get("license_name") or "").strip()
+        # SPDX LicenseRef suffixes allow letters, digits, dots, and hyphens.
+        suffix = re.sub(r"[^A-Za-z0-9.-]", "", name)
+        notice = str(fields.get("license_text") or "").strip()
+        if not suffix or not notice:
+            raise ValueError("projects.license.custom_required")
+        choice = "LicenseRef-" + suffix
+    elif choice not in {identifier for identifier, _ in LICENSES}:
+        raise ValueError("projects.license.custom_required")
+    credit = str(fields.get("attribution") or "").strip()
+    if credit and choice not in {"CC0-1.0", "LicenseRef-Proprietary"}:
+        notice = (notice + "\n" if notice else "") + "Credit: " + credit
+    return choice, notice
+
+
+def pending_removals(details: Any) -> list[dict[str, Any]]:
+    raw = value(details, "manifest", {}).get("contents_removals", "")
+    try:
+        rows = json.loads(raw).get("rows", []) if raw else []
+        return [row for row in rows if isinstance(row, dict)]
+    except (ValueError, TypeError, AttributeError):
+        return []
+
+
+def contents_rows(entry: Any, details: Any, plan: Any = None, *,
+                  tr: Callable[[str], str], format_size: Callable[[Any], str],
+                  format_time: Callable[[Any], str], busy: bool = False) -> list[dict[str, Any]]:
+    """One row per existing part, with durable removals and only relevant actions."""
+    if details is None:
+        return []
+    rows = []
+    pending = pending_removals(details)
+    removed_ids = {str(row.get("id", "")) for row in pending}
+    params = value(details, "parameters", None)
+    saves = list(value(details, "save_history", []) or [])
+    current = max((int(value(save, "generation", 0)) for save in saves), default=0)
+    chapters = list(value(details, "chapters", []) or [])
+    def size_of(code):
+        return sum(int(value(part, "stored_bytes", 0)) for part in chapters if str(value(part, "fourcc", "")) == code)
+    def row(id, kind, label, size=0, action="", action_label="", remove=False, secondary="", secondary_label="", **extra):
+        result = dict(id=id, kind=kind, label=label, size=format_size(size) if size else "", bytes=int(size),
+                      action=action, action_label=tr(action_label) if action_label else "",
+                      action_tooltip=tr("projects.action.resume_training") if action == "resume" else tr(action_label) if action_label else "",
+                      secondary=secondary, secondary_label=tr(secondary_label) if secondary_label else "",
+                      removable=remove, disabled=busy, pending=False, remove_label=tr("projects.contents.remove"), **extra)
+        rows.append(result)
+        return result
+    for index, save in reversed(list(enumerate(saves, 1))):
+        generation = int(value(save, "generation", index))
+        if "save:" + str(generation) in removed_ids:
+            continue
+        label = tr("projects.contents.save").format(number=index, total=len(saves))
+        date = format_time(value(save, "saved_at_unix_ns", 0))
+        if date: label += ", " + date
+        if generation == current: label += ", " + tr("projects.contents.current")
+        row("save:" + str(generation), "save", label, value(save, "bytes_added", 0),
+            "restore" if generation != current else "", "projects.contents.restore" if generation != current else "",
+            generation != current, generation=generation)
+    checkpoints = list(value(details, "retained_checkpoints", []) or [])
+    sizes = {str(value(cp, "instance_uuid", "")): int(value(cp, "bytes", 0)) for cp in value(plan, "retained_checkpoints", []) or []}
+    strategy = str(value(params, "active_strategy", "") or "")
+    for cp in checkpoints:
+        if not value(cp, "retained", True): continue
+        uuid = str(value(cp, "instance_uuid", ""))
+        iteration = int(value(cp, "iteration", 0))
+        label = tr("projects.contents.checkpoint").format(iteration=iteration)
+        if strategy: label += ", " + strategy
+        resumable = bool(value(cp, "header_reachable", True)) and bool(value(value(details, "scene_graph", None), "training_node_id", None))
+        row("checkpoint:" + uuid, "checkpoint", label, sizes.get(uuid, 0),
+            "resume" if resumable else "", "projects.contents.resume" if resumable else "", True,
+            checkpoint_uuid=uuid, iteration=iteration, bound=bool(value(cp, "binds_scene_graph", False)))
+    embedded = bool(value(params, "embedded_dataset_present", False))
+    if embedded:
+        count = int(value(params, "embedded_images", 0))
+        r = row("dataset:embedded", "dataset", tr("projects.contents.dataset_embedded").format(count=count),
+                sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []), remove=True)
+        r["remove_disabled"] = not bool(value(value(plan, "drop_embedded_dataset", None), "allowed", False))
+        r["remove_label"] = tr("projects.contents.dataset_kept") if r["remove_disabled"] else tr("projects.contents.remove")
+    else:
+        external = next((ref for ref in value(details, "references", []) or [] if str(value(ref, "kind", "")).lower() in {"dataset", "images", "data"}), None)
+        dataset_node = str(value(value(details, "scene_graph", None), "dataset_node_name", "") or "")
+        if external or dataset_node:
+            reachable = bool(value(external, "reachable", False))
+            label = tr("projects.contents.dataset_external").format(path=value(external, "path", "")).rstrip(", 、，")
+            label += ", " + tr("projects.contents.reachable" if reachable else "projects.contents.missing")
+            r = row("dataset:external", "external", label, action="embed", action_label="projects.contents.embed",
+                    secondary="locate", secondary_label="projects.contents.locate")
+            r["action_disabled"] = not reachable
+    has_thumbnail = bool(value(value(details, "card", None), "has_preview", False))
+    row("thumbnail", "thumbnail", tr("projects.contents.thumbnail" if has_thumbnail else "projects.contents.add_thumbnail"),
+        size_of("THMB") if has_thumbnail else 0, "thumbnail", "projects.contents.update" if has_thumbnail else "projects.contents.add", has_thumbnail)
+    metrics = value(details, "metrics", None)
+    samples = int(value(metrics, "loss_samples", 0)) + int(value(metrics, "psnr_samples", 0))
+    if samples:
+        row("metrics", "metrics", tr("projects.contents.metrics").format(count=samples), size_of("METR"), remove=True)
+    license_obj = value(details, "license", None)
+    identifier = str(value(license_obj, "identifier", "") or "")
+    license_bytes = len(identifier.encode("utf-8")) + len(str(value(license_obj, "notice", "") or "").encode("utf-8"))
+    row("license", "license", tr("projects.contents.license").format(name=license_name(identifier, tr)) if identifier else tr("projects.contents.add_license"),
+        license_bytes,
+        action="license", action_label="projects.contents.change" if identifier else "projects.contents.add", remove=bool(identifier))
+    for removed in pending:
+        kind = removed.get("kind", "")
+        if kind == "save": label = tr("projects.contents.save").format(number=removed.get("generation", ""), total=len(saves))
+        elif kind == "checkpoint": label = tr("projects.contents.checkpoint").format(iteration=removed.get("iteration", 0))
+        elif kind == "dataset": label = tr("projects.contents.dataset_embedded").format(count=removed.get("images", 0))
+        elif kind == "metrics": label = tr("projects.contents.metrics").format(count=removed.get("samples", 0))
+        elif kind == "license": label = tr("projects.contents.license").format(name=license_name(removed.get("identifier", ""), tr))
+        else: label = tr("projects.contents.thumbnail")
+        r = row("removed:" + str(len(rows)), kind, label + ", " + tr("projects.contents.removed"), removed.get("bytes", 0))
+        r.update(pending=True, disabled=True)
+    storage = value(details, "storage", None)
+    ratio = float(value(storage, "dead_ratio", 0) or 0)
+    if ratio >= 0.01:
+        row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),
+            value(storage, "dead_bytes", 0), "compact", "projects.contents.compact")
+    for r in rows:
+        r["has_action"] = bool(r["action"])
+        r["has_secondary"] = bool(r["secondary"])
+        r.setdefault("action_disabled", False)
+        r.setdefault("remove_disabled", False)
+        r["disabled"] = bool(r["disabled"] or not value(entry, "path", "") or str(value(entry, "status", "")) in {"MISSING", "UNREADABLE", "REPAIR_ONLY", "UNSUPPORTED_NEWER", "IDENTITY_MISMATCH"})
+    return rows

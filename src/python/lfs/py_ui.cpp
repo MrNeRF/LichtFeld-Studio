@@ -5422,6 +5422,8 @@ namespace lfs::python {
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 
+        m.def("resource_directory", []() { return lfs::core::path_to_utf8(lfs::core::getResourceBaseDir()); }, "Directory containing the bundled UI resources");
+
         m.def(
             "get_current_language",
             []() -> std::string {

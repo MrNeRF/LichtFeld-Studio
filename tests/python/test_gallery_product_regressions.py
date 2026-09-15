@@ -331,6 +331,64 @@ def test_resolve_single_review_executes_one_final_action(gallery, monkeypatch, c
     assert not panel._decision_pending
     assert [a[0] for a in actions] == [expected]
 
+@pytest.mark.parametrize('choice,content,expected', [('mine', True, 'upload'), ('gallery', True, 'pull'), ('gallery', False, 'patch')])
+def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, tmp_path, choice, content, expected):
+    # The old confirmation chain is one review; settings still save before publishing.
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    path = tmp_path / 'project.licht'
+    path.write_bytes(b'saved project with training history')
+    asset = dict(id='project', path=str(path), commit_uuid='local' if content else 'base')
+    remote = scene(viewerSettings={'exposure': 2, 'cameraPath': {'keyframes': [{'t': 1}]}})
+    state['scenes'] = [remote]
+    state['links'] = {'project': dict(sceneId=remote['id'], commitUuid='base',
+                                    contentRevision='original', metadataRevision='original')}
+    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', asset['path']))
+    poll = {'path': asset['path'], 'generation': 1, 'running': False}
+    monkeypatch.setattr(module.lf, 'project_poll_write', lambda: dict(poll), raising=False)
+    mine = {'exposure': 1, 'cameraPath': {'keyframes': [{'t': 0}]}}
+    monkeypatch.setattr(module, 'capture_view', lambda _: copy.deepcopy(mine))
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    restored = []
+    monkeypatch.setattr(module, 'restore_view', lambda _lf, view, **kw: restored.append(copy.deepcopy(view)))
+    def save(**kwargs):
+        assert restored and not actions
+        poll['generation'] += 1
+        return True
+    monkeypatch.setattr(module.lf, 'project_save', save, raising=False)
+    monkeypatch.setattr(module.lf, 'project_is_dirty', lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, 'is_training_active', lambda: False, raising=False)
+    monkeypatch.setattr(panel, '_publish_saved', lambda *a, **k: actions.append(('upload', a)))
+    monkeypatch.setattr(panel, 'pull_asset', lambda *a, **k: actions.append(('pull', a)))
+    panel.service.edit = lambda *a, **k: actions.append(('patch', a))
+    def backup(*args):
+        assert not restored and not actions
+        state['jobs'] = [dict(id='settings', status='completed', project='project',
+            localUpdate=dict(id='backup', state='ready', backupPath=str(tmp_path / 'recovery.licht')))]
+        return 'settings', 'backup'
+    def saved(*args, **kwargs):
+        assert restored and not actions
+        state['jobs'][0]['localUpdate']['state'] = 'applied'
+    panel.service.prepare_settings_update = backup
+    panel.service.finish_settings_update = saved
+    reviews = _capture_review(monkeypatch)
+    panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
+    assert panel._decision_pending and not actions
+    choices = _accept_review(reviews, choice)
+    assert set(choices) == ({'text', 'view', 'track', 'content'} if content else {'text', 'view', 'track'})
+    assert not panel._decision_pending
+    if expected != 'pull':
+        assert panel._settings_pending and not actions and not restored
+        panel._finish_settings_apply()
+        assert panel._save_pending and not actions
+        panel._finish_current_project_save()
+        assert not actions
+        panel._finish_settings_apply()
+        assert restored == [remote['viewerSettings'] if choice == 'gallery' else mine]
+        assert panel._undo_pull['jobId'] == 'settings'
+    assert [a[0] for a in actions] == [expected]
+    assert path.read_bytes() == b'saved project with training history'
+
 @pytest.mark.parametrize('diagnostic,key', [
     ('Gallery download exceeds its declared size', 'error.download_size'),
     ('Gallery download was incomplete', 'error.download_damaged'),

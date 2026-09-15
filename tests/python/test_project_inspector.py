@@ -135,3 +135,153 @@ def _wait(predicate, timeout=2.0):
             return True
         time.sleep(0.01)
     return False
+
+
+def _contents_details(**changes):
+    result = dict(
+        card=SimpleNamespace(has_preview=False), storage=SimpleNamespace(dead_ratio=0, dead_bytes=0),
+        save_history=[], retained_checkpoints=[], references=[], chapters=[], manifest={}, license=None,
+        parameters=SimpleNamespace(embedded_dataset_present=False, active_strategy='mcmc'),
+        scene_graph=SimpleNamespace(training_node_id='model', dataset_node_name=''),
+        metrics=SimpleNamespace(loss_samples=0, psnr_samples=0),
+    )
+    result.update(changes)
+    return SimpleNamespace(**result)
+
+
+def _contents(details, plan=None, **kwargs):
+    import json
+    from pathlib import Path
+    from lfs_plugins.project_inspector import contents_rows
+    translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    return contents_rows(_entry(), details, plan, tr=lambda key: translations[key],
+                         format_size=lambda size: f'{size} B', format_time=lambda timestamp: '2026-08-27' if timestamp else '', **kwargs)
+
+
+def test_empty_contents_has_only_the_two_add_rows():
+    rows = _contents(_contents_details())
+    assert [(r['id'], r['label'], r['action']) for r in rows] == [
+        ('thumbnail', 'Add thumbnail', 'thumbnail'), ('license', 'Add license', 'license')]
+    assert not any(r['removable'] for r in rows)
+
+
+def test_contents_saves_have_dates_and_only_older_saves_have_actions():
+    rows = _contents(_contents_details(save_history=[
+        SimpleNamespace(generation=1, bytes_added=38, saved_at_unix_ns=10),
+        SimpleNamespace(generation=2, bytes_added=412, saved_at_unix_ns=20)]))
+    current, older = rows[:2]
+    assert current['label'] == 'Save 2 of 2, 2026-08-27, current'
+    assert not current['removable'] and not current['has_action']
+    assert older['action'] == 'restore' and older['removable'] and older['generation'] == 1
+    assert older['size'] == '38 B'
+
+
+def test_contents_checkpoints_only_list_retained_payloads_and_match_sizes_by_identity():
+    rows = _contents(_contents_details(retained_checkpoints=[
+        SimpleNamespace(instance_uuid='old', iteration=10, retained=False),
+        SimpleNamespace(instance_uuid='a', iteration=20, retained=True, header_reachable=True),
+        SimpleNamespace(instance_uuid='b', iteration=30, retained=True, header_reachable=False)]),
+        SimpleNamespace(retained_checkpoints=[SimpleNamespace(instance_uuid='b', bytes=200), SimpleNamespace(instance_uuid='a', bytes=100)]))
+    cps = [r for r in rows if r['kind'] == 'checkpoint']
+    assert [(r['id'], r['bytes'], r['action']) for r in cps] == [('checkpoint:a',100,'resume'),('checkpoint:b',200,'')]
+    assert all(r['removable'] for r in cps)
+    assert cps[0]['label'] == 'Checkpoint, iteration 20, mcmc'
+
+
+def test_contents_embedded_dataset_counts_images_without_counting_normals_as_images():
+    details = _contents_details(parameters=SimpleNamespace(embedded_dataset_present=True, embedded_images=194, embedded_normals=194, embedded_sparse=3))
+    plan = SimpleNamespace(embedded_dataset=[SimpleNamespace(bytes=100), SimpleNamespace(bytes=50)], drop_embedded_dataset=SimpleNamespace(allowed=False))
+    dataset = next(r for r in _contents(details,plan) if r['kind']=='dataset')
+    assert dataset['label'] == 'Dataset, 194 images embedded' and dataset['bytes']==150
+    assert dataset['removable'] and dataset['remove_disabled']
+    plan.drop_embedded_dataset.allowed=True
+    assert not next(r for r in _contents(details,plan) if r['kind']=='dataset')['remove_disabled']
+
+
+def test_external_dataset_always_offers_locate_and_only_embeds_reachable_inputs():
+    for reachable in (False,True):
+        rows = _contents(_contents_details(references=[SimpleNamespace(kind='dataset',path='/dataset',reachable=reachable)]))
+        dataset = next(r for r in rows if r['kind']=='external')
+        assert dataset['action']=='embed' and dataset['secondary']=='locate'
+        assert dataset['action_disabled'] is not reachable
+        assert '/dataset' in dataset['label']
+        assert not dataset['removable']
+
+
+def test_contents_thumbnail_metrics_and_license_use_native_parts():
+    rows=_contents(_contents_details(card=SimpleNamespace(has_preview=True), chapters=[SimpleNamespace(fourcc='THMB',stored_bytes=40),SimpleNamespace(fourcc='METR',stored_bytes=8)],
+        metrics=SimpleNamespace(loss_samples=8,psnr_samples=4),license=SimpleNamespace(identifier='CC-BY-4.0',notice='Credit: Owner')))
+    parts={r['id']:r for r in rows}
+    assert parts['thumbnail']['bytes']==40 and parts['thumbnail']['action']=='thumbnail'
+    assert parts['metrics']['label']=='Metrics, 12 samples' and parts['metrics']['bytes']==8
+    assert parts['license']['label']=='License, CC BY 4.0' and parts['license']['action_label']=='Change'
+    assert all(parts[id]['removable'] for id in ('thumbnail','metrics','license'))
+
+
+def test_pending_contents_survive_new_models_and_do_not_restore_removed_saves():
+    import json
+    details=_contents_details(save_history=[SimpleNamespace(generation=1),SimpleNamespace(generation=2)],manifest={
+        'contents_removals':json.dumps({'rows':[{'id':'save:1','kind':'save','generation':1,'bytes':38},{'id':'checkpoint:a','kind':'checkpoint','iteration':30,'bytes':210}]})})
+    rows=_contents(details)
+    assert not any(r['id']=='save:1' for r in rows)
+    pending=[r for r in rows if r['pending']]
+    assert len(pending)==2 and sum(r['bytes'] for r in pending)==248
+    assert all(r['disabled'] and not r['removable'] and not r['has_action'] for r in pending)
+    assert all('removed, compact to free' in r['label'] for r in pending)
+
+
+def test_compact_threshold_and_busy_state():
+    for ratio, expected in ((.009,False),(.01,True),(.49,True)):
+        rows=_contents(_contents_details(storage=SimpleNamespace(dead_ratio=ratio,dead_bytes=210)),busy=True)
+        assert any(r['id']=='compact' for r in rows) is expected
+        assert all(r['disabled'] for r in rows)
+
+
+def test_standard_license_mapping_and_credit():
+    from lfs_plugins.project_inspector import LICENSES,license_value,license_fields
+    assert [identifier for identifier,_ in LICENSES] == ['CC0-1.0','CC-BY-4.0','CC-BY-SA-4.0','CC-BY-NC-4.0','CC-BY-NC-SA-4.0','CC-BY-ND-4.0','CC-BY-NC-ND-4.0','LicenseRef-Proprietary','custom']
+    for identifier,_ in LICENSES[:-1]:
+        actual,notice=license_value(dict(license_choice=identifier,attribution='Owner'))
+        assert actual==identifier
+        assert notice==('' if identifier in {'CC0-1.0','LicenseRef-Proprietary'} else 'Credit: Owner')
+        fields=license_fields(SimpleNamespace(identifier=actual,notice=notice))
+        assert fields['license_choice']==identifier
+        assert license_value(fields)==(actual,notice)
+
+
+def test_custom_license_mapping_and_multiline_notice_round_trip():
+    import pytest
+    from lfs_plugins.project_inspector import license_fields,license_value
+    identifier,notice=license_value(dict(license_choice='custom',license_name='My Scan License',license_text='Ask first.\nhttps://example.org/license',attribution='Studio'))
+    assert identifier=='LicenseRef-MyScanLicense'
+    assert notice=='Ask first.\nhttps://example.org/license\nCredit: Studio'
+    assert license_value(license_fields(SimpleNamespace(identifier=identifier,notice=notice)))==(identifier,notice)
+    for fields in ({'license_name':'','license_text':'terms'},{'license_name':'Name','license_text':''},{'license_name':'!!!','license_text':'terms'}):
+        with pytest.raises(ValueError):license_value(dict(license_choice='custom',**fields))
+
+
+def test_removed_checkpoint_does_not_describe_current_training():
+    details = _contents_details(retained_checkpoints=[
+        SimpleNamespace(iteration=30000, retained=False, binds_scene_graph=True),
+    ])
+    model = details_rows(_entry(), details, format_size=str, format_time=str)
+    assert model["iteration"] == ""
+    assert not model["resumable"]
+
+
+def test_license_removal_size_counts_utf8_notice_bytes():
+    license_obj = SimpleNamespace(identifier="CC-BY-4.0", notice="Credit: Renée")
+    rows = _contents(_contents_details(license=license_obj))
+    row = next(row for row in rows if row["id"] == "license")
+    assert row["bytes"] == len((license_obj.identifier + license_obj.notice).encode("utf-8"))
+
+
+def test_license_form_uses_chooser_and_escapes_custom_text():
+    from lfs_plugins.project_dialog import form_content
+    body,_=form_content('set_license',dict(license_choice='custom',license_name='<scan>',license_text='<terms>'),tr=lambda key:key,confirm_label='Save',busy=False,resumable=False)
+    assert 'name="license_choice"' in body and 'name="license_name"' in body and 'name="license_text"' in body
+    assert 'name="identifier"' not in body and 'name="notice"' not in body
+    assert '&lt;scan&gt;' in body and '&lt;terms&gt;' in body
+    for choice in ('CC0-1.0','LicenseRef-Proprietary'):
+        body,_=form_content('set_license',dict(license_choice=choice),tr=lambda key:key,confirm_label='Save',busy=False,resumable=False)
+        assert 'name="attribution"' not in body and 'name="license_text"' not in body

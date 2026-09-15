@@ -1028,6 +1028,20 @@ def test_pull_undo_stays_in_history_across_gallery_checks(panel_module, monkeypa
     panel._gallery_command("refresh")
     assert panel._gallery_undo is not None
 
+def test_pull_undo_stays_in_history_and_clears_on_next_gallery_action(panel_module, monkeypatch):
+    # Gallery checks now retain the durable recovery action in Transfers.
+    panel = panel_module.AssetManagerPanel()
+    timers, restored = [], []
+    monkeypatch.setattr(panel_module.threading, "Timer", lambda delay, callback: timers.append((delay, callback)) or SimpleNamespace(start=lambda: None, cancel=lambda: None))
+    undo = lambda: restored.append(True)
+    panel._set_gallery_undo(undo, kind="pull")
+    assert timers == []
+    panel._gallery_controller = SimpleNamespace(refresh=lambda: None)
+    panel._gallery_command("refresh")
+    assert panel._gallery_undo == (float("inf"), undo)
+    panel._gallery_undo[1]()
+    assert restored == [True]
+
 def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatch):
     import xml.etree.ElementTree as ET
     from lfs_plugins.asset_layout import list_columns, list_column_widths
@@ -1036,7 +1050,7 @@ def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatc
     panel.on_bind_model(_BindingContext(model))
     for width in (260, 359, 360, 479, 480, 559, 560, 699, 700, 1100):
         columns = list_columns(width)
-        assert columns["gallery"] == (24 if width < 480 else 128)
+        assert columns["gallery"] == (32 if width < 480 else list_column_widths(width)["gallery"])
         assert columns["size"] == (width >= 360)
         assert columns["modified"] == (width >= 560)
         assert columns["folder"] == (width >= 700)
@@ -1889,6 +1903,11 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
         elif scope == "transfer":
             assert field in {"can_pause", "can_resume", "can_cancel", "can_resolve", "can_recover", "can_undo"}, expr
+        elif scope == "part":
+            from lfs_plugins.project_inspector import contents_rows
+            parts = contents_rows(asset, SimpleNamespace(), tr=lambda key: key,
+                                  format_size=str, format_time=str)
+            assert parts and all(isinstance(part[field], bool) for part in parts), expr
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
 
@@ -2344,8 +2363,13 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
             assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
-        assert sum(widths.values()) + 24 + 32 + 8 * visible <= width + 0.1
-        assert widths['name'] >= (80 if width < 420 else 120)
+        assert sum(widths.values()) + 24 + 16 + 32 + 8 <= width + 0.1
+        assert widths['name'] >= 80
+        measured = dict(gallery=220, size=87, modified=132, folder=180)
+        fitted = list_column_widths(width, overrides, measured)
+        assert sum(fitted.values()) + 80 <= width + 0.1
+        for col in ("size", "modified", "folder"):
+            assert fitted[col] == 0 or fitted[col] >= measured[col]
 
 
 def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
@@ -2374,14 +2398,19 @@ def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     assert len(strip.findall('./span[@class="inspector-strip-meta"]')) == 2
     strip_open = next(e for e in strip.findall('button') if 'inspector-strip-open' in e.get('class', '').split())
     assert 'asset-button--toolbar24' in strip_open.get('class').split()
-    assert strip_open.get('data-event-click') == 'on_load_asset'
-    operations = root.find('.//div[@class="inspector-operations"]')
-    action = operations.find('button')
-    assert action.get('data-for') == 'operation : inspector_operation_rows'
-    assert action.get('data-event-click') == 'open_project_operation(operation.action)'
-    assert action.get('data-attr-data-project-operation') == 'operation.action'
-    assert action.get('data-attr-title') == 'operation.label'
-    assert operations.findall('span') == []
+    assert strip_open.get('data-event-click') == 'on_strip_action'
+    assert strip_open.find('span').text == '{{strip_action_label}}'
+    contents = root.find('.//div[@class="inspector-contents"]')
+    row = contents.find('div')
+    assert row.get('data-for') == 'part : contents_rows'
+    assert row.get('data-attr-data-content-id') == 'part.id'
+    actions = row.findall('button')
+    assert [e.get('data-event-click') for e in actions] == [
+        'contents_action(part.id, part.action)', 'contents_action(part.id, part.secondary)',
+        "contents_action(part.id, 'remove')"]
+    assert 'contents-remove' in actions[-1].get('class').split()
+    assert actions[-1].find('span').get('class') == 'asset-button-glyph'
+    assert row.find('span').get('data-attr-title') == 'part.label'
     for name in ('asset_manager.rml', 'gallery_file_panel.rml', 'viewport_overlay.rml'):
         content = (resources / name).read_text()
         for obsolete in ('sign_in', 'sign-in', 'sign in', 'account.connect_menu_bar', 'gallery_account_reason'):

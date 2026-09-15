@@ -38,6 +38,10 @@ from .gallery_transfer_ui import transfer_rows
 from .project_inspector import (
     InspectionFactsPipeline,
     dialog_model,
+    contents_rows,
+    pending_removals,
+    license_name,
+    license_value,
     details_rows,
     inspection_cache_key,
     operation_actions,
@@ -139,6 +143,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._info_preferred_height = 220.0
         self._navigator_width = 200.0
         self._navigator_widths = {"medium": 160.0, "wide": 200.0}
+        self._text_column_metrics = None
+        self._text_measure_key = None
+        self._text_locales = None
+        self._inspector_label_width = 168.0
         self._inspector_width = INSPECTOR_COLUMN_MIN
         self._inspector_preferred_height = 200.0
         self._tray_height = 120.0
@@ -157,6 +165,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._layout_class = ""
         self._content_width = 0.0
         self._host_geometry = None
+        self._layout_recheck_pending = False
         self._last_ui_scale = 0.0
         self._list_column_overrides: Dict[str, float] = {}
         self._layout_signature = None
@@ -452,9 +461,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "show_selection_multiple", lambda: self._selection_type == "multiple"
         )
 
-        model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width)["modified"])
-        model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width)["folder"])
-        model.bind_func("asset_list_show_size", lambda: list_columns(self._asset_window_client_width)["size"])
+        model.bind_func("asset_list_wide", lambda: self._list_columns()["modified"])
+        model.bind_func("asset_list_show_folder", lambda: self._list_columns()["folder"])
+        model.bind_func("asset_list_show_size", lambda: self._list_columns()["size"])
         for column in ("name", "gallery", "size", "modified", "folder"):
             model.bind_func(
                 f"asset_list_{column}_width",
@@ -462,7 +471,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
             label_binding = "col_" + column + "_label"
             model.bind_func(label_binding, lambda column=column: self._list_header_label(column))
-        model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width)["gallery"] == 24)
+        model.bind_func("asset_list_gallery_compact", lambda: self._list_columns()["gallery"] == 32)
         model.bind_func(
             "check_gallery_tooltip",
             lambda: f"{tr('projects.action.check_gallery')} · {self._gallery_checked_label()}",
@@ -487,8 +496,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_has_gallery_action", lambda: (
             not self.get_selected_asset_can_locate()
             and bool(self._selected_gallery_action())))
+        model.bind_func("strip_action_label", lambda: self._selected_transfer_recovery(label=True) or tr("projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.repair" if (self._get_selected_asset() or {}).get("status") == "REPAIR_ONLY" else "projects.action.open"))
         model.bind_func("open_button_label", lambda: tr(
-            "projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.open"))
+            "projects.action.locate" if self.get_selected_asset_can_locate() else
+            "projects.action.repair" if (self._get_selected_asset() or {}).get("status") == "REPAIR_ONLY" else
+            "projects.action.open"))
         model.bind_func("inspector_gallery_action_tooltip", lambda: (
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
@@ -603,7 +615,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_embedded": lambda: bool(self._selected_details_rows().get("embedded")),
             "inspector_has_metrics": lambda: bool(self._selected_details_rows().get("has_metrics")),
             "inspector_metrics": lambda: self._selected_details_rows().get("metrics", ""),
-            "inspector_license": lambda: self._selected_details_rows().get("license_identifier", ""),
+            "inspector_license": lambda: license_name(self._selected_details_rows().get("license_identifier", ""), tr),
             "inspector_license_notice": lambda: self._selected_details_rows().get("license_notice", ""),
             "selected_project_title": lambda: self._selected_details_rows().get("title", ""),
             "inspector_physical_size": lambda: self._selected_details_rows().get("physical_size", ""),
@@ -613,8 +625,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_autosave_newer": lambda: bool(self._selected_details_rows().get("autosave_newer")),
             "inspector_has_details": lambda: bool(self._selected_inspection().get("details")),
             "inspector_card_diagnostic": lambda: str(getattr(self._selected_inspection().get("card"), "diagnostic", "") or ""),
-            "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and bool(self._selected_details_rows().get("resumable")),
+            "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and not self._selected_transfer_recovery() and bool(self._selected_details_rows().get("resumable")),
             "inspector_operations_expanded": self.get_operations_expanded,
+            "contents_pending": self.get_contents_pending,
+            "contents_has_pending": lambda: bool(self.get_contents_pending()),
             "inspector_has_saved": lambda: bool(self._selected_details_rows().get("saved")),
             "inspector_has_saved_at": lambda: bool(self._selected_details_rows().get("saved_at")),
             "inspector_has_opened": lambda: bool(self._selected_details_rows().get("opened")),
@@ -699,7 +713,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "project_section_title": "projects.inspector.project",
             "gallery_section_title": "projects.inspector.gallery",
             "file_section_title": "projects.inspector.file",
-            "operations_section_title": "projects.inspector.operations",
+            "operations_section_title": "projects.contents.title",
             "resume_button_label": "projects.action.resume_training",
             "scope_all_label": "projects.sidebar.all_projects",
             "scope_recent_label": "projects.sidebar.recent",
@@ -771,6 +785,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_record_list("folders")
         model.bind_record_list("assets")
         model.bind_record_list("inspector_operation_rows")
+        model.bind_record_list("contents_rows")
         model.bind_record_list("dialog_rows")
         for event, handler in (
             ("open_gallery", self.on_open_gallery),
@@ -781,6 +796,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
             ("on_load_asset", self.on_load_asset),
+            ("on_strip_action", self.on_strip_action),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
             ("open_sort_menu", self.open_sort_menu),
@@ -798,6 +814,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_use_found_location", self.on_use_found_location),
             ("on_selected_fix", self.on_selected_fix),
             ("open_project_operation", self.open_project_operation),
+            ("contents_action", self.on_contents_action),
             ("dialog_cancel", self.close_project_dialog),
             ("dialog_confirm", self.confirm_project_dialog),
             ("dialog_restore_new", self.dialog_restore_new),
@@ -819,6 +836,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._handle = model.get_handle()
         self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
         self._handle.update_record_list("inspector_operation_rows", self.get_selected_operation_actions())
+        self._handle.update_record_list("contents_rows", self.get_contents_rows())
         self._handle.update_record_list("dialog_rows", self._dialog_data.get("rows", []))
 
     def get_search_query(self) -> str:
@@ -1072,11 +1090,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
             self._inspection_pipeline = InspectionFactsPipeline(
                 lambda path: self._native_io_call("inspect_project_card", path),
-                lambda path: self._native_io_call("inspect_project_details", path),
+                self._inspect_contents,
                 self._on_inspection_result,
                 scheduler=scheduler if callable(scheduler) else None,
             )
         return self._inspection_pipeline
+
+    def _inspect_contents(self, path):
+        details = self._native_io_call("inspect_project_details", path)
+        plan = self._native_io_call("plan_reduce_size", path)
+        return {"details": details, "plan": plan}
 
     def _start_inspection_refresh(self) -> None:
         if not self._asset_index or not self._panel_mounted or not self._handle:
@@ -1097,6 +1120,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if kind == "card":
                 self._dirty_fields("assets", "selected_has_problem", "selected_health_label")
             return
+        if kind == "details" and isinstance(result, dict) and "details" in result:
+            self._inspection_by_asset.setdefault(asset_id, {})["plan"] = result["plan"]
+            result = result["details"]
         if asset_id != self.get_selected_asset_id() and kind == "details":
             # Background details are useful for later selection but must not
             # cause a hidden Inspector to redraw as if it were selected.
@@ -1186,16 +1212,71 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return [{**row, "label": tr(keys.get(row["action"], row["label"]))} for row in rows]
 
     def get_operations_expanded(self) -> bool:
-        if self._operations_expanded is not None:
-            return self._operations_expanded
-        if self.selected_has_problem():
-            return True
-        rows = self._selected_details_rows()
-        try:
-            reclaimable = float(str(rows.get("reclaimable_percent", "0")).rstrip("%"))
-        except (TypeError, ValueError):
-            reclaimable = 0.0
-        return reclaimable > 10.0
+        return self._operations_expanded is not False
+
+    def _contents_busy(self, asset_id):
+        return any(row.get("asset_id") == asset_id and row.get("status") == "running"
+                   for row in self._project_operations.values())
+
+    def get_contents_rows(self):
+        facts = self._selected_inspection()
+        return contents_rows(self._get_selected_asset() or {}, facts.get("details"), facts.get("plan"),
+                             tr=tr, format_size=self._format_size, format_time=self._format_unix_ns,
+                             busy=self._contents_busy(self.get_selected_asset_id()))
+
+    def get_contents_pending(self):
+        rows = pending_removals(self._selected_inspection().get("details"))
+        if not rows:
+            return ""
+        return tr("projects.contents.pending_total").format(size=self._format_size(sum(int(row.get("bytes", 0)) for row in rows)))
+
+    def _embed_contents_dataset(self, path, progress, cancel):
+        details = self._native_io_call("inspect_project_details", path)
+        legacy = next((ref for ref in details.references if ref.key == "training_parameters"), None)
+        if legacy is not None:
+            self._native_io_call("set_dataset_reference", path, str(legacy.path))
+        return self._native_io_call("embed_dataset_file", path, progress, cancel)
+
+    def on_contents_action(self, _handle=None, _event=None, args=None):
+        if not args or len(args) < 2:
+            return
+        row_id, action = str(args[0]), str(args[1])
+        row = next((row for row in self.get_contents_rows() if row["id"] == row_id), None)
+        asset = self._get_selected_asset()
+        if not asset or not row or row["disabled"]:
+            return
+        self._dialog_asset_id = asset["id"]
+        path = str(asset["path"])
+        if action == "remove":
+            if not row["removable"] or row["remove_disabled"]:
+                return
+            subject = row["label"]
+            message = tr("projects.contents.confirm_remove").format(part=subject, size=row["size"] or self._format_size(0))
+            if row.get("bound"):
+                message += "\n" + tr("projects.contents.keep_model")
+            self._set_dialog("remove_content", {"row": row, "message": message})
+        elif action == "compact":
+            self._set_dialog("compact_content", {"message": tr("projects.contents.confirm_compact")})
+        elif action == "restore":
+            self._start_project_operation(asset["id"], tr("projects.contents.restore"),
+                lambda _progress, _cancel: self._native_io_call("restore_save", path, row["generation"], path))
+        elif action == "resume":
+            if row.get("bound"):
+                self._load_asset(asset["id"])
+            else:
+                self._start_project_operation(asset["id"], tr("projects.action.resume_training"),
+                    lambda _progress, _cancel: self._native_io_call("rebind_checkpoint", path, row["checkpoint_uuid"]),
+                    after=lambda: self._load_asset(asset["id"]))
+        elif action == "embed" and not row["action_disabled"]:
+            self._start_project_operation(asset["id"], tr("projects.action.embed_dataset"),
+                lambda progress, cancel: self._embed_contents_dataset(path, progress, cancel))
+        elif action == "locate":
+            directory = lf.ui.open_folder_dialog(tr("projects.dialog.select_dataset"), str(Path(path).parent))
+            if directory:
+                self._start_project_operation(asset["id"], tr("projects.action.locate_dataset"),
+                    lambda _progress, _cancel: self._native_io_call("set_dataset_reference", path, directory))
+        elif action in {"thumbnail", "license"}:
+            self.open_project_operation(None, None, ["update_thumbnail" if action == "thumbnail" else "set_license"])
 
     def toggle_operations(self, _handle=None, _ev=None, _args=None) -> None:
         self._operations_expanded = not self.get_operations_expanded()
@@ -1351,6 +1432,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         key = {
             "AVAILABLE": "projects.status.available",
             "MISSING": "projects.status.missing",
+            "UNREADABLE": "projects.status.unreadable",
+            "UNSUPPORTED": "projects.status.unreadable",
             "IDENTITY_MISMATCH": "projects.status.identity_mismatch",
             "REPAIR_ONLY": "projects.status.needs_repair",
             "UNSUPPORTED_NEWER": "projects.status.newer_version",
@@ -1604,7 +1687,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_list_top_spacer_height = 0.0
             self._asset_list_bottom_spacer_height = 0.0
         else:
-            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
             visible = (
                 math.ceil(client_height / row_height)
@@ -1737,6 +1820,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return str(asset.get("path") or "") if asset else ""
 
     def get_selected_asset_size(self) -> str:
+        if size := self._selected_details_rows().get("physical_size"):
+            return size
         asset = self._get_selected_asset()
         return self._format_size(asset.get("file_size_bytes", 0)) if asset else ""
 
@@ -1745,6 +1830,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return self._format_unix_ns(asset.get("created_at_unix_ns", 0)) if asset else ""
 
     def get_selected_asset_modified(self) -> str:
+        if saved := self._selected_details_rows().get("saved_at"):
+            return saved
         asset = self._get_selected_asset()
         return self._format_unix_ns(asset.get("saved_at_unix_ns", 0)) if asset else ""
 
@@ -2119,7 +2206,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_physical_size", "inspector_dead_bytes", "inspector_reclaimable",
             "inspector_saves", "inspector_autosave_newer", "inspector_has_details",
             "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
-            "inspector_operations_expanded",
+            "inspector_operations_expanded", "contents_pending", "contents_has_pending",
             "inspector_gallery_action_label", "inspector_has_gallery_action", "inspector_gallery_action_enabled",
             "inspector_gallery_action_tooltip",
             "inspector_training_tooltip", "inspector_model_tooltip", "inspector_reclaimable_tooltip",
@@ -2129,6 +2216,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         if self._handle:
             self._handle.update_record_list("inspector_operation_rows", self.get_selected_operation_actions())
+            self._handle.update_record_list("contents_rows", self.get_contents_rows())
 
     def on_locate_file(self, _handle=None, _ev=None, args=None):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id") or self.get_selected_asset_id()
@@ -2182,6 +2270,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
 
+    def _selected_transfer_recovery(self, *, label=False):
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        badge = self._gallery_badge(asset)
+        if not badge["health_badge"] and badge["gallery_action"] in ("resume", "retry"):
+            return badge["gallery_action_label"] if label else badge["gallery_action"]
+        return ""
+
+    def on_strip_action(self, handle, event, args):
+        action = self._selected_transfer_recovery()
+        if action:
+            self._stop_event(event)
+            self._gallery_command(action)
+        else:
+            self.on_load_asset(handle, event, args)
+
     def on_load_asset(self, _handle, _ev, args):
         # The action button must not also toggle its containing compact strip.
         if _ev is not None:
@@ -2190,6 +2295,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._asset_dict(asset_id) or {}
         if str(asset.get("status") or "") in ("MISSING", "IDENTITY_MISMATCH"):
             self.on_locate_file(None, None, [asset_id])
+        elif asset.get("status") == "REPAIR_ONLY":
+            self.open_project_operation(None, None, ["repair"])
         else:
             self._load_asset(asset_id)
 
@@ -2202,7 +2309,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "reduce_size": "projects.dialog.reduce_size",
             "export_as": "projects.dialog.export_as",
             "update_thumbnail": "projects.dialog.update_thumbnail",
-            "set_license": "projects.dialog.set_license",
+            "set_license": "projects.contents.license_chooser",
+            "remove_content": "projects.contents.remove",
+            "compact_content": "projects.contents.compact",
             "rename": "projects.dialog.rename_project",
             "repair": "projects.dialog.repair",
             "locate_dataset": "projects.dialog.locate_dataset",
@@ -2219,6 +2328,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "export_as": "projects.action.export",
             "update_thumbnail": "projects.action.update_thumbnail",
             "set_license": "common.save",
+            "remove_content": "projects.contents.remove",
+            "compact_content": "projects.contents.compact",
             "rename": "common.save",
             "repair": "projects.action.repair",
             "locate_dataset": "projects.action.locate_dataset",
@@ -2267,7 +2378,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         key = self._dialog_key
         lf.ui.form_dialog(key, self.get_dialog_title(), body, buttons,
                           lambda label, values: self._project_form_result(key, label, values),
-                          lambda values: self._project_form_changed(key, values), width=720)
+                          lambda values: self._project_form_changed(key, values),
+                          width=560 if self._dialog_kind in {"remove_content", "compact_content", "set_license"} else 720)
 
     def _refresh_project_form(self, *, body: bool = True) -> None:
         if not self._dialog_kind:
@@ -2276,7 +2388,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         lf.ui.form_dialog_update(self._dialog_key, buttons, content if body else None)
 
     def _read_project_form(self, values) -> None:
-        for key in ("generation", "destination", "format", "source", "identifier", "notice", "name"):
+        for key in ("generation", "destination", "format", "source", "identifier", "notice", "name", "license_choice", "license_name", "license_text", "attribution"):
             if key in values:
                 self._dialog_data[key] = str(values[key])
         if "drop_checkpoints" in values:
@@ -2289,9 +2401,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _project_form_changed(self, key, values) -> None:
         if key != self._dialog_key or not self._dialog_kind:
             return
-        previous = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset)
+        previous = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset, self._dialog_data.get("license_choice"))
         self._read_project_form(values)
-        current = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset)
+        current = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset, self._dialog_data.get("license_choice"))
         if previous != current:
             # Replace form content after the native control finishes its event.
             self._schedule_ui(lambda: self._refresh_project_form() if key == self._dialog_key else None)
@@ -2338,19 +2450,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         self._dialog_asset_id = asset_id
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
-        if action == "reduce_size":
-            self._dialog_plan = None
-            self._dialog_drop_checkpoints = True
-            self._dialog_drop_dataset = False
-            self._set_dialog("reduce_size", {"name": self._get_asset_display_name(asset), "path": asset.get("path", ""), "busy": True})
-            self._dialog_busy = True
-            self._dialog_plan = None
-            self._run_dialog_worker(lambda: self._native_io_call("plan_reduce_size", asset["path"]), self._on_plan_ready)
-            return
-        if action == "save_history" and details is None:
-            self._set_dialog("save_history", {"name": self._get_asset_display_name(asset), "path": asset.get("path", ""), "busy": True})
-            self._dialog_busy = True
-            self._start_inspection_refresh()
+        if action in {"save_history", "reduce_size"}:
+            self._inspector_expanded = True
+            self._operations_expanded = True
+            self._dirty_selection()
+            self._dirty_fields("inspector_expanded")
             return
         data = dialog_model(
             action,
@@ -2513,9 +2617,28 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "update_thumbnail":
             self._start_thumbnail_operation(asset)
         elif action == "set_license":
-            identifier = str(data.get("identifier") or "").strip()
-            notice = str(data.get("notice") or "")
-            self._start_project_operation(asset["id"], "Set project license", lambda _progress, _cancel: self._native_io_call("clear_project_license", path) if not identifier else self._native_io_call("set_project_license", path, identifier, notice))
+            try:
+                identifier, notice = license_value(data)
+            except ValueError as error:
+                data["message"] = tr(str(error))
+                return
+            self._start_project_operation(asset["id"], tr("projects.contents.license_chooser"), lambda _progress, _cancel: self._native_io_call("set_project_license", path, identifier, notice))
+        elif action == "remove_content":
+            row = data["row"]
+            options = {"compact": False, "drop_unbound_checkpoints": False}
+            if row["kind"] == "license":
+                function = lambda _progress, _cancel: self._native_io_call("clear_project_license", path)
+            else:
+                if row["kind"] == "save": options["save_generation"] = row["generation"]
+                elif row["kind"] == "checkpoint": options["checkpoint_uuid"] = row["checkpoint_uuid"]
+                elif row["kind"] == "dataset": options["drop_embedded_dataset"] = True
+                elif row["kind"] == "thumbnail": options["drop_thumbnail"] = True
+                elif row["kind"] == "metrics": options["drop_metrics"] = True
+                function = lambda progress, cancel: self._native_io_call("reduce_size", path, options, progress, cancel)
+            self._start_project_operation(asset["id"], tr("projects.contents.removing").format(part=row["label"]), function)
+        elif action == "compact_content":
+            self._start_project_operation(asset["id"], tr("projects.contents.compact"),
+                lambda progress, cancel: self._native_io_call("compact_project_file", path, progress, cancel))
         elif action == "rename":
             name = str(data.get("name") or "").strip()
             if name:
@@ -2531,7 +2654,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             directory = lf.ui.open_folder_dialog(tr("projects.dialog.select_dataset"), str(Path(path).parent))
             if directory:
                 self._start_project_operation(asset["id"], "Locate dataset", lambda _progress, _cancel: self._native_io_call("set_dataset_reference", path, directory))
-        if action not in {"save_history", "reduce_size", "export_as", "update_thumbnail", "set_license", "rename", "repair", "locate_dataset"}:
+        if action not in {"save_history", "reduce_size", "export_as", "update_thumbnail", "set_license", "rename", "repair", "locate_dataset", "remove_content", "compact_content"}:
             return
         self.close_project_dialog()
 
@@ -2555,12 +2678,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
                 return
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._capture_viewport_preview(path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path), after=after)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
 
     @staticmethod
     def _capture_viewport_preview(path: str) -> Any:
@@ -2586,6 +2709,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         *,
         after: Optional[Callable[[], None]] = None,
     ) -> None:
+        if self._contents_busy(asset_id):
+            return
         self._operation_counter += 1
         operation_id = f"project-{self._operation_counter}"
         cancel = threading.Event()
@@ -2598,7 +2723,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "progress": 0.0,
             "cancel": cancel,
         }
+        self._tray_expanded = True
+        self._dirty_fields("tray_expanded", "tray_height", "tray_toggle_icon", "tray_toggle_label")
         self._refresh_transfer_rows()
+        self._dirty_selection()
 
         def progress(value: Any = 0.0, stage: str = "") -> None:
             try:
@@ -2620,6 +2748,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     return
                 if error is None:
                     row.update(status="completed", progress=100.0, phase=tr("projects.transfer.done"), result=result)
+                    if self._inspection_pipeline is not None:
+                        self._inspection_pipeline.invalidate(asset_id)
                     self._inspection_by_asset.pop(asset_id, None)
                     self._inspection_errors.pop(asset_id, None)
                     if after is not None:
@@ -2641,7 +2771,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if row is None:
             return
         row["progress"] = progress
-        row["phase"] = str(stage or tr("projects.transfer.preparing"))
+        row["phase"] = tr("projects.contents.working")
         self._refresh_transfer_rows()
 
     def native_file_drop(self, path: str) -> bool:
@@ -2786,10 +2916,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ]
         )
         details = self._inspection_by_asset.get(str(asset.get("id") or asset.get("project_uuid") or ""), {}).get("details")
-        if details is not None:
+        if details is not None or asset.get("status") == "REPAIR_ONLY":
             labels = {
-                "save_history": "projects.action.save_history",
-                "reduce_size": "projects.action.reduce_size",
+                "repair": "projects.action.repair",
+                "save_history": "projects.contents.title",
                 "embed_dataset": "projects.action.embed_dataset",
                 "locate_dataset": "projects.action.locate_dataset",
                 "export_as": "projects.action.export_as",
@@ -3261,14 +3391,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         visible_ids: List[str], generation: int,
     ) -> None:
         try:
-            if self._library_service is not None:
-                verified = self._library_service._call(
-                    "verify_projects_batch", visible_ids
-                )
-            else:
-                verified = verify_catalog_projects(
-                    index, cancel_event, visible_asset_ids=visible_ids
-                )
+            verified = verify_catalog_projects(
+                self._library_service or index, cancel_event, visible_asset_ids=visible_ids
+            )
             self._catalog_verify_succeeded = not cancel_event.is_set()
             _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception:
@@ -3345,6 +3470,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty("folders")
             self._handle.dirty("all_assets_count")
         if assets:
+            self._measure_text_columns()
             self._release_obsolete_thumbnail_sources()
             rows = self.get_filtered_assets()
             self._release_thumbnails_outside_window()
@@ -3476,7 +3602,28 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields("inspector_style_height", "inspector_reserved_height")
         if scale_changed:
             self._dirty_layout_fields()
+        self._request_layout_recheck()
         return True
+
+    def _request_layout_recheck(self) -> None:
+        # Rml applies the responsive styles after on_update. Read the resulting
+        # browser width once on the next UI turn, including float/dock changes.
+        schedule = getattr(lf.ui, "schedule", None)
+        if not self._panel_mounted or self._layout_recheck_pending or not callable(schedule):
+            return
+        self._layout_recheck_pending = True
+        generation = self._mount_generation
+
+        def recheck() -> None:
+            if generation != self._mount_generation:
+                return
+            self._layout_recheck_pending = False
+            if self._panel_mounted and self._sync_asset_window_viewport():
+                self._refresh_records(assets=True)
+                # The new row heights can change scrollbar space once more.
+                self._request_layout_recheck()
+
+        schedule(recheck)
 
     def on_host_geometry_changed(self, width: float, height: float, scale: float) -> None:
         """Use native host bounds, which cannot grow with overflowing children."""
@@ -3784,7 +3931,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             start = row * row_height
             end = start + row_height
         else:
-            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = index * row_height
             end = start + row_height
         top = self._asset_window_scroll_top
@@ -4034,8 +4181,58 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def on_bottom_panel_resize_start(self, _handle, event, _args):
         self._start_resize("inspector-height", event)
 
+    def _list_columns(self):
+        return list_columns(self._asset_window_client_width, self._text_column_metrics, self._list_column_overrides)
+
+    def _measure_text_columns(self):
+        if not self._doc:
+            return
+        prose = self._doc.get_element_by_id("asset-measure-prose")
+        mono = self._doc.get_element_by_id("asset-measure-mono")
+        if not prose or not mono or not hasattr(prose, "measure_text"):
+            return
+        scale = self._ui_scale()
+        folders = tuple(sorted({self._folder_name(a.get("folder_id")) for a in self._asset_index_assets().values()}))
+        key = (scale, lf.ui.get_current_language(), folders)
+        if key == self._text_measure_key:
+            return
+        if self._text_locales is None:
+            import json
+            lf.ui.get_languages()  # Load fallback glyphs before measuring every locale.
+            directory = Path(lf.ui.resource_directory()) / "locales"
+            def flatten(data, prefix=""):
+                result = {}
+                for name, value in data.items():
+                    full = prefix + name
+                    if isinstance(value, dict):
+                        result.update(flatten(value, full + "."))
+                    else:
+                        result[full] = value
+                return result
+            self._text_locales = [flatten(json.loads(path.read_text())) for path in sorted(directory.glob("*.json"))]
+        def widest(element, texts):
+            return max((element.measure_text(text) / scale for text in texts), default=0.0)
+        gallery = [value.format(percent=100) for locale in self._text_locales for name, value in locale.items()
+                   if name.startswith("projects.gallery.state.") and "{" not in value.replace("{percent}", "")]
+        labels = [value for locale in self._text_locales for name, value in locale.items()
+                  if name.startswith("projects.property.")]
+        self._inspector_label_width = math.ceil(widest(prose, labels))
+        self._text_column_metrics = dict(
+            gallery=math.ceil(widest(prose, gallery)) + 16.0 + 24.0,
+            size=math.ceil(widest(mono, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
+            modified=math.ceil(widest(mono, ["2000-12-30 23:59"])) + 16.0,
+            folder=min(240.0, math.ceil(widest(prose, folders)) + 16.0))
+        for column in self._text_column_metrics:
+            self._text_column_metrics[column] = max(self._text_column_metrics[column],
+                math.ceil(prose.measure_text(self._list_header_label(column)) / scale) + 16.0)
+        for label in self._doc.query_selector_all(".parameter-label"):
+            label.set_property("width", f"{self._inspector_label_width}dp")
+            label.set_property("min-width", f"{self._inspector_label_width}dp")
+            label.set_property("flex-basis", f"{self._inspector_label_width}dp")
+        self._text_measure_key = key
+
     def _list_column_width(self, column: str) -> float:
-        return list_column_widths(self._asset_window_client_width, self._list_column_overrides)[column]
+        return list_column_widths(self._asset_window_client_width, self._list_column_overrides, self._text_column_metrics)[column]
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
@@ -4074,6 +4271,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             column = region.partition(":")[2]
             self._list_column_overrides.pop(column, None)
             self._dirty_fields(
+                "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )
 
@@ -4117,18 +4315,19 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._stop_event(event)
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
-            minimum_name = 80.0 if self._asset_window_client_width < 420 else 120.0
+            minimum_name = 80.0
             if column == "name":
-                minimum_gallery = 24.0 if self._asset_window_client_width < 480 else 96.0
+                minimum_gallery = 32.0 if self._list_columns()["gallery"] == 32 else (self._text_column_metrics or {}).get("gallery", 32.0)
                 maximum = self._list_column_width("name") + max(0.0, self._list_column_width("gallery") - minimum_gallery)
                 minimum = minimum_name
                 self._list_column_overrides.pop("gallery", None)
             else:
                 maximum = min(280.0, self._list_column_width(column) + max(0.0, self._list_column_width("name") - minimum_name))
-                minimum = 64.0
+                minimum = (self._text_column_metrics or {}).get(column, 32.0)
                 self._list_column_overrides.pop("name", None)
             self._list_column_overrides[column] = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
             self._dirty_fields(
+                "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )
             self._stop_event(event)
@@ -4254,6 +4453,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._panel_mounted = True
         self._mount_generation += 1
         self._doc = doc
+        self._text_measure_key = None
         self._subscribe_gallery()
         if self._asset_index is None:
             self._start_backend_initialization()
@@ -4263,6 +4463,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._sync_panel_space_state()
         self._sync_panel_layout(doc)
         self._sync_asset_window_viewport(doc)
+        self._request_layout_recheck()
         self._refresh_records(assets=True, folders=True)
         if self._handle:
             self._handle.dirty_all()
@@ -4294,6 +4495,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_unmount(self, doc):
         RuntimeState.projects_panel_visible.value = False
+        self._layout_recheck_pending = False
         self._thumbnail_menu_visible = False
         if self._gallery_toast_timer:
             self._gallery_toast_timer.cancel()

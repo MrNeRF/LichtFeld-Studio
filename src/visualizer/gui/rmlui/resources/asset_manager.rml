@@ -5,6 +5,7 @@
 </head>
 
 <body template="docked-panel" data-model="asset_manager">
+  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-mono">M</span></div>
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">
@@ -96,10 +97,10 @@
               <div id="asset-sidebar-local-content">
                 <div class="asset-sidebar-global">
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="all_assets_selected" data-folder-id="__all__">
-                    <span class="asset-row-label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
+                    <span class="asset-row-label" data-attr-title="scope_all_label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
                   </button>
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__recent__'" data-folder-id="__recent__">
-                    <span class="asset-row-label">{{scope_recent_label}}</span>
+                    <span class="asset-row-label" data-attr-title="scope_recent_label">{{scope_recent_label}}</span>
                   </button>
                 </div>
                 <div class="asset-sidebar-section">
@@ -135,13 +136,14 @@
             <div class="asset-sidebar-section asset-sidebar-gallery" id="asset-sidebar-gallery">
               <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-title="gallery_quota">
                 <span>{{g_sidebar_title}}</span>
-
+                <button class="asset-button asset-button--small-icon gallery-refresh" data-event-click="gallery_refresh"
+                        data-attr-title="check_gallery_tooltip" aria-label="{{check_gallery_label}}"><span class="asset-refresh-glyph">&#x21BB;</span></button>
               </div>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
-                <span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
+                <span class="asset-row-label" data-attr-title="g_sidebar_published">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
               </button>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__">
-                <span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
+                <span class="asset-row-label" data-attr-title="g_sidebar_attention">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
               </button>
             </div>
           </div>
@@ -153,7 +155,7 @@
           <div id="asset-results-header" class="asset-gallery-header">
             <div class="asset-gallery-header-row">
               <div class="asset-gallery-header-copy">
-                <span class="asset-gallery-subtitle">{{asset_results_summary}}</span>
+                <span class="asset-gallery-subtitle" data-attr-title="asset_results_summary">{{asset_results_summary}}</span>
                 <span class="asset-gallery-empty-search" data-if="asset_search_empty">
                   <span>{{no_search_results_label}}</span><button class="btn btn--secondary" data-event-click="clear_search"><span>{{clear_search_label}}</span></button>
                 </span>
@@ -204,17 +206,17 @@
                          data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-class-gallery-remote="asset.remote_only"
                            data-style-decorator="asset.thumbnail_decorator" data-style-height="asset_card_thumbnail_height">
-                        <span class="gallery-badge" data-if="asset.gallery_has_badge" data-attr-class="'gallery-badge ' + asset.gallery_tone"
-                              data-attr-title="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
-                        <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-health-badge" data-if="asset.health_badge" data-attr-class="'asset-health-badge ' + asset.health_tone" data-attr-title="asset.health_label"><span>!</span></span>
+                        <span class="gallery-activity" data-if="asset.gallery_ring" data-attr-title="asset.gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="asset.gallery_progress_value"/></span>
+                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row"><span class="asset-card-title" data-attr-title="asset.display_name">{{asset.display_name}}</span></div>
                         <div class="asset-card-meta">
-                          <span data-if="asset.gallery_has_bytes" data-attr-title="asset.gallery_bytes">{{asset.gallery_detail}}</span>
-                          <span data-if="!asset.gallery_has_bytes">{{asset.size_label}}</span>
-                          <span data-if="!asset.has_problem">{{asset.gallery_label}}</span>
-                          <span data-if="asset.has_problem">{{asset.health_label}}</span>
+                          <span data-if="asset.gallery_has_bytes" data-attr-title="asset.gallery_bytes">{{asset.gallery_bytes}}</span>
+                          <span data-if="!asset.gallery_has_bytes" data-attr-title="asset.size_label">{{asset.size_label}}</span>
+                          <span class="gallery-card-state" data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip"><img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/><span>{{asset.gallery_label}}</span></span>
+                          <span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                         </div>
                         <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-title="asset.gallery_tooltip">
                           <div class="gallery-progress"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
@@ -241,7 +243,9 @@
                     <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists"
                          data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-list-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
-                        <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-health-badge" data-if="asset.health_badge" data-attr-class="'asset-health-badge ' + asset.health_tone" data-attr-title="asset.health_label"><span>!</span></span>
+                        <span class="gallery-activity" data-if="asset.gallery_ring" data-attr-title="asset.gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="asset.gallery_progress_value"/></span>
+                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <span class="asset-col asset-col-name" data-style-width="asset_list_name_width">
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
@@ -250,11 +254,11 @@
                       <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
                         <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon"
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
-                        <span data-if="!asset.has_problem">{{asset.gallery_label}}</span><span data-if="asset.has_problem">{{asset.health_label}}</span>
+                        <span data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span><span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                       </span>
-                      <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width">{{asset.size_label}}</span>
-                      <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width">{{asset.saved_label}}</span>
-                      <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width">{{asset.folder_name}}</span>
+                      <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width" data-attr-title="asset.size_label">{{asset.size_label}}</span>
+                      <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width" data-attr-title="asset.saved_label">{{asset.saved_label}}</span>
+                      <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width" data-attr-title="asset.folder_name">{{asset.folder_name}}</span>
                       <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active">
                         <div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div>
                       </div>
@@ -271,11 +275,14 @@
              tabindex="0" aria-label="{{resize_inspector_label}}"></div>
         <aside id="asset-inspector" class="asset-inspector" data-style-width="inspector_style_width" data-style-height="inspector_style_height">
           <div class="inspector-strip" data-event-click="toggle_inspector">
+            <span class="asset-health-badge" data-if="selected_health_badge" data-attr-class="'asset-health-badge ' + selected_health_tone" data-attr-title="selected_health_label"><span>!</span></span>
+            <img class="gallery-list-icon" data-if="selected_gallery_has_badge" data-attr-src="selected_gallery_icon" data-attr-class="'gallery-list-icon ' + selected_gallery_tone" data-attr-title="selected_gallery_tooltip"/>
+            <span class="gallery-activity" data-if="selected_gallery_ring" data-attr-title="selected_gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="selected_gallery_progress_value"/></span>
             <span class="inspector-strip-name" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
             <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_asset_size">{{selected_asset_size}}</span>
             <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_health_label">{{selected_health_label}}</span>
             <button class="btn btn--primary asset-button--toolbar24 inspector-strip-open" data-if="show_selection_asset"
-                    data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
+                    data-attr-data-asset-id="selected_asset_id" data-event-click="on_strip_action"><span>{{strip_action_label}}</span></button>
           </div>
           <div class="asset-resize-handle asset-resize-handle--horizontal" data-resize="inspector-height"
                tabindex="0" aria-label="{{resize_inspector_height_label}}"></div>
@@ -308,12 +315,12 @@
                     <div class="inspector-band-column">
                       <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value" data-attr-title="selected_asset_size">{{selected_asset_size}}</span></div>
                       <div class="parameter-row" data-if="inspector_has_saves"><span class="parameter-label">{{inspector_saves_label}}</span><span class="parameter-value" data-attr-title="inspector_saves">{{inspector_saves}}</span></div>
-                      <div class="parameter-row"><span class="parameter-label">{{gallery_section_title}}</span><span class="parameter-value" data-attr-title="gallery_selected_state">{{gallery_selected_state}}</span></div>
+                      <div class="parameter-row"><span class="parameter-label">{{gallery_section_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
                     </div>
                   </div>
                   <div class="inspector-facts" data-if="!is_medium">
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
-                    <div class="inspector-section-title">{{problem_title}}</div>
+                    <div class="inspector-section-title"><span>{{problem_title}}</span></div>
                     <div class="inspector-problem-status">{{selected_health_label}}</div>
                     <button class="btn btn--secondary" data-if="selected_fix_requires_action" data-event-click="on_selected_fix">{{selected_fix_label}}</button>
                     <div class="parameter-row" data-if="has_inspector_verify_result"><span class="parameter-label">{{inspector_verify_label}}</span><span class="parameter-value" data-attr-title="inspector_verify_result">{{inspector_verify_result}}</span></div>
@@ -357,26 +364,32 @@
                       <img class="inspector-disclosure" data-class-is-expanded="inspector_gallery_expanded" src="../icon/dropdown-arrow.png"/><span>{{gallery_section_title}}</span>
                     </button>
                     <div class="inspector-section-body" data-if="inspector_gallery_expanded">
-                      <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="gallery_selected_state">{{gallery_selected_state}}</span></div>
-                      <span class="inspector-gallery-reason text-muted" data-attr-title="gallery_selected_reason">{{gallery_selected_reason}}</span>
+                      <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
+                      <span class="inspector-gallery-reason" data-if="gallery_has_selected_reason" data-attr-title="gallery_selected_reason">{{gallery_selected_reason}}</span>
+                      <div class="parameter-row" data-if="inspector_has_license"><span class="parameter-label">{{inspector_license_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_license_notice">{{inspector_license}}</span></div>
                       <span class="inspector-gallery-summary text-muted" data-if="gallery_linked" data-attr-title="gallery_exchange_summary">{{gallery_exchange_summary}}</span>
                     </div>
                   </div>
+                  </div>
                   <div class="inspector-section">
                     <button class="asset-button asset-button--text asset-button--toolbar24 inspector-section-title" data-event-click="toggle_operations" data-attr-aria-expanded="inspector_operations_expanded"><img class="inspector-disclosure" data-class-is-expanded="inspector_operations_expanded" src="../icon/dropdown-arrow.png"/><span>{{operations_section_title}}</span></button>
-                    <div class="inspector-operations" data-if="inspector_operations_expanded">
-                      <button class="btn btn--secondary asset-button--toolbar24 inspector-operation" data-for="operation : inspector_operation_rows"
-                              data-attr-data-project-operation="operation.action" data-attr-title="operation.label"
-                              data-event-click="open_project_operation(operation.action)"><span>{{operation.label}}</span></button>
+                    <div class="inspector-contents" data-if="inspector_operations_expanded">
+                      <div class="contents-row" data-for="part : contents_rows" data-attr-data-content-id="part.id" data-attr-title="part.label" data-class-contents-row--pending="part.pending" data-class-contents-row--disabled="part.disabled">
+                        <span class="contents-label" data-attr-title="part.label">{{part.label}}</span>
+                        <span class="contents-size" data-attr-title="part.size">{{part.size}}</span>
+                        <button class="btn btn--secondary contents-action" data-if="part.has_action" data-attr-disabled="part.disabled || part.action_disabled" data-event-click="contents_action(part.id, part.action)" data-attr-title="part.action_tooltip"><span>{{part.action_label}}</span></button>
+                        <button class="btn btn--secondary contents-action" data-if="part.has_secondary" data-attr-disabled="part.disabled" data-event-click="contents_action(part.id, part.secondary)" data-attr-title="part.secondary_label"><span>{{part.secondary_label}}</span></button>
+                        <button class="asset-button asset-button--small-icon contents-remove" data-if="part.removable" data-attr-disabled="part.disabled || part.remove_disabled" data-event-click="contents_action(part.id, 'remove')" data-attr-title="part.remove_label"><span class="asset-button-glyph">&#215;</span></button>
+                      </div>
+                      <span class="contents-pending text-muted" data-if="contents_has_pending" data-attr-title="contents_pending">{{contents_pending}}</span>
                     </div>
-                  </div>
                   </div>
                 </div>
               </div>
             </div>
             <div data-if="show_selection_folder">
-              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
-              <div class="inspector-section"><div class="inspector-section-title">{{folder_details_title}}</div>
+              <div class="inspector-header"><span class="inspector-title" data-attr-title="selected_folder_name">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
+              <div class="inspector-section"><div class="inspector-section-title"><span>{{folder_details_title}}</span></div>
                 <div class="parameter-row"><span class="parameter-label">{{prop_assets_label}}</span><span class="parameter-value" data-attr-title="selected_folder_asset_count">{{selected_folder_asset_count}}</span></div>
               </div>
             </div>
@@ -402,13 +415,13 @@
       <div class="asset-quick-look" data-if="quick_look_visible">
         <div class="asset-quick-look-card">
           <div class="asset-quick-look-heading">
-            <span class="inspector-title">{{selected_asset_name}}</span>
+            <span class="inspector-title" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
             <button class="asset-button asset-button--small-icon" data-event-click="close_quick_look"
                     data-tooltip="common.close" aria-label="{{close_label}}"><span class="asset-button-glyph">&#215;</span></button>
           </div>
           <div class="asset-quick-look-thumb asset-thumb-project"
                data-style-decorator="quick_look_thumbnail">
-            <span class="asset-card-placeholder" data-if="!quick_look_has_thumbnail">{{quick_look_placeholder}}</span>
+            <span class="asset-card-placeholder" data-attr-title="quick_look_placeholder" data-if="!quick_look_has_thumbnail">{{quick_look_placeholder}}</span>
           </div>
           <div class="asset-quick-look-facts">
             <span>{{selected_asset_size}}</span><span>{{selected_asset_modified}}</span>
