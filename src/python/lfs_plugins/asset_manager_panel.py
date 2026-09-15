@@ -1347,7 +1347,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         rows: List[Dict[str, Any]] = []
         source = self._gallery_rows(folder_id == SCOPE_ATTENTION) if folder_id in GALLERY_SCOPES else self._asset_index_assets().values()
         for asset in source:
-            if folder_id not in (None, SCOPE_ALL, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
+            if folder_id not in (None, SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
                 continue
             if not self._asset_matches_query(asset, query):
                 continue
@@ -1355,17 +1355,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 continue
             rows.append(asset)
         if folder_id == SCOPE_RECENT:
-            rows = sorted(
-                rows,
-                key=lambda asset: int(
-                    asset.get("last_opened_at_unix_ns")
-                    or asset.get("opened_at_unix_ns")
-                    or asset.get("saved_at_unix_ns")
-                    or 0
-                ),
-                reverse=True,
-            )[:10]
-        if self._sort_mode == "size":
+            recent_files = getattr(lf, "project_recent_files", lambda: [])()
+            order = {Path(path): rank for rank, path in enumerate(recent_files)}
+            rows = [asset for asset in rows if Path(asset.get("path") or "") in order]
+            rows.sort(key=lambda asset: order[Path(asset["path"])])
+            rows = rows[:10]
+        elif self._sort_mode == "size":
             rows.sort(
                 key=lambda asset: (
                     -int(asset.get("file_size_bytes") or 0),
