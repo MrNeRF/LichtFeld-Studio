@@ -1107,7 +1107,6 @@
 .asset-account-chip { padding: 8dp; white-space: normal; }
 .gallery-account-row { display: flex; align-items: center; gap: 6dp; min-height: 24dp; padding: 0 8dp; }
 .gallery-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gallery-sign-in { margin-left: auto; flex: 0 0 auto; }
 
 .asset-resize-handle { flex: 0 0 auto; z-index: 2; background-color: transparent; }
 .asset-resize-handle--vertical { width: 12dp; min-width: 12dp; margin: 0 -2dp; cursor: ew-resize; }
@@ -1223,6 +1222,7 @@
 .parameter-label { flex: 0 0 88dp; width: 88dp; min-width: 88dp; font-size: 12dp; }
 .parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
 .inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-gallery-reason { display: block; padding: 4dp 0; }
 .inspector-operations { display: flex; flex-direction: column; align-items: stretch; gap: 8dp; min-width: 0; width: 100%; }
 .inspector-operation { box-sizing: border-box; flex: 0 0 24dp; width: 100%; min-width: 0; max-width: 100%; padding: 0 8dp; text-align: left; justify-content: flex-start; }
 .inspector-band-facts { display: flex; align-items: flex-start; gap: 16dp; min-width: 0; }

@@ -20,10 +20,7 @@
     </div>
     <span class="text-muted">{{quota}}</span><span class="status-warning">{{warning}}</span>
     <span class="status-info" data-if="waiting">@tr:projects.gallery.dialog.waiting</span>
-    <div class="gallery-file-sign-in" data-if="disconnected">
-      <span class="status-info">@tr:projects.gallery.sidebar.sign_in</span>
-      <button class="btn btn--secondary" data-event-click="sign_in">@tr:projects.gallery.sidebar.sign_in</button>
-    </div>
+    <span class="status-info gallery-file-account-reason" data-if="disconnected">@tr:projects.gallery.account.connect_menu_bar</span>
     <span class="status-error" data-if="has_error">{{error}}</span>
     <div class="gallery-file-actions">
       <button class="btn btn--secondary" data-event-click="cancel">{{g_action_cancel}}</button>

@@ -449,6 +449,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if self._get_selected_asset() else ""))
         model.bind_func("inspector_has_gallery_action", lambda: (
             not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+        model.bind_func("inspector_gallery_action_tooltip", lambda: self._gallery_account_reason() or (
+            self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
+            if self._get_selected_asset() else ""))
         model.bind_func("inspector_more_label", lambda: tr("common.more"))
         model.bind_func("inspector_training_tooltip", lambda: " · ".join(filter(None, (
             self._selected_details_rows().get("iteration", ""), self._selected_details_rows().get("strategy", "")))))
@@ -1750,9 +1753,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             {"label": tr("projects.action.check_gallery"), "action": "check_gallery", "separator_before": True},
             {"label": tr("projects.action.rescan_folders"), "action": "rescan_folders"},
         ]
-        if not self._gallery_state.get("signed_in"):
-            items.append({"label": tr("projects.gallery.sidebar.sign_in"), "action": "sign_in"})
-
         def choose(action: str) -> None:
             if action.startswith("filter:"):
                 self._set_filter(action.partition(":")[2])
@@ -1769,8 +1769,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._gallery_command("refresh")
             elif action == "rescan_folders":
                 self.refresh_catalog(scan_folders=True)
-            elif action == "sign_in":
-                self._start_gallery_sign_in()
 
         self._show_shared_context_menu(items, choose)
 
@@ -1975,6 +1973,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
             "inspector_operations_expanded",
             "inspector_gallery_action_label", "inspector_has_gallery_action",
+            "gallery_account_reason", "gallery_has_account_reason", "inspector_gallery_action_tooltip",
             "inspector_training_tooltip", "inspector_model_tooltip", "inspector_reclaimable_tooltip",
             "inspector_verify_result",
             "catalog_notice",

@@ -66,14 +66,6 @@ class GalleryAssetMixin:
             self._gallery_upload_format = self._gallery_controller.upload_format
         return self._gallery_controller
 
-    def _start_gallery_sign_in(self, _handle=None, _event=None, _args=None):
-        account = getattr(self._controller().service, "account", None)
-        if account is None:
-            return
-        state = account.snapshot()
-        if not state.linking:
-            account.start_device_flow(reauthorize=bool(state.signed_in))
-
     def _subscribe_gallery(self):
         if self._gallery_unsubscribe is None:
             self._gallery_unsubscribe = self._controller().subscribe(self._gallery_changed)
@@ -270,12 +262,25 @@ class GalleryAssetMixin:
                 "missing": sum(not self._project_available(a) for a in selected)}
 
     def _gallery_checked_label(self):
-        if not self._gallery_state.get("signed_in"):
-            return tr("sidebar.sign_in_hint")
+        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
+            return tr("sidebar.not_checked")
         if self._gallery_state.get("offline"):
             return tr("sidebar.offline")
         checked = self._gallery_state.get("checkedAt", 0)
-        return tr("sidebar.checked_relative", time=relative_time(checked)) if checked else tr("state.unknown")
+        return tr("sidebar.checked_relative", time=relative_time(checked)) if checked else tr("sidebar.not_checked")
+
+    def _gallery_account_label(self):
+        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
+            return tr("sidebar.not_connected")
+        name = self._gallery_state.get("display_name") or self._gallery_state.get("email", "")
+        return tr("sidebar.connected_as", name=name)
+
+    def _gallery_account_reason(self):
+        if self._gallery_state.get("signed_in") and not self._gallery_state.get("relink_required"):
+            return ""
+        if self._selected_gallery_action() in ("publish", "update", "pull", "publish_new", "retry", "resume", "resolve", "relink"):
+            return tr("account.connect_menu_bar")
+        return ""
 
     def _gallery_notice_text(self):
         if self._gallery_notice:
@@ -299,7 +304,9 @@ class GalleryAssetMixin:
         values = {
             "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
-            "gallery_account": lambda: self._gallery_state.get("display_name") or self._gallery_state.get("email", ""),
+            "gallery_account": self._gallery_account_label,
+            "gallery_account_reason": self._gallery_account_reason,
+            "gallery_has_account_reason": lambda: bool(self._gallery_account_reason()),
             "gallery_checked": self._gallery_checked_label,
             "gallery_quota": self._gallery_quota,
             "gallery_has_toast": lambda: bool(self._gallery_toast),
@@ -337,7 +344,7 @@ class GalleryAssetMixin:
         for name, getter in values.items():
             model.bind_func(name, getter)
         model.bind_record_list("transfer_rows")
-        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers", "sidebar.sign_in_hint", "sidebar.sign_in",
+        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers",
                     "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel", "action.resume",
                     "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
@@ -345,7 +352,6 @@ class GalleryAssetMixin:
         for action in ("toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "undo",
                        "publish_many", "update_many", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
-        model.bind_event("gallery_sign_in", self._start_gallery_sign_in)
         for action in ("pause", "resume", "cancel"):
             model.bind_event(
                 "transfer_" + action,

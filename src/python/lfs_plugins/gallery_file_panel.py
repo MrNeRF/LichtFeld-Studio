@@ -96,18 +96,6 @@ class GalleryFilePanel(Panel):
             return tr("action.update")
         return tr("action.publish").rstrip("…")
 
-    def on_sign_in(self, _handle=None, _event=None, _args=None):
-        review = self._review
-        controller = review.get("controller") if review else None
-        account = getattr(controller, "service", None)
-        account = getattr(account, "account", None)
-        if account is None:
-            from .portal_account import get_portal_account_service
-            account = get_portal_account_service()
-        state = account.snapshot()
-        if not state.linking:
-            account.start_device_flow(reauthorize=bool(state.signed_in))
-
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("gallery_file")
         if model is None:
@@ -137,7 +125,6 @@ class GalleryFilePanel(Panel):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         model.bind_event("submit", lambda _h, _e, _args: self._submit())
         model.bind_event("cancel", lambda _h, _e, _args: self._close(False))
-        model.bind_event("sign_in", self.on_sign_in)
         self._handle = model.get_handle()
 
     def _submit(self):
