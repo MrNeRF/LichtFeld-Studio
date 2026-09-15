@@ -110,3 +110,64 @@ body {
     max-height: 260dp;
     overflow-y: auto;
 }
+
+/* Shared forms keep fields and footer actions on the same 24dp row grid. */
+.modal-dialog.form-modal {
+    box-sizing: border-box;
+    max-width: 96%;
+    padding: 16dp;
+}
+.form-modal .modal-title { text-align: left; line-height: 24dp; margin: 0; }
+.form-modal .modal-content { text-align: left; }
+.form-modal .modal-button-row { justify-content: flex-end; flex-wrap: wrap; }
+.form-modal .modal-button-row .btn {
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
+    min-width: 64dp;
+    padding: 0 8dp;
+    line-height: 24dp;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.project-form { display: block; }
+.modal-field {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    min-height: 24dp;
+    margin-bottom: 8dp;
+}
+.modal-field-label { width: 144dp; flex-shrink: 0; line-height: 24dp; }
+.modal-field-value, .modal-field input, .modal-field select {
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 0;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
+    line-height: 24dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.modal-field input { padding: 0 8dp; }
+.modal-field select { padding: 0; }
+.modal-note { display: block; margin: 8dp 0; line-height: 20dp; }
+.modal-check { display: flex; align-items: center; min-height: 24dp; gap: 8dp; margin: 8dp 0; }
+.modal-check input { flex-shrink: 0; }
+.modal-history-head, .modal-history-row {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: 32dp;
+    gap: 8dp;
+    padding: 4dp 8dp;
+}
+.modal-history-head { font-weight: bold; }
+.modal-history-row input, .modal-radio-space { width: 16dp; height: 16dp; flex-shrink: 0; box-sizing: border-box; margin: 0; }
+.modal-history-row span, .modal-history-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24dp; }
+.modal-history-0 { width: 112dp; flex-shrink: 0; }
+.modal-history-1 { flex: 1; min-width: 144dp; }
+.modal-history-2 { width: 80dp; flex-shrink: 0; text-align: right; }
+.modal-history-3 { width: 96dp; flex-shrink: 0; text-align: right; }

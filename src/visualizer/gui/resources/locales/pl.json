@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "Galeria: wymagana zgoda",
     "portal.status.reauthorize": "Zatwierdź dostęp do galerii na swoim koncie Galerii",
     "projects.dialog.choose_destination": "Wybierz miejsce docelowe",
-    "projects.dialog.keep_latest_checkpoint": "Zachowaj tylko najnowszy checkpoint",
+    "projects.dialog.keep_latest_checkpoint": "Usuń punkty kontrolne nieużywane przez tę scenę",
     "projects.dialog.drop_embedded_dataset": "Usuń osadzony dataset po weryfikacji",
     "projects.dialog.projected_size": "Przewidywany rozmiar",
     "projects.dialog.current_viewport": "Bieżący widok",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "Plik obrazu",
     "projects.property.identifier": "Identyfikator",
     "projects.property.notice": "Informacja",
-    "projects.property.display_name": "Nazwa wyświetlana"
+    "projects.property.display_name": "Nazwa wyświetlana",
+  "projects.dialog.save_kind": "Rodzaj",
+  "projects.dialog.bytes_added": "Dodano",
+  "projects.dialog.recovered": "Odzyskany",
+  "projects.dialog.compaction": "Kompaktowanie",
+  "projects.dialog.recovery_note": "Przed zmianą projektu zachowywana jest kopia odzyskiwania.",
+  "projects.dialog.no_checkpoint": "Ten zapis nie ma zachowanego punktu kontrolnego do wznowienia.",
+  "projects.dialog.checkpoint_kept": "Używany przez tę scenę",
+  "projects.dialog.dataset_kept": "Osadzone dane pozostają do czasu sprawdzenia wszystkich zewnętrznych zamienników.",
+  "projects.dialog.format": "Format",
+  "projects.dialog.source": "Źródło",
+  "projects.property.iteration": "Iteracja"
 }

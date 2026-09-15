@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "갤러리: 승인 필요",
     "portal.status.reauthorize": "갤러리 계정으로 갤러리 접근 승인",
     "projects.dialog.choose_destination": "대상 선택",
-    "projects.dialog.keep_latest_checkpoint": "최신 체크포인트만 유지",
+    "projects.dialog.keep_latest_checkpoint": "이 장면에서 사용하지 않는 체크포인트 제거",
     "projects.dialog.drop_embedded_dataset": "검증된 임베디드 데이터셋 삭제",
     "projects.dialog.projected_size": "예상 크기",
     "projects.dialog.current_viewport": "현재 뷰포트",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "이미지 파일",
     "projects.property.identifier": "식별자",
     "projects.property.notice": "알림",
-    "projects.property.display_name": "표시 이름"
+    "projects.property.display_name": "표시 이름",
+  "projects.dialog.save_kind": "종류",
+  "projects.dialog.bytes_added": "추가 용량",
+  "projects.dialog.recovered": "복구됨",
+  "projects.dialog.compaction": "압축",
+  "projects.dialog.recovery_note": "프로젝트를 변경하기 전에 복구 사본을 보관합니다.",
+  "projects.dialog.no_checkpoint": "이 저장본에는 재개할 수 있는 체크포인트가 남아 있지 않습니다.",
+  "projects.dialog.checkpoint_kept": "이 장면에서 사용 중",
+  "projects.dialog.dataset_kept": "모든 외부 대체 파일을 검증할 때까지 포함된 데이터를 유지합니다.",
+  "projects.dialog.format": "형식",
+  "projects.dialog.source": "원본",
+  "projects.property.iteration": "반복 횟수"
 }

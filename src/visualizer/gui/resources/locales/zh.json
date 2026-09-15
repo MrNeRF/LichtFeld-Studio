@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "图库：需要授权",
     "portal.status.reauthorize": "使用图库账户授权图库访问",
     "projects.dialog.choose_destination": "选择目标",
-    "projects.dialog.keep_latest_checkpoint": "仅保留最新检查点",
+    "projects.dialog.keep_latest_checkpoint": "删除此场景未使用的检查点",
     "projects.dialog.drop_embedded_dataset": "验证后删除嵌入数据集",
     "projects.dialog.projected_size": "预计大小",
     "projects.dialog.current_viewport": "当前视口",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "图像文件",
     "projects.property.identifier": "标识符",
     "projects.property.notice": "通知",
-    "projects.property.display_name": "显示名称"
+    "projects.property.display_name": "显示名称",
+  "projects.dialog.save_kind": "类型",
+  "projects.dialog.bytes_added": "新增大小",
+  "projects.dialog.recovered": "已恢复",
+  "projects.dialog.compaction": "压缩",
+  "projects.dialog.recovery_note": "更改项目前会保留恢复副本。",
+  "projects.dialog.no_checkpoint": "此保存没有可用于继续训练的保留检查点。",
+  "projects.dialog.checkpoint_kept": "此场景正在使用",
+  "projects.dialog.dataset_kept": "在验证所有外部替代文件之前保留嵌入数据。",
+  "projects.dialog.format": "格式",
+  "projects.dialog.source": "来源",
+  "projects.property.iteration": "迭代次数"
 }

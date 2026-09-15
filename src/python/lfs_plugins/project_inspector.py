@@ -124,14 +124,20 @@ class InspectionFactsPipeline:
                     try:
                         card = self._inspect_card(path)
                     except Exception as exc:  # a damaged card is still a result
-                        self._cache[asset_id] = InspectionCache(key=key, error=str(exc))
-                        self._deliver(asset_id, "card", None, exc, cancel)
+                        with self._lock:
+                            if cancel.is_set():
+                                return
+                            self._cache[asset_id] = InspectionCache(key=key, error=str(exc))
+                            self._deliver(asset_id, "card", None, exc, cancel)
                     else:
-                        current = self._cache.get(asset_id)
-                        self._cache[asset_id] = InspectionCache(
-                            key=key, card=card, details=current.details if current and current.key == key else None
-                        )
-                        self._deliver(asset_id, "card", card, None, cancel)
+                        with self._lock:
+                            if cancel.is_set():
+                                return
+                            current = self._cache.get(asset_id)
+                            self._cache[asset_id] = InspectionCache(
+                                key=key, card=card, details=current.details if current and current.key == key else None
+                            )
+                            self._deliver(asset_id, "card", card, None, cancel)
                 if cancel.is_set():
                     return
                 is_selected = asset_id == selected_id
@@ -146,17 +152,26 @@ class InspectionFactsPipeline:
                 try:
                     details = self._inspect_details(path)
                 except Exception as exc:
-                    current = self._cache.get(asset_id)
-                    if current is not None and current.key == key:
-                        current.error = str(exc)
-                    self._deliver(asset_id, "details", None, exc, cancel)
+                    with self._lock:
+                        if cancel.is_set():
+                            return
+                        current = self._cache.get(asset_id)
+                        if current is not None and current.key == key:
+                            current.error = str(exc)
+                        self._deliver(asset_id, "details", None, exc, cancel)
                 else:
-                    current = self._cache.get(asset_id)
-                    if current is None or current.key != key:
-                        current = InspectionCache(key=key)
-                        self._cache[asset_id] = current
-                    current.details = details
-                    self._deliver(asset_id, "details", details, None, cancel)
+                    # Cancellation must not leave a cached result whose UI
+                    # notification was discarded. The next refresh would see
+                    # the cache and skip the result forever (Reading...).
+                    with self._lock:
+                        if cancel.is_set():
+                            return
+                        current = self._cache.get(asset_id)
+                        if current is None or current.key != key:
+                            current = InspectionCache(key=key)
+                            self._cache[asset_id] = current
+                        current.details = details
+                        self._deliver(asset_id, "details", details, None, cancel)
                     if not is_selected:
                         background_done += 1
 
@@ -286,6 +301,10 @@ def operation_actions(entry: Any, details: Any = None, *, has_operation: bool = 
     status = str(value(entry, "status", "READING") or "READING")
     path = str(value(entry, "path", "") or "")
     rows: list[dict[str, Any]] = []
+    if not path or status in {"MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER"}:
+        return rows
+    if status == "REPAIR_ONLY":
+        return [{"action": "repair", "label": "projects.action.repair"}]
     if path and status not in {"MISSING", "UNREADABLE", "REPAIR_ONLY", "UNSUPPORTED_NEWER"}:
         rows.append({"action": "save_history", "label": "projects.action.save_history"})
     if details is not None:
@@ -312,8 +331,8 @@ def dialog_model(kind: str, *, entry: Any = None, details: Any = None, plan: Any
     kind = str(kind or "")
     base = {"kind": kind, "name": str(value(entry, "name", "") or ""), "path": str(value(entry, "path", "") or ""), "rows": []}
     if kind == "save_history":
-        base["rows"] = [{"kind": str(value(row, "kind", "") or ""), "date": format_time(value(row, "saved_at_unix_ns", 0)), "iteration": str(value(row, "checkpoint_iteration", "") or ""), "bytes_added": format_size(value(row, "bytes_added", 0)), "generation": int(value(row, "generation", 0) or 0), "holds_checkpoint": bool(value(row, "holds_checkpoint", False))} for row in value(details, "save_history", []) or []]
-        base["recovery_note"] = "Resume from here keeps a recovery copy."
+        base["rows"] = [{"kind": str(value(row, "kind", "") or "").rsplit(".", 1)[-1].lower(), "date": format_time(value(row, "saved_at_unix_ns", 0)), "iteration": str(value(row, "checkpoint_iteration", "")) if value(row, "checkpoint_iteration", None) is not None else "", "bytes_added": format_size(value(row, "bytes_added", 0)), "generation": int(value(row, "generation", 0) or 0), "holds_checkpoint": bool(value(row, "holds_checkpoint", False))} for row in value(details, "save_history", []) or []]
+        base["generation"] = max((row["generation"] for row in base["rows"]), default=0)
     elif kind == "reduce_size":
         base.update(reduce_plan_rows(plan, format_size=format_size) if plan is not None else {})
         base["confirm_is_destructive"] = True

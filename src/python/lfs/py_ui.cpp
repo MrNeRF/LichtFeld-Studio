@@ -3324,6 +3324,16 @@ namespace lfs::python {
             "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
 
         m.def(
+            "save_project_file_dialog",
+            [](const std::string& default_name, const std::string& start_dir) -> std::string {
+                const auto result = lfs::vis::gui::SaveProjectFileDialog(
+                    default_name, lfs::core::utf8_to_path(start_dir));
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
+            "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
+
+        m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;

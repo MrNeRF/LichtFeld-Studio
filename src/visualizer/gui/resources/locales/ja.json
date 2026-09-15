@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "ギャラリー: 承認が必要",
     "portal.status.reauthorize": "ギャラリーアカウントでギャラリーへのアクセスを承認",
     "projects.dialog.choose_destination": "保存先を選択",
-    "projects.dialog.keep_latest_checkpoint": "最新のチェックポイントだけを保持",
+    "projects.dialog.keep_latest_checkpoint": "このシーンで使用していないチェックポイントを削除",
     "projects.dialog.drop_embedded_dataset": "検証済みの埋め込みデータセットを削除",
     "projects.dialog.projected_size": "予測サイズ",
     "projects.dialog.current_viewport": "現在のビューポート",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "画像ファイル",
     "projects.property.identifier": "識別子",
     "projects.property.notice": "通知",
-    "projects.property.display_name": "表示名"
+    "projects.property.display_name": "表示名",
+  "projects.dialog.save_kind": "種類",
+  "projects.dialog.bytes_added": "追加容量",
+  "projects.dialog.recovered": "復元",
+  "projects.dialog.compaction": "圧縮",
+  "projects.dialog.recovery_note": "プロジェクトを変更する前に復旧用コピーを保存します。",
+  "projects.dialog.no_checkpoint": "この保存には再開できるチェックポイントが残っていません。",
+  "projects.dialog.checkpoint_kept": "このシーンで使用中",
+  "projects.dialog.dataset_kept": "外部の代替ファイルをすべて検証するまで埋め込みデータを保持します。",
+  "projects.dialog.format": "形式",
+  "projects.dialog.source": "取得元",
+  "projects.property.iteration": "反復回数"
 }

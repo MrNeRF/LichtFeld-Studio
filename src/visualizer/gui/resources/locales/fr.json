@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "Galerie : autorisation requise",
     "portal.status.reauthorize": "Autoriser l’accès à la galerie avec votre compte Galerie",
     "projects.dialog.choose_destination": "Choisir la destination",
-    "projects.dialog.keep_latest_checkpoint": "Garder uniquement le dernier checkpoint",
+    "projects.dialog.keep_latest_checkpoint": "Supprimer les points de contrôle inutilisés par cette scène",
     "projects.dialog.drop_embedded_dataset": "Supprimer le dataset intégré après validation",
     "projects.dialog.projected_size": "Taille prévue",
     "projects.dialog.current_viewport": "Vue actuelle",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "Fichier image",
     "projects.property.identifier": "Identifiant",
     "projects.property.notice": "Notice",
-    "projects.property.display_name": "Nom affiché"
+    "projects.property.display_name": "Nom affiché",
+  "projects.dialog.save_kind": "Type",
+  "projects.dialog.bytes_added": "Ajouté",
+  "projects.dialog.recovered": "Récupéré",
+  "projects.dialog.compaction": "Compactage",
+  "projects.dialog.recovery_note": "Une copie de récupération est conservée avant de modifier ce projet.",
+  "projects.dialog.no_checkpoint": "Cette sauvegarde ne contient aucun point de contrôle conservé pour reprendre.",
+  "projects.dialog.checkpoint_kept": "Conservé par cette scène",
+  "projects.dialog.dataset_kept": "Les données intégrées sont conservées jusqu’à la vérification de tous les remplacements externes.",
+  "projects.dialog.format": "Format",
+  "projects.dialog.source": "Source",
+  "projects.property.iteration": "Itération"
 }

@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "Gallery: Approval needed",
     "portal.status.reauthorize": "Approve gallery access with your Gallery account",
     "projects.dialog.choose_destination": "Choose destination",
-    "projects.dialog.keep_latest_checkpoint": "Keep only the latest checkpoint",
+    "projects.dialog.keep_latest_checkpoint": "Remove checkpoints not used by this scene",
     "projects.dialog.drop_embedded_dataset": "Drop embedded dataset when validated",
     "projects.dialog.projected_size": "Projected size",
     "projects.dialog.current_viewport": "Current viewport",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "Image file",
     "projects.property.identifier": "Identifier",
     "projects.property.notice": "Notice",
-    "projects.property.display_name": "Display name"
+    "projects.property.display_name": "Display name",
+  "projects.dialog.save_kind": "Kind",
+  "projects.dialog.bytes_added": "Added",
+  "projects.dialog.recovered": "Recovered",
+  "projects.dialog.compaction": "Compaction",
+  "projects.dialog.recovery_note": "A recovery copy is kept before changing this project.",
+  "projects.dialog.no_checkpoint": "This save has no retained checkpoint to resume.",
+  "projects.dialog.checkpoint_kept": "Kept by this scene",
+  "projects.dialog.dataset_kept": "Embedded data stays until every external replacement is verified.",
+  "projects.dialog.format": "Format",
+  "projects.dialog.source": "Source",
+  "projects.property.iteration": "Iteration"
 }

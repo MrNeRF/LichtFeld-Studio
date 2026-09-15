@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "Galerij: toestemming vereist",
     "portal.status.reauthorize": "Galerijtoegang toestaan met je galerijaccount",
     "projects.dialog.choose_destination": "Bestemming kiezen",
-    "projects.dialog.keep_latest_checkpoint": "Alleen het laatste checkpoint behouden",
+    "projects.dialog.keep_latest_checkpoint": "Controlepunten verwijderen die deze scène niet gebruikt",
     "projects.dialog.drop_embedded_dataset": "Ingesloten dataset verwijderen na validatie",
     "projects.dialog.projected_size": "Verwachte grootte",
     "projects.dialog.current_viewport": "Huidige viewport",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "Afbeeldingsbestand",
     "projects.property.identifier": "Identificatie",
     "projects.property.notice": "Melding",
-    "projects.property.display_name": "Weergavenaam"
+    "projects.property.display_name": "Weergavenaam",
+  "projects.dialog.save_kind": "Soort",
+  "projects.dialog.bytes_added": "Toegevoegd",
+  "projects.dialog.recovered": "Hersteld",
+  "projects.dialog.compaction": "Opschoning",
+  "projects.dialog.recovery_note": "Voor wijzigingen aan dit project wordt een herstelkopie bewaard.",
+  "projects.dialog.no_checkpoint": "Deze opslag heeft geen bewaard controlepunt om te hervatten.",
+  "projects.dialog.checkpoint_kept": "Nodig voor deze scène",
+  "projects.dialog.dataset_kept": "Ingesloten gegevens blijven behouden totdat alle externe vervangingen zijn gecontroleerd.",
+  "projects.dialog.format": "Formaat",
+  "projects.dialog.source": "Bron",
+  "projects.property.iteration": "Iteratie"
 }

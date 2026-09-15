@@ -2760,7 +2760,7 @@
     "portal.status.approval_needed": "Galerie: Freigabe erforderlich",
     "portal.status.reauthorize": "Galeriezugriff mit deinem Galeriekonto freigeben",
     "projects.dialog.choose_destination": "Ziel auswählen",
-    "projects.dialog.keep_latest_checkpoint": "Nur den neuesten Checkpoint behalten",
+    "projects.dialog.keep_latest_checkpoint": "Nicht von dieser Szene benötigte Checkpoints entfernen",
     "projects.dialog.drop_embedded_dataset": "Eingebetteten Datensatz nach Validierung entfernen",
     "projects.dialog.projected_size": "Erwartete Größe",
     "projects.dialog.current_viewport": "Aktuelles Ansichtsfenster",
@@ -2769,5 +2769,16 @@
     "projects.dialog.image_file": "Bilddatei",
     "projects.property.identifier": "Bezeichner",
     "projects.property.notice": "Hinweis",
-    "projects.property.display_name": "Anzeigename"
+    "projects.property.display_name": "Anzeigename",
+  "projects.dialog.save_kind": "Art",
+  "projects.dialog.bytes_added": "Hinzugefügt",
+  "projects.dialog.recovered": "Wiederhergestellt",
+  "projects.dialog.compaction": "Bereinigung",
+  "projects.dialog.recovery_note": "Vor Änderungen an diesem Projekt wird eine Wiederherstellungskopie angelegt.",
+  "projects.dialog.no_checkpoint": "Dieser Speicherstand hat keinen erhaltenen Checkpoint zum Fortsetzen.",
+  "projects.dialog.checkpoint_kept": "Von dieser Szene benötigt",
+  "projects.dialog.dataset_kept": "Eingebettete Daten bleiben erhalten, bis alle externen Ersatzdateien geprüft wurden.",
+  "projects.dialog.format": "Format",
+  "projects.dialog.source": "Quelle",
+  "projects.property.iteration": "Iteration"
 }
