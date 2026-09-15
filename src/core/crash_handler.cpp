@@ -219,7 +219,7 @@ namespace lfs::core {
                 ::backtrace_symbols_fd(frames.data(), count, g_crash_log_fd);
             }
 
-            struct sigaction action{};
+            struct sigaction action {};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;

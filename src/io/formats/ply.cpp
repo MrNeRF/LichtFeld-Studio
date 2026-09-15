@@ -566,7 +566,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st{};
+            struct stat st {};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
