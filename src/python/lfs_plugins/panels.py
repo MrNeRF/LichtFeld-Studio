@@ -104,7 +104,7 @@ PANEL_SPECS = {
     "asset_manager": _PanelSpec(
         "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",
         "Projects", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
-        (1100, 700), update_policy="dirty",
+        (1100, 700), update_policy="interval",
     ),
 }
 

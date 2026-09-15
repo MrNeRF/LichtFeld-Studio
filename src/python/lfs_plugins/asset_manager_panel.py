@@ -516,7 +516,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "import_project_tooltip": "projects.tooltip.add_existing",
             "no_search_results_label": "projects.status.no_search_results",
             "clear_search_label": "projects.action.clear_search",
-            "search_placeholder": "projects.toolbar.search_placeholder",
+            "search_placeholder": "projects.toolbar.search_icon",
             "search_icon_label": "projects.toolbar.search_icon",
             "all_assets_label": "projects.sidebar.all_assets",
             "folders_title": "projects.sidebar.folders",
@@ -2276,7 +2276,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         height = float(popup.client_height or 0) / scale
         if height <= 0:
             return False
-        width = float(getattr(popup, "client_width", 0) or 0) / scale
+        widths = []
+        for identifier in ("asset-shell", "asset-popup"):
+            element = document.get_element_by_id(identifier) if document else None
+            value = float(getattr(element, "client_width", 0) or 0) if element else 0.0
+            if value > 0:
+                widths.append(value / scale)
+        width = max(widths, default=0.0)
         if width <= 0:
             width = self._content_width
         if width > 0:
@@ -2317,7 +2323,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         content = 16.0 + measured("asset-sidebar-local-content", local, content=True) + measured("asset-sidebar-gallery", 132.0) + 8.0
         toolbar = measured("asset-popup-toolbar", 114.0) + 1.0
         header = measured("asset-results-header", 48.0) + 1.0
-        signature = (scale, height, content, toolbar, header,
+        signature = (scale, width, self._layout_class, self._is_floating, height, content, toolbar, header,
                      self._info_preferred_height, self._folders_collapsed)
         if signature == self._layout_signature:
             return False
@@ -2326,7 +2332,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                               results_header_height=header, sidebar_content_height=content)
         self._sidebar_height = layout["sidebar"]
         self._bottom_panel_height = layout["info"]
-        self._main_min_height = layout["main_min_height"]
+        self._main_min_height = (
+            0.0 if self._layout_class in ("compact", "narrow")
+            else layout["main_min_height"]
+        )
         self._dirty_fields("sidebar_height", "bottom_panel_height", "main_min_height")
         if scale_changed:
             self._dirty_layout_fields()
@@ -2758,6 +2767,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return True
         target = event.target()
         container = event.current_target()
+        tag = getattr(target, "tag_name", "")
+        if callable(tag):
+            tag = tag()
+        if key == KI_SPACE and tag not in ("input", "textarea", "select"):
+            self.open_quick_look()
+            if self._quick_look_visible:
+                self._stop_event(event)
+                return True
         element = rml_widgets.find_ancestor_with_attribute(target, "data-folder-id", container)
         action = rml_widgets.find_ancestor_with_attribute(target, "data-sidebar-action", container)
         if key in (KI_RETURN, 32) and (element is not None or action is not None):
@@ -3003,6 +3020,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._panel_space = panel_space
         self._is_floating = is_floating
         if changed:
+            self._layout_signature = None
             self._dirty_layout_fields()
         return changed
 
@@ -3088,11 +3106,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._scan_asset_folders()
 
     def on_update(self, doc):
-        changed = self._sync_panel_layout(doc)
+        changed = self._sync_panel_space_state()
+        changed = self._sync_panel_layout(doc) or changed
         changed = self._sync_info_thumbnail(doc) or changed
-        if self._sync_panel_space_state():
-            self._dirty_fields("is_floating")
-            changed = True
         if self._publish_catalog_if_changed():
             changed = True
         if self._publish_scan_progress():

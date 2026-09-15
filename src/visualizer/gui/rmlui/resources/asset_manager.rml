@@ -278,6 +278,8 @@
         <aside id="asset-inspector" class="asset-inspector" data-style-width="inspector_style_width" data-style-height="inspector_style_height">
           <div class="inspector-strip" data-event-click="toggle_inspector">
             <span class="inspector-strip-name" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_asset_size}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_health_label}}</span>
             <button class="btn btn--primary inspector-strip-open" data-if="show_selection_asset"
                     data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset">{{open_button_label}}</button>
           </div>

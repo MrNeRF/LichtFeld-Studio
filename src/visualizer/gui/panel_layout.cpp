@@ -886,15 +886,13 @@ namespace lfs::vis::gui {
                                             },
                                             draw_ctx);
         }
-        left_dock_visible_ = preloaded_h > 0.0f;
-        if (!left_dock_visible_) {
-            drawLeftDockResizeIndicator(draw_ctx, dpi, false, false);
-            return;
-        }
-
+        // A live resize can enter this path before the Rml host has a
+        // measured height. Do not hide the dock just because preload returned
+        // zero; the live draw below establishes visibility after laying out at
+        // the new width.
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.left_dock.draw", 0.25);
-            reg.render_panels({
+            const float drawn_h = reg.render_panels({
                                   .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
                                   .mode = PanelRenderMode::Direct,
                                   .x = panel_x,
@@ -904,6 +902,7 @@ namespace lfs::vis::gui {
                                   .input = &dock_input,
                               },
                               draw_ctx);
+            left_dock_visible_ = preloaded_h > 0.0f || drawn_h > 0.0f;
         }
 
         drawLeftDockResizeIndicator(

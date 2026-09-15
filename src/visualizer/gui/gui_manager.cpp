@@ -6975,6 +6975,8 @@ namespace lfs::vis::gui {
             reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
             viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
         }
+        if (pointer_targets_left_dock)
+            viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
             if (!block_underlay_input)

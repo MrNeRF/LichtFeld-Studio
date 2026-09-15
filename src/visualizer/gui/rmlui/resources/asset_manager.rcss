@@ -1032,16 +1032,37 @@
 }
 
 .asset-search-box input {
+    box-sizing: border-box;
     min-width: 0;
     flex: 1;
     height: 24dp;
     border-width: 0;
     padding: 0 8dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.asset-search-icon { display: block; flex: 0 0 24dp; width: 24dp; text-align: center; overflow: hidden; }
+.asset-search-icon {
+    display: block;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 64dp;
+    min-width: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .asset-toolbar-filter, .asset-toolbar-view { display: none; }
 .asset-check-gallery { display: flex; align-items: center; max-width: 190dp; }
+.asset-check-gallery .asset-button-text,
+.asset-check-gallery .gallery-checked {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .asset-check-gallery-icon { display: none; }
 .asset-check-gallery .gallery-checked { margin-left: 4dp; }
 .asset-thumbnail-slider { width: 96dp; height: 24dp; flex: 0 0 96dp; }
@@ -1165,8 +1186,10 @@
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
 .asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; }
-.inspector-strip { display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; }
-.inspector-strip-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-strip { position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 68dp 0 12dp; overflow: hidden; }
+.inspector-strip-name { flex: 1 1 0dp; width: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-strip-meta { flex: 0 1 56dp; width: 56dp; min-width: 0; max-width: 56dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10dp; }
+.inspector-strip-open { position: absolute; right: 12dp; top: 4dp; display: block; width: 48dp; min-width: 48dp; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 4dp; }
 .inspector-header { display: flex; flex-direction: column; gap: 4dp; padding: 12dp; min-width: 0; }
 .inspector-title { font-size: 14dp; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-path { font-size: 10dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

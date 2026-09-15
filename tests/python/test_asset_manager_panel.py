@@ -337,7 +337,7 @@ def _scan_result(**overrides):
 
 def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     panel_type = panel_module.AssetManagerPanel
-    assert panel_type.update_policy == "dirty"
+    assert panel_type.update_policy == "interval"
     assert panel_type.update_interval_ms == 100
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
@@ -2169,6 +2169,63 @@ def test_A4_short_panel_starts_folders_collapsed_and_keeps_info_preference(panel
     panel._sync_panel_layout()
     assert panel._bottom_panel_height == 220
 
+def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    scale = 1.5
+    monkeypatch.setattr(panel_module.lf.ui, "get_ui_scale", lambda: scale, raising=False)
+    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.LEFT_DOCK)
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
+    shell = SimpleNamespace(client_width=1100 * scale)
+    popup = SimpleNamespace(client_width=1100 * scale, client_height=700 * scale)
+    panel._doc = _Document({"asset-shell": shell, "asset-popup": popup})
+
+    panel._sync_panel_space_state()
+    panel._sync_panel_layout()
+    assert panel._layout_class == "wide"
+    assert panel._content_width == pytest.approx(1100)
+    assert panel._is_floating is False
+
+    info.space = panel_module.lf.ui.PanelSpace.FLOATING
+    panel._sync_panel_space_state()
+    panel._sync_panel_layout()
+    assert panel._is_floating is True
+    assert panel._layout_class == "wide"
+
+    shell.client_width = popup.client_width = 320 * scale
+    panel._sync_panel_layout()
+    assert panel._layout_class == "compact"
+    assert panel._main_min_height == 0.0
+
+def test_P13_space_opens_quick_look_from_panel_key_handler(panel_module):
+    asset = _project(name="Bonsai")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    panel._update_selection_type()
+    shell = _Element()
+
+    panel._on_asset_manager_keydown(_Event(shell, shell, {"key_identifier": str(panel_module.KI_SPACE)}))
+
+    assert panel._quick_look_visible is True
+
+def test_P13_native_resize_and_tooltip_paths_are_live(panel_module):
+    root = Path(__file__).resolve().parents[2]
+    layout = (root / "src/visualizer/gui/panel_layout.cpp").read_text()
+    manager = (root / "src/visualizer/gui/gui_manager.cpp").read_text()
+    assert "preloaded_h > 0.0f || drawn_h > 0.0f" in layout
+    assert "if (pointer_targets_left_dock)" in manager
+
+def test_P13_search_placeholder_uses_short_label(panel_module):
+    model = _BindingModel()
+    panel_module.AssetManagerPanel().on_bind_model(_BindingContext(model))
+    assert model.func_bindings["search_placeholder"]() == "projects.toolbar.search_icon"
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "asset_manager.rcss").read_text()
+    assert ".asset-search-icon" in rcss and "max-width: 64dp" in rcss
+    assert ".asset-search-box input" in rcss and "text-overflow: ellipsis" in rcss
+    assert ".asset-check-gallery .gallery-checked" in rcss
+
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
@@ -2238,6 +2295,11 @@ def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     inspector = root.find('.//*[@id="asset-inspector-content"]')
     assert inspector is not None
     assert inspector.get('class') == 'asset-inspector-content'
+    strip = root.find('.//*[@class="inspector-strip"]')
+    assert strip is not None
+    strip_meta = strip.findall('./span[@class="inspector-strip-meta"]')
+    assert len(strip_meta) == 2
+    assert strip.find('./button[@class="btn btn--primary inspector-strip-open"]') is not None
     operations = root.find('.//div[@class="inspector-operations"]')
     assert operations is not None
     history = operations.find('./span[@class="inspector-history-empty text-muted"]')
@@ -2259,6 +2321,8 @@ def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     assert '.asset-shell.is-narrow .asset-list-header,' in rcss
     assert '.asset-shell.is-narrow .asset-check-gallery-icon,' in rcss
     assert '.inspector-actions .btn { box-sizing: border-box;' in rcss
+    assert '.inspector-strip-meta' in rcss
+    assert '.inspector-strip-open' in rcss
 
     gui_manager = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/gui_manager.cpp'
     cpp = gui_manager.read_text()
