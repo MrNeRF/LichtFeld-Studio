@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 import copy
 import threading
+from .gallery_logging import failure as log_failure
 from pathlib import Path
 
 import lichtfeld as lf
@@ -448,6 +449,7 @@ class GalleryAssetMixin:
                     command = "keep_waiting"
             self._controller().command(command, None if identifier == "native" else identifier)
         except Exception as exc:
+            log_failure(action, exc, transfer=identifier)
             from .gallery_messages import localize_message
             self._gallery_notice = localize_message(str(exc))
             self._request_model_update()
@@ -572,6 +574,7 @@ class GalleryAssetMixin:
                 scene = self._gallery_scene(asset)
                 self._confirm_gallery("confirm.remove", lambda: self._controller().service.remove(scene["id"], scene))
         except Exception as exc:
+            log_failure(action, exc, path=(self.get_selected_asset() or {}).get("path", ""))
             from .gallery_messages import localize_message
             self._gallery_notice = localize_message(str(exc))
             if action == "undo" and self._gallery_undo_kind == "pull" and self._gallery_undo:
@@ -756,6 +759,7 @@ class GalleryAssetMixin:
                 controller._after_service = controller.refresh
                 controller._schedule_poll()
             except Exception as exc:
+                log_failure("update_gallery_thumbnail", exc, path=asset["path"])
                 from .gallery_messages import localize_message
                 self._gallery_notice = localize_message(str(exc))
                 self._request_model_update()
@@ -825,7 +829,8 @@ class GalleryAssetMixin:
         try:
             controller.publish_asset(asset, self._gallery_details(), self._gallery_upload_format,
                                      update=action == "update")
-        except Exception:
+        except Exception as exc:
+            log_failure("publish", exc, path=asset["path"])
             self._gallery_batch_waiting = False
             raise
 

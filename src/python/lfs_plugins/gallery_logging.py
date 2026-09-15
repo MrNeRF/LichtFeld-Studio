@@ -32,7 +32,7 @@ def safe_url(value: object) -> str:
             } else part)
         return urlunsplit((parsed.scheme, parsed.netloc, "/".join(path_parts) or "/", "", ""))
     except (TypeError, ValueError):
-        return safe_text(value)
+        return "[invalid URL]"
 
 
 def _fields(values: dict[str, object]) -> str:

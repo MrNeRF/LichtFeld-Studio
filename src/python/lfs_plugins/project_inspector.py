@@ -10,6 +10,7 @@ be tested without starting LichtFeld Studio.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
@@ -70,6 +71,7 @@ class InspectionFactsPipeline:
         self._scheduler = scheduler
         self._max_background_details = max(0, int(max_background_details))
         self._cache: dict[str, InspectionCache] = {}
+        self._pending_deliveries: set[tuple[str, str]] = set()
         self._details_last_started: dict[str, float] = {}
         self._cancel: Optional[threading.Event] = None
         self._generation = 0
@@ -81,19 +83,24 @@ class InspectionFactsPipeline:
         return self._cache
 
     def cached(self, asset_id: str) -> Optional[InspectionCache]:
-        return self._cache.get(str(asset_id))
+        with self._lock:
+            return self._cache.get(str(asset_id))
 
     def invalidate(self, asset_id: Optional[str] = None) -> None:
-        if asset_id is None:
-            self._cache.clear()
-            return
-        self._cache.pop(str(asset_id), None)
+        with self._lock:
+            if asset_id is None:
+                self._cache.clear()
+                return
+            self._cache.pop(str(asset_id), None)
 
     def cancel(self) -> None:
         with self._lock:
             if self._cancel is not None:
                 self._cancel.set()
             self._generation += 1
+            for asset_id, _kind in self._pending_deliveries:
+                self._cache.pop(asset_id, None)
+            self._pending_deliveries.clear()
 
     def refresh(self, entries: Iterable[Any], selected_id: str = "") -> None:
         import threading
@@ -121,7 +128,8 @@ class InspectionFactsPipeline:
                 if cached is None or cached.key != key or cached.card is None:
                     try:
                         card = self._inspect_card(path)
-                    except Exception as exc:  # a damaged card is still a result
+                    except Exception as exc:
+                        logging.getLogger(__name__).exception("Inspect project card failed path=%s", path)
                         with self._lock:
                             if cancel.is_set():
                                 return
@@ -150,6 +158,7 @@ class InspectionFactsPipeline:
                 try:
                     details = self._inspect_details(path)
                 except Exception as exc:
+                    logging.getLogger(__name__).exception("Inspect project details failed path=%s", path)
                     with self._lock:
                         if cancel.is_set():
                             return
@@ -181,9 +190,33 @@ class InspectionFactsPipeline:
     def _deliver(self, asset_id: str, kind: str, result: Any, error: Optional[Exception], cancel: Any) -> None:
         if cancel.is_set():
             return
-        callback = lambda: self._on_result(asset_id, kind, result, error)
+        self._pending_deliveries.add((asset_id, kind))
+
+        def callback():
+            with self._lock:
+                if cancel.is_set():
+                    return
+                self._pending_deliveries.discard((asset_id, kind))
+            try:
+                self._on_result(asset_id, kind, result, error)
+            except Exception as exc:
+                logging.getLogger(__name__).exception("Deliver project inspection failed project=%s kind=%s", asset_id, kind)
+                with self._lock:
+                    cached = self._cache.get(asset_id)
+                    if cached is not None:
+                        cached.error = str(exc)
+                        cached.card = cached.details = None
+
         if self._scheduler is not None:
-            self._scheduler(callback)
+            try:
+                self._scheduler(callback)
+            except Exception as exc:
+                logging.getLogger(__name__).exception("Schedule project inspection failed project=%s kind=%s", asset_id, kind)
+                with self._lock:
+                    cached = self._cache.get(asset_id)
+                    if cached is not None:
+                        cached.error = str(exc)
+                        cached.card = cached.details = None
         else:
             callback()
 

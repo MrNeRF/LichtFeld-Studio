@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 import logging
-import re
+import sys
 
+from .gallery_logging import safe_text
 
-_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
 def install() -> bool:
     try:
         import lichtfeld as lf
-    except Exception:
+    except ImportError as exc:
+        sys.stderr.write(f"Python log bridge could not load the native logger: {safe_text(exc)}\n")
         return False
 
     class _LfLogHandler(logging.Handler):
@@ -22,7 +23,7 @@ def install() -> bool:
         def emit(self, record):
             try:
                 message = self.format(record)
-                message = _EMAIL.sub("[REDACTED_EMAIL]", message)
+                message = safe_text(message)
                 if record.levelno >= logging.ERROR:
                     lf.log.error(message)
                 elif record.levelno >= logging.WARNING:
@@ -31,9 +32,8 @@ def install() -> bool:
                     lf.log.info(message)
                 else:
                     lf.log.debug(message)
-            except Exception:
-                # A diagnostic path must never alter the operation being logged.
-                pass
+            except Exception as exc:
+                sys.stderr.write(f"Native log write failed: {safe_text(exc)}; {safe_text(record.getMessage())}\n")
 
     root = logging.getLogger()
     if not any(getattr(handler, "_lichtfeld_bridge", False) for handler in root.handlers):

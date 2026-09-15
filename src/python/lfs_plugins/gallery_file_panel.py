@@ -5,6 +5,7 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 
+from .gallery_logging import failure as log_failure
 import lichtfeld as lf
 
 from .gallery_messages import localize_message, tr as gallery_tr
@@ -175,6 +176,7 @@ class GalleryFilePanel(Panel):
             self._review["on_submit"](action)
             self._close(True)
         except Exception as exc:
+            log_failure("_replacement", exc, path=getattr(self, "_path", ""))
             self._error = localize_message(str(exc))
             self._dirty()
 
@@ -249,6 +251,7 @@ class GalleryFilePanel(Panel):
                                          update=review["action"] == "update", publish_as_new=review["publish_new"])
             self._close(True)
         except Exception as exc:
+            log_failure("_submit", exc, path=getattr(self, "_path", ""))
             self._error = localize_message(str(exc))
         finally:
             self._submitting = False

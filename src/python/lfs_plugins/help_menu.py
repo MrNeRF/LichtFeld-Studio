@@ -47,6 +47,16 @@ class AboutOperator(Operator):
         return {"FINISHED"}
 
 
+class GalleryTransfersOperator(Operator):
+    label = "gallery.transfer.action.details"
+    description = "Open the Projects transfer tray"
+
+    def execute(self, context) -> set:
+        from .gallery_transfer_ui import show_transfer_tray
+        show_transfer_tray()
+        return {"FINISHED"}
+
+
 class PortalConnectionOperator(Operator):
     label = "portal.status.connect"
     description = "Connect or disconnect the LichtFeld Portal account"
@@ -102,6 +112,7 @@ class HelpMenu:
 
 
 _operator_classes = [
+    GalleryTransfersOperator,
     GettingStartedOperator,
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,

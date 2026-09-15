@@ -265,3 +265,46 @@ def test_license_form_uses_chooser_and_escapes_custom_text():
     for choice in ('CC0-1.0','LicenseRef-Proprietary'):
         body,_=form_content('license',dict(license_choice=choice),tr=lambda key:key,confirm_label='Save',busy=False)
         assert 'name="attribution"' not in body and 'name="license_text"' not in body
+
+
+def test_queued_inspection_is_discarded_and_retried_after_cancel():
+    callbacks, results = [], []
+    pipeline = InspectionFactsPipeline(lambda _path: object(), lambda _path: object(),
+        lambda *args: results.append(args), scheduler=callbacks.append)
+    pipeline.refresh([_entry()], 'project')
+    pipeline._thread.join(2)
+    pipeline.cancel()
+    for callback in callbacks:
+        callback()
+    assert results == []
+    callbacks.clear()
+    pipeline.refresh([_entry()], 'project')
+    pipeline._thread.join(2)
+    for callback in callbacks:
+        callback()
+    assert [row[1] for row in results] == ['card', 'details']
+
+
+def test_inspection_failures_are_logged_with_path_and_delivered(caplog):
+    results = []
+    def fail(path):
+        raise OSError('unreadable marker')
+    pipeline = InspectionFactsPipeline(fail, fail, lambda *args: results.append(args))
+    pipeline.refresh([_entry(path='/项目.licht')], 'project')
+    pipeline._thread.join(2)
+    assert len(results) == 2 and all(isinstance(row[3], OSError) for row in results)
+    assert 'Inspect project card failed path=/项目.licht' in caplog.text
+    assert 'Inspect project details failed path=/项目.licht' in caplog.text
+
+
+def test_inspection_scheduler_failure_can_be_retried(caplog):
+    def fail(_callback):
+        raise RuntimeError('scheduler marker')
+    pipeline = InspectionFactsPipeline(lambda _path: object(), lambda _path: object(),
+        lambda *_args: None, scheduler=fail)
+    pipeline.refresh([_entry()], 'project')
+    pipeline._thread.join(2)
+    assert not pipeline._thread.is_alive()
+    assert pipeline.cached('project').card is None
+    assert pipeline.cached('project').error == 'scheduler marker'
+    assert 'Schedule project inspection failed project=project' in caplog.text

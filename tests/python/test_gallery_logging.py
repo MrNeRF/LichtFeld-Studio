@@ -96,3 +96,27 @@ def test_preparation_exception_is_logged_and_journaled(tmp_path, monkeypatch, ca
     assert "preparation marker" in job["failureReason"]
     assert "gallery failure stage=transfer" in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+def test_malformed_url_does_not_recurse_or_expose_credentials():
+    from lfs_plugins.gallery_logging import safe_text
+    assert safe_text('request https://[bad?token=secret failed') == 'request [invalid URL] failed'
+
+
+def test_log_bridge_fallback_keeps_failure_visible(monkeypatch, capsys):
+    from lfs_plugins import logging_bridge
+    def fail(_message):
+        raise OSError('sink unavailable')
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(log=SimpleNamespace(error=fail)))
+    root = logging.getLogger()
+    previous = list(root.handlers)
+    for handler in previous:
+        root.removeHandler(handler)
+    try:
+        assert logging_bridge.install()
+        logging.getLogger(__name__).error('failed path=项目.licht https://host/file?token=secret')
+        output = capsys.readouterr().err
+        assert 'sink unavailable' in output and '项目.licht' in output
+        assert 'token=secret' not in output
+    finally:
+        root.handlers[:] = previous

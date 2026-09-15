@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import lichtfeld as lf
 
+from .gallery_logging import failure as log_failure
 from .gallery_transfer_ui import show_transfer_tray, tr
 from .gallery_messages import localize_message
 from .ui import RuntimeState
@@ -116,6 +117,7 @@ class GalleryTransferOverlay:
                                                  None if identifier == "native" else identifier)
                 self._message = ""
             except Exception as exc:
+                log_failure("_action", exc, path=getattr(self, "_path", ""))
                 self._message = localize_message(str(exc))
         if self._handle:
             self._handle.dirty_all()
