@@ -110,10 +110,6 @@ body {
     overflow: hidden;
 }
 
-.toolbar-position-top .toolbar-vertical {
-    margin-top: 12dp;
-}
-
 .toolbar-drag-handle {
     display: none;
     width: 30dp;

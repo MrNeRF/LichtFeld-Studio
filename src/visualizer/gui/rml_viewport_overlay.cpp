@@ -369,10 +369,12 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
                                               const float primary_width,
+                                              const float inset,
                                               const bool show_secondary,
                                               const float secondary_x,
                                               const float secondary_width) {
         const bool changed =
+            std::abs(toolbar_inset_ - inset) > 0.5f ||
             std::abs(primary_toolbar_x_ - primary_x) > 0.5f ||
             std::abs(primary_toolbar_width_ - primary_width) > 0.5f ||
             show_secondary_toolbar_ != show_secondary ||
@@ -382,6 +384,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        toolbar_inset_ = inset;
         primary_toolbar_x_ = primary_x;
         primary_toolbar_width_ = primary_width;
         show_secondary_toolbar_ = show_secondary;
@@ -623,7 +626,8 @@ namespace lfs::vis::gui {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
-        apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
+        apply_left_toolbar_offset("primary-utility-toolbar", toolbar_inset_);
+        apply_left_toolbar_offset("secondary-utility-toolbar", toolbar_inset_);
         attachToolbarDragListeners();
         applyToolbarPosition();
         applied_primary_toolbar_x_ = primary_toolbar_x_;
@@ -640,8 +644,7 @@ namespace lfs::vis::gui {
         if (!document_ || !rml_context_ || !toolbar_rail_layout_dirty_)
             return false;
 
-        const float dpi = std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
-        const float available_height = std::max(0.0f, vp_size_.y - 24.0f * dpi);
+        const float available_height = std::max(0.0f, vp_size_.y - 2.0f * toolbar_inset_);
         auto* const primary_toolbar = document_->GetElementById("primary-utility-toolbar");
         auto* const secondary_toolbar = document_->GetElementById("secondary-utility-toolbar");
         auto* const primary_tools = document_->GetElementById("primary-rail-tools");
@@ -709,11 +712,7 @@ namespace lfs::vis::gui {
     }
 
     float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
-        const float dp_ratio = rml_context_
-                                   ? std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f)
-                                   : 1.0f;
-        constexpr float kViewportGapDp = 12.0f;
-        return std::min(kViewportGapDp * dp_ratio,
+        return std::min(toolbar_inset_,
                         std::max(0.0f, (vp_size_.y - std::max(toolbar_height, 0.0f)) * 0.5f));
     }
 
@@ -760,7 +759,7 @@ namespace lfs::vis::gui {
             if (!toolbar)
                 return;
 
-            if (viewport_toolbar_position_ != "free") {
+            if (viewport_toolbar_position_ == "centered") {
                 if (mode_changed)
                     toolbar->RemoveProperty("margin-top");
                 applied_top = std::numeric_limits<float>::quiet_NaN();
@@ -770,7 +769,7 @@ namespace lfs::vis::gui {
             float height = toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
             if (height <= 0.0f)
                 height = fallback_height;
-            const float top = toolbarFreeTop(height);
+            const float top = viewport_toolbar_position_ == "free" ? toolbarFreeTop(height) : toolbar_inset_;
             if (!std::isfinite(applied_top) || std::abs(applied_top - top) > 0.25f) {
                 toolbar->SetProperty("margin-top", std::format("{:.1f}px", top));
                 applied_top = top;
@@ -880,6 +879,9 @@ namespace lfs::vis::gui {
         if (auto* const element = document_->GetElementById("viewport-content")) {
             element->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
         }
+        if (auto* const border = document_->GetElementById("left-frame-border"))
+            border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
+        applyLeftDockResizeIndicator();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
     }
@@ -907,6 +909,9 @@ namespace lfs::vis::gui {
                 document_->GetElementById("left-dock-resize-indicator")) {
             indicator->SetClass("hidden", !left_dock_resize_visible_);
             indicator->SetClass("active", left_dock_resize_active_);
+            indicator->SetProperty(
+                "left",
+                std::format("{:.1f}px", viewport_content_offset_ - left_dock_resize_thickness_));
             indicator->SetProperty(
                 "width",
                 std::format("{:.1f}px", left_dock_resize_thickness_));

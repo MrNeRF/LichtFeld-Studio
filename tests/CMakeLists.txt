@@ -31,6 +31,25 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+if(BUILD_PANEL_LAYOUT_TESTS)
+    add_executable(panel_layout_tests EXCLUDE_FROM_ALL
+        test_panel_layout_render_demand.cpp
+        test_panel_registry_animation_demand.cpp
+        test_panel_registry_default_closed.cpp
+    )
+    target_compile_features(panel_layout_tests PRIVATE cxx_std_23)
+    target_include_directories(panel_layout_tests PRIVATE
+        $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>
+    )
+    target_link_libraries(panel_layout_tests PRIVATE
+        $<TARGET_PROPERTY:${PROJECT_NAME},LINK_LIBRARIES>
+        GTest::gtest_main
+    )
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY)
+        return()
+    endif()
+endif()
+
 # =============================================================================
 # Unicode Path Test Only (no CUDA dependencies)
 # =============================================================================

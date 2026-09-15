@@ -29,6 +29,14 @@ namespace lfs::vis::gui {
         float width = 0.0f;
     };
 
+    struct LeftDockLayout {
+        float panel_x = 0.0f;
+        float panel_width = 0.0f;
+        float toolbar_x = 0.0f;
+        float edge_min_x = 0.0f;
+        float edge_max_x = 0.0f;
+    };
+
     enum class CursorRequest : uint8_t { None,
                                          ResizeEW,
                                          ResizeNS };
@@ -127,6 +135,8 @@ namespace lfs::vis::gui {
                                              bool python_console_visible,
                                              const ScreenState& screen) const;
         DockHorizontalLayout computeBottomDockHorizontalLayout(
+            bool show_main_panel, bool ui_hidden, const ScreenState& screen) const;
+        LeftDockLayout computeLeftDockLayout(
             bool show_main_panel, bool ui_hidden, const ScreenState& screen) const;
 
         bool isResizingPanel() const {
@@ -242,7 +252,7 @@ namespace lfs::vis::gui {
         static constexpr float LEFT_DOCK_MIN_WIDTH = 180.0f;
         static constexpr float LEFT_DOCK_MIN_VISIBLE_WIDTH = 220.0f;
         static constexpr float LEFT_DOCK_DEFAULT_WIDTH = 320.0f;
-        static constexpr float ICON_BAR_WIDTH = 40.0f;
+        static constexpr float TOOLBAR_INSET = 8.0f;
     };
 
 } // namespace lfs::vis::gui
