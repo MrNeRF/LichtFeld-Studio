@@ -14,6 +14,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "view_output_key.hpp"
+#include "viewport_error.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
@@ -399,8 +400,8 @@ namespace lfs::vis {
                     point_cloud_image);
             }
             if (last_vulkan_context_) {
-                std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> image =
-                    std::unexpected("workspace renderer unavailable");
+                lfs::Result<std::shared_ptr<lfs::core::Tensor>> image =
+                    viewportError("Workspace renderer unavailable", lfs::ErrorCode::Unavailable);
                 if (frame->source == WorkspaceVulkanFrame::Source::Gaussian &&
                     vksplat_viewport_renderer_) {
                     image = transparent

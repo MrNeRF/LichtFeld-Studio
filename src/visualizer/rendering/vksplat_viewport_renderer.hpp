@@ -146,8 +146,8 @@ namespace lfs::vis {
 
         // Scene output columns are keyed by workspace ViewId. Reserved
         // Legacy/Preview columns stay renderer-owned and cannot be released.
-        [[nodiscard]] std::expected<ViewOutputKey, std::string> registerViewOutput(ViewId view_id);
-        [[nodiscard]] std::expected<void, std::string> releaseViewOutput(ViewId view_id);
+        [[nodiscard]] lfs::Result<ViewOutputKey> registerViewOutput(ViewId view_id);
+        [[nodiscard]] lfs::Result<void> releaseViewOutput(ViewId view_id);
 
         // Scope GPU LOD streaming demand to the panes visible in the current
         // workspace snapshot. Hidden views retain their output columns and
@@ -157,7 +157,7 @@ namespace lfs::vis {
         }
         void clearVisibleWorkspaceViews() { gpu_lod_views_.clearVisibleKeys(); }
 
-        [[nodiscard]] std::expected<RenderResult, std::string> render(
+        [[nodiscard]] lfs::Result<RenderResult> render(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
@@ -173,7 +173,7 @@ namespace lfs::vis {
             bool force_input_upload,
             OutputSlot output_slot = OutputSlot::Main,
             bool synchronize_input_upload = false);
-        [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
+        [[nodiscard]] lfs::Result<RenderResult> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
@@ -235,25 +235,25 @@ namespace lfs::vis {
         [[nodiscard]] bool nextOutputImagesNeedResize(
             glm::ivec2 size,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+        [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImage(
             VulkanContext& context,
             ViewOutputKey output_key) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
+        [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImageRgba(
             VulkanContext& context,
             ViewOutputKey output_key) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
+        [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImageRgb8(
             VulkanContext& context,
             ViewOutputKey output_key) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
+        [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImageRgba8(
             VulkanContext& context,
             ViewOutputKey output_key) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
@@ -276,7 +276,7 @@ namespace lfs::vis {
             depth_capture_mode_ = on;
             depth_capture_expected_ = on && expected;
         }
-        [[nodiscard]] std::expected<void, std::string> readOutputImageIntoCpuHwc(
+        [[nodiscard]] lfs::Result<void> readOutputImageIntoCpuHwc(
             VulkanContext& context,
             ViewOutputKey output_key,
             lfs::core::Tensor& destination,
@@ -291,7 +291,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request) const;
-        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+        [[nodiscard]] lfs::Result<float> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request,
             ViewOutputKey output_key) const;
@@ -303,7 +303,7 @@ namespace lfs::vis {
             Ready = 1,
             Failed = 2,
         };
-        [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(
+        [[nodiscard]] lfs::Result<std::uint64_t> submitReadOutputImageIntoCpuHwcTicket(
             VulkanContext& context,
             ViewOutputKey output_key,
             lfs::core::Tensor& destination,
@@ -315,7 +315,7 @@ namespace lfs::vis {
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
-        [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
+        [[nodiscard]] lfs::Result<std::uint64_t> submitReadOutputDepthImageTicket(
             VulkanContext& context,
             ViewOutputKey output_key,
             lfs::core::Tensor& destination) const;
@@ -423,7 +423,7 @@ namespace lfs::vis {
             _VulkanBuffer model_transforms{};
             bool raster_overlays_active = true;
         };
-        [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadOverlayBindings(
+        [[nodiscard]] lfs::Result<OverlayBindingViews> uploadOverlayBindings(
             VulkanContext& context,
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
@@ -634,14 +634,14 @@ namespace lfs::vis {
         // keys fail rather than allocating an empty column.
         [[nodiscard]] std::optional<std::size_t> findLiveOutputLogical(
             ViewOutputKey output_key) const noexcept;
-        [[nodiscard]] std::expected<std::size_t, std::string> requireLiveOutputLogical(
+        [[nodiscard]] lfs::Result<std::size_t> requireLiveOutputLogical(
             ViewOutputKey output_key,
             std::string_view operation) const;
         // Render may register a valid Scene key. Reserved Legacy/Preview keys
         // must already exist; fake ones are rejected.
-        [[nodiscard]] std::expected<std::size_t, std::string> resolveOutputLogicalForRender(
+        [[nodiscard]] lfs::Result<std::size_t> resolveOutputLogicalForRender(
             ViewOutputKey output_key);
-        [[nodiscard]] std::expected<ViewOutputKey, std::string> legacyOutputKey(
+        [[nodiscard]] lfs::Result<ViewOutputKey> legacyOutputKey(
             OutputSlot output_slot,
             std::string_view operation) const;
         void forgetAndReleaseOutputSlot(OutputImageSlot& slot,
@@ -691,7 +691,7 @@ namespace lfs::vis {
         [[nodiscard]] bool residentRasterScratchCompatible(
             const ResidentRasterScratchProvenance& published,
             const ResidentRasterScratchProvenance& requested) const;
-        [[nodiscard]] std::expected<void, std::string> requireReusableResidentRasterScratch(
+        [[nodiscard]] lfs::Result<void> requireReusableResidentRasterScratch(
             ViewOutputKey output_key,
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats);

@@ -554,10 +554,10 @@ namespace lfs::vis {
             return request;
         }
 
-        static void expectUnavailable(const std::expected<void, std::string>& result,
+        static void expectUnavailable(const lfs::Status& result,
                                       const std::string_view what) {
             ASSERT_FALSE(result) << what << " unexpectedly succeeded";
-            EXPECT_NE(result.error().find("unavailable"), std::string::npos) << result.error();
+            EXPECT_NE(result.error().user_message().find("unavailable"), std::string::npos) << result.error().user_message();
         }
 
         static void rejectWrongKeyResidentScratchReuse() {

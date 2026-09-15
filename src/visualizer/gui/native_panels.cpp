@@ -250,9 +250,8 @@ namespace lfs::vis::gui::native_panels {
                                            chrome.value("timeline_pan", 0.0f));
                     ui_state_.show_film_strip = chrome.value(
                         "show_film_strip", ui_state_.show_film_strip);
-                } catch (const std::exception&) {
-                    // Chrome is optional presentation state; malformed data
-                    // must leave the freshly constructed instance usable.
+                } catch (const std::exception& error) {
+                    LOG_WARN("Ignoring invalid sequencer area state: {}", error.what());
                 }
             }
 

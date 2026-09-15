@@ -4,19 +4,19 @@
 </head>
 <body id="area-header">
     <div class="area-header">
-        <select id="editor-select" class="editor-select" title="Area editor">
+        <select id="editor-select" class="editor-select" title="@tr:ui.area_editor">
         </select>
         <span class="area-spacer"></span>
         <button id="projection" class="area-action" type="button" data-action="projection"
-                title="Toggle projection" aria-label="Toggle projection">
+                title="@tr:ui.toggle_projection" aria-label="@tr:ui.toggle_projection">
             <img id="projection-icon" src="../icon/perspective.png" />
         </button>
         <button id="maximize" class="area-action" type="button" data-action="maximize"
-                title="Maximize area" aria-label="Maximize area">
+                title="@tr:ui.maximize_area" aria-label="@tr:ui.maximize_area">
             <img id="maximize-icon" src="../icon/arrows-maximize.png" />
         </button>
         <button id="close" class="area-action area-close" type="button" data-action="close"
-                title="Close area" aria-label="Close area">
+                title="@tr:ui.close_area" aria-label="@tr:ui.close_area">
             <img src="../icon/scene/x.png" />
         </button>
     </div>

@@ -66,7 +66,7 @@ TEST(PointCloudOutputOwnership, FourSceneKeysStayIndependentAfterRegister) {
     std::array<const void*, 4> identities{};
     for (std::size_t i = 0; i < ids.size(); ++i) {
         auto registered = renderer.registerViewOutput(ids[i]);
-        ASSERT_TRUE(registered) << registered.error();
+        ASSERT_TRUE(registered) << registered.error().user_message();
         keys[i] = *registered;
         EXPECT_EQ(keys[i], sceneOutputKey(ids[i]));
         identities[i] = PointCloudOutputOwnershipTestAccess::resourceIdentity(renderer, keys[i]);
@@ -99,7 +99,9 @@ TEST(PointCloudOutputOwnership, RegisterIsIdempotentAndRejectsZero) {
               PointCloudOutputOwnershipTestAccess::resourceIdentity(renderer, *second));
     auto invalid = renderer.registerViewOutput(0);
     EXPECT_FALSE(invalid);
-    EXPECT_NE(invalid.error().find("non-zero"), std::string::npos);
+    EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+    EXPECT_EQ(invalid.error().domain(), lfs::ErrorDomain::Rendering);
+    EXPECT_NE(invalid.error().user_message().find("non-zero"), std::string::npos);
 }
 
 TEST(PointCloudOutputOwnership, RetiringOneViewDoesNotAliasOrClearNeighbors) {
@@ -118,14 +120,15 @@ TEST(PointCloudOutputOwnership, RetiringOneViewDoesNotAliasOrClearNeighbors) {
     ASSERT_NE(identity_b, nullptr);
 
     auto released = renderer.releaseViewOutput(202);
-    ASSERT_TRUE(released) << released.error();
+    ASSERT_TRUE(released) << released.error().user_message();
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::resourceIdentity(renderer, retired), nullptr);
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::resourceIdentity(renderer, live_a), identity_a);
     EXPECT_EQ(PointCloudOutputOwnershipTestAccess::resourceIdentity(renderer, live_b), identity_b);
     EXPECT_FALSE(PointCloudOutputOwnershipTestAccess::outputsAlias(renderer, live_a, live_b));
 
     auto unknown = renderer.releaseViewOutput(202);
-    EXPECT_FALSE(unknown);
+    ASSERT_FALSE(unknown);
+    EXPECT_EQ(unknown.error().code(), lfs::ErrorCode::NotFound);
     auto zero = renderer.releaseViewOutput(0);
     EXPECT_FALSE(zero);
 

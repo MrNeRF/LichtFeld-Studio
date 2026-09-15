@@ -5,6 +5,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -1961,8 +1962,8 @@ namespace lfs::vis::gui::panels {
                 pane->active_tab = std::clamp(value["active_tab"].get<int>(), 0, 2);
             if (value.contains("splitter_ratio") && value["splitter_ratio"].is_number())
                 pane->splitter_ratio = std::clamp(value["splitter_ratio"].get<float>(), 0.2f, 0.8f);
-        } catch (const std::exception&) {
-            // Chrome is opaque project data. A malformed payload keeps defaults.
+        } catch (const std::exception& error) {
+            LOG_WARN("Ignoring invalid console area state: {}", error.what());
         }
     }
 

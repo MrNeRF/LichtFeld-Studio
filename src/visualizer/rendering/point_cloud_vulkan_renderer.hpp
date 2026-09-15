@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -132,10 +133,10 @@ namespace lfs::vis {
         // Scene output columns are keyed by workspace ViewId. Geometry buffers
         // stay shared; only color/depth attachments are per key. Reserved
         // Legacy columns cannot be released.
-        [[nodiscard]] std::expected<ViewOutputKey, std::string> registerViewOutput(ViewId view_id);
-        [[nodiscard]] std::expected<void, std::string> releaseViewOutput(ViewId view_id);
+        [[nodiscard]] lfs::Result<ViewOutputKey> registerViewOutput(ViewId view_id);
+        [[nodiscard]] lfs::Result<void> releaseViewOutput(ViewId view_id);
 
-        [[nodiscard]] std::expected<RenderResult, std::string> render(
+        [[nodiscard]] lfs::Result<RenderResult> render(
             VulkanContext& context,
             const RenderRequest& request,
             ViewOutputKey output_key);
@@ -143,7 +144,7 @@ namespace lfs::vis {
             VulkanContext& context,
             const RenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main);
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+        [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImage(
             VulkanContext& context,
             ViewOutputKey output_key);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
@@ -168,7 +169,7 @@ namespace lfs::vis {
     // GPU-free ownership probes for contract tests. Images are null until a
     // successful render; identity is the per-key resource record.
     struct PointCloudOutputOwnershipTestAccess {
-        [[nodiscard]] static std::expected<ViewOutputKey, std::string> legacyKey(
+        [[nodiscard]] static lfs::Result<ViewOutputKey> legacyKey(
             PointCloudVulkanRenderer::OutputSlot output_slot);
         [[nodiscard]] static std::vector<ViewOutputKey> registeredKeys(
             const PointCloudVulkanRenderer& renderer);

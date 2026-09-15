@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/area_editor_host.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 
 #include "gui/rmlui/rml_panel_host.hpp"
@@ -75,6 +76,7 @@ namespace lfs::vis::gui {
         uint64_t options_revision = 0;
         std::string options_markup;
         std::string maximize_icon;
+        std::string maximize_tooltip;
         std::string projection_tooltip;
         std::string responsive_mode;
 
@@ -431,12 +433,23 @@ namespace lfs::vis::gui {
                         area.header->maximize_icon = maximize_icon;
                         header_changed = true;
                     }
+                    if (auto* const maximize = header_document->GetElementById("maximize")) {
+                        const std::string tooltip = LOC(snapshot_area.maximized
+                                                            ? "ui.restore_area"
+                                                            : "ui.maximize_area");
+                        if (area.header->maximize_tooltip != tooltip) {
+                            maximize->SetAttribute("title", tooltip);
+                            maximize->SetAttribute("aria-label", tooltip);
+                            area.header->maximize_tooltip = tooltip;
+                            header_changed = true;
+                        }
+                    }
                     if (auto* const projection = header_document->GetElementById("projection")) {
                         const auto* const record = workspace_.findView(snapshot_area.id);
                         const std::string projection_tooltip =
-                            record && record->projection.orthographic
-                                ? "Use perspective projection"
-                                : "Use orthographic projection";
+                            LOC(record && record->projection.orthographic
+                                    ? "ui.use_perspective_projection"
+                                    : "ui.use_orthographic_projection");
                         if (area.header->projection_tooltip != projection_tooltip) {
                             projection->SetAttribute("title", projection_tooltip);
                             projection->SetAttribute("aria-label", projection_tooltip);

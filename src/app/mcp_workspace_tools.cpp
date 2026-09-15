@@ -35,53 +35,63 @@ namespace lfs::app {
         constexpr std::string_view kWorkspaceUnavailable =
             "Viewport workspace is unavailable";
 
+        lfs::Error workspaceArgumentError(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::MCP,
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
         json vec3_json(const glm::vec3& value) {
             return json::array({value.x, value.y, value.z});
         }
 
-        std::expected<ViewId, std::string> view_id_arg(const json& args) {
+        lfs::Result<ViewId> view_id_arg(const json& args) {
             if (!args.contains("view_id") ||
                 (!args["view_id"].is_number_integer() && !args["view_id"].is_number_unsigned()))
-                return std::unexpected("Field 'view_id' must be a non-negative integer");
+                return workspaceArgumentError("Field 'view_id' must be a non-negative integer");
             const auto& value = args["view_id"];
             if (!value.is_number_unsigned() && value.get<std::int64_t>() <= 0)
-                return std::unexpected("Field 'view_id' must be non-zero");
+                return workspaceArgumentError("Field 'view_id' must be non-zero");
             if (value.is_number_unsigned() && value.get<std::uint64_t>() == 0)
-                return std::unexpected("Field 'view_id' must be non-zero");
+                return workspaceArgumentError("Field 'view_id' must be non-zero");
             const auto id = value.get<ViewId>();
             if (id == vis::kInvalidViewId)
-                return std::unexpected("Field 'view_id' must be non-zero");
+                return workspaceArgumentError("Field 'view_id' must be non-zero");
             return id;
         }
 
-        std::expected<float, std::string> finite_float_arg(const json& args,
-                                                           const char* name,
-                                                           const float fallback = 0.0f) {
+        lfs::Result<float> finite_float_arg(const json& args,
+                                            const char* name,
+                                            const float fallback = 0.0f) {
             if (!args.contains(name))
                 return fallback;
             if (!args[name].is_number())
-                return std::unexpected(std::string("Field '") + name + "' must be a number");
+                return workspaceArgumentError(std::string("Field '") + name + "' must be a number");
             const float value = args[name].get<float>();
             if (!std::isfinite(value))
-                return std::unexpected(std::string("Field '") + name + "' must be finite");
+                return workspaceArgumentError(std::string("Field '") + name + "' must be finite");
             return value;
         }
 
-        std::expected<glm::vec3, std::string> vec3_arg(const json& args,
-                                                       const char* name,
-                                                       const glm::vec3& fallback = {}) {
+        lfs::Result<glm::vec3> vec3_arg(const json& args,
+                                        const char* name,
+                                        const glm::vec3& fallback = {}) {
             if (!args.contains(name))
                 return fallback;
             const auto& value = args[name];
             if (!value.is_array() || value.size() != 3)
-                return std::unexpected(std::string("Field '") + name + "' must be a 3-element array");
+                return workspaceArgumentError(std::string("Field '") + name + "' must be a 3-element array");
             glm::vec3 result;
             for (std::size_t i = 0; i < 3; ++i) {
                 if (!value[i].is_number())
-                    return std::unexpected(std::string("Field '") + name + "' must contain numbers");
+                    return workspaceArgumentError(std::string("Field '") + name + "' must contain numbers");
                 result[i] = value[i].get<float>();
                 if (!std::isfinite(result[i]))
-                    return std::unexpected(std::string("Field '") + name + "' must contain finite numbers");
+                    return workspaceArgumentError(std::string("Field '") + name + "' must contain finite numbers");
             }
             return result;
         }
@@ -258,7 +268,7 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 if (!args.contains("editor_id") || !args["editor_id"].is_string())
                     return json{{"error", "Field 'editor_id' must be a string"}};
                 const auto editor = args["editor_id"].get<std::string>();
@@ -316,13 +326,13 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 const auto axis_name = args.value("axis", "horizontal");
                 if (axis_name != "horizontal" && axis_name != "vertical")
                     return json{{"error", "Split axis must be horizontal or vertical"}};
                 auto ratio = finite_float_arg(args, "ratio", 0.5f);
                 if (!ratio)
-                    return json{{"error", ratio.error()}};
+                    return json{{"error", std::string(ratio.error().user_message())}};
                 return post_and_wait(viewer, [viewer, id = *id, axis_name, ratio = *ratio]() -> json {
                     auto* const workspace = viewer->getViewportWorkspace();
                     if (!workspace)
@@ -345,7 +355,7 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 return mutate_workspace(viewer, [id = *id](vis::ViewportWorkspace& workspace) {
                     return workspace.close(id);
                 });
@@ -356,7 +366,7 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 return mutate_workspace(viewer, [id = *id](vis::ViewportWorkspace& workspace) {
                     return workspace.focus(id);
                 });
@@ -369,7 +379,7 @@ namespace lfs::app {
                     return mutate_workspace(viewer, [](vis::ViewportWorkspace& workspace) { return workspace.restoreMaximized(); });
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 return mutate_workspace(viewer, [id = *id](vis::ViewportWorkspace& workspace) { return workspace.maximize(id); });
             });
 
@@ -383,7 +393,7 @@ namespace lfs::app {
                     return json{{"error", "Field 'split_id' must be a non-zero integer"}};
                 auto ratio = finite_float_arg(args, "ratio");
                 if (!ratio)
-                    return json{{"error", ratio.error()}};
+                    return json{{"error", std::string(ratio.error().user_message())}};
                 const auto split = args["split_id"].get<vis::LayoutNodeId>();
                 return mutate_workspace(viewer, [split, ratio = *ratio](vis::ViewportWorkspace& workspace) { return workspace.resize(split, ratio); });
             });
@@ -393,16 +403,16 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 auto eye = vec3_arg(args, "eye");
                 if (!eye)
-                    return json{{"error", eye.error()}};
+                    return json{{"error", std::string(eye.error().user_message())}};
                 auto target = vec3_arg(args, "target");
                 if (!target)
-                    return json{{"error", target.error()}};
+                    return json{{"error", std::string(target.error().user_message())}};
                 auto up = vec3_arg(args, "up", {0.0f, 1.0f, 0.0f});
                 if (!up)
-                    return json{{"error", up.error()}};
+                    return json{{"error", std::string(up.error().user_message())}};
                 return mutate_workspace(viewer, [id = *id, eye = *eye, target = *target, up = *up](vis::ViewportWorkspace& workspace) -> lfs::Status {
                     auto* record = workspace.findView(id);
                     if (!record)
@@ -424,15 +434,15 @@ namespace lfs::app {
             [viewer](const json& args) -> json {
                 auto id = view_id_arg(args);
                 if (!id)
-                    return json{{"error", id.error()}};
+                    return json{{"error", std::string(id.error().user_message())}};
                 if (!args.contains("orthographic") || !args["orthographic"].is_boolean())
                     return json{{"error", "Field 'orthographic' must be a boolean"}};
                 auto focal = finite_float_arg(args, "focal_length_mm");
                 if (!focal)
-                    return json{{"error", focal.error()}};
+                    return json{{"error", std::string(focal.error().user_message())}};
                 auto ortho = finite_float_arg(args, "ortho_scale");
                 if (!ortho)
-                    return json{{"error", ortho.error()}};
+                    return json{{"error", std::string(ortho.error().user_message())}};
                 const bool orthographic = args["orthographic"].get<bool>();
                 const bool has_focal = args.contains("focal_length_mm");
                 const bool has_ortho = args.contains("ortho_scale");
@@ -456,8 +466,8 @@ namespace lfs::app {
                                           vis::Visualizer* viewer) {
         registry.register_resource(
             mcp::McpResource{.uri = "lichtfeld://workspace/state", .name = "Workspace State", .description = "Current stable viewport views, layout, cameras and pane rectangles", .mime_type = "application/json"},
-            [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+            [viewer](const std::string& uri) -> mcp::ResourceRegistry::ResourceHandler::result_type {
+                return post_and_wait(viewer, [viewer, uri]() -> mcp::ResourceRegistry::ResourceHandler::result_type {
                     auto* const workspace = viewer->getViewportWorkspace();
                     if (!workspace)
                         return std::unexpected(std::string(kWorkspaceUnavailable));

@@ -1454,7 +1454,8 @@ namespace lfs::vis {
         if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
             try {
                 resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
-            } catch (const std::exception&) {
+            } catch (const std::exception& error) {
+                LOG_DEBUG("Environment resource lookup failed; trying the assets directory: {}", error.what());
                 resolved = lfs::core::getAssetsDir() / path;
             }
         }

@@ -20,6 +20,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "view_output_key.hpp"
+#include "viewport_error.hpp"
 #include "viewport_request_builder.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include "workspace_render_request.hpp"
@@ -521,14 +522,14 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             for (const ViewId id : closed) {
                 if (auto released = vksplat_viewport_renderer_->releaseViewOutput(id); !released) {
-                    LOG_DEBUG("releaseViewOutput({}): {}", id, released.error());
+                    LOG_DEBUG("releaseViewOutput({}): {}", id, viewportErrorText(released.error()));
                 }
             }
         }
         if (point_cloud_vulkan_renderer_) {
             for (const ViewId id : closed) {
                 if (auto released = point_cloud_vulkan_renderer_->releaseViewOutput(id); !released) {
-                    LOG_DEBUG("point-cloud releaseViewOutput({}): {}", id, released.error());
+                    LOG_DEBUG("point-cloud releaseViewOutput({}): {}", id, viewportErrorText(released.error()));
                 }
             }
         }
@@ -549,7 +550,7 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             for (const ViewId id : ids) {
                 if (auto released = vksplat_viewport_renderer_->releaseViewOutput(id); !released) {
-                    LOG_DEBUG("releaseViewOutput({}) during workspace clear: {}", id, released.error());
+                    LOG_DEBUG("releaseViewOutput({}) during workspace clear: {}", id, viewportErrorText(released.error()));
                 }
             }
         }
@@ -558,7 +559,7 @@ namespace lfs::vis {
                 if (auto released = point_cloud_vulkan_renderer_->releaseViewOutput(id); !released) {
                     LOG_DEBUG("point-cloud releaseViewOutput({}) during workspace clear: {}",
                               id,
-                              released.error());
+                              viewportErrorText(released.error()));
                 }
             }
         }
@@ -1209,6 +1210,7 @@ namespace lfs::vis {
                             point_cloud_colors_cache_key_ = sh0_key;
                             point_cloud_colors_cache_size_ = sh0_count;
                         } catch (const std::exception& e) {
+                            LOG_WARN("Point cloud color derivation failed: {}", e.what());
                             point_cloud_setup_error =
                                 std::format("Point cloud color derivation failed: {}", e.what());
                         }
@@ -1285,6 +1287,7 @@ namespace lfs::vis {
                     unjittered = makeWorkspaceFrameView(
                         pane, plan.output_extent, frame_settings.background_color);
                 } catch (const std::exception& e) {
+                    LOG_WARN("Viewport {} camera setup failed: {}", pane.id, e.what());
                     results.push_back(previousWorkspaceFrame(pane.id, pane, e.what()));
                     continue;
                 }
@@ -1334,7 +1337,7 @@ namespace lfs::vis {
 
                 if (auto registered = point_cloud_vulkan_renderer_->registerViewOutput(pane.id);
                     !registered) {
-                    results.push_back(previousWorkspaceFrame(pane.id, pane, registered.error()));
+                    results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(registered.error())));
                     continue;
                 }
                 if (is_training &&
@@ -1349,17 +1352,18 @@ namespace lfs::vis {
                     continue;
                 }
 
-                std::expected<PointCloudVulkanRenderer::RenderResult, std::string> render_result =
-                    std::unexpected("Point-cloud workspace render was not executed");
+                lfs::Result<PointCloudVulkanRenderer::RenderResult> render_result =
+                    viewportError("Point-cloud workspace render was not executed");
                 try {
                     render_result = point_cloud_vulkan_renderer_->render(
                         *context.vulkan_context, vk_req, sceneOutputKey(pane.id));
                 } catch (const std::exception& e) {
-                    render_result = std::unexpected(
+                    LOG_WARN("Viewport operation failed: {}", e.what());
+                    render_result = viewportError(
                         std::format("Point-cloud render threw: {}", e.what()));
                 }
                 if (!render_result) {
-                    results.push_back(previousWorkspaceFrame(pane.id, pane, render_result.error()));
+                    results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(render_result.error())));
                     continue;
                 }
 
@@ -1448,6 +1452,7 @@ namespace lfs::vis {
                 unjittered = makeWorkspaceFrameView(
                     pane, plan.output_extent, frame_settings.background_color);
             } catch (const std::exception& e) {
+                LOG_WARN("Viewport {} camera setup failed: {}", pane.id, e.what());
                 results.push_back(previousWorkspaceFrame(pane.id, pane, e.what()));
                 continue;
             }
@@ -1566,7 +1571,7 @@ namespace lfs::vis {
             }
 
             if (auto registered = vksplat_viewport_renderer_->registerViewOutput(pane.id); !registered) {
-                results.push_back(previousWorkspaceFrame(pane.id, pane, registered.error()));
+                results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(registered.error())));
                 continue;
             }
 
@@ -1577,8 +1582,8 @@ namespace lfs::vis {
                 ((consumed_dirty & DirtyFlag::SELECTION) != 0) &&
                 (consumed_dirty & ~(DirtyFlag::SELECTION | DirtyFlag::OVERLAY)) == 0 &&
                 !plan.camera_cut;
-            std::expected<VksplatViewportRenderer::RenderResult, std::string> render_result =
-                std::unexpected("VkSplat workspace render was not executed");
+            lfs::Result<VksplatViewportRenderer::RenderResult> render_result =
+                viewportError("VkSplat workspace render was not executed");
             bool used_overlay = false;
             if (selection_only) {
                 const auto previous = previousWorkspaceFrame(pane.id, pane, {});
@@ -1593,7 +1598,8 @@ namespace lfs::vis {
                             is_training);
                         used_overlay = render_result.has_value();
                     } catch (const std::exception& e) {
-                        render_result = std::unexpected(
+                        LOG_WARN("Viewport operation failed: {}", e.what());
+                        render_result = viewportError(
                             std::format("VkSplat selection overlay threw: {}", e.what()));
                     }
                 }
@@ -1608,24 +1614,25 @@ namespace lfs::vis {
                         sceneOutputKey(pane.id),
                         is_training);
                 } catch (const std::exception& e) {
-                    render_result = std::unexpected(
+                    LOG_WARN("Viewport operation failed: {}", e.what());
+                    render_result = viewportError(
                         std::format("VkSplat render threw: {}", e.what()));
                     lfs::core::Tensor::trim_memory_pool();
                 }
             }
             if (!render_result) {
-                if (isRetryableSharedScratchUnavailable(render_result.error())) {
-                    if (render_result.error().find("arena is busy") != std::string::npos) {
+                if (isRetryableSharedScratchUnavailable(viewportErrorText(render_result.error()))) {
+                    if (viewportErrorText(render_result.error()).find("arena is busy") != std::string::npos) {
                         vksplat_viewport_renderer_->requestArenaHandoff();
                     }
                     workspace_retry_raster_ = true;
                     dirty_mask_.fetch_or(DirtyFlag::SPLATS, std::memory_order_relaxed);
                     results.push_back(previousWorkspaceFrame(
                         pane.id, pane,
-                        std::format("deferred: {}", render_result.error())));
+                        std::format("deferred: {}", viewportErrorText(render_result.error()))));
                     continue;
                 }
-                results.push_back(previousWorkspaceFrame(pane.id, pane, render_result.error()));
+                results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(render_result.error())));
                 continue;
             }
 
@@ -1692,7 +1699,7 @@ namespace lfs::vis {
                     }
                 } else {
                     LOG_WARN("Workspace PPISP readback failed: {}",
-                             image ? "missing image payload" : image.error());
+                             image ? "missing image payload" : viewportErrorText(image.error()));
                 }
             }
             const bool temporal_frame_published =
