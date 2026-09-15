@@ -171,7 +171,7 @@ def test_update_all_one_public_confirmation_continues_after_item_failure(gallery
     failures = [j for j in controller.snapshot()['jobs'] if j.get('batchFailure')]
     assert len(failures) == 1 and failures[0]['project'] == 'project0'
     assert failures[0]['message'] == 'Missing source payload'
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     row = next(r for r in transfer_rows(controller.snapshot()) if r['id'] == failures[0]['id'])
     assert row['can_resume'] and row['can_cancel']
 

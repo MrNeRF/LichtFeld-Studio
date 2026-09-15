@@ -817,7 +817,7 @@ def test_download_transport_failure_classification(tmp_path, monkeypatch, connec
     monkeypatch.setattr(test_gallery_sync, 'gallery_sync', gallery_sync)
     from lfs_plugins import portal_gallery, portal_retry
     from lfs_plugins.gallery_controller import asset_sync_state
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
 
     service = connected(tmp_path, monkeypatch)
     data = (Path(__file__).parents[1] / 'data' / 'portable-sog.licht').read_bytes()
@@ -959,7 +959,7 @@ def test_upload_transport_failure_classification(tmp_path, monkeypatch, failure)
     from pathlib import Path
     import test_gallery_sync
     from lfs_plugins import gallery_sync, portal_gallery, portal_retry
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     monkeypatch.setattr(test_gallery_sync, 'gallery_sync', gallery_sync)
     service = test_gallery_sync.connected(tmp_path, monkeypatch)
     path = tmp_path / 'upload.licht'

@@ -50,12 +50,6 @@ PANEL_SPECS = {
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
         update_policy="dirty",
     ),
-    # Kept as an import-compatible implementation for older callers; it is
-    # no longer registered or exposed because transfers live in Projects.
-    "gallery_transfer": _PanelSpec(
-        "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
-        "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",
-    ),
     "gallery_file": _PanelSpec(
         "lfs_plugins.gallery_file_panel", "GalleryFilePanel", "lfs.gallery_file", "Gallery",
         "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (680, 0),

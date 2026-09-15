@@ -486,7 +486,7 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
 
 def test_transfer_tray_tracks_processing_pause_completion_and_cleared_recovery(gallery):
     panel, state, _ = gallery
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     job = dict(id='transfer', kind='upload', metadata={'title': 'Private garden'},
                status='running', serverProcessing=True, completed=40, total=100, message='Checking scene')
     state['jobs'] = [job]
@@ -682,7 +682,7 @@ def test_subscribers_are_coalesced_and_unsubscribe_stops_delivery(gallery, monke
     assert len(received) == count + 1
 
 def test_tray_has_all_pending_jobs_and_bounded_history(gallery):
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     jobs = [dict(id=str(i), metadata={'title':str(i)}, status='completed', completed=1,total=1) for i in range(35)]
     jobs += [dict(id='upload',metadata={'title':'Upload'},status='running',completed=2,total=10),
              dict(id='paused',metadata={'title':'Paused'},status='paused',interrupted=True,completed=0,total=10)]
@@ -856,8 +856,8 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
 @pytest.mark.parametrize('kind', ['upload', 'download'])
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
 def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, kind, status, expected):
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
-    module = import_module('lfs_plugins.gallery_transfer_panel')
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
+    module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: {
         'projects.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
     }.get(key, key))
@@ -875,8 +875,6 @@ def test_A5_gallery_asset_borders_use_supported_longhands():
     unsupported = re.compile(r'\bborder(?:-(?:top|right|bottom|left))?\s*:\s*[^;]*(?:solid|dashed|dotted|double)\s*;')
     assert paths
     assert not [(p.name, match.group()) for p in paths for match in unsupported.finditer(p.read_text())]
-    assert 'border-bottom-width: 1dp;' in (resources / 'gallery_transfer_panel.rcss').read_text()
-    assert 'border-bottom-color: @{border};' in (resources / 'gallery_transfer_panel.theme.rcss').read_text()
 
 @pytest.mark.parametrize('upload_format', ['studio', 'sog', 'ssog', 'spz'])
 def test_closed_project_prepares_saved_file_without_opening(gallery, monkeypatch, tmp_path, upload_format):

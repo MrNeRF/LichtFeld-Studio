@@ -2316,7 +2316,7 @@ def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     (137114, '134 KB'), (10 * 1024, '10 KB'), (1024**2, '1.0 MB'), (42 * 1024**2, '42 MB'), (1024**3, '1.0 GB')])
 def test_A4_adaptive_sizes_match_tray_cards_and_info(panel_module, monkeypatch, size, expected):
     from lfs_plugins.asset_format import format_size
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     locale = json.loads((Path(__file__).resolve().parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
     # Use the real localized templates/units instead of checking untranslated keys.
     flattened = dict(locale)
