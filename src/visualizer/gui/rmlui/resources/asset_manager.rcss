@@ -1426,3 +1426,19 @@
 .asset-row-count { flex: 0 0 auto; white-space: nowrap; }
 
 .asset-card-placeholder { box-sizing: border-box; max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Relationship glyphs sit beside words; activity and file health are independent. */
+.gallery-card-state { display: flex; align-items: center; gap: 4dp; min-width: 0; }
+.gallery-card-state > span { min-width: 0; flex: 1 1 0dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gallery-card-state .gallery-list-icon { flex: 0 0 16dp; }
+.gallery-activity { position: absolute; top: 6dp; right: 6dp; width: 16dp; height: 16dp; }
+.gallery-activity > img, .gallery-activity > progress { position: absolute; left: 0; top: 0; width: 16dp; height: 16dp; }
+.gallery-activity > progress { fill-image: ../icon/gallery-progress-ring.png; }
+.asset-health-badge { position: absolute; left: 6dp; top: 6dp; width: 16dp; height: 16dp; display: flex; justify-content: center; align-items: center; border-radius: 8dp; line-height: 16dp; font-size: 12dp; font-weight: bold; }
+.asset-list-thumb .asset-health-badge { left: 0; top: 0; }
+.asset-list-thumb .gallery-activity { right: 0; top: 0; }
+.inspector-strip > .asset-health-badge, .inspector-strip > .gallery-activity { position: relative; left: auto; right: auto; top: auto; flex: 0 0 16dp; }
+
+.asset-card-menu { top: auto; bottom: 44dp; right: 6dp; }
+
+.asset-health-badge > span { display: block; line-height: 16dp; }

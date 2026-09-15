@@ -488,7 +488,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if self._get_selected_asset() else ""))
         model.bind_func("inspector_has_gallery_action", lambda: (
             not self.get_selected_asset_can_locate()
-            and not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+            and (self._selected_transfer_recovery() or not self._selected_details_rows().get("resumable")) and bool(self._selected_gallery_action())))
+        model.bind_func("strip_action_label", lambda: self._selected_transfer_recovery(label=True) or tr("projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.repair" if (self._get_selected_asset() or {}).get("status") == "REPAIR_ONLY" else "projects.action.open"))
         model.bind_func("open_button_label", lambda: tr(
             "projects.action.locate" if self.get_selected_asset_can_locate() else
             "projects.action.repair" if (self._get_selected_asset() or {}).get("status") == "REPAIR_ONLY" else
@@ -617,7 +618,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_autosave_newer": lambda: bool(self._selected_details_rows().get("autosave_newer")),
             "inspector_has_details": lambda: bool(self._selected_inspection().get("details")),
             "inspector_card_diagnostic": lambda: str(getattr(self._selected_inspection().get("card"), "diagnostic", "") or ""),
-            "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and bool(self._selected_details_rows().get("resumable")),
+            "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and not self._selected_transfer_recovery() and bool(self._selected_details_rows().get("resumable")),
             "inspector_operations_expanded": self.get_operations_expanded,
             "inspector_has_saved": lambda: bool(self._selected_details_rows().get("saved")),
             "inspector_has_saved_at": lambda: bool(self._selected_details_rows().get("saved_at")),
@@ -785,6 +786,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
             ("on_load_asset", self.on_load_asset),
+            ("on_strip_action", self.on_strip_action),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
             ("open_sort_menu", self.open_sort_menu),
@@ -1350,6 +1352,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         key = {
             "AVAILABLE": "projects.status.available",
             "MISSING": "projects.status.missing",
+            "UNREADABLE": "projects.status.unreadable",
+            "UNSUPPORTED": "projects.status.unreadable",
             "IDENTITY_MISMATCH": "projects.status.identity_mismatch",
             "REPAIR_ONLY": "projects.status.needs_repair",
             "UNSUPPORTED_NEWER": "projects.status.newer_version",
@@ -2180,6 +2184,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._log_warn("Could not use the found location for this project")
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
+
+    def _selected_transfer_recovery(self, *, label=False):
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        badge = self._gallery_badge(asset)
+        if not badge["health_badge"] and badge["gallery_action"] in ("resume", "retry"):
+            return badge["gallery_action_label"] if label else badge["gallery_action"]
+        return ""
+
+    def on_strip_action(self, handle, event, args):
+        action = self._selected_transfer_recovery()
+        if action:
+            self._stop_event(event)
+            self._gallery_command(action)
+        else:
+            self.on_load_asset(handle, event, args)
 
     def on_load_asset(self, _handle, _ev, args):
         # The action button must not also toggle its containing compact strip.

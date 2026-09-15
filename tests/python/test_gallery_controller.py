@@ -550,6 +550,7 @@ def test_three_fact_freshness_uses_commit_and_shared_fields(gallery, commit, rem
     assert facts['freshness'] == expected
     assert facts['state'] == expected
     assert facts['relationship'] == 'linked'
+    assert facts['icon'] == {'equal':'cloud-check','local':'cloud-up','remote':'cloud-down','diverged':'cloud-bang','unknown':'cloud-dotted'}[expected]
 
 @pytest.mark.parametrize('status,extra,expected', [
     ('queued', {}, 'queued'), ('running', {}, 'uploading'), ('running', {'serverProcessing': True}, 'processing'),
@@ -565,6 +566,7 @@ def test_single_badge_precedence_during_transfers(gallery, status, extra, expect
     assert facts['state'] == expected
     assert facts['progress'] == 70
     assert facts['jobId'] == 'job'
+    assert facts['icon'] == ('ring' if facts['active'] else {'paused':'pause','interrupted':'pause','error':'error','diverged':'cloud-bang'}[expected])
     diverged = asset_sync_state(dict(id='project', commit_uuid='new', exists=True), link, dict(base,title='remote', metadataRevision='remote-edit'), [job])
     assert diverged['state'] == 'diverged'
 
@@ -916,3 +918,32 @@ def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path
     changed = bytearray(original)
     changed[row+72] ^= 1  # A new payload checksum, with unchanged SCNG and VIEW.
     assert stamp(changed) != before
+
+
+@pytest.mark.parametrize("state,icon,tone", [
+    ("unlinked", "cloud", "text_dim"), ("remote_only", "cloud-dotted", "primary"),
+    ("remote_deleted", "cloud-strike", "text_dim"),
+    ("preparing", "ring", "primary"), ("applying", "ring", "primary"),
+])
+def test_project_state_glyphs(gallery, state, icon, tone):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    asset = {"id":"project", "exists":True}
+    link = {"sceneId":"one", "remoteDeleted":True} if state == "remote_deleted" else None
+    facts = asset_sync_state(None if state == "remote_only" else asset, link,
+                             phase=state if state in ("preparing", "applying") else "idle")
+    assert facts["icon"] == icon
+    assert facts["tone"] == tone
+
+
+@pytest.mark.parametrize("health,tone", [
+    ("MISSING", "warning"), ("IDENTITY_MISMATCH", "warning"),
+    ("UNREADABLE", "error"), ("REPAIR_ONLY", "error"), ("UNSUPPORTED_NEWER", "error"),
+])
+def test_file_health_has_an_independent_glyph(gallery, health, tone):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    facts = asset_sync_state({"id":"project", "status":health, "error":"Fixture reason"},
+        {"sceneId":"one"}, jobs=[dict(id="job",project="project",kind="upload",status="running",completed=43,total=100)])
+    assert facts["health_icon"] == "bang"
+    assert facts["health_tone"] == tone
+    assert facts["action"] == "check"
+    assert facts["progress"] == 43

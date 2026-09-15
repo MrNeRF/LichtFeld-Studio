@@ -1696,13 +1696,13 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
             relationship = "linked"
             visible = cached
     icons = {"unlinked": "cloud", "equal": "cloud-check", "local": "cloud-up",
-             "remote": "cloud-down", "diverged": "cloud-updown", "remote_only": "cloud-down",
-             "queued": "cloud-dotted", "paused": "cloud-dotted", "interrupted": "cloud-dotted",
-             "error": "cloud-bang", "local_missing": "cloud-bang", "remote_deleted": "cloud-strike",
+             "remote": "cloud-down", "diverged": "cloud-bang", "remote_only": "cloud-dotted",
+             "queued": "ring", "paused": "pause", "interrupted": "pause",
+             "error": "error", "local_missing": "cloud-bang", "remote_deleted": "cloud-strike",
              "unknown": "cloud-dotted"}
-    tones = {"equal": "success", "local": "primary", "remote": "info", "remote_only": "info",
-             "diverged": "warning", "error": "error", "local_missing": "warning", "remote_deleted": "warning",
-             "interrupted": "warning", "processing": "info"}
+    tones = {"equal": "success", "local": "primary", "remote": "primary", "remote_only": "primary",
+             "diverged": "warning", "error": "error", "local_missing": "warning", "remote_deleted": "text_dim",
+             "interrupted": "text_dim", "processing": "primary"}
     action = {"unlinked": "publish", "equal": "open", "local": "update", "remote": "pull",
               "diverged": "resolve", "remote_only": "pull", "local_missing": "pull",
               "remote_deleted": "publish_new", "unknown": "", "error": "retry",
@@ -1720,8 +1720,15 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
             from .asset_manager_panel import tr as asset_tr
             label = _LOCAL_FILE_PROBLEM_LABELS.get(project["status"])
             reason = asset_tr(label) if label else project["status"]
+    health = project.get("status", "")
+    health_tone = ("warning" if health in ("MISSING", "IDENTITY_MISMATCH", "IDENTITY_CONFLICT", "DUPLICATE", "AMBIGUOUS")
+                   else "error" if health in _LOCAL_FILE_PROBLEM_STATUSES else "")
+    icon = "ring" if active else icons.get(visible, "cloud")
+    if relationship == "local_file_problem":
+        icon = "cloud-bang"
     return dict(relationship=relationship, freshness=freshness, activity=activity, state=visible,
-                icon=icons.get(visible, "ring"), tone=tones.get(visible, "primary" if active else "text_dim"),
+                icon=icon, tone="primary" if active else tones.get(visible, "text_dim"),
+                health_icon="bang" if health_tone else "", health_tone=health_tone,
                 action=action, active=active, jobId=job.get("id", ""), reason=reason,
                 progress=min(100, int(100 * job.get("completed", 0) / max(1, job.get("total", 0)))),
                 attention=visible in ("diverged", "error", "local_missing", "remote_deleted"))

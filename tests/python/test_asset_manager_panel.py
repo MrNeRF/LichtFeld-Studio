@@ -2349,7 +2349,8 @@ def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     assert len(strip.findall('./span[@class="inspector-strip-meta"]')) == 2
     strip_open = next(e for e in strip.findall('button') if 'inspector-strip-open' in e.get('class', '').split())
     assert 'asset-button--toolbar24' in strip_open.get('class').split()
-    assert strip_open.get('data-event-click') == 'on_load_asset'
+    assert strip_open.get('data-event-click') == 'on_strip_action'
+    assert strip_open.find('span').text == '{{strip_action_label}}'
     operations = root.find('.//div[@class="inspector-operations"]')
     action = operations.find('button')
     assert action.get('data-for') == 'operation : inspector_operation_rows'
