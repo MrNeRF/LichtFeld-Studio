@@ -1046,3 +1046,56 @@ def test_metadata_publish_acknowledges_only_the_project_that_sent_it(tmp_path, m
     assert links["original"]["commitUuid"] == "new" and links["original"]["metadataRevision"] == "m2"
     assert links["copy"]["commitUuid"] == "copy-save" and links["copy"]["metadataRevision"] == "m"
 
+
+
+def test_settings_only_backup_and_undo_survive_restart(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    remote = dict(id="remote", title="Gallery title", contentRevision="c1", metadataRevision="m2",
+                  viewerSettings={}, description="", visibility="private")
+    monkeypatch.setattr(Client, "scene", lambda *args: remote)
+    path = tmp_path / "master.licht"
+    original = b"geometry and checkpoint before applying settings"
+    path.write_bytes(original)
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(dict(remote, metadataRevision="m1"), "before")
+    service._save()
+    job_id, backup_id = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    update = service._job(job_id)["localUpdate"]
+    assert update["id"] == backup_id and update["state"] == "ready"
+    assert gallery_sync.Path(update["backupPath"]).read_bytes() == original
+    path.write_bytes(original + b" settings")
+    service.finish_settings_update(job_id, "after", gallery_sync.file_stamp(path), gallery_sync.shared_fields(remote))
+    finish(service)
+    assert service._job(job_id)["localUpdate"]["state"] == "applied"
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    assert restarted._job(job_id)["localUpdate"]["state"] == "applied"
+    link = restarted.snapshot()["links"]["project"]
+    assert link["commitUuid"] == "after" and link["contentRevision"] == "c1" and link["metadataRevision"] == "m2"
+    restarted.restore_local_backup(str(path), update["backupPath"], gallery_sync.file_stamp(path))
+    finish(restarted)
+    assert path.read_bytes() == original
+
+    restored = restarted.snapshot()["links"]["project"]
+    assert restored["commitUuid"] == "before" and restored["metadataRevision"] == "m1"
+
+
+
+def test_settings_only_refuses_remote_changes_during_apply(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    remote = dict(id="remote", title="Gallery title", contentRevision="c1", metadataRevision="m2")
+    monkeypatch.setattr(Client, "scene", lambda *args: dict(remote))
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"unchanged geometry and checkpoint")
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(remote, "before")
+    service._save()
+    job, _ = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    remote["metadataRevision"] = "m3"
+    service.finish_settings_update(job, "after", gallery_sync.file_stamp(path), {})
+    finish(service)
+    assert service.snapshot()["links"]["project"]["commitUuid"] == "before"
+    assert service._job(job)["localUpdate"]["state"] == "ready"
+    assert "changed" in service.message
+

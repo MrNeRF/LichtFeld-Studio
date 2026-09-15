@@ -245,6 +245,10 @@ class GallerySync:
                     for job in bucket["jobs"]:
                         if (recover_interrupted or self._journal_problem) and job["status"] in ("queued", "running"):
                             job.update(status="paused", interrupted=True, message="Interrupted. Resume when ready.")
+                        update = job.get("localUpdate", {})
+                        if recover_interrupted and not job.get("retired") and update.get("state") in ("preparing", "ready", "applying"):
+                            update["interrupted"] = True
+                            job["message"] = "Applying Gallery changes was interrupted. Review the recovery copy before continuing."
                 self._data = data
             self._disk_digest = digest
             self._journal_problem = self._stale = False
@@ -1035,6 +1039,12 @@ class GallerySync:
                 with self._lock:
                     scene = job["result"]
                     bucket["links"][project_id] = exchange_link(scene, commit_uuid)
+                    if job.get("localUpdate", {}).get("backupPath"):
+                        update = job["localUpdate"]
+                        update.update(state="applied", appliedStamp=file_stamp(update["path"]), appliedCommit=commit_uuid,
+                                      appliedIdentity=list(self.identity()), appliedLink=copy.deepcopy(bucket["links"][project_id]))
+                    else:
+                        bucket["links"][project_id]["viewingCopy"] = True
                     job["project"] = project_id
                     job["linkOperation"] = {"id": operation, "state": "ready"}
                 self._save()
@@ -1063,7 +1073,7 @@ class GallerySync:
             raise ValueError("Finish or discard this project's pending transfer before updating it.")
         update_id = str(uuid.uuid4())
         record = {"id": update_id, "state": "preparing", "project": project_id,
-            "path": str(project_path), "sourceStamp": list(expected_stamp)}
+            "path": str(project_path), "sourceStamp": list(expected_stamp), "previousLink": copy.deepcopy(linked)}
 
         def action():
             temporary = None
@@ -1164,13 +1174,12 @@ class GallerySync:
                 project_path = Path(job["destination"]) if job.get("destination") else assets / ("Gallery-" + identifier + ".licht")
                 if project_path.exists():
                     raise ValueError("The destination already exists. Choose another file name.")
-                with open(job["path"], "rb") as source, project_path.open("xb") as output:
-                    retained_project = project_path
-                    while chunk := source.read(gallery_validation.CHUNK_BYTES):
-                        if self._cancel.is_set(): raise GalleryTransferCanceled()
-                        output.write(chunk)
-                    output.flush()
-                    os.fsync(output.fileno())
+                import lichtfeld as lf
+                self._client()
+                retained_project = project_path
+                # A download is a new project each time, even when the same
+                # representation is downloaded twice on this machine.
+                lf.io.restore_save(job["path"], 1, project_path)
                 with self._lock:
                     record["projectPath"] = str(project_path)
                 background = target / "environment.lfsenv"
@@ -1240,6 +1249,12 @@ class GallerySync:
                        if j.get("localUpdate", {}).get("backupPath") == str(source)), None)
         if not record or source.parent != self.root / "backups":
             raise ValueError("The saved backup is no longer available.")
+        if record.get("appliedIdentity") and tuple(record["appliedIdentity"]) != self.identity():
+            raise ValueError("The account changed. Keep the backup for recovery.")
+        if record.get("appliedLink"):
+            current = self._bucket()["links"].get(record["project"], {})
+            if not same_undo_link(current, record["appliedLink"]):
+                raise ValueError("The Gallery link changed. Keep the backup for recovery.")
         operation = {"id": str(uuid.uuid4()), "state": "running"}
         self._undo_restore = operation
         def action():
@@ -1263,6 +1278,8 @@ class GallerySync:
                 os.replace(temporary, target)
                 restored = True
                 record["undoRestored"] = True
+                if record.get("previousLink") and record.get("appliedLink"):
+                    self._bucket()["links"][record["project"]] = copy.deepcopy(record["previousLink"])
                 self._save()
                 with self._lock:
                     operation.update(state="restored")
@@ -1554,6 +1571,112 @@ class GallerySync:
         self._launch_metadata(action)
 
 
+    def fail_local_update(self, job_id, reason):
+        def action():
+            job = self._job(job_id)
+            job.setdefault("localUpdate", {}).update(state="failed", message=reason)
+            job["message"] = reason
+            self._save()
+        self._launch_metadata(action)
+
+
+
+    def finish_settings_update(self, job_id, commit_uuid, stamp, fields, *, acknowledge=True):
+        fields = copy.deepcopy(fields)
+        def action():
+            bucket = self._bucket()
+            job = self._job(job_id)
+            update = job.get("localUpdate", {})
+            if update.get("state") != "ready" or not update.get("backupPath") or file_stamp(update["path"]) != stamp:
+                raise ValueError("The local project changed. Its recovery copy was kept.")
+            link = bucket["links"].get(job["project"])
+            if not link or link["sceneId"] != job["sceneId"]:
+                raise ValueError("The Gallery link changed. Its recovery copy was kept.")
+            remote = self._client().scene(job["sceneId"])
+            if domain_tokens(remote) != domain_tokens(job["result"]):
+                raise ValueError("The gallery item changed while applying settings. Its recovery copy was kept.")
+            before_link, before_update = copy.deepcopy(link), copy.deepcopy(update)
+            link["localFields"] = fields
+            if acknowledge:
+                link.update(metadataRevision=job["result"]["metadataRevision"],
+                            sharedFields=shared_fields(job["result"]), commitUuid=commit_uuid,
+                            metadata=copy.deepcopy(job["result"]), exchangedAt=time.time())
+            update.update(state="applied", appliedStamp=list(stamp), appliedCommit=commit_uuid,
+                          appliedIdentity=list(self.identity()), appliedLink=copy.deepcopy(link))
+            job.update(message="Gallery changes applied. Recovery copy kept.")
+            self.message = job["message"]
+            try:
+                self._save()
+            except Exception:
+                link.clear()
+                link.update(before_link)
+                update.clear()
+                update.update(before_update)
+                raise
+        self._launch_metadata(action)
+
+
+
+    def prepare_settings_environment(self, job_id):
+        def action():
+            job = self._job(job_id)
+            job["settingsEnvironment"] = {"state": "preparing"}
+            self._save()
+            target = self.root / "environments" / (str(uuid.UUID(job_id)) + ".lfsenv")
+            temporary = target.with_suffix(".tmp")
+            try:
+                client = self._client()
+                remote = client.scene(job["sceneId"])
+                if domain_tokens(remote) != domain_tokens(job["result"]):
+                    raise ValueError("The Gallery background changed. Check gallery before applying it.")
+                def progress(done, total):
+                    self._client()
+                    with self._lock:
+                        job.update(completed=done, total=total)
+                        self.version += 1
+                client.download(job["sceneId"], job["path"], cancel=self._cancel, on_progress=progress)
+                target.parent.mkdir(mode=0o700, exist_ok=True)
+                if target.parent.is_symlink() or target.is_symlink() or temporary.is_symlink():
+                    raise ValueError("The HDR background folder was redirected.")
+                from .portable_project import ProjectFile
+                with open(job["path"], "rb") as source, temporary.open("wb") as output:
+                    ProjectFile(source).copy_environment(output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                self._client()
+                os.replace(temporary, target)
+                job["settingsEnvironment"] = {"state": "ready", "path": str(target)}
+            except Exception as exc:
+                job["settingsEnvironment"] = {"state": "failed", "message": friendly_error(exc)}
+                raise
+            finally:
+                temporary.unlink(missing_ok=True)
+                self._save()
+        self._launch_metadata(action)
+
+
+
+    def prepare_settings_update(self, scene, project_id, path, stamp):
+        self._client()
+        if self.busy:
+            raise ValueError("Wait for the current operation before applying Gallery changes.")
+        identifier = str(uuid.uuid4())
+        job = dict(id=identifier, project=project_id, kind="download", sceneId=scene["id"],
+                   path=str(self.root / "downloads" / (identifier + ".licht")),
+                   metadata={"title": scene["title"]}, checkpoint=None, status="completed",
+                   completed=0, total=0, message="Applying Gallery settings", result=copy.deepcopy(scene),
+                   settingsOnly=True)
+        jobs = self._bucket()["jobs"]
+        jobs.append(job)
+        try:
+            operation = self.prepare_local_update(identifier, project_id, path, stamp)
+        except Exception:
+            jobs.remove(job)
+            raise
+        return identifier, operation
+
+
+
 _service = None
 
 
@@ -1564,3 +1687,10 @@ def get_gallery_sync():
         from .portal_account import get_portal_account_service
         _service = GallerySync(get_portal_account_service(), resolve_asset_manager_storage_path() / "gallery")
     return _service
+
+
+def same_undo_link(current, applied):
+    return (all(current.get(key) == applied.get(key) for key in ("sceneId", "commitUuid"))
+            and (current.get("localFields") or current.get("sharedFields")) ==
+                (applied.get("localFields") or applied.get("sharedFields")))
+
