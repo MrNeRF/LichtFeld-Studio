@@ -1329,6 +1329,7 @@ class GalleryController:
 
     def _finish_export(self):
         export, metadata, project_id, started = self._export_pending
+        prepared_commit = self._prepared_commit
         if self._export_identity is not None and self.service.identity() != self._export_identity:
             self._export_cancelled = True
         state = lf.ui.get_export_state()
@@ -1355,6 +1356,7 @@ class GalleryController:
             self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else (error or "Scene preparation failed. Check the export status and try again.")
             if outcome == "failed" and not self._export_cancelled:
                 self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "commitUuid": prepared_commit,
                     "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
                     "message": self._message, "failureReason": self._message}
                 log_failure("native_preparation", RuntimeError(self._message), project_id=project_id)
@@ -1376,6 +1378,7 @@ class GalleryController:
             except Exception as exc:
                 log_failure("queue_after_preparation", exc, project_id=project_id)
                 self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "commitUuid": prepared_commit,
                     "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
                     "message": friendly_error(exc), "failureReason": friendly_error(exc)}
                 try:
@@ -1391,6 +1394,7 @@ class GalleryController:
             self._remove_preparation(export)
             self._message = "LichtFeld Studio could not prepare the scene. Check the export status and try again."
             self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                "commitUuid": prepared_commit,
                 "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
                 "message": self._message, "failureReason": self._message}
             log_failure("native_preparation_timeout", TimeoutError(self._message), project_id=project_id)

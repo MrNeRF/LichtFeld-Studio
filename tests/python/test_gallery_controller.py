@@ -993,6 +993,23 @@ def test_presentation_metadata_and_scene_content_have_separate_relationships(gal
     assert asset_sync_state(asset, dict(link, commitUuid=""), remote)["state"] == "unknown"
 
 
+def test_eligibility_uses_only_checks_for_the_saved_commit(gallery):
+    from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
+    asset = dict(id="project", commit_uuid="saved", exists=True)
+    failed = dict(project="project", commitUuid="saved", nativePreparation=True,
+                  failureReason="gallery_project_no_splats: No visible geometry")
+    facts = dict(signed_in=True, job=failed, activity="error")
+    assert gallery_eligibility(asset, facts)["reasons"] == ["no_splats"]
+    assert not gallery_actions(asset, facts)[0]["enabled"]
+    assert gallery_eligibility(dict(asset, commit_uuid="changed"), facts)["status"] == "not_checked"
+    checked = dict(project="project", commitUuid="saved", kind="upload", packaged=True,
+                   status="completed", uploadFormat="sog", total=80)
+    facts = dict(signed_in=True, jobs=[checked], quotaBytes=100, usedBytes=40)
+    assert gallery_eligibility(asset, facts)["reasons"] == ["space"]
+    assert gallery_eligibility(asset, dict(facts, replacedBytes=80))["status"] == "eligible"
+    assert gallery_eligibility(dict(asset, commit_uuid="changed"), facts)["status"] == "not_checked"
+
+
 def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
     from lfs_plugins.gallery_controller import conflict_groups
     base = dict(title="Original", description="First", visibility="private", viewerSettings={})

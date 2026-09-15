@@ -171,8 +171,9 @@ class GalleryAssetMixin:
         if controller and getattr(controller, "_operation_project", None) == asset.get("id"):
             phase = controller.phase()
         jobs = list(self._gallery_state.get("jobs", ()))
-        if self._gallery_state.get("preparationFailure"):
-            jobs.append(self._gallery_state["preparationFailure"])
+        failure = self._gallery_state.get("preparationFailure")
+        if failure and (not failure.get("commitUuid") or failure["commitUuid"] == asset.get("commit_uuid")):
+            jobs.append(failure)
         facts = asset_sync_state(None if remote else asset, link, self._gallery_scene(asset),
             jobs, checked=bool(self._gallery_state.get("checkedAt")),
             storage_issue=self._gallery_state.get("storage_issue", False), phase=phase,
@@ -191,6 +192,7 @@ class GalleryAssetMixin:
         elif not link and self._gallery_scene(asset) and not remote and not previous:
             facts.update(state="unknown", originMatch=True)
         facts["replacedBytes"] = (self._gallery_scene(asset) or {}).get("contentLength", 0) if link else 0
+        facts["jobs"] = jobs
         facts["actions"] = gallery_actions(asset, facts)
         facts["action"] = facts["actions"][0]["id"] if facts["actions"] else ""
         return facts

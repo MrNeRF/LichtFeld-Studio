@@ -20,7 +20,23 @@ def gallery_eligibility(entry, facts):
         reasons.append("format")
     if entry.get("has_hdr") and facts.get("hdrBackgrounds") is False:
         reasons.append("hdr")
-    publication = entry.get("publication", {})
+    publication = dict(entry.get("publication", {}))
+    commit = entry.get("commit_uuid")
+    for job in reversed(facts.get("jobs", [])):
+        if (commit and job.get("project") == entry.get("id") and job.get("commitUuid") == commit
+                and job.get("kind") == "upload" and job.get("packaged")
+                and job.get("status") == "completed"):
+            publication["checked"] = True
+            if not facts.get("upload_format") or facts["upload_format"] == job.get("uploadFormat"):
+                publication["preparedBytes"] = job.get("total")
+            break
+    failure = facts.get("preparationFailure") or facts.get("job") or {}
+    if (commit and failure.get("project") == entry.get("id") and failure.get("commitUuid") == commit):
+        reason = {"gallery_project_no_splats": "no_splats",
+                  "gallery_project_payload_unavailable": "external_payloads",
+                  "gallery_project_not_supported": "format"}.get(failure.get("failureReason", "").split(":", 1)[0])
+        if reason and reason not in reasons:
+            reasons.append(reason)
     if publication.get("visibleSplats") == 0:
         reasons.append("no_splats")
     if publication.get("externalPayloads"):
@@ -82,7 +98,7 @@ def gallery_actions(entry, facts):
         add("open_recovery", account=False)
         return actions
     if job.get("nativePreparation"):
-        add("retry", enabled=not busy)
+        add("retry", enabled=not busy and eligibility["status"] != "blocked", reason=eligibility["reason"])
         return actions
     if activity == "applying":
         return actions

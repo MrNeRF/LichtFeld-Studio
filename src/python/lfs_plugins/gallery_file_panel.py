@@ -250,7 +250,7 @@ class GalleryFilePanel(Panel):
 
     def _eligibility_facts(self):
         replaced = ((self._review or {}).get("scene") or {}).get("contentLength", 0) if (self._review or {}).get("action") == "update" else 0
-        return dict(self._state, replacedBytes=replaced)
+        return dict(self._state, replacedBytes=replaced, upload_format=self._fields.get("upload_format"))
 
     def _estimate(self):
         from .asset_format import format_size
