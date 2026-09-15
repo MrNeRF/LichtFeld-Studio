@@ -273,8 +273,8 @@
         <aside id="asset-inspector" class="asset-inspector" data-style-width="inspector_style_width" data-style-height="inspector_style_height">
           <div class="inspector-strip" data-event-click="toggle_inspector">
             <span class="inspector-strip-name" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
-            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_asset_size}}</span>
-            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_health_label}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_asset_size">{{selected_asset_size}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_health_label">{{selected_health_label}}</span>
             <button class="btn btn--primary asset-button--toolbar24 inspector-strip-open" data-if="show_selection_asset"
                     data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
           </div>
@@ -303,8 +303,8 @@
                   <div class="inspector-band-facts" data-if="is_medium">
                     <div class="inspector-band-column">
                       <div class="parameter-row" data-if="inspector_has_saved"><span class="parameter-label">{{inspector_saved_label}}</span><span class="parameter-value" data-attr-title="inspector_saved">{{inspector_saved}}</span></div>
-                      <div class="parameter-row" data-if="inspector_has_iteration"><span class="parameter-label">{{inspector_training_label}}</span><span class="parameter-value" data-attr-title="inspector_training_tooltip">{{inspector_iteration}} <span data-if="inspector_has_strategy">· {{inspector_strategy}}</span></span></div>
-                      <div class="parameter-row" data-if="inspector_has_gaussians"><span class="parameter-label">{{inspector_model_label}}</span><span class="parameter-value" data-attr-title="inspector_model_tooltip">{{inspector_gaussians}} <span data-if="inspector_has_sh_degree">· SH {{inspector_sh_degree}}</span></span></div>
+                      <div class="parameter-row" data-if="inspector_has_iteration"><span class="parameter-label">{{inspector_training_label}}</span><span class="parameter-value" data-attr-title="inspector_training_tooltip">{{inspector_training_summary}}</span></div>
+                      <div class="parameter-row" data-if="inspector_has_gaussians"><span class="parameter-label">{{inspector_model_label}}</span><span class="parameter-value" data-attr-title="inspector_model_tooltip">{{inspector_model_summary}}</span></div>
                     </div>
                     <div class="inspector-band-column">
                       <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value" data-attr-title="selected_asset_size">{{selected_asset_size}}</span></div>
@@ -314,8 +314,8 @@
                   </div>
                   <div class="inspector-facts" data-if="!is_medium">
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
-                    <div class="inspector-section-title">{{problem_title}}</div>
-                    <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value" data-attr-title="selected_fix_label">{{selected_fix_label}}</span></div>
+                    <div class="inspector-section-title"><span>{{problem_title}}</span></div>
+                    <div class="inspector-problem-status">{{selected_health_label}}</div>
                     <button class="btn btn--secondary" data-if="selected_fix_requires_action" data-event-click="on_selected_fix">{{selected_fix_label}}</button>
                     <div class="parameter-row" data-if="has_inspector_verify_result"><span class="parameter-label">{{inspector_verify_label}}</span><span class="parameter-value" data-attr-title="inspector_verify_result">{{inspector_verify_result}}</span></div>
                   </div>
@@ -327,8 +327,8 @@
                     <div class="parameter-row" data-if="inspector_has_saved"><span class="parameter-label">{{inspector_saved_label}}</span><span class="parameter-value" data-attr-title="inspector_saved">{{inspector_saved}}</span></div>
                     <div class="parameter-row" data-if="inspector_has_saved_at"><span class="parameter-label">{{inspector_date_label}}</span><span class="parameter-value" data-attr-title="inspector_saved_at">{{inspector_saved_at}}</span></div>
                     <div class="parameter-row" data-if="inspector_has_opened"><span class="parameter-label">{{inspector_opened_label}}</span><span class="parameter-value" data-attr-title="inspector_opened">{{inspector_opened}}</span></div>
-                    <div class="parameter-row" data-if="inspector_has_iteration"><span class="parameter-label">{{inspector_training_label}}</span><span class="parameter-value" data-attr-title="inspector_training_tooltip">{{inspector_iteration}} <span data-if="inspector_has_strategy">· {{inspector_strategy}}</span></span></div>
-                    <div class="parameter-row" data-if="inspector_has_gaussians"><span class="parameter-label">{{inspector_model_label}}</span><span class="parameter-value" data-attr-title="inspector_model_tooltip">{{inspector_gaussians}} <span data-if="inspector_has_sh_degree">· SH {{inspector_sh_degree}}</span></span></div>
+                    <div class="parameter-row" data-if="inspector_has_iteration"><span class="parameter-label">{{inspector_training_label}}</span><span class="parameter-value" data-attr-title="inspector_training_tooltip">{{inspector_training_summary}}</span></div>
+                    <div class="parameter-row" data-if="inspector_has_gaussians"><span class="parameter-label">{{inspector_model_label}}</span><span class="parameter-value" data-attr-title="inspector_model_tooltip">{{inspector_model_summary}}</span></div>
                     <div class="parameter-row" data-if="inspector_has_dataset"><span class="parameter-label">{{inspector_dataset_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_dataset">{{inspector_dataset}}</span></div>
                     <div class="parameter-row" data-if="selected_asset_has_folder"><span class="parameter-label">{{prop_folder_label}}</span><span class="parameter-value" data-attr-title="selected_asset_folder_name">{{selected_asset_folder_name}}</span></div>
                     <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value" data-attr-title="selected_asset_size">{{selected_asset_size}}</span></div>
@@ -376,8 +376,8 @@
               </div>
             </div>
             <div data-if="show_selection_folder">
-              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path">{{selected_folder_path}}</span></div>
-              <div class="inspector-section"><div class="inspector-section-title">{{folder_details_title}}</div>
+              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
+              <div class="inspector-section"><div class="inspector-section-title"><span>{{folder_details_title}}</span></div>
                 <div class="parameter-row"><span class="parameter-label">{{prop_assets_label}}</span><span class="parameter-value" data-attr-title="selected_folder_asset_count">{{selected_folder_asset_count}}</span></div>
               </div>
             </div>

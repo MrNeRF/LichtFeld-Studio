@@ -1109,9 +1109,10 @@
 }
 .asset-toolbar-filter { display: inline-flex; }
 .asset-toolbar-view { display: none; }
-.asset-check-gallery { display: flex; align-items: center; max-width: 190dp; }
+.asset-check-gallery { display: flex; align-items: center; flex: 0 0 auto; max-width: none; }
 .asset-check-gallery .asset-button-text,
 .asset-check-gallery .gallery-checked {
+    flex: 0 0 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1252,13 +1253,14 @@
 .asset-list-secondary { display: none; height: 16dp; line-height: 16dp; font-size: 10dp; }
 .gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; margin: 0; }
 .asset-list-row .asset-col-gallery { gap: 8dp; }
+.asset-list-row .asset-col-gallery > span { display: block; flex: 1 1 0dp; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
 .asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
-.inspector-strip { box-sizing: border-box; position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 68dp 0 12dp; overflow: hidden; }
+.inspector-strip { box-sizing: border-box; position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; overflow: hidden; }
 .inspector-strip-name { flex: 1 1 0dp; width: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-strip-meta { flex: 0 1 56dp; width: 56dp; min-width: 0; max-width: 56dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10dp; }
-.inspector-strip-open { position: absolute; right: 12dp; top: 4dp; display: block; width: 48dp; min-width: 48dp; padding: 0 4dp; }
+.inspector-strip-open { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 48dp; padding: 0 8dp; white-space: nowrap; }
 .asset-inspector-content { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; }
 .asset-inspector-content > [data-if] { flex: 0 0 auto; min-width: 0; width: 100%; }
 .asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 16dp; align-items: stretch; }
@@ -1268,9 +1270,10 @@
 .inspector-title, .inspector-path { display: block; min-width: 0; width: 100%; height: 16dp; min-height: 16dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-title { font-size: 12dp; font-weight: bold; }
 .inspector-path { font-size: 10dp; }
-.inspector-actions { box-sizing: border-box; display: flex; align-items: center; flex-wrap: nowrap; height: 24dp; min-height: 24dp; gap: 8dp; min-width: 0; }
-.inspector-actions .btn { flex: 0 1 auto; min-width: 48dp; padding: 0 8dp; white-space: nowrap; }
-.inspector-actions .btn span, .inspector-operation span { display: block; min-width: 0; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspector-actions { box-sizing: border-box; display: flex; align-items: center; flex-wrap: wrap; height: auto; min-height: 24dp; gap: 8dp; min-width: 0; }
+.inspector-actions .btn { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 48dp; max-width: 100%; padding: 0 8dp; white-space: nowrap; }
+.inspector-actions .btn span { flex: 0 0 auto; }
+.inspector-actions .btn span, .inspector-operation span { display: block; min-width: 0; line-height: 16dp; white-space: nowrap; }
 .inspector-more { margin-left: auto; flex: 0 0 24dp; }
 .inspector-more img { width: 16dp; height: 16dp; }
 .inspector-facts { display: flex; flex-direction: column; min-width: 0; }
@@ -1282,14 +1285,18 @@
 .inspector-section-body { display: flex; flex-direction: column; min-width: 0; }
 .parameter-row { box-sizing: border-box; display: flex; flex: 0 0 24dp; flex-direction: row; align-items: center; gap: 8dp; height: 24dp; min-height: 24dp; padding: 0; border-width: 0; min-width: 0; }
 .parameter-label, .parameter-value { display: block; box-sizing: border-box; height: 24dp; min-height: 24dp; line-height: 24dp; padding: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.parameter-label { flex: 0 0 88dp; width: 88dp; min-width: 88dp; font-size: 12dp; }
+/* Covers the longest label in all ten locales at 12 dp, including French
+   automatic save (160 dp). Keep the value column separate and ellipsized. */
+.parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp; font-size: 12dp; overflow: visible; }
+.inspector-problem-status { display: block; flex: 0 0 auto; line-height: 18dp; white-space: normal; }
+.inspector-problem > .btn { max-width: 100%; height: auto; min-height: 24dp; white-space: normal; }
 .parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
 .inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-gallery-reason { display: block; padding: 4dp 0; }
 .inspector-operations { display: flex; flex-direction: column; align-items: stretch; gap: 8dp; min-width: 0; width: 100%; }
-.inspector-operation { box-sizing: border-box; flex: 0 0 24dp; width: 100%; min-width: 0; max-width: 100%; padding: 0 8dp; text-align: left; justify-content: flex-start; }
-.inspector-band-facts { display: flex; align-items: flex-start; gap: 16dp; min-width: 0; }
-.inspector-band-column { display: flex; flex: 1 1 0dp; flex-direction: column; min-width: 0; }
+.inspector-operation { box-sizing: border-box; display: flex; align-items: center; flex: 0 0 24dp; width: 100%; min-width: 0; max-width: 100%; padding: 0 8dp; text-align: left; justify-content: flex-start; }
+.inspector-band-facts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16dp; min-width: 0; }
+.inspector-band-column { display: flex; flex: 1 1 240dp; flex-direction: column; min-width: 240dp; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
 .asset-info-empty { display: block; box-sizing: border-box; padding: 16dp 12dp; }
 
