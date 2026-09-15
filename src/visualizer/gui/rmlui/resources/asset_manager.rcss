@@ -126,6 +126,36 @@
     min-height: 0;
 }
 
+.asset-quick-look {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.52);
+    z-index: 30;
+}
+
+.asset-quick-look-card {
+    width: 360dp;
+    max-width: 80%;
+    padding: 12dp;
+    background-color: #20242b;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.asset-quick-look-heading,
+.asset-quick-look-facts {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+}
+
+.asset-quick-look-heading { justify-content: space-between; margin-bottom: 8dp; }
+.asset-quick-look-thumb { height: 180dp; margin-bottom: 8dp; }
+.asset-quick-look-facts { flex-direction: column; align-items: flex-start; }
+
 #asset-viewport-edge {
     position: absolute;
     top: 0;
@@ -333,6 +363,27 @@
     transition: transform 0.18s cubic-out, color 0.18s cubic-out;
 }
 
+.asset-sidebar-title-main,
+.asset-row-main {
+    background-color: transparent;
+    border-width: 0;
+    color: inherit;
+    text-align: left;
+}
+
+.asset-sidebar-title-main {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    padding: 0;
+    flex: 1;
+    height: auto;
+    min-height: 20dp;
+    max-height: none;
+    border-radius: 0;
+    min-width: 0;
+}
+
 .asset-sidebar-title .section-arrow.is-expanded {
     transform: rotate(90deg);
 }
@@ -352,6 +403,11 @@
     margin-bottom: 2dp;
     cursor: pointer;
     border-radius: 3dp;
+    background-color: transparent;
+    border-width: 0;
+    color: inherit;
+    text-align: left;
+    width: 100%;
 }
 
 .asset-row-label {
@@ -368,6 +424,17 @@
     flex-direction: row;
     align-items: center;
     gap: 4dp;
+}
+
+.asset-row-main {
+    min-width: 0;
+    padding: 0;
+    flex: 1;
+    height: auto;
+    min-height: 20dp;
+    max-height: none;
+    border-radius: 0;
+    min-width: 0;
 }
 
 .asset-folder-menu {
@@ -1069,6 +1136,17 @@
 .asset-col-modified { flex: 0 0 96dp; font-family: "JetBrains Mono"; }
 .asset-col-gallery { flex: 0 1 128dp; min-width: 96dp; max-width: 200dp; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
+.asset-list-header .asset-col { display: flex; align-items: center; }
+.asset-list-column-handle {
+    width: 8dp;
+    min-width: 8dp;
+    height: 20dp;
+    margin-left: auto;
+    border-right-width: 1dp;
+    border-right-color: transparent;
+    cursor: ew-resize;
+}
+.asset-list-column-handle:hover { border-right-color: #8fb4ff; background-color: rgba(143, 180, 255, 0.18); }
 .asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex-basis: auto; }
 .asset-list-header.show-folder .asset-col-folder,
 .asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
@@ -1158,7 +1236,7 @@
 .asset-shell.is-compact .asset-col-folder, .asset-shell.is-compact .asset-col-modified, .asset-shell.is-compact .asset-col-size { display: none; }
 .asset-shell.is-compact .asset-col-name { min-width: 80dp; }
 .asset-shell.is-compact .asset-list-row { height: 40dp; min-height: 40dp; }
-.asset-shell.is-compact .asset-list-secondary { display: none; }
+.asset-shell.is-compact .asset-list-secondary { display: block; }
 .asset-shell.is-compact .asset-col-gallery { min-width: 24dp; flex: 0 0 24dp; }
 .asset-shell.is-compact .asset-col-gallery span { display: none; }
 .asset-shell.is-narrow .asset-col-folder { display: none; }

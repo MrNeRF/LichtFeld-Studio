@@ -181,14 +181,17 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPythonPanelAdapter::onViewportDrop(const std::string& type, const std::string& data) {
-        if (type != "application/x-lichtfeld-gallery-scene" || !isMounted() ||
+        if ((type != "application/x-lichtfeld-gallery-scene" &&
+             type != "application/x-lichtfeld-project-file") || !isMounted() ||
             !lfs::python::can_acquire_gil())
             return false;
         const lfs::python::GilAcquire gil;
         try {
-            if (!nb::hasattr(panel_instance_, "gallery_viewport_drop"))
+            const char* hook = type == "application/x-lichtfeld-project-file"
+                ? "native_file_drop" : "gallery_viewport_drop";
+            if (!nb::hasattr(panel_instance_, hook))
                 return false;
-            return nb::cast<bool>(panel_instance_.attr("gallery_viewport_drop")(data));
+            return nb::cast<bool>(panel_instance_.attr(hook)(data));
         } catch (const std::exception& e) {
             LOG_ERROR("Gallery viewport drop failed: {}", e.what());
             return false;

@@ -50,6 +50,8 @@ PANEL_SPECS = {
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
         update_policy="dirty",
     ),
+    # Kept as an import-compatible implementation for older callers; it is
+    # no longer registered or exposed because transfers live in Projects.
     "gallery_transfer": _PanelSpec(
         "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
         "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",
@@ -327,7 +329,6 @@ def _build_builtin_panel_steps(lf):
 
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
-        _register_lazy_panel(lf, "gallery_transfer")
         _register_lazy_panel(lf, "gallery_file")
 
     def overlays():

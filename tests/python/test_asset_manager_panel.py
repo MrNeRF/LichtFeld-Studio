@@ -68,8 +68,8 @@ def _install_lf_stub(monkeypatch):
         get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
         show_context_menu=show_context_menu,
-        confirm_dialog=lambda title, message, buttons, callback=None: state.confirm_dialogs.append(
-            (title, message, buttons, callback)
+        confirm_dialog=lambda title, message, buttons, callback=None, *extra: state.confirm_dialogs.append(
+            (title, message, buttons, callback, *extra)
         ),
         message_dialog=lambda title, message, style=None: state.message_dialogs.append(
             (title, message, style)
@@ -342,14 +342,13 @@ def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
 
-def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
+def test_rml_and_panel_use_only_cached_project_thumbnail_model():
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
     source = (root / "src/python/lfs_plugins/asset_manager_panel.py").read_text()
 
     assert "scene" not in rml.casefold()
-    assert "scene" not in source.casefold()
     assert "scene-asset" not in rcss
     assert "absolute_path" not in source
     assert "fingerprint" not in source
@@ -596,6 +595,7 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
         "rename",
         "show_in_folder",
         "remove",
+        "trash",
     ]
     assert event.stopped is True
 
@@ -630,6 +630,7 @@ def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     menu = panel_module.lf._test_state.context_menus[-1]
     assert [item["action"] for item in menu["items"]] == [
         "show",
+        "rescan",
         "remove",
     ]
     menu["on_action"]("show")
@@ -756,6 +757,8 @@ def test_add_folder_uses_real_directory_picker(panel_module):
 
     panel.on_add_folder()
 
+    assert len(panel_module.lf._test_state.confirm_dialogs) == 1
+    panel_module.lf._test_state.confirm_dialogs[-1][3]("projects.action.include_subfolders")
     assert calls == [selected]
     assert panel._selected_folder_id == "selected-folder"
 
@@ -821,7 +824,7 @@ def test_published_sidebar_click_selects_gallery_scope(panel_module):
 
     assert panel._selected_folder_id == "__gallery__"
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
-    assert 'class="asset-filter-row" tabindex="0" data-class-is-active="selected_folder_id == \'__gallery__\'" data-folder-id="__gallery__"' in rml
+    assert 'class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == \'__gallery__\'" data-folder-id="__gallery__"' in rml
     assert 'data-event-click="select_folder"' not in rml
 
 def test_recent_scope_and_shift_click_select_a_range(panel_module):
@@ -992,13 +995,13 @@ def test_log_only_asset_manager_failures_show_catalog_notice(panel_module):
     panel._complete_folder_scan()
     assert panel.get_catalog_notice() == "projects.status.folder_unavailable"
 
-def test_pull_undo_expires_and_clears_on_next_gallery_action(panel_module, monkeypatch):
+def test_pull_undo_stays_in_history_and_clears_on_next_gallery_action(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     timers = []
     monkeypatch.setattr(panel_module.threading, "Timer", lambda delay, callback: timers.append((delay, callback)) or SimpleNamespace(start=lambda: None, cancel=lambda: None))
     panel._set_gallery_undo(lambda: None, kind="pull")
 
-    assert timers[-1][0] == 8
+    assert timers == []
     assert panel._gallery_undo is not None
     panel._gallery_controller = SimpleNamespace(refresh=lambda: None)
     panel._gallery_command("refresh")
@@ -1030,7 +1033,7 @@ def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
     panel._on_asset_manager_keydown(_Event(shell, title, {"key_identifier": "32"}))
     assert panel._folders_collapsed is True
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
-    assert 'class="asset-filter-row" tabindex="0"' in rml
+    assert 'class="asset-button asset-button--text asset-filter-row" type="button"' in rml
     assert 'data-sidebar-action="toggle_folders"' in rml
 
 def test_folder_tree_is_expanded_by_default(panel_module):
@@ -1107,6 +1110,7 @@ def test_keyboard_navigation_enter_delete_and_typeahead(panel_module, monkeypatc
     panel._on_asset_results_keydown(
         _Event(scroll, params={"key_identifier": str(panel_module.KI_DELETE)})
     )
+    panel_module.lf._test_state.confirm_dialogs[-1][3]("common.delete")
     assert deleted == [[second["id"]]]
     assert panel.get_selected_asset_id() == third["id"]
 
@@ -1365,6 +1369,10 @@ def test_default_folder_links_to_settings_instead_of_removal(panel_module):
         {
             "label": "projects.action.show_in_folder",
             "action": "show",
+        },
+        {
+            "label": "projects.action.rescan_folders",
+            "action": "rescan",
         },
         {
             "label": "projects.action.settings",
@@ -1699,6 +1707,7 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
         "rename",
         "show_in_folder",
         "remove",
+        "trash",
     ]
 
     asset["relocation_candidate"] = "/tmp/found.licht"
@@ -1846,6 +1855,8 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
         elif scope == "folder":
             assert field in folders[0], expr
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
+        elif scope == "transfer":
+            assert field in {"can_pause", "can_resume", "can_cancel"}, expr
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
 
@@ -2107,7 +2118,7 @@ def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     assert panel._gallery_undo and calls == ['restore']
     clock[0] = 120.0
     panel._gallery_changed(dict(state, undoPull={'backup':'/backup', 'attempt':1, 'error':'localized reason'}))
-    assert panel._gallery_undo[0] == 128.0
+    assert panel._gallery_undo[0] == float("inf")
     assert panel._gallery_notice == 'localized reason'
     panel._gallery_changed(dict(state, undoPull={'backup':'/backup', 'attempt':2, 'backupMissing':True, 'error':'gone'}))
     assert panel._gallery_undo is None and panel._gallery_notice == 'gone'
@@ -2166,7 +2177,7 @@ def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     gallery = root.find('.//*[@id="asset-sidebar-gallery"]')
     assert gallery not in list(local.iter())
     assert {e.get('data-folder-id') for e in gallery.iter() if e.get('data-folder-id')} == {
-        '__gallery__', '__gallery_attention__', '__gallery_transfers__'}
+        '__gallery__', '__gallery_attention__'}
     rcss = (resources / 'asset_manager.rcss').read_text()
     assert '#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto;' in rcss
     assert '#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }' in rcss

@@ -926,10 +926,12 @@ namespace lfs::python {
         void set_enqueue_callback(EnqueueCallback cb);
 
         void show_confirm(const std::string& title, const std::string& message,
-                          const std::vector<std::string>& buttons, nb::object callback);
+                          const std::vector<std::string>& buttons, nb::object callback,
+                          MessageStyle style = MessageStyle::Info);
         void show_confirm(const std::string& title, const std::string& message,
                           const std::vector<std::string>& buttons,
-                          std::function<void(const std::string&)> callback);
+                          std::function<void(const std::string&)> callback,
+                          MessageStyle style = MessageStyle::Info);
         void show_input(const std::string& title, const std::string& message,
                         const std::string& default_value, nb::object callback);
         void show_message(const std::string& title, const std::string& message,

@@ -255,6 +255,7 @@ def iter_licht_projects(
     progress: AssetFolderScanProgress | None = None,
     *,
     scan_cache: _DirectoryScanCache | None = None,
+    recursive: bool = True,
 ) -> Iterator[str]:
     """Yield .licht files beneath one Asset Manager folder as they are found."""
     cache = scan_cache or _DirectoryScanCache()
@@ -373,7 +374,8 @@ def iter_licht_projects(
                         for prune in pruned_user_directories
                     ):
                         continue
-                    kept_directories.append(Path(entry.path))
+                    if recursive:
+                        kept_directories.append(Path(entry.path))
                     continue
                 path = Path(entry.path)
                 # A symlink to a .licht file is a locator, while a symlinked
@@ -425,6 +427,8 @@ def scan_asset_folder(
     directory: str,
     cancel_event: threading.Event | None = None,
     progress: AssetFolderScanProgress | None = None,
+    *,
+    recursive: bool = True,
 ) -> AssetFolderScanResult:
     """Discover and register .licht projects from one real filesystem folder."""
     if cancel_event is not None and cancel_event.is_set():
@@ -438,7 +442,10 @@ def scan_asset_folder(
     try:
         if callable(getattr(index, "reconcile_observations", None)):
             discovered = list(
-                iter_licht_projects(directory, cancel_event, progress, scan_cache=cache)
+                iter_licht_projects(
+                    directory, cancel_event, progress,
+                    scan_cache=cache, recursive=recursive,
+                )
             )
             was_cancelled = cancel_event is not None and cancel_event.is_set()
             added, already, failed, _ = _commit_registration_batch(
@@ -459,7 +466,8 @@ def scan_asset_folder(
             (
                 (path, folder_id)
                 for path in iter_licht_projects(
-                    directory, cancel_event, progress, scan_cache=cache
+                    directory, cancel_event, progress,
+                    scan_cache=cache, recursive=recursive,
                 )
             ),
             cancel_event,

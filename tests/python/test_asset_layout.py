@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from lfs_plugins.asset_layout import (
@@ -28,12 +30,11 @@ def test_grid_subtracts_gap_and_limits_card_stretch(width, scale):
     slot = grid_slot_width(logical_width, 168)
     assert columns >= 1
     assert slot <= 168 * 1.15 + 1e-9
-    assert slot == pytest.approx(
-        min(
-            (max(0, logical_width - 24) - 12 * (columns - 1)) / columns,
-            168 * 1.15,
-        )
+    expected = min(
+        (max(0, logical_width - 24) - 12 * (columns - 1)) / columns,
+        168 * 1.15,
     )
+    assert slot == pytest.approx(math.floor(expected * 10) / 10)
 
 
 def test_card_geometry_is_sixteen_to_ten_with_fixed_body():

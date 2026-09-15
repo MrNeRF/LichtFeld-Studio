@@ -323,7 +323,7 @@ class GalleryAssetMixin:
             "gallery_update_many": lambda: tr("multi.update", count=self._gallery_counts()["linked"]),
             "gallery_can_publish_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["ready"] > 0,
             "gallery_can_update_many": lambda: not self._gallery_state.get("unsupported") and self._gallery_counts()["linked"] > 0,
-            "gallery_has_undo": lambda: bool(self._gallery_undo and time.monotonic() < self._gallery_undo[0]
+            "gallery_has_undo": lambda: bool(self._gallery_undo
                 and not (self._gallery_state.get("undoPull") or {}).get("operation")),
             "gallery_has_recovery": lambda: bool((self._gallery_state.get("undoPull") or {}).get("backupMissing")),
         }
@@ -406,7 +406,7 @@ class GalleryAssetMixin:
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")
                 return
-            if action == "undo" and self._gallery_undo and time.monotonic() < self._gallery_undo[0]:
+            if action == "undo" and self._gallery_undo:
                 self._gallery_undo[1]()
                 if self._gallery_undo_kind != "pull":
                     self._gallery_undo = None
@@ -624,22 +624,10 @@ class GalleryAssetMixin:
         self._gallery_undo_kind = kind
         if self._gallery_undo_timer:
             self._gallery_undo_timer.cancel()
-        undo = (time.monotonic() + 8, action)
-        self._gallery_undo = undo
-        generation = self._mount_generation
-        def expire():
-            if not self._panel_mounted or generation != self._mount_generation:
-                return
-            if self._gallery_undo is undo:
-                if kind == "pull" and (self._gallery_state.get("undoPull") or {}).get("operation"):
-                    return
-                self._gallery_undo = None
-                if self._handle:
-                    self._handle.dirty_all()
-                    self._request_model_update()
-        self._gallery_undo_timer = threading.Timer(8, lambda: lf.ui.schedule_on_ui_thread(expire))
-        self._gallery_undo_timer.daemon = True
-        self._gallery_undo_timer.start()
+            self._gallery_undo_timer = None
+        # Keep the completed operation in history until the user invokes Undo
+        # or a newer operation replaces it.
+        self._gallery_undo = (float("inf"), action)
 
     def _dismiss_gallery_undo(self):
         if self._gallery_undo_timer:

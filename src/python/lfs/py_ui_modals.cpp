@@ -137,8 +137,10 @@ namespace lfs::python {
             switch (modal.type) {
             case ModalDialogType::Confirm: {
                 for (size_t i = 0; i < modal.buttons.size(); ++i) {
-                    const std::string style = (i == 0) ? "primary" : "secondary";
-                    req.buttons.push_back({modal.buttons[i], style});
+                const std::string style = (i == 0) ? "primary" : "secondary";
+                    const std::string button_style =
+                        (i == 0 && modal.style == MessageStyle::Error) ? "error" : style;
+                    req.buttons.push_back({modal.buttons[i], button_style});
                 }
 
                 if (modal.cpp_callback) {
@@ -224,12 +226,19 @@ namespace lfs::python {
         m.def(
             "confirm_dialog",
             [](const std::string& title, const std::string& message,
-               const std::vector<std::string>& buttons, nb::object callback) {
-                PyModalRegistry::instance().show_confirm(title, message, buttons, callback);
+               const std::vector<std::string>& buttons, nb::object callback,
+               const std::string& style) {
+                MessageStyle msg_style = MessageStyle::Info;
+                if (style == "warning")
+                    msg_style = MessageStyle::Warning;
+                else if (style == "error")
+                    msg_style = MessageStyle::Error;
+                PyModalRegistry::instance().show_confirm(title, message, buttons, callback, msg_style);
             },
             nb::arg("title"), nb::arg("message"),
             nb::arg("buttons") = std::vector<std::string>{"OK", "Cancel"},
             nb::arg("callback") = nb::none(),
+            nb::arg("style") = "info",
             "Show a confirmation dialog with custom buttons");
 
         m.def(
