@@ -276,7 +276,9 @@ class GalleryController:
             raise ValueError("This project already has an upload. Resume or discard it first.")
         link = self._state["links"].get(project_id)
         scene = next((s for s in self._state["scenes"] if link and s["id"] == link["sceneId"]), None) if update else None
-        if update and scene is None:
+        if handoff:
+            scene = next((s for s in self._state["scenes"] if s["id"] == handoff["sceneId"]), None)
+        if (update or handoff) and scene is None:
             raise ValueError(tr("error.refresh"))
         if update and asset_sync_state(asset, link, scene)["freshness"] in ("diverged", "remote", "unknown"):
             # Review must resolve remote write guards before any replacement.
@@ -553,7 +555,8 @@ class GalleryController:
         metadata_only = key in ("confirm.remove", "confirm.unlink")
         if self._metadata_busy() if metadata_only else self._panel_busy():
             raise ValueError(tr("error.busy"))
-        self._confirm = (tr(key, title=title), continuation, tr("action.submit"))
+        verb = {"confirm.remove": "action.remove", "confirm.unlink": "action.unlink"}.get(key, "action.submit")
+        self._confirm = (tr(key, title=title), continuation, tr(verb).rstrip("…."))
         self._show_confirmation(metadata_only=metadata_only)
 
     def _show_confirmation(self, *, metadata_only=False):
@@ -579,6 +582,7 @@ class GalleryController:
                     from .gallery_messages import localize_message
                     log_failure("confirmation_callback", exc)
                     self._message = localize_message(str(exc))
+                    self._failure_notice = self._message
                 self._schedule_poll()
         lf.ui.confirm_dialog(tr("sidebar.title"), message, [tr("action.cancel"), label], selected)
 

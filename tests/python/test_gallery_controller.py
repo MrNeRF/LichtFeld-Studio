@@ -1082,3 +1082,17 @@ def test_replacement_buttons_wait_for_the_account_and_transfer(gallery):
         panel._replacement(["replace"])
         panel._replacement(["keep"])
     assert not actions
+
+
+def test_replacement_confirmation_names_the_existing_public_scene(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    remote = dict(scene(), visibility="public")
+    state.update(source_formats=["licht"], scenes=[remote])
+    panel._state = state
+    panel.service.root = tmp_path
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(panel, "_public_confirmation", lambda scene, action, **_: actions.append(scene))
+    panel._publish_closed_asset(dict(id="project", path="/project.licht"), remote, "sog",
+        update=False, publish_as_new=False,
+        handoff=dict(sceneId=remote["id"], baseRevisions={"content": "original", "metadata": "original"}))
+    assert actions == [remote]
