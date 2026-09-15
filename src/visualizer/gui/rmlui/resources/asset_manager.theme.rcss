@@ -323,6 +323,17 @@
     color: @{text_dim};
 }
 
+.asset-list-header .asset-list-sort {
+    background-color: transparent;
+    color: @{text_dim};
+    border-radius: 0;
+}
+
+.asset-list-header .asset-list-sort:hover {
+    background-color: @{surface_bright};
+    color: @{text};
+}
+
 .asset-list-row {
     background-color: @{surface_bright};
     border-color: @{border};

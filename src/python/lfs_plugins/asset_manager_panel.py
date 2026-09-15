@@ -31,6 +31,7 @@ from .asset_layout import (
     native_to_dp,
     panel_layout,
     list_columns,
+    list_column_widths,
 )
 from .asset_format import format_size
 from .gallery_transfer_ui import transfer_rows
@@ -156,6 +157,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._layout_class = ""
         self._content_width = 0.0
         self._host_geometry = None
+        self._layout_recheck_pending = False
         self._last_ui_scale = 0.0
         self._list_column_overrides: Dict[str, float] = {}
         self._layout_signature = None
@@ -3454,7 +3456,28 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields("inspector_style_height", "inspector_reserved_height")
         if scale_changed:
             self._dirty_layout_fields()
+        self._request_layout_recheck()
         return True
+
+    def _request_layout_recheck(self) -> None:
+        # Rml applies the responsive styles after on_update. Read the resulting
+        # browser width once on the next UI turn, including float/dock changes.
+        schedule = getattr(lf.ui, "schedule", None)
+        if not self._panel_mounted or self._layout_recheck_pending or not callable(schedule):
+            return
+        self._layout_recheck_pending = True
+        generation = self._mount_generation
+
+        def recheck() -> None:
+            if generation != self._mount_generation:
+                return
+            self._layout_recheck_pending = False
+            if self._panel_mounted and self._sync_asset_window_viewport():
+                self._refresh_records(assets=True)
+                # The new row heights can change scrollbar space once more.
+                self._request_layout_recheck()
+
+        schedule(recheck)
 
     def on_host_geometry_changed(self, width: float, height: float, scale: float) -> None:
         """Use native host bounds, which cannot grow with overflowing children."""
@@ -4001,21 +4024,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_resize("inspector-height", event)
 
     def _list_column_width(self, column: str) -> float:
-        width = self._asset_window_client_width
-        columns = list_columns(width)
-        widths = {"size": 72.0, "modified": 96.0, "folder": 100.0,
-                  "gallery": columns["gallery"]}
-        widths.update(self._list_column_overrides)
-        if columns["gallery"] == 24:
-            widths["gallery"] = 24.0
-        fixed = columns["size"] * widths["size"] + columns["modified"] * widths["modified"] + columns["folder"] * widths["folder"]
-        gaps = 8.0 * (2 + int(columns["size"]) + int(columns["modified"]) + int(columns["folder"]))
-        remaining = max(0.0, width - 24.0 - 32.0 - gaps - fixed)
-        widths["name"] = self._list_column_overrides.get("name", max(80.0 if width < 420 else 120.0, remaining - widths["gallery"]))
-        if "name" in self._list_column_overrides and "gallery" not in self._list_column_overrides:
-            widths["gallery"] = max(columns["gallery"] if columns["gallery"] == 24 else 96.0,
-                                    remaining - widths["name"])
-        return float(widths[column])
+        return list_column_widths(self._asset_window_client_width, self._list_column_overrides)[column]
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
@@ -4243,6 +4252,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._sync_panel_space_state()
         self._sync_panel_layout(doc)
         self._sync_asset_window_viewport(doc)
+        self._request_layout_recheck()
         self._refresh_records(assets=True, folders=True)
         if self._handle:
             self._handle.dirty_all()
@@ -4274,6 +4284,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_unmount(self, doc):
         RuntimeState.projects_panel_visible.value = False
+        self._layout_recheck_pending = False
         self._thumbnail_menu_visible = False
         if self._gallery_toast_timer:
             self._gallery_toast_timer.cancel()

@@ -169,3 +169,31 @@ def list_columns(width):
     gaps = 8.0 * (2 + int(size) + int(modified) + int(folder))
     name = width - 24.0 - 32.0 - gaps - gallery - size * 72.0 - modified * 96.0 - folder * 100.0
     return dict(size=size, modified=modified, folder=folder, name=name, gallery=gallery)
+
+
+def list_column_widths(width, overrides=None):
+    """Fit remembered column sizes to the current browser, in logical dp."""
+    columns = list_columns(width)
+    visible = ["name", "gallery"] + [key for key in ("size", "modified", "folder") if columns[key]]
+    available = max(0.0, width - 24.0 - 32.0 - 8.0 * len(visible))
+    minimum = dict(name=80.0 if width < 420 else 120.0,
+                   gallery=24.0 if width < 480 else 96.0,
+                   size=64.0, modified=64.0, folder=64.0)
+    preferred = dict(name=minimum["name"], gallery=columns["gallery"],
+                     size=72.0, modified=96.0, folder=100.0)
+    preferred.update(overrides or {})
+    if width < 480:
+        preferred["gallery"] = 24.0
+    widths = {key: max(minimum[key], float(preferred[key])) for key in visible}
+    if "name" not in (overrides or {}):
+        widths["name"] = max(minimum["name"], available - sum(widths[key] for key in visible if key != "name"))
+    elif "gallery" not in (overrides or {}) and width >= 480:
+        widths["gallery"] = max(minimum["gallery"], available - sum(widths[key] for key in visible if key != "gallery"))
+    if sum(widths.values()) > available:
+        floor = sum(minimum[key] for key in visible)
+        extra = sum(widths[key] - minimum[key] for key in visible)
+        fraction = max(0.0, min(1.0, (available - floor) / extra)) if extra else 0.0
+        widths = {key: minimum[key] + (widths[key] - minimum[key]) * fraction for key in visible}
+    # Never round a final column over the right edge at fractional UI scales.
+    return {key: math.floor(widths.get(key, 0.0) * 10.0) / 10.0
+            for key in ("name", "gallery", "size", "modified", "folder")}
