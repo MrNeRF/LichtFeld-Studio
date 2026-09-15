@@ -875,10 +875,18 @@ class GallerySync:
                     previous_job = copy.deepcopy(job)
                     previous_scenes = copy.deepcopy(self.scenes)
                     previous_intents = copy.deepcopy(bucket.get("handoffIntents", {}))
+                    previous_undo = []
                     self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
                     bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
                     bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
                     bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
+                    for history in bucket["jobs"]:
+                        update = history.get("localUpdate", {})
+                        if (history.get("project") == job["project"] and update.get("state") == "applied"
+                                and not update.get("undoRestored") and update.get("appliedCommit") == job.get("commitUuid")
+                                and tuple(update.get("appliedIdentity", ())) == self.identity()):
+                            previous_undo.append((update, copy.deepcopy(update.get("appliedLink"))))
+                            update["appliedLink"] = copy.deepcopy(bucket["links"][job["project"]])
                     job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
                     job.pop("previewPng", None)
                     if job.get("handoff"):
@@ -894,6 +902,8 @@ class GallerySync:
                         bucket["links"] = previous_links
                         self.scenes = previous_scenes
                         bucket["handoffIntents"] = previous_intents
+                        for update, applied_link in previous_undo:
+                            update["appliedLink"] = applied_link
                         job.clear()
                         job.update(previous_job)
                         self._completion = None

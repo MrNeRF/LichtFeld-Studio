@@ -1160,3 +1160,34 @@ def test_publish_cover_adds_only_a_thumbnail_to_the_prepared_copy(tmp_path):
     with pytest.raises(ValueError, match="PNG"):
         gallery_preparation.attach_preview(prepared, b"private text")
     assert prepared.read_bytes() == content
+
+
+def test_settings_undo_survives_its_follow_up_upload(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    remote = dict(id="remote", title="Gallery title", contentRevision="c1", metadataRevision="m2",
+                  viewerSettings={"exposure": 1.6}, description="", visibility="private")
+    monkeypatch.setattr(Client, "scene", lambda *args: remote)
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"original geometry and checkpoint")
+    before = gallery_sync.exchange_link(dict(remote, metadataRevision="m1"), "before")
+    service._bucket()["links"]["project"] = gallery_sync.copy.deepcopy(before)
+    service._save()
+    job_id, _ = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    path.write_bytes(b"original geometry and checkpoint with reviewed settings")
+    fields = dict(gallery_sync.shared_fields(remote), viewerSettings={"exposure": 1.0})
+    service.finish_settings_update(job_id, "after", gallery_sync.file_stamp(path), fields, acknowledge=False)
+    finish(service)
+    published = dict(remote, **fields)
+    published.update(contentRevision="c2", metadataRevision="m3")
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": published}, raising=False)
+    service.queue_upload(path, dict(fields, replaceSceneId="remote", baseRevisions={"content": "c1", "metadata": "m2"},
+                                   _commitUuid="after"), "project")
+    finish(service)
+    update = service._job(job_id)["localUpdate"]
+    assert gallery_sync.same_undo_link(service.snapshot()["links"]["project"], update["appliedLink"])
+    assert update["previousLink"] == before
+    service.restore_local_backup(str(path), update["backupPath"], gallery_sync.file_stamp(path))
+    finish(service)
+    assert path.read_bytes() == b"original geometry and checkpoint"
+    assert service.snapshot()["links"]["project"] == before
