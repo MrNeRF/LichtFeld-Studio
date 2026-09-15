@@ -946,6 +946,10 @@ namespace lfs::io::project {
 
     } // namespace
 
+    lfs::Result<void> detail::validate_project_operation_identity() {
+        return active_operation_identity ? active_operation_identity->validate() : lfs::Result<void>{};
+    }
+
     lfs::Result<void> run_project_operation(
         const std::filesystem::path& path, const lfs::core::Uuid& expected_project,
         const lfs::core::Uuid& expected_commit, const std::function<void()>& operation) {
@@ -1471,6 +1475,9 @@ namespace lfs::io::project {
                 ProjectOperationProgress progress,
                 ProjectOperationCancel cancel,
                 const ProjectReduceSelection& selection) {
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         auto plan = make_reduce_plan(path);
         if (!plan) {
             return std::move(plan).error();
@@ -1512,6 +1519,8 @@ namespace lfs::io::project {
         if (progress) {
             progress(0.05F, "Preparing project reduction");
         }
+        if (auto checked = identity->validate(); !checked)
+            return std::move(checked).error();
         auto document = ProjectDocument::open(path);
         if (!document) {
             return std::move(document).error();

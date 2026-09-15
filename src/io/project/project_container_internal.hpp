@@ -116,6 +116,8 @@ namespace lfs::io::project::detail {
         [[nodiscard]] lfs::Result<void> validate() const;
     };
 
+    [[nodiscard]] lfs::Result<void> validate_project_operation_identity();
+
     class WriterLock {
     public:
         WriterLock(const WriterLock&) = delete;

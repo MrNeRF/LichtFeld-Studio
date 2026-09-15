@@ -1089,6 +1089,8 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<void> require_ready() const {
+            if (auto identity = detail::validate_project_operation_identity(); !identity)
+                return identity;
             if (destination_identity) {
                 if (auto identity = destination_identity->validate(); !identity)
                     return identity;
@@ -1520,6 +1522,8 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::create(const std::filesystem::path& path,
                           const CreateOptions& options) {
+        if (auto checked = detail::validate_project_operation_identity(); !checked)
+            return std::move(checked).error();
         auto identity = detail::ProjectPathIdentity::capture(path);
         if (!identity)
             return std::move(identity).error();
@@ -1756,6 +1760,8 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::append(const std::filesystem::path& path,
                           const AppendOptions& options) {
+        if (auto checked = detail::validate_project_operation_identity(); !checked)
+            return std::move(checked).error();
         auto identity = detail::ProjectPathIdentity::capture(path);
         if (!identity)
             return std::move(identity).error();
@@ -2020,6 +2026,12 @@ namespace lfs::io::project {
                 detail::preflight_disk_space(impl_->active_path, *required);
             !space) {
             return space;
+        }
+        if (auto identity = detail::validate_project_operation_identity(); !identity)
+            return identity;
+        if (impl_->destination_identity) {
+            if (auto identity = impl_->destination_identity->validate(); !identity)
+                return identity;
         }
         if (impl_->mode == Impl::Mode::Append &&
             impl_->original_physical_size > impl_->cursor) {

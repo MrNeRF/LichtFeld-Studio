@@ -106,6 +106,40 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
     assert swapped and selected.read_bytes() == before
 
 
+@pytest.mark.parametrize("swap", ["identity", "path"])
+@pytest.mark.parametrize("guarded", [False, True])
+def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_project, tmp_path, swap, guarded):
+    path, card = identity_project
+    other = tmp_path / "other.licht"
+    native_io.restore_save(path, 1, other)
+    selected = path
+    if swap == "path":
+        selected = tmp_path / "alias.licht"
+        selected.symlink_to(path)
+        other.write_bytes(path.read_bytes())
+    before = other.read_bytes()
+    swapped = False
+
+    def progress(*args):
+        nonlocal swapped
+        if swapped:
+            return
+        swapped = True
+        if swap == "identity":
+            os.replace(other, path)
+        else:
+            selected.unlink()
+            selected.symlink_to(other)
+
+    with pytest.raises(Exception, match="(identity|path).*changed"):
+        operation = lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}, progress=progress)
+        if guarded:
+            native_io.run_project_operation(selected, str(card.project_uuid), str(card.commit_uuid), operation)
+        else:
+            operation()
+    assert swapped and selected.read_bytes() == before
+
+
 def test_repair_refuses_changed_id_without_creating_destination(native_io, identity_project, tmp_path):
     path, card = identity_project
     other = tmp_path / "other.licht"
