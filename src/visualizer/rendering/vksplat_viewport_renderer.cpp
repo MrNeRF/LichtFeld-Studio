@@ -1735,6 +1735,11 @@ namespace lfs::vis {
                     return std::unexpected(ok.error());
                 }
             }
+            if (splat_data.shN_value_quantized()) {
+                if (auto ok = waitForInputTensorStream(stream, splat_data.shN_value_bounds(), "shN bounds"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+            }
             if (auto ok = waitForInputTensorStream(stream, splat_data.rotation_raw(), "rotation"); !ok) {
                 return std::unexpected(ok.error());
             }
@@ -3205,8 +3210,14 @@ namespace lfs::vis {
             return std::unexpected(ok.error());
         }
         if (!raw_layout->omits_shN) {
-            if (auto ok = requireCudaFloat32ContiguousTensor(shN, "shN"); !ok) {
-                return std::unexpected(ok.error());
+            if (!shN.is_valid() || shN.device() != Device::CUDA || !shN.is_contiguous() ||
+                (shN.dtype() != DataType::Float32 && shN.dtype() != DataType::Float16)) {
+                return std::unexpected("VkSplat LOD page upload expected contiguous CUDA SH rest storage");
+            }
+            if (raw_layout->shN_q16) {
+                if (auto ok = requireCudaFloat32ContiguousTensor(splat_data.shN_value_bounds(), "shN bounds"); !ok) {
+                    return std::unexpected(ok.error());
+                }
             }
         }
         if (auto ok = requireCudaFloat32ContiguousTensor(rotations, "rotation"); !ok) {
@@ -3226,7 +3237,7 @@ namespace lfs::vis {
 
         const auto* const means_src = static_cast<const float*>(means.data_ptr());
         const auto* const sh0_src = static_cast<const float*>(sh0.data_ptr());
-        const auto* const shN_src = static_cast<const float*>(raw_layout->omits_shN ? nullptr : shN.data_ptr());
+        const void* const shN_src = raw_layout->omits_shN ? nullptr : shN.data_ptr();
         const auto* const rotations_src = static_cast<const float*>(rotations.data_ptr());
         const auto* const scaling_src = static_cast<const float*>(scaling.data_ptr());
         const auto* const opacity_src = static_cast<const float*>(opacity.data_ptr());
@@ -3266,13 +3277,17 @@ namespace lfs::vis {
             const LodPageTensorSources sources{
                 .means = means_src + logical_start * 3u,
                 .sh0 = sh0_src + logical_start * 3u,
-                .shN = raw_layout->omits_shN
-                           ? nullptr
-                           : shN_src + logical_start * static_cast<std::size_t>(src_rest) * 3u,
+                .shN = shN_src,
+                .shN_bounds = raw_layout->shN_q16
+                                  ? static_cast<const float2*>(splat_data.shN_value_bounds().data_ptr())
+                                  : nullptr,
                 .rotation = rotations_src + logical_start * 4u,
                 .scaling = scaling_src + logical_start * 3u,
                 .opacity = opacity_src + logical_start,
                 .src_rest = src_rest,
+                .src_splat_offset = static_cast<std::uint32_t>(logical_start),
+                .shN_f16 = raw_layout->shN_f16,
+                .shN_q16 = raw_layout->shN_q16,
                 .count = static_cast<std::uint32_t>(count),
             };
             if (const cudaError_t status = launchLodPageQuantizeFromTensors(
@@ -8546,6 +8561,12 @@ namespace lfs::vis {
             }
         }
         if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
+            // Start the next frame at the threshold that actually fit. The
+            // gradual controller can refine it, but cannot undo same-frame repair.
+            if (std::isfinite(lod_stats->threshold_scale) && lod_stats->threshold_scale > 1.0f) {
+                gpu_lod_pixel_scale_feedback_ = std::min(
+                    64.0f, gpu_lod_pixel_scale_feedback_ * lod_stats->threshold_scale);
+            }
             gpu_lod_last_candidate_count_ = lod_stats->candidate_count;
             gpu_lod_last_overflow_count_ = lod_stats->overflow_count;
             const bool overflowed =

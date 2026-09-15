@@ -2496,6 +2496,29 @@
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
     "no_splat_node_named": "Aucun nœud splat nommé '{}'"
   },
+  "align": {
+    "preview": "Aperçu de l’alignement",
+    "hint_preview": "Aperçu : changez les options pour comparer. Désactivez l’aperçu pour modifier les points. Appliquer : conserver le résultat. Échap : restaurer l’original.",
+    "click_1st": "Cliquez le 1er point",
+    "click_2nd": "Cliquez le 2e point",
+    "click_3rd": "Cliquez le 3e point",
+    "points_count": "Points : {}/3",
+    "up": "HAUT",
+    "hint_picking": "Clic : placer/sélectionner. Glisser un point : déplacer. Suppr : sélection. Retour : dernier. Échap : annuler.",
+    "hint_review": "Aperçu : voir le résultat. Appliquer : le conserver. Faites glisser les points pour ajuster. Échap : annuler.",
+    "status_targets_changed": "La sélection a changé. Choisissez à nouveau les points d’alignement.",
+    "status_colinear": "Les points sont presque alignés. Déplacez un point.",
+    "status_no_surface": "Aucune surface sous le curseur.",
+    "status_no_target": "Aucune cible transformable à aligner.",
+    "snapped": "accroché",
+    "apply": "Appliquer",
+    "clear": "Effacer",
+    "snap": "Accrochage d'axes",
+    "edge_to_axis": "Met le plan à niveau, puis tourne le bord de 1 à 2 vers la flèche X rouge. Comparez avec l’aperçu.",
+    "edge_label": "1 → 2 selon X",
+    "edge_on_help": "Bord de 1 à 2 selon X : OUI. Met le plan à niveau, puis tourne la scène pour que ce bord suive la flèche X rouge.",
+    "edge_off_help": "Bord de 1 à 2 selon X : NON. Met le plan à niveau sans rotation supplémentaire."
+  },
   "toast": {
     "trainer_not_restored": {
       "title": "Entraîneur non restauré",

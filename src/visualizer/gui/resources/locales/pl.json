@@ -2496,6 +2496,29 @@
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
   },
+  "align": {
+    "preview": "Podgląd wyrównania",
+    "hint_preview": "Podgląd: przełączaj opcje wyrównania, aby porównać wyniki. Wyłącz podgląd, aby edytować punkty. Zastosuj: zachowaj wynik. Esc: przywróć oryginał.",
+    "click_1st": "Kliknij 1. punkt",
+    "click_2nd": "Kliknij 2. punkt",
+    "click_3rd": "Kliknij 3. punkt",
+    "points_count": "Punkty: {}/3",
+    "up": "GÓRA",
+    "hint_picking": "Klik: ustaw/wybierz. Przeciągnij marker: przesuń. Del: usuń wybrany. Backspace: ostatni. Esc: anuluj.",
+    "hint_review": "Podgląd: zobacz wynik. Zastosuj: zachowaj. Przeciągnij punkty, aby poprawić. Esc: anuluj.",
+    "status_targets_changed": "Wybór się zmienił. Wybierz ponownie punkty wyrównania.",
+    "status_colinear": "Punkty są prawie w linii. Przesuń punkt.",
+    "status_no_surface": "Brak powierzchni pod kursorem.",
+    "status_no_target": "Brak obiektu do wyrównania.",
+    "snapped": "przyciągnięto",
+    "apply": "Zastosuj",
+    "clear": "Wyczyść",
+    "snap": "Przyciąganie osi",
+    "edge_to_axis": "Poziomuje płaszczyznę, a potem obraca krawędź od 1 do 2 w stronę czerwonej strzałki X. Porównaj w podglądzie.",
+    "edge_label": "1 → 2 wzdłuż X",
+    "edge_on_help": "Krawędź od 1 do 2 wzdłuż X: WŁ. Poziomuje płaszczyznę, a potem obraca scenę, aby krawędź biegła wzdłuż czerwonej strzałki X.",
+    "edge_off_help": "Krawędź od 1 do 2 wzdłuż X: WYŁ. Poziomuje płaszczyznę bez dodatkowego obrotu."
+  },
   "toast": {
     "trainer_not_restored": {
       "title": "Nie przywrócono trenera",

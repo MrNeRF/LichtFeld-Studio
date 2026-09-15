@@ -451,6 +451,20 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NODES_SELECTED = "transform.nodes_selected";
     } // namespace Transform
 
+    namespace Align {
+        inline constexpr const char* CLICK_1ST = "align.click_1st";
+        inline constexpr const char* CLICK_2ND = "align.click_2nd";
+        inline constexpr const char* CLICK_3RD = "align.click_3rd";
+        inline constexpr const char* POINTS_COUNT = "align.points_count";
+        inline constexpr const char* UP = "align.up";
+        inline constexpr const char* SNAPPED = "align.snapped";
+        inline constexpr const char* HINT_PICKING = "align.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "align.hint_review";
+        inline constexpr const char* STATUS_COLINEAR = "align.status_colinear";
+        inline constexpr const char* STATUS_NO_SURFACE = "align.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
+    } // namespace Align
+
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";

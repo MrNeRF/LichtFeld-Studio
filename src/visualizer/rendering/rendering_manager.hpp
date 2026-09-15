@@ -423,12 +423,6 @@ namespace lfs::vis {
         };
         // Renders a fresh expected-depth preview for precise picking on sparse or low-opacity splats.
         float renderExpectedDepthAtPixel(const ExpectedDepthSampleRequest& request);
-        float renderDepthAtPixelForNodeMask(const SceneManager* scene_manager,
-                                            const Viewport& viewport,
-                                            const glm::ivec2& render_size,
-                                            int x,
-                                            int y,
-                                            const std::vector<bool>& node_visibility_mask);
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();

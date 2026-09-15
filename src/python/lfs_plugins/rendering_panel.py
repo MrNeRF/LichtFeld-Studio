@@ -290,7 +290,7 @@ class RenderingPanel(Panel):
     space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 10
     template = "rmlui/rendering.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
+    height_mode = lf.ui.PanelHeightMode.FILL
     update_policy = "dirty"
 
     def __init__(self):

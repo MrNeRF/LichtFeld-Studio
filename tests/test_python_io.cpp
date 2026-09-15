@@ -1652,10 +1652,14 @@ TEST_F(PythonIOTest, HtmlExport) {
         << "Should be valid HTML";
     EXPECT_TRUE(content.find("window.__lfsInitMeasureTool") != std::string::npos)
         << "Should embed the measure tool init hook";
+    EXPECT_TRUE(content.find("window.__lfsInitLabelTool") != std::string::npos)
+        << "Should embed the label tool init hook";
     EXPECT_TRUE(content.find("export { Gizmo, TranslateGizmo };") == std::string::npos)
         << "Gizmo export statement should be stripped";
     EXPECT_TRUE(content.find("export { initMeasureTool };") == std::string::npos)
         << "Measure-tool export statement should be stripped";
+    EXPECT_TRUE(content.find("export { initLabelTool };") == std::string::npos)
+        << "Label-tool export statement should be stripped";
 }
 
 TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {

@@ -2496,6 +2496,29 @@
     "colmap_min_track_length": "min-track-length는 --init과 함께 사용할 수 없습니다. 초기화에서 '{}'를 사용하므로 COLMAP 희소 점 필터링이 적용되지 않습니다",
     "no_splat_node_named": "'{}'이라는 이름의 스플랫 노드가 없습니다"
   },
+  "align": {
+    "preview": "정렬 미리보기",
+    "hint_preview": "미리보기: 정렬 옵션을 전환하여 비교하세요. 점을 편집하려면 미리보기를 끄세요. 적용: 결과 유지. Esc: 원래 상태로 복원.",
+    "click_1st": "첫 번째 점 클릭",
+    "click_2nd": "두 번째 점 클릭",
+    "click_3rd": "세 번째 점 클릭",
+    "points_count": "점: {}/3",
+    "up": "위",
+    "hint_picking": "클릭: 배치/선택. 마커 드래그: 이동. Del: 선택 삭제. Backspace: 마지막 삭제. Esc: 취소.",
+    "hint_review": "미리보기: 결과 확인. 적용: 결과 확정. 점을 드래그하여 조정. Esc: 취소.",
+    "status_targets_changed": "선택이 변경되었습니다. 정렬 지점을 다시 선택하세요.",
+    "status_colinear": "점이 거의 일직선입니다. 점을 이동하세요.",
+    "status_no_surface": "커서 아래에 표면이 없습니다.",
+    "status_no_target": "정렬할 변환 가능한 대상이 없습니다.",
+    "snapped": "스냅됨",
+    "apply": "적용",
+    "clear": "지우기",
+    "snap": "축 스냅",
+    "edge_to_axis": "평면을 수평으로 맞춘 다음 점 1에서 2로 향하는 변을 빨간 X 화살표 방향으로 회전합니다. 미리보기로 비교하세요.",
+    "edge_label": "1 → 2를 X 방향으로",
+    "edge_on_help": "점 1에서 2로 향하는 변을 X 방향으로: 켜짐. 평면을 수평으로 맞춘 다음 변이 빨간 X 화살표를 따르도록 장면을 회전합니다.",
+    "edge_off_help": "점 1에서 2로 향하는 변을 X 방향으로: 꺼짐. 추가 회전 없이 평면을 수평으로 맞춥니다."
+  },
   "toast": {
     "trainer_not_restored": {
       "title": "트레이너를 복원하지 못함",
