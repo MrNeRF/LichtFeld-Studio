@@ -1016,6 +1016,25 @@ namespace lfs::vis {
 
             auto scoped_state = scene_state;
             const auto& node = i == 0 ? *left_node : *right_node;
+            // The Vulkan path starts with the full scene request, then replaces
+            // its transform array with the owned node's single world transform.
+            // Aggregate SH limits must not survive that replacement.
+            auto request = buildViewportRenderRequest(
+                ctx, {320, 480}, &viewport,
+                i == 0 ? SplitViewPanelId::Left : SplitViewPanelId::Right,
+                {static_cast<int>(i) * 320, 0}, ctx.render_size);
+            ASSERT_EQ(request.scene.node_active_sh_degrees, (std::vector<int>{1, 2}));
+            ASSERT_EQ(request.scene.model_transforms->size(), 2u);
+            applyPlyComparisonNodeScope(
+                request.scene, request.filters, request.overlay, ctx, node, static_cast<int>(i));
+            const std::vector<glm::mat4> transforms{panel.content.model_transform};
+            request.scene.model_transforms = &transforms;
+            EXPECT_EQ(request.scene.model_transforms->size(), 1u);
+            EXPECT_EQ(request.scene.transform_indices, nullptr);
+            EXPECT_TRUE(request.scene.node_visibility_mask.empty());
+            EXPECT_TRUE(request.scene.node_active_sh_degrees.empty());
+            EXPECT_EQ(node.model->get_active_sh_degree(), static_cast<int>(i) + 1);
+            EXPECT_EQ(scene_state.node_active_sh_degrees, (std::vector<int>{1, 2}));
             scopeSceneRenderStateToVisibleSplatNode(
                 scoped_state, scene, node, static_cast<int>(i), panel.content.model_transform);
             EXPECT_EQ(scoped_state.node_active_sh_degrees,

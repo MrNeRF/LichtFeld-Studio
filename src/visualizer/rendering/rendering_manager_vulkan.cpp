@@ -2519,6 +2519,9 @@ namespace lfs::vis {
                 std::vector<glm::mat4> transforms_storage;
                 auto scene = state.scene;
                 if (model_transforms_override) {
+                    if (model_override && !node_visibility_override) {
+                        scene = {};
+                    }
                     scene.model_transforms = model_transforms_override;
                 } else if (!scene.model_transforms) {
                     transforms_storage = {glm::mat4(1.0f)};
@@ -2577,6 +2580,7 @@ namespace lfs::vis {
                 for (const auto& slot : visible_nodes) {
                     if (slot.node && slot.node->model.get() == model_override) {
                         applyPlyComparisonNodeScope(
+                            request.scene,
                             request.filters,
                             request.overlay,
                             frame_ctx,
@@ -3499,9 +3503,14 @@ namespace lfs::vis {
                             .left_name = left_node.node->name,
                             .right_name = right_node.node->name};
                     } else {
-                        render_error = left ? right.error() : left.error();
+                        render_error = std::format(
+                            "PLY comparison panel rendering failed (left: {}; right: {})",
+                            left ? "ok" : left.error(),
+                            right ? "ok" : right.error());
                     }
                 }
+            } else {
+                render_error = "PLY comparison requires at least two visible Gaussian models";
             }
         }
 
@@ -3541,6 +3550,7 @@ namespace lfs::vis {
             // full-viewport fallback that would set rendered_image to a wrong-
             // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud &&
+                   (!has_visible_gaussian_model || hasRenderableGaussians(model)) &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
             // Brush edits mutate sh0 in place — same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
@@ -3760,7 +3770,7 @@ namespace lfs::vis {
             } else {
                 render_error = "Point-cloud Vulkan render failed";
             }
-        } else if (has_visible_gaussian_model) {
+        } else if (has_visible_gaussian_model && hasRenderableGaussians(model)) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
@@ -4313,6 +4323,12 @@ namespace lfs::vis {
             } else {
                 render_error = "Gaussian viewer rendering requires a VkSplat backend";
             }
+        } else if (has_visible_gaussian_model && render_error.empty()) {
+            // PLY comparison intentionally leaves FrameContext.model empty and
+            // renders the two owned node models into dedicated output slots.
+            // If panel preparation fails, never fall through to the full-frame
+            // renderer and dereference that absent aggregate model.
+            render_error = "No full-frame Gaussian model is available for rendering";
         }
 
         if (rendered_image && !rendered_image_contains_ground_truth) {

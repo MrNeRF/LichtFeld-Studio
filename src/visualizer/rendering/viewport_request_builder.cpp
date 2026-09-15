@@ -466,11 +466,16 @@ namespace lfs::vis {
     }
 
     void applyPlyComparisonNodeScope(
+        lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
         const FrameContext& ctx,
         const core::SceneNode& node,
         const int visible_index) {
+        // An owned model has one transform slot. Discard aggregate indices,
+        // visibility and SH limits; the renderer uses this model's active SH
+        // degree. The caller supplies the node's world transform separately.
+        scene = {};
         const auto keep_matching = [visible_index](auto& regions, auto& primary) {
             using Filter = std::decay_t<decltype(regions[0])>;
             std::vector<Filter> kept;
