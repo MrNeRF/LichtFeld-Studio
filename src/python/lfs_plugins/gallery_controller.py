@@ -1095,7 +1095,7 @@ class GalleryController:
                 and metadata.get("replaceSceneId") == linked.get("sceneId")):
             details = {k: v for k, v in metadata.items() if k in ("title", "description", "visibility", "viewerSettings")}
             self.service.edit(linked["sceneId"], {name + "Revision": token for name, token in metadata["baseRevisions"].items()}, details,
-                commit_uuid=str(lf.io.inspect_project(path).commit_uuid), content_stamp=content_stamp)
+                commit_uuid=str(lf.io.inspect_project(path).commit_uuid), content_stamp=content_stamp, project_id=project_id)
             return True
         return False
 

@@ -1498,7 +1498,7 @@ class GallerySync:
             self._save()
         self._launch_metadata(action)
 
-    def edit(self, scene_id, baseline, metadata, *, commit_uuid=None, content_stamp=None):
+    def edit(self, scene_id, baseline, metadata, *, commit_uuid=None, content_stamp=None, project_id=None):
         baseline = copy.deepcopy(baseline)
         metadata = copy.deepcopy(metadata)
         def action():
@@ -1509,14 +1509,17 @@ class GallerySync:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
                 self.message = "Gallery details saved."
                 self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
-                for link in bucket["links"].values():
-                    if link["sceneId"] == scene_id:
+                linked_projects = [key for key, value in bucket["links"].items() if value["sceneId"] == scene_id]
+                acknowledged = project_id or (linked_projects[0] if len(linked_projects) == 1 else None)
+                for identifier, link in bucket["links"].items():
+                    if identifier == acknowledged and link["sceneId"] == scene_id:
                         # A metadata exchange does not exchange remote geometry.
                         tokens = domain_tokens(scene)
                         if link.get("contentRevision"):
                             tokens["contentRevision"] = link["contentRevision"]
                         link.update(**tokens, metadata=copy.deepcopy(scene),
                                     sharedFields=shared_fields(scene), exchangedAt=time.time(), checkedAt=time.time())
+                        link.pop("localFields", None)
                         if commit_uuid:
                             link["commitUuid"] = commit_uuid
                         if content_stamp:

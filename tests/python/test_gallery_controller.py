@@ -684,7 +684,7 @@ def test_metadata_only_update_skips_native_export(gallery, monkeypatch):
     panel.service.edit=lambda *a,**kw:actions.append((a,kw))
     state['links']={'project':{'sceneId':'scene','contentStamp':'same-content:same-view'}}
     panel._publish_saved({'title':'New title','replaceSceneId':'scene','baseRevisions':{'content':'r1','metadata':'r1'}},'project','/project.licht',state['identity'], update=True)
-    assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view'})]
+    assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view','project_id':'project'})]
 
 def test_cancel_paused_job_does_not_pause_someone_elses_upload(gallery, monkeypatch):
     panel,state,actions=gallery

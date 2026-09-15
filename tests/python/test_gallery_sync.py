@@ -1031,3 +1031,18 @@ def test_owner_etag_fallback_requires_a_known_change_sequence(tmp_path, monkeypa
     service.refresh(); finish(service)
     assert service.snapshot()["scenes"][0]["id"] == "old"
 
+
+
+def test_metadata_publish_acknowledges_only_the_project_that_sent_it(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = dict(id="scene", title="Before", contentRevision="c", metadataRevision="m", viewerSettings={})
+    service._bucket()["links"] = {"original": gallery_sync.exchange_link(scene, "old"),
+                                  "copy": gallery_sync.exchange_link(scene, "copy-save")}
+    service._save()
+    monkeypatch.setattr(Client, "update", lambda *_a, **_k: dict(scene, title="After", metadataRevision="m2"), raising=False)
+    service.edit("scene", scene, {"title": "After"}, commit_uuid="new", project_id="original")
+    finish(service)
+    links = service.snapshot()["links"]
+    assert links["original"]["commitUuid"] == "new" and links["original"]["metadataRevision"] == "m2"
+    assert links["copy"]["commitUuid"] == "copy-save" and links["copy"]["metadataRevision"] == "m"
+
