@@ -383,7 +383,7 @@
                         <button class="btn btn--secondary contents-action" data-if="part.has_action" data-attr-disabled="part.disabled || part.action_disabled" data-event-click="contents_action(part.id, part.action)" data-attr-title="part.action_tooltip"><span>{{part.action_label}}</span></button>
                         <button class="btn btn--secondary contents-action" data-if="part.has_secondary" data-attr-disabled="part.disabled" data-event-click="contents_action(part.id, part.secondary)" data-attr-title="part.secondary_label"><span>{{part.secondary_label}}</span></button>
                         <button class="asset-button asset-button--small-icon contents-remove" data-if="part.removable" data-attr-disabled="part.disabled || part.remove_disabled" data-event-click="contents_action(part.id, 'remove')" data-attr-title="part.remove_label"><span class="asset-button-glyph">&#215;</span></button>
-                        <button class="asset-button asset-button--small-icon contents-remove" data-if="part.undo" data-attr-disabled="part.disabled" data-event-click="contents_action(part.id, 'undo_remove')" data-attr-title="contents_undo_label"><span class="asset-button-glyph">&#8630;</span></button>
+                        <button class="asset-button asset-button--small-icon contents-remove" data-if="part.undo" data-attr-disabled="part.disabled" data-event-click="contents_action(part.id, 'undo_remove')" data-attr-title="contents_undo_label"><img src="../icon/undo.png"/></button>
                        </div>
                        <span class="contents-detail text-muted" data-if="part.has_detail" data-attr-title="part.detail">{{part.detail}}</span>
                        <span class="contents-error status-error" data-if="part.has_error" data-attr-title="part.error">{{part.error}}</span>
@@ -455,6 +455,7 @@
             <div class="asset-tray-status-row">
               <span class="asset-tray-phase" data-attr-title="transfer.phase">{{transfer.phase}}</span>
               <div class="asset-tray-actions">
+                <button class="btn btn--secondary" data-if="transfer.can_recover" data-event-click="transfer_open_recovery(transfer.id)" data-attr-title="g_action_open_recovery">{{g_action_open_recovery}}</button>
                 <button class="btn btn--secondary" data-if="transfer.can_pause" data-event-click="transfer_pause(transfer.id)">{{g_action_pause}}</button>
                 <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)" data-attr-title="transfer.action_label">{{transfer.action_label}}</button>
                 <button class="btn btn--secondary" data-if="transfer.can_resolve" data-event-click="transfer_resolve(transfer.id)" data-attr-title="transfer.action_label">{{transfer.action_label}}</button>
@@ -465,7 +466,6 @@
             <div class="asset-tray-progress"><span data-style-width="transfer.progress_width"></span></div>
             <span class="asset-tray-reason status-error" data-class-hidden="transfer.reason == ''" data-attr-title="transfer.reason">{{transfer.reason}}</span>
             <span class="asset-tray-reason text-muted" data-class-hidden="transfer.detail == ''" data-attr-title="transfer.detail">{{transfer.detail}}</span>
-            <div class="asset-tray-recovery" data-if="transfer.can_recover"><button class="btn btn--secondary" data-event-click="transfer_open_recovery(transfer.id)" data-attr-title="g_action_open_recovery">{{g_action_open_recovery}}</button></div>
           </div>
         </div>
         <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-if="tray_expanded" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>

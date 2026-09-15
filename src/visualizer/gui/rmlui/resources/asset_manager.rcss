@@ -1141,7 +1141,7 @@
 .asset-tray-heading .asset-tray-detail { flex: 1 1 auto; font-size: 10dp; }
 .asset-tray-title, .asset-tray-phase, .asset-tray-bytes, .asset-tray-detail { min-width: 0; height: 24dp; line-height: 24dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-tray-list { box-sizing: border-box; min-height: 0; flex: 1 1 auto; overflow-y: auto; padding-right: 8dp; }
-.asset-tray-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; min-width: 0; }
+.asset-tray-row { display: flex; flex-direction: column; gap: 4dp; padding: 4dp 0; min-width: 0; }
 .asset-tray-direction { flex: 0 0 16dp; height: 24dp; line-height: 24dp; text-align: center; }
 .asset-tray-title { flex: 1 1 auto; }
 .asset-tray-bytes { flex: 0 1 auto; font-family: "JetBrains Mono"; font-size: 10dp; text-align: right; }
@@ -1152,7 +1152,7 @@
 .asset-tray .btn, .asset-tray .asset-button { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; font-size: 11dp; line-height: 22dp; flex-shrink: 0; }
 .asset-tray .asset-button--small-icon { width: 24dp; min-width: 24dp; padding: 0; }
 .asset-tray-reason { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.asset-tray .asset-tray-project { flex: 1 1 0dp; min-width: 0; padding: 0; text-align: left; }
+.asset-tray .asset-tray-project { flex: 1 1 0dp; min-width: 0; padding: 0; text-align: left; justify-content: flex-start; }
 .asset-tray-project span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-tray .hidden { display: none; }
 #asset-tray-resize-handle { position: absolute; left: 0; right: 0; top: -6dp; width: auto; height: 12dp; min-height: 12dp; margin: 0; }
@@ -1270,7 +1270,6 @@
 .contents-detail { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .contents-error { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: normal; word-break: break-all; }
 .contents-tag { flex: 0 0 auto; padding: 0 4dp; line-height: 18dp; font-size: 10dp; border-radius: 3dp; }
-.asset-tray-recovery { display: flex; align-items: center; min-height: 24dp; }
 .contents-row { display: flex; align-items: center; flex: 0 0 24dp; height: 24dp; min-height: 24dp; width: 100%; min-width: 0; gap: 4dp; }
 .contents-label { display: block; flex: 1 1 0dp; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24dp; }
 .contents-size { display: block; flex: 0 0 auto; white-space: nowrap; line-height: 24dp; }

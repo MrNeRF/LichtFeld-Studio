@@ -2879,7 +2879,7 @@
   "projects.contents.gaussians": "{count} gaussians",
   "projects.contents.save_explanation": "A saved state of the project. Restore makes it the current one; the file keeps the others until you remove them.",
   "projects.contents.edited": "edited {time}: {change}",
-  "projects.contents.compact_removals": "{count} removed contents included",
+  "projects.contents.compact_removals": "Removed items included: {count}",
   "projects.contents.undo": "Undo",
   "projects.contents.undone": "Undid removal of {part}",
   "projects.contents.removed_part": "Removed {part}",

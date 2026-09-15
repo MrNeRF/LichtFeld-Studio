@@ -395,7 +395,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                         self._handle.dirty_all()
                     self._start_catalog_verify()
                     self._scan_asset_folders()
-                self._request_model_update()
+                self._refresh_transfer_rows()
 
             self._schedule_ui(complete)
 
@@ -1021,7 +1021,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _inspect_contents(self, path):
         details = self._native_io_call("inspect_project_details", path)
         plan = self._native_io_call("plan_reduce_size", path)
-        return {"details": details, "plan": plan}
+        return {"details": details, "plan": plan, "card": getattr(details, "card", None)}
 
     def _start_inspection_refresh(self) -> None:
         if not self._asset_index or not self._panel_mounted or not self._handle:
@@ -1108,7 +1108,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         for row in rows:
             if row["id"] == feedback.get("row_id"):
                 if feedback.get("status") == "running":
-                    row.update(pending=True, detail=tr("projects.contents.removing").format(part=row["label"]))
+                    row["pending"] = True
+                    if feedback.get("operation_kind") == "remove":
+                        row["detail"] = tr("projects.contents.removing").format(part=row["label"])
                 elif feedback.get("status") == "failed":
                     row["error"] = feedback.get("reason", "")
             row["has_detail"] = bool(row["detail"])
@@ -1213,9 +1215,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         projects_by_job = {job["id"]: job.get("project") or "remote:" + job.get("sceneId", "") for job in self._gallery_state.get("jobs", ())}
         for row in rows:
             row["project"] = row.get("project") or projects_by_job.get(row["id"], self._gallery_state.get("operationProject", ""))
-        for operation in self._project_operations.values():
-            progress = float(operation.get("progress", 0.0) or 0.0)
+        for operation in reversed(list(self._project_operations.values())):
             status = str(operation.get("status", "running"))
+            progress = 100.0 if status == "completed" else float(operation.get("progress", 0.0) or 0.0)
             rows.append({
                 "id": operation["id"],
                 "project": operation.get("asset_id", ""),
@@ -1236,6 +1238,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "can_undo": bool(operation.get("backup_path") and operation.get("output_commit")
                                  and status == "completed" and not operation.get("undone")),
             })
+        rows.sort(key=lambda row: row["status"] != "running")
         projects = self._all_display_assets()
         for row in rows:
             row["can_select"] = row["project"] in projects
@@ -1255,7 +1258,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif part.get("kind") == "dataset":
             subject = tr("projects.contents.dataset_embedded").format(count=part.get("images", ""))
         if operation.get("undone"):
-            return tr("projects.contents.undone").format(part=subject)
+            return (tr("projects.contents.undone").format(part=subject) if kind == "remove"
+                    else tr("projects.contents.operation.undo_done"))
+        if status == "failed":
+            return tr("projects.transfer.failed")
         if kind == "remove":
             text = tr("projects.contents.removed_part" if status == "completed" else "projects.contents.removing").format(part=subject)
         elif kind:
@@ -2426,7 +2432,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "compact_content":
             self._start_project_operation(asset["id"], tr("projects.contents.compact"),
                 lambda progress, cancel: self._native_io_call("compact_project_file", path, progress, cancel),
-                operation_kind="compact")
+                content_row={"id": "compact", "kind": "compact"}, operation_kind="compact")
         elif action == "rename":
             name = str(data.get("name") or "").strip()
             if name:
@@ -2498,6 +2504,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not asset.get("path"):
             self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
             return
+        inspected = self._inspection_by_asset.get(asset_id, {})
+        card = getattr(inspected.get("details"), "card", None) or inspected.get("card")
+        if card is not None and str(getattr(card, "project_uuid", "")) == asset_id:
+            asset["commit_uuid"] = str(card.commit_uuid)
         operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
         metadata = dict(project_name=self._get_asset_display_name(asset), operation_kind=operation_kind,
@@ -2512,7 +2522,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "progress": 0.0,
             "cancel": cancel,
         }
-        self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="running")
+        self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="running", operation_kind=operation_kind)
         if self._inspection_pipeline is not None:
             self._inspection_pipeline.cancel()
         self._tray_expanded = True

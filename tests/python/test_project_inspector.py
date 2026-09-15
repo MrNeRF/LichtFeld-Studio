@@ -206,8 +206,8 @@ def test_contents_thumbnail_metrics_and_license_use_native_parts():
 
 def test_pending_contents_survive_new_models_and_do_not_restore_removed_saves():
     import json
-    details=_contents_details(save_history=[SimpleNamespace(generation=1),SimpleNamespace(generation=2)],manifest={
-        'contents_removals':json.dumps({'rows':[{'id':'save:1','kind':'save','generation':1,'bytes':38},{'id':'checkpoint:a','kind':'checkpoint','iteration':30,'bytes':210}]})})
+    details=_contents_details(save_history=[SimpleNamespace(generation=1,bytes_added=38),SimpleNamespace(generation=2)],manifest={
+        'contents_removals':json.dumps({'rows':[{'id':'save:1','kind':'save','generation':1,'bytes':400},{'id':'checkpoint:a','kind':'checkpoint','iteration':30,'bytes':210}]})})
     rows=_contents(details)
     assert not any(r['id']=='save:1' and r['action']=='restore' for r in rows)
     pending=[r for r in rows if r['pending']]
