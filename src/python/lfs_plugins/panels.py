@@ -58,7 +58,7 @@ PANEL_SPECS = {
     ),
     "gallery_file": _PanelSpec(
         "lfs_plugins.gallery_file_panel", "GalleryFilePanel", "lfs.gallery_file", "Gallery",
-        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (500, 0),
+        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (680, 0),
         update_policy="dirty", has_poll=True,
     ),
     "bug_report": _PanelSpec(
