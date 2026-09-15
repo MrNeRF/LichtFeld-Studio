@@ -13,6 +13,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "training/components/ppisp.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/Ops.h"
@@ -367,6 +368,43 @@ TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
     release_ctx_arena(ctx);
 }
 #endif
+
+TEST(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
+    constexpr int width = 32;
+    constexpr int height = 32;
+    auto camera = make_camera(width, height);
+    auto model = make_visible_splat(1);
+    model->means_raw().fill_(0.0f);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    PPISP ppisp(100);
+    ppisp.register_frame(0, 0);
+    ppisp.finalize();
+
+    for (const auto& color : {std::array{-0.20f, 0.05f, 0.05f},
+                              std::array{-0.10f, -0.10f, 0.05f}}) {
+        const std::vector<float> sh{
+            (color[0] - 0.5f) / 0.28209479177387814f,
+            (color[1] - 0.5f) / 0.28209479177387814f,
+            (color[2] - 0.5f) / 0.28209479177387814f};
+        model->sh0_raw() = Tensor::from_vector(sh, {1, 1, 3}, Device::CUDA);
+        auto result = gsplat_rasterize_forward(
+            camera, *model, background,
+            0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        auto raw = result->first.image.clone();
+        release_ctx_arena(result->second);
+        ASSERT_LT(raw.min().item<float>(), -0.01f) << "Fixture must reach PPISP with negative radiance";
+        const auto corrected = ppisp.apply(raw, 0, 0).cpu();
+        const auto* pixels = corrected.ptr<float>();
+        for (int c = 0; c < 3; ++c) {
+            for (int p = 0; p < width * height; ++p) {
+                ASSERT_TRUE(std::isfinite(pixels[c * width * height + p]));
+                ASSERT_LE(pixels[c * width * height + p], std::max(color[c], 0.0f) + 1e-4f)
+                    << "channel=" << c << ", pixel=" << p;
+            }
+        }
+    }
+}
 
 TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     // Just test that forward pass doesn't crash
