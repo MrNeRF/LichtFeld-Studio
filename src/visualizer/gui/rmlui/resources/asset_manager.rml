@@ -316,7 +316,6 @@
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
                     <div class="inspector-section-title">{{problem_title}}</div>
                     <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value" data-attr-title="selected_fix_label">{{selected_fix_label}}</span></div>
-                    <button class="btn btn--secondary" data-if="selected_asset_can_locate" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
                     <button class="btn btn--secondary" data-if="selected_fix_requires_action" data-event-click="on_selected_fix">{{selected_fix_label}}</button>
                     <div class="parameter-row" data-if="has_inspector_verify_result"><span class="parameter-label">{{inspector_verify_label}}</span><span class="parameter-value" data-attr-title="inspector_verify_result">{{inspector_verify_result}}</span></div>
                   </div>

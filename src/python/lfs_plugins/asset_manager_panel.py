@@ -474,7 +474,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
         model.bind_func("inspector_has_gallery_action", lambda: (
-            not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+            not self.get_selected_asset_can_locate()
+            and not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+        model.bind_func("open_button_label", lambda: tr(
+            "projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.open"))
         model.bind_func("inspector_gallery_action_tooltip", lambda: self._gallery_account_reason() or (
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
@@ -590,7 +593,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_autosave_newer": lambda: bool(self._selected_details_rows().get("autosave_newer")),
             "inspector_has_details": lambda: bool(self._selected_inspection().get("details")),
             "inspector_card_diagnostic": lambda: str(getattr(self._selected_inspection().get("card"), "diagnostic", "") or ""),
-            "inspector_can_resume": lambda: bool(self._selected_details_rows().get("resumable")),
+            "inspector_can_resume": lambda: self._project_available(self._get_selected_asset() or {}) and bool(self._selected_details_rows().get("resumable")),
             "inspector_operations_expanded": self.get_operations_expanded,
             "inspector_has_saved": lambda: bool(self._selected_details_rows().get("saved")),
             "inspector_has_saved_at": lambda: bool(self._selected_details_rows().get("saved_at")),
@@ -677,7 +680,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "gallery_section_title": "projects.inspector.gallery",
             "file_section_title": "projects.inspector.file",
             "operations_section_title": "projects.inspector.operations",
-            "open_button_label": "projects.action.open",
             "resume_button_label": "projects.action.resume_training",
             "scope_all_label": "projects.sidebar.all_projects",
             "scope_recent_label": "projects.sidebar.recent",
@@ -2039,6 +2041,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "selected_fix_action",
             "selected_asset_file_missing",
             "selected_asset_can_locate",
+            "open_button_label",
             "selected_fix_requires_action",
             "locate_section_title",
             "selected_asset_relocation_candidate",
@@ -2121,7 +2124,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._log_error("Failed to relink .licht project: %s", exc)
 
     def on_load_asset(self, _handle, _ev, args):
-        self._load_asset(self._resolve_event_value(args, _ev, "data-asset-id"))
+        # The action button must not also toggle its containing compact strip.
+        if _ev is not None:
+            self._stop_event(_ev)
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id") or self.get_selected_asset_id()
+        asset = self._asset_dict(asset_id) or {}
+        if str(asset.get("status") or "") in ("MISSING", "IDENTITY_MISMATCH"):
+            self.on_locate_file(None, None, [asset_id])
+        else:
+            self._load_asset(asset_id)
 
     def _dialog_entry(self) -> Optional[Dict[str, Any]]:
         return self._asset_dict(self._dialog_asset_id or self.get_selected_asset_id())
@@ -2554,7 +2565,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
-        if not asset.get("remote_only"):
+        if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})
         items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
