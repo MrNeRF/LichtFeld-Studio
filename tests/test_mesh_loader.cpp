@@ -2,14 +2,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mesh_data.hpp"
+#include "io/formats/ply.hpp"
 #include "io/loaders/mesh_loader.hpp"
+#include "rendering/mesh2splat.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <variant>
 
@@ -92,4 +96,70 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
 
 TEST_F(MeshLoaderTest, MissingFileReturnsError) {
     EXPECT_FALSE(loader_.load(temp_dir_ / "missing.obj").has_value());
+}
+
+TEST_F(MeshLoaderTest, MeshToSplatPreservesCoordinatesThroughPlyExport) {
+    // An offset, tilted, asymmetric triangle makes axis swaps and origin
+    // rotations observable. Exercise both PLY encodings from issue #2135.
+    const std::array points{glm::vec3(1, 2, 3), glm::vec3(5, 2, 4), glm::vec3(1, 4, 5)};
+    const glm::vec3 normal = glm::normalize(glm::cross(points[1] - points[0], points[2] - points[0]));
+    for (const std::string format : {"obj", "ascii", "binary_little_endian"}) {
+        SCOPED_TRACE(format);
+        const auto path = temp_dir_ / (format + (format == "obj" ? ".obj" : ".ply"));
+        std::ofstream file(path, std::ios::binary);
+        if (format == "obj") {
+            for (const auto& p : points)
+                file << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+            file << "f 1 2 3\n";
+        } else {
+            file << "ply\nformat " << format << " 1.0\nelement vertex 3\n"
+                                                "property float x\nproperty float y\nproperty float z\n"
+                                                "element face 1\nproperty list uchar int vertex_indices\nend_header\n";
+            if (format == "ascii") {
+                for (const auto& p : points)
+                    file << p.x << ' ' << p.y << ' ' << p.z << '\n';
+                file << "3 0 1 2\n";
+            } else {
+                for (const auto& p : points) {
+                    const std::array coords{p.x, p.y, p.z};
+                    file.write(reinterpret_cast<const char*>(coords.data()), sizeof(coords));
+                }
+                file.put(3);
+                const std::array<int32_t, 3> indices{0, 1, 2};
+                file.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+            }
+        }
+        file.close();
+        ASSERT_TRUE(file.good());
+        const auto loaded = lfs::io::Loader::create()->load(path);
+        ASSERT_TRUE(loaded.has_value());
+        const auto* mesh = std::get_if<std::shared_ptr<MeshData>>(&loaded->data);
+        ASSERT_NE(mesh, nullptr);
+        Mesh2SplatOptions options;
+        options.resolution_target = 32;
+        auto converted = lfs::rendering::mesh_to_splat(**mesh, options);
+        ASSERT_TRUE(converted.has_value()) << converted.error();
+        const auto exported = temp_dir_ / (format + "_splat.ply");
+        ASSERT_TRUE(lfs::io::save_ply(**converted, {.output_path = exported, .binary = true}).has_value());
+        auto reloaded = lfs::io::Loader::create()->load(exported);
+        ASSERT_TRUE(reloaded.has_value());
+        const auto* splat = std::get_if<std::shared_ptr<SplatData>>(&reloaded->data);
+        ASSERT_NE(splat, nullptr);
+        const auto means = (*splat)->means_raw().cpu();
+        const auto rotations = (*splat)->rotation_raw().cpu();
+        ASSERT_GT(means.size(0), 0u);
+        for (size_t i = 0; i < means.size(0); ++i) {
+            const auto* p = means.ptr<float>() + 3 * i;
+            const glm::vec3 point(p[0], p[1], p[2]);
+            ASSERT_NEAR(glm::dot(point - points[0], normal), 0.0f, 2e-5f);
+            const float u = (point.x - 1.0f) / 4.0f;
+            const float v = (point.y - 2.0f) / 2.0f;
+            ASSERT_GE(u, -1e-5f);
+            ASSERT_GE(v, -1e-5f);
+            ASSERT_LE(u + v, 1.0f + 1e-5f);
+            const auto* q = rotations.ptr<float>() + 4 * i;
+            const glm::vec3 thin_axis = glm::quat(q[0], q[1], q[2], q[3]) * glm::vec3(0, 0, 1);
+            ASSERT_NEAR(std::abs(glm::dot(thin_axis, normal)), 1.0f, 2e-5f);
+        }
+    }
 }
