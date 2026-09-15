@@ -179,6 +179,10 @@ namespace lfs::vis::gui {
         virtual void setPollVisibility(bool visible) { (void)visible; }
         virtual bool isVisibleForAnimation() const { return true; }
         virtual void on_visibility_changed(bool visible) { (void)visible; }
+        // GUI-thread notifications. Retained panels schedule work only when
+        // their host geometry or an external data producer changes.
+        virtual void on_layout_changed() {}
+        virtual void on_content_changed() {}
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
         virtual PanelDirectRenderResult renderDirect(

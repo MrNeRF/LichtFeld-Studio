@@ -2077,8 +2077,11 @@ apply_registered_chrome:
                 if (!validatePanelContract(p, new_space))
                     return false;
                 const bool was_floating = p.space == PanelSpace::Floating;
+                const bool space_changed = p.space != new_space;
                 requested_project_floating_state_.erase(p.id);
                 p.space = new_space;
+                if (space_changed && p.panel)
+                    p.panel->on_layout_changed();
                 ++visibility_revision_;
                 if (!was_floating && new_space == PanelSpace::Floating) {
                     auto& interaction = ensure_floating_interaction_locked(p);

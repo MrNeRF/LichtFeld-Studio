@@ -146,6 +146,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }
         self._layout_class = ""
         self._content_width = 0.0
+        self._host_geometry = None
         self._last_ui_scale = 0.0
         self._list_column_overrides: Dict[str, float] = {}
         self._layout_signature = None
@@ -187,6 +188,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._catalog_verify_cancel: Optional[threading.Event] = None
         self._catalog_verify_thread: Optional[threading.Thread] = None
         self._catalog_epoch_seen: Optional[int] = None
+        self._catalog_unsubscribe: Optional[Callable[[], None]] = None
+        self._worker_notification_lock = threading.Lock()
+        self._worker_notification_pending = False
         self._scan_progress = AssetFolderScanProgress()
         self._scan_stop_requested = False
         self._scan_stopped_visible = False
@@ -197,7 +201,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._panel_mounted = True
         self._mount_generation = 0
         self._backend_load_active = False
-        self._ui_poll_timer: Optional[threading.Timer] = None
         self._catalog_load_failed = False
         self._catalog_notice = ""
         self._folder_scan_error = False
@@ -357,6 +360,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     self.__class__.STORAGE_PATH = storage_path
                     self._last_default_folder_path = default_path
                     self._catalog_epoch_seen = self._catalog_epoch()
+                    self._subscribe_catalog()
                     self._repair_selection()
                     if self._gallery_focus_path:
                         self.focus_gallery(self._gallery_focus_path)
@@ -1246,6 +1250,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._get_selected_asset() or {}
         decorator = self._thumbnail_decorator(self._asset_with_poster(asset)) if asset else "none"
         source = self._thumbnail_source_from_decorator(decorator)
+        created = element is None
         if element is None:
             layout = query(".asset-info-asset-layout") if callable(query) else None
             details = query(".asset-info-details") if callable(query) else None
@@ -1263,7 +1268,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 release(self._info_thumbnail_source)
             self._info_thumbnail_source = source
             element.set_property("decorator", decorator)
-        element.set_property("display", "block" if source else "none")
+        if changed or created:
+            element.set_property("display", "block" if source else "none")
         return changed
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
@@ -2710,7 +2716,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._folder_scan_rerun_target = None
             self._scan_stop_requested = False
             self._scan_stopped_visible = False
-            progress = AssetFolderScanProgress()
+            progress = AssetFolderScanProgress(self._queue_worker_update)
             if target is not None:
                 progress.report(current_root=target[1])
             else:
@@ -2847,7 +2853,31 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._catalog_epoch_seen = epoch
         self._refresh_records(assets=True, folders=True)
         self._dirty_selection()
+        self._start_inspection_refresh()
         return True
+
+    def _subscribe_catalog(self) -> None:
+        subscribe = getattr(self._asset_index, "subscribe", None)
+        if self._catalog_unsubscribe is None and callable(subscribe):
+            self._catalog_unsubscribe = subscribe(self._queue_worker_update)
+
+    def _queue_worker_update(self) -> None:
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if not callable(scheduler):
+            return
+        with self._worker_notification_lock:
+            if self._worker_notification_pending or not self._panel_mounted:
+                return
+            self._worker_notification_pending = True
+            generation = self._mount_generation
+
+        def complete() -> None:
+            with self._worker_notification_lock:
+                self._worker_notification_pending = False
+            if generation == self._mount_generation and self._panel_mounted:
+                self._request_model_update()
+
+        scheduler(complete)
 
     def _start_catalog_verify(self) -> None:
         if not self._asset_index or not self._panel_mounted:
@@ -3032,6 +3062,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         scale_changed = abs(scale - self._last_ui_scale) > 0.001
         self._last_ui_scale = scale
         height = float(popup.client_height or 0) / scale
+        if self._host_geometry:
+            height = self._host_geometry[1]
         if height <= 0:
             return False
         widths = []
@@ -3041,6 +3073,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if value > 0:
                 widths.append(value / scale)
         width = max(widths, default=0.0)
+        if self._host_geometry:
+            width = self._host_geometry[0]
         if width <= 0:
             width = self._content_width
         if width > 0:
@@ -3098,6 +3132,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if scale_changed:
             self._dirty_layout_fields()
         return True
+
+    def on_host_geometry_changed(self, width: float, height: float, scale: float) -> None:
+        """Use native host bounds, which cannot grow with overflowing children."""
+        self._host_geometry = (width / scale, height / scale)
+        self._layout_signature = None
+        self._request_model_update()
 
     def _sync_asset_window_viewport(self, doc=None) -> bool:
         scroll = self._asset_scroll_container(doc)
@@ -3842,7 +3882,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         super().on_mount(doc)
         self._panel_mounted = True
         self._mount_generation += 1
-        self._schedule_slow_poll(self._mount_generation)
         self._doc = doc
         self._subscribe_gallery()
         if self._asset_index is None:
@@ -3857,6 +3896,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._handle:
             self._handle.dirty_all()
         self._catalog_epoch_seen = self._catalog_epoch()
+        self._subscribe_catalog()
+        self._sync_default_folder_path()
         self._refresh_after_project_write()
         if self._asset_index is not None:
             self._start_catalog_verify()
@@ -3866,6 +3907,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_update(self, doc):
         changed = self._sync_panel_space_state()
+        changed = self._sync_default_folder_path() or changed
+        changed = self._refresh_after_project_write() or changed
         changed = self._sync_panel_layout(doc) or changed
         changed = self._sync_info_thumbnail(doc) or changed
         if self._publish_catalog_if_changed():
@@ -3877,35 +3920,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._refresh_records(assets=True)
             changed = True
         return changed
-
-    def _schedule_slow_poll(self, generation: int) -> None:
-        def dispatch() -> None:
-            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-
-            def tick() -> None:
-                if generation != self._mount_generation or not self._panel_mounted:
-                    return
-                try:
-                    changed = self._sync_default_folder_path()
-                    changed = self._refresh_after_project_write() or changed
-                    if changed:
-                        self._request_model_update()
-                    self._last_poll_error = None
-                except Exception as exc:
-                    from .gallery_messages import report_poll_error
-                    self._gallery_notice = report_poll_error(self, exc, "Asset Manager polling failed")
-                    self._dirty_fields("gallery_notice")
-                    self._request_model_update()
-                finally:
-                    self._schedule_slow_poll(generation)
-
-            if callable(scheduler):
-                scheduler(tick)
-
-        timer = threading.Timer(1.0, dispatch)
-        timer.daemon = True
-        self._ui_poll_timer = timer
-        timer.start()
 
     def on_unmount(self, doc):
         if self._gallery_toast_timer:
@@ -3924,16 +3938,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._folder_scan_rerun_target = None
             cancel = self._folder_scan_cancel
             verify_cancel = self._catalog_verify_cancel
-            poll_timer = self._ui_poll_timer
-            self._ui_poll_timer = None
         if cancel is not None:
             cancel.set()
         if verify_cancel is not None:
             verify_cancel.set()
         if self._inspection_pipeline is not None:
             self._inspection_pipeline.close()
-        if poll_timer is not None:
-            poll_timer.cancel()
+        if self._catalog_unsubscribe:
+            self._catalog_unsubscribe()
+            self._catalog_unsubscribe = None
         if self._drag_payload_token is not None:
             cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
             if callable(cancel_drag):

@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from types import SimpleNamespace
 
 from .asset_index import (
@@ -62,19 +62,31 @@ _PRUNED_DIRECTORY_NAMES = frozenset(
 class AssetFolderScanProgress:
     """Worker-side counters for one Asset Manager folder scan."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
         self._lock = threading.Lock()
         self._directories_visited = 0
         self._projects_found = 0
         self._current_root = ""
+        self._on_change = on_change
+        self._last_notification = 0.0
+
+    def _notify(self) -> None:
+        # Progress producers wake the UI at most four times a second. There is
+        # no timer after the worker stops; completion publishes the final state.
+        now = time.monotonic()
+        if self._on_change and now - self._last_notification >= SCAN_BATCH_INTERVAL_S:
+            self._last_notification = now
+            self._on_change()
 
     def add_directory(self) -> None:
         with self._lock:
             self._directories_visited += 1
+        self._notify()
 
     def add_project(self) -> None:
         with self._lock:
             self._projects_found += 1
+        self._notify()
 
     def report(
         self,
@@ -90,6 +102,7 @@ class AssetFolderScanProgress:
                 self._projects_found = projects
             if current_root is not None:
                 self._current_root = current_root
+        self._notify()
 
     def snapshot(self) -> tuple[int, int, str]:
         with self._lock:

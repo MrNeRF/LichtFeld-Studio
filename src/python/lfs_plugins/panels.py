@@ -104,7 +104,7 @@ PANEL_SPECS = {
     "asset_manager": _PanelSpec(
         "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",
         "Projects", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
-        (1100, 700), update_policy="interval",
+        (1100, 700), update_policy="dirty",
     ),
 }
 
@@ -178,6 +178,7 @@ def _register_lazy_panel(lf, name):
         _delegated_instance_methods = frozenset({
             "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
             "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+            "on_host_geometry_changed",
         })
 
         def _load(self):

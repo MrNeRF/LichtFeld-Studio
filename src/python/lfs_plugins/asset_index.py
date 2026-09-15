@@ -578,6 +578,7 @@ class AssetIndex:
         self._projects: Dict[str, Project] = {}
         self._project_by_path: Dict[str, str] = {}
         self._catalog_epoch = 0
+        self._catalog_subscribers: list[Callable[[], None]] = []
         self._assets_snapshot_epoch: Optional[int] = None
         self._assets_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         self._catalog_extra: Dict[str, Any] = {}
@@ -705,6 +706,20 @@ class AssetIndex:
         self._catalog_epoch += 1
         self._assets_snapshot_epoch = None
         self._assets_snapshot = None
+        for callback in tuple(self._catalog_subscribers):
+            callback()
+
+    @_synchronized
+    def subscribe(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Notify changes on the writer thread; callbacks only enqueue UI work."""
+        self._catalog_subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                if callback in self._catalog_subscribers:
+                    self._catalog_subscribers.remove(callback)
+
+        return unsubscribe
 
     @_synchronized
     def catalog_epoch(self) -> int:
