@@ -757,15 +757,9 @@ namespace lfs::vis {
             };
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
-                const float v = rect_h > 1
-                                    ? (static_cast<float>(y) + 0.5f - static_cast<float>(rect_y)) /
-                                          static_cast<float>(rect_h - 1)
-                                    : 0.0f;
+                const float v = splitViewPixelCenterUv(y, rect_y, rect_h);
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
-                    const float u = rect_w > 1
-                                        ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
-                                              static_cast<float>(rect_w - 1)
-                                        : 0.0f;
+                    const float u = splitViewPixelCenterUv(x, rect_x, rect_w);
                     const bool use_left = x < divider;
                     const auto& panel = use_left ? left_panel : right_panel;
                     const auto& data = use_left ? *left_data : *right_data;
@@ -1934,7 +1928,8 @@ namespace lfs::vis {
                 return;
             }
             LOG_TIMER("renderVulkanFrame.buildRenderState");
-            if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
+                plyComparisonUsesOwnedNodeModels(frame_settings.raster_backend)) {
                 // Comparison draws owned node models. Do not concatenate them
                 // into a hidden combined copy just to fill FrameContext.model.
                 scene_manager->getScene().discardUnconsolidatedModelCache();
@@ -3420,7 +3415,9 @@ namespace lfs::vis {
                         ? right_node.node->model.get()
                         : nullptr;
                 const auto* const prepared_combined = scene.peekCombinedModel();
-                const bool render_owned_nodes = left_owned && right_owned;
+                const bool render_owned_nodes =
+                    plyComparisonUsesOwnedNodeModels(frame_settings.raster_backend) &&
+                    left_owned && right_owned;
                 const size_t slot_count = std::max(frame_ctx.scene_state.model_transforms.size(),
                                                    frame_ctx.scene_state.node_visibility_mask.size());
                 if (!left_node.node || !right_node.node) {

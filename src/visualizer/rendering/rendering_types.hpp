@@ -72,6 +72,17 @@ namespace lfs::vis {
         return mode == SplitViewMode::PLYComparison;
     }
 
+    // VkSplat owns one mutable model-input binding set per renderer. A PLY
+    // comparison submits both panels through that renderer in the same frame,
+    // so switching it from one owned node model to another would invalidate the
+    // first panel's in-flight bindings. Keep VkSplat on the combined model and
+    // isolate panels with the node mask; independent rasterizers may render the
+    // node models directly without building that aggregate.
+    [[nodiscard]] inline bool plyComparisonUsesOwnedNodeModels(
+        const lfs::rendering::GaussianRasterBackend backend) {
+        return !lfs::rendering::isVkSplatBackend(backend);
+    }
+
     // Ordered pair of visible splat-node indices for a PLY-comparison offset.
     // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
     [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>
@@ -208,6 +219,15 @@ namespace lfs::vis {
             static_cast<float>(total_width) * PLY_COMPARISON_SPLITTER_MARGIN_FRACTION));
         return std::abs(static_cast<float>(splitViewDividerPixel(total_width, cached_split_position) -
                                            splitViewDividerPixel(total_width, current_split_position))) <= margin;
+    }
+
+    // Normalized texture coordinates address pixel centers at (pixel + 0.5) / extent.
+    // Using extent - 1 here stretches clipped comparison panels by a different amount
+    // whenever their cached widths change, so a divider refresh appears to reframe them.
+    [[nodiscard]] inline float splitViewPixelCenterUv(
+        const int pixel, const int rect_origin, const int rect_extent) {
+        return (static_cast<float>(pixel - rect_origin) + 0.5f) /
+               static_cast<float>(std::max(rect_extent, 1));
     }
 
     enum class SelectionPreviewMode {
