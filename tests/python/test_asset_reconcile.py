@@ -143,9 +143,7 @@ def test_symlink_discovery_suppresses_target_duplicates_and_broken_target_is_mis
 
 
 def test_v5_owner_catalog_migrates_once_with_distinct_backup(tmp_path):
-    source = Path(__file__).resolve().parents[2] / ".codex_tmp" / "am_concept" / "testhome" / "data" / "asset_library" / "library.json"
-    if not source.is_file():
-        source = Path("/home/paja/projects/gaussian-splatting-cuda/.codex_tmp/am_concept/testhome/data/asset_library/library.json")
+    source = Path(__file__).with_name("fixtures") / "asset_library_schema5.json"
     library = tmp_path / "library.json"
     shutil.copy2(source, library)
     index = AssetIndex(library_path=library, default_folder_path=tmp_path / "projects")

@@ -1,0 +1,28 @@
+{
+  "schema_version": 5,
+  "folders": {
+    "default": {
+      "path": "/tmp/projects"
+    }
+  },
+  "projects": {
+    "00000000-0000-4000-8000-000000000005": {
+      "name": "fixture",
+      "path": "/tmp/projects/fixture.licht",
+      "folder_id": "default",
+      "size": 1,
+      "mtime_ns": 1,
+      "fallback_preview_path": "",
+      "file_uuid": "00000000-0000-4000-8000-000000000105",
+      "commit_uuid": "00000000-0000-4000-8000-000000000205",
+      "generation": 1,
+      "created_at_unix_ns": 1,
+      "saved_at_unix_ns": 1,
+      "file_size_bytes": 1,
+      "role": "MASTER",
+      "open_state": "OPEN",
+      "has_preview": false,
+      "status": "AVAILABLE"
+    }
+  }
+}
