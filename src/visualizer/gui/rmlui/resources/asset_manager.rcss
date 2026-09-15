@@ -1228,7 +1228,7 @@
 .asset-col-gallery { flex: 0 1 128dp; min-width: 96dp; max-width: 200dp; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
 .asset-list-header .asset-col, .asset-list-row .asset-col { flex: 0 0 auto; min-width: 0; max-width: none; box-sizing: border-box; height: 24dp; line-height: 24dp; }
-.asset-list-header .asset-col { position: relative; display: flex; flex-direction: row; align-items: center; height: 24dp; padding: 0; }
+.asset-list-header .asset-col { position: relative; display: flex; flex-direction: row; align-items: center; height: 24dp; padding: 0; font-family: Inter; font-size: 12dp; font-weight: 400; }
 .asset-list-column-handle {
     position: absolute;
     right: 0;
@@ -1243,9 +1243,7 @@
 }
 .asset-list-column-handle:hover { border-right-color: #8fb4ff; background-color: rgba(143, 180, 255, 0.18); }
 .asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex: 0 0 auto; min-width: 0; }
-.asset-list-header.show-folder .asset-col-folder,
 .asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
-.asset-list-header.is-wide .asset-col-modified,
 .asset-scroll-shell-list.is-wide .asset-col-modified { display: block; }
 .asset-list-header.gallery-compact .asset-col-gallery,
 .asset-scroll-shell-list.gallery-compact .asset-col-gallery { min-width: 24dp; }
@@ -1393,8 +1391,6 @@
 .asset-shell.is-compact .asset-panel-close, .asset-shell.is-narrow .asset-panel-close { margin-left: 0; }
 .asset-shell.is-medium .asset-import-button { display: none; }
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
-.asset-shell.is-medium .asset-col-folder { display: none; }
-.asset-shell.is-medium .asset-col-name { min-width: 120dp; }
 
 /* The header and rows share one browser column grid at every UI scale. */
 .asset-list-sort { box-sizing: border-box; display: block; width: 100%; min-width: 0; max-width: none; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0; margin: 0; border-width: 0; background-color: transparent; text-align: left; font-size: 12dp; cursor: pointer; }

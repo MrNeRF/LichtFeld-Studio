@@ -31,6 +31,7 @@ from .asset_layout import (
     native_to_dp,
     panel_layout,
     list_columns,
+    list_column_widths,
 )
 from .asset_format import format_size
 from .gallery_transfer_ui import transfer_rows
@@ -4001,21 +4002,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_resize("inspector-height", event)
 
     def _list_column_width(self, column: str) -> float:
-        width = self._asset_window_client_width
-        columns = list_columns(width)
-        widths = {"size": 72.0, "modified": 96.0, "folder": 100.0,
-                  "gallery": columns["gallery"]}
-        widths.update(self._list_column_overrides)
-        if columns["gallery"] == 24:
-            widths["gallery"] = 24.0
-        fixed = columns["size"] * widths["size"] + columns["modified"] * widths["modified"] + columns["folder"] * widths["folder"]
-        gaps = 8.0 * (2 + int(columns["size"]) + int(columns["modified"]) + int(columns["folder"]))
-        remaining = max(0.0, width - 24.0 - 32.0 - gaps - fixed)
-        widths["name"] = self._list_column_overrides.get("name", max(80.0 if width < 420 else 120.0, remaining - widths["gallery"]))
-        if "name" in self._list_column_overrides and "gallery" not in self._list_column_overrides:
-            widths["gallery"] = max(columns["gallery"] if columns["gallery"] == 24 else 96.0,
-                                    remaining - widths["name"])
-        return float(widths[column])
+        return list_column_widths(self._asset_window_client_width, self._list_column_overrides)[column]
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
