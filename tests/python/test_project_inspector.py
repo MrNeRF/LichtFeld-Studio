@@ -143,10 +143,23 @@ def test_contents_saves_have_dates_and_only_older_saves_have_actions():
         SimpleNamespace(generation=1, bytes_added=38, saved_at_unix_ns=10),
         SimpleNamespace(generation=2, bytes_added=412, saved_at_unix_ns=20)]))
     current, older = rows[:2]
-    assert current['label'] == 'Save 2 of 2, 2026-08-27, current'
+    assert current['label'] == 'Save 2 of 2, 2026-08-27'
+    assert current['current'] and not older['current']
+    assert 'A saved state of the project.' in current['tooltip']
     assert not current['removable'] and not current['has_action']
     assert older['action'] == 'restore' and older['removable'] and older['generation'] == 1
     assert older['size'] == '38 B'
+
+    edited = _contents(_contents_details(save_history=[
+        SimpleNamespace(generation=1, kind='AUTOSAVE', saved_at_unix_ns=10,
+                        checkpoint_iteration=12000, planned_iterations=30000, strategy='mrnf', gaussians=1000000),
+        SimpleNamespace(generation=2, kind='CONTENTS', saved_at_unix_ns=20,
+                        source_save_generation=1, operation='dataset_removed')]))
+    saves = [r for r in edited if r['kind']=='save']
+    assert len(saves)==1 and saves[0]['current'] and saves[0]['autosave']
+    assert saves[0]['label']=='Save 1 of 1, 2026-08-27, step 12,000 of 30,000, mrnf, 1.0 M gaussians'
+    assert saves[0]['detail']=='edited 2026-08-27: dataset removed'
+    assert saves[0]['generation']==2
 
 
 def test_contents_checkpoints_only_list_retained_payloads_and_match_sizes_by_identity():
@@ -193,14 +206,16 @@ def test_contents_thumbnail_metrics_and_license_use_native_parts():
 
 def test_pending_contents_survive_new_models_and_do_not_restore_removed_saves():
     import json
-    details=_contents_details(save_history=[SimpleNamespace(generation=1),SimpleNamespace(generation=2)],manifest={
-        'contents_removals':json.dumps({'rows':[{'id':'save:1','kind':'save','generation':1,'bytes':38},{'id':'checkpoint:a','kind':'checkpoint','iteration':30,'bytes':210}]})})
+    details=_contents_details(save_history=[SimpleNamespace(generation=1,bytes_added=38),SimpleNamespace(generation=2)],manifest={
+        'contents_removals':json.dumps({'rows':[{'id':'save:1','kind':'save','generation':1,'bytes':400},{'id':'checkpoint:a','kind':'checkpoint','iteration':30,'bytes':210}]})})
     rows=_contents(details)
-    assert not any(r['id']=='save:1' for r in rows)
+    assert not any(r['id']=='save:1' and r['action']=='restore' for r in rows)
     pending=[r for r in rows if r['pending']]
-    assert len(pending)==2 and sum(r['bytes'] for r in pending)==248
-    assert all(r['disabled'] and not r['removable'] and not r['has_action'] for r in pending)
-    assert all('removed, compact to free' in r['label'] for r in pending)
+    assert len(pending)==1 and pending[0]['bytes']==38
+    assert pending[0]['undo'] and not pending[0]['removable'] and not pending[0]['has_action']
+    assert pending[0]['detail']=='removed, freed by Compact'
+    assert not any(r['kind']=='checkpoint' for r in rows)
+    assert next(r for r in rows if r['id']=='compact')['has_detail']
 
 
 def test_compact_threshold_and_busy_state():

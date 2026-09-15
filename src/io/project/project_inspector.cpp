@@ -532,6 +532,7 @@ namespace lfs::io::project {
             return indices;
         }();
         std::uint64_t previous_end = APPEND_REGION_OFFSET;
+        std::set<std::string> previous_removals;
         for (const std::size_t lineage_index : oldest_first) {
             const auto& commit = lineage[lineage_index];
             const auto& rows = (*lineage_chunks)[lineage_index];
@@ -572,20 +573,6 @@ namespace lfs::io::project {
                     result.retained_checkpoints.push_back(std::move(checkpoint));
                 }
             }
-            std::optional<std::int32_t> checkpoint_iteration;
-            for (const auto& item : live) {
-                if (item.first.fourcc != FOURCC_CKPT) {
-                    continue;
-                }
-                const auto found = checkpoint_indices.find(
-                    item.first.instance_uuid.to_string());
-                if (found != checkpoint_indices.end() &&
-                    result.retained_checkpoints[found->second].header_reachable) {
-                    checkpoint_iteration =
-                        result.retained_checkpoints[found->second].iteration;
-                    break;
-                }
-            }
             result.save_history.push_back(ProjectInspectorSave{
                 .sequence = commit.generation,
                 .generation = commit.generation,
@@ -596,8 +583,117 @@ namespace lfs::io::project {
                                    : 0,
                 .holds_checkpoint = std::ranges::any_of(
                     live, [](const auto& item) { return item.first.fourcc == FOURCC_CKPT; }),
-                .checkpoint_iteration = checkpoint_iteration,
             });
+            auto& save = result.save_history.back();
+            // Read the small metadata chapters from this generation. The bound
+            // checkpoint, not the first UUID in the index, owns its training facts.
+            auto historical = ProjectReader::open_generation(path, commit.generation, reader.reader_options());
+            if (!historical)
+                return std::move(historical).error();
+            std::vector<std::byte> metadata;
+            if (auto read = read_current_json(*historical, FOURCC_SCNG, metadata); !read)
+                return std::move(read).error();
+            if (!metadata.empty()) {
+                auto scene = SceneGraphChapter::from_bytes(metadata);
+                if (!scene)
+                    return std::move(scene).error();
+                auto training = scene->training_model_uuid();
+                if (!training)
+                    return std::move(training).error();
+                if (*training) {
+                    auto node = scene->find(**training);
+                    if (!node)
+                        return std::move(node).error();
+                    if (*node && (*node)->payload && (*node)->payload->fourcc == "CKPT") {
+                        const auto* checkpoint = historical->find(FOURCC_CKPT, (*node)->payload->instance_uuid);
+                        if (checkpoint) {
+                            if (auto header = read_checkpoint_header(*historical, *checkpoint, checkpoint_byte_budget)) {
+                                save.checkpoint_iteration = header->iteration;
+                                save.gaussians = header->num_gaussians;
+                            }
+                        }
+                    }
+                }
+            }
+            if (auto read = read_current_json(*historical, FOURCC_PRMS, metadata); !read)
+                return std::move(read).error();
+            if (!metadata.empty()) {
+                auto parameters = ParametersChapter::from_bytes(metadata);
+                if (!parameters)
+                    return std::move(parameters).error();
+                auto snapshot = parameters->snapshot();
+                if (!snapshot)
+                    return std::move(snapshot).error();
+                save.strategy = snapshot->active_strategy;
+                const auto iterations = parameters->dom().get<std::uint64_t>(
+                    "presets." + save.strategy + ".current.iterations");
+                if (iterations && *iterations > 0)
+                    save.planned_iterations = *iterations;
+            }
+            {
+                if (auto read = read_current_json(*historical, FOURCC_PROJ, metadata); !read)
+                    return std::move(read).error();
+                if (!metadata.empty()) {
+                    auto project = ProjectChapter::from_bytes(metadata);
+                    if (!project)
+                        return std::move(project).error();
+                    const auto& dom = project->dom();
+                    std::set<std::string> removals;
+                    std::string legacy_removal;
+                    if (const auto pending = dom.get_json("contents_removals");
+                        pending && pending->is_object() &&
+                        pending->value("file_uuid", std::string{}) == historical->superblock().file_uuid.to_string() &&
+                        pending->contains("rows") && (*pending)["rows"].is_array()) {
+                        for (const auto& part : (*pending)["rows"]) {
+                            if (!part.is_object())
+                                continue;
+                            const auto id = part.value("id", std::string{});
+                            removals.insert(id);
+                            if (!previous_removals.contains(id))
+                                legacy_removal = part.value("kind", std::string{}) + "_removed";
+                        }
+                    }
+                    previous_removals = std::move(removals);
+                    if (save.kind == CommitKind::Explicit &&
+                        dom.get<std::string>("contents_edit.file_uuid").value_or("") == historical->superblock().file_uuid.to_string() &&
+                        dom.get<std::uint64_t>("contents_edit.first_generation").value_or(0) <= commit.generation &&
+                        dom.get<std::uint64_t>("contents_edit.last_generation").value_or(0) >= commit.generation) {
+                        save.kind = CommitKind::Contents;
+                    }
+                    // Older Contents removals used EXPLICIT but wrote a durable
+                    // removal record. A newly added record proves that edit.
+                    if (save.kind == CommitKind::Explicit && !legacy_removal.empty() && result.save_history.size() > 1) {
+                        const auto& source = result.save_history[result.save_history.size() - 2];
+                        const bool derived = source.kind == CommitKind::Contents || source.kind == CommitKind::Compaction;
+                        save.kind = CommitKind::Contents;
+                        save.operation = legacy_removal;
+                        save.source_save_generation = derived ? source.source_save_generation : source.generation;
+                        save.source_saved_at_unix_ns = derived ? source.source_saved_at_unix_ns : source.saved_at_unix_ns;
+                        save.source_save_kind = derived ? source.source_save_kind : source.kind;
+                        previous_end = commit.committed_file_end;
+                        continue;
+                    }
+                    if (save.kind != CommitKind::Contents && save.kind != CommitKind::Compaction) {
+                        previous_end = commit.committed_file_end;
+                        continue;
+                    }
+                    save.operation = save.kind == CommitKind::Compaction ? "compacted"
+                                                                         : dom.get<std::string>("contents_edit.operation").value_or("changed");
+                    save.source_save_generation = dom.get<std::uint64_t>("contents_edit.source_save.generation").value_or(0);
+                    save.source_saved_at_unix_ns = dom.get<std::uint64_t>("contents_edit.source_save.saved_at_unix_ns").value_or(0);
+                    const auto kind = dom.get<std::uint32_t>("contents_edit.source_save.kind").value_or(1);
+                    if (kind >= 1 && kind <= 3)
+                        save.source_save_kind = static_cast<CommitKind>(kind);
+                    if (save.source_saved_at_unix_ns != 0) {
+                        save.checkpoint_iteration = dom.get<std::int32_t>("contents_edit.source_save.checkpoint_iteration");
+                        save.planned_iterations = dom.get<std::uint64_t>("contents_edit.source_save.planned_iterations");
+                        save.gaussians = dom.get<std::uint32_t>("contents_edit.source_save.gaussians");
+                        save.strategy = dom.get<std::string>("contents_edit.source_save.strategy").value_or("");
+                    }
+                    if (save.kind == CommitKind::Compaction)
+                        save.source_save_generation = save.generation;
+                }
+            }
             previous_end = commit.committed_file_end;
         }
 
@@ -715,6 +811,10 @@ namespace lfs::io::project {
                 return std::move(snapshot).error();
             }
             result.parameters.active_strategy = snapshot->active_strategy;
+            const auto iterations = parsed->dom().get<std::uint64_t>(
+                "presets." + snapshot->active_strategy + ".current.iterations");
+            if (iterations && *iterations > 0)
+                result.parameters.planned_iterations = *iterations;
             parameter_dataset_path = snapshot->dataset.data_path;
             auto embedded = parsed->embedded_dataset();
             if (!embedded) {

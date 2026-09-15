@@ -208,6 +208,8 @@ class ProjectCommitKind(enum.Enum):
 
     COMPACTION = 4
 
+    CONTENTS = 5
+
 class ProjectRowKind(enum.Enum):
     LIVE = 0
 
@@ -380,6 +382,27 @@ class ProjectInspectorSave:
     @property
     def checkpoint_iteration(self) -> int | None: ...
 
+    @property
+    def planned_iterations(self) -> int | None: ...
+
+    @property
+    def strategy(self) -> str: ...
+
+    @property
+    def gaussians(self) -> int | None: ...
+
+    @property
+    def operation(self) -> str: ...
+
+    @property
+    def source_save_generation(self) -> int: ...
+
+    @property
+    def source_saved_at_unix_ns(self) -> int: ...
+
+    @property
+    def source_save_kind(self) -> ProjectCommitKind: ...
+
 class ProjectInspectorChapter:
     @property
     def fourcc(self) -> str: ...
@@ -438,6 +461,9 @@ class ProjectInspectorSceneGraph:
     def training_node_id(self) -> str | None: ...
 
 class ProjectInspectorParameters:
+    @property
+    def planned_iterations(self) -> int | None: ...
+
     @property
     def active_strategy(self) -> str: ...
 
@@ -866,3 +892,5 @@ def save_image(path: str | os.PathLike, image: lichtfeld.Tensor, include_provena
     """
     Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
     """
+
+def undo_contents_removal(path: str | os.PathLike, id: str) -> ProjectInspectorCard: ...

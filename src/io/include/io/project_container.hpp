@@ -162,6 +162,9 @@ namespace lfs::io::project {
         Autosave = 2,
         Recovered = 3,
         Compaction = 4,
+        // Inspector classification from generation-scoped PROJ provenance.
+        // Contents writes retain the Explicit wire kind for older readers.
+        Contents = 5,
     };
 
     // Chunk payload entropy encodings (wire u16 / index-row u8).
@@ -590,6 +593,9 @@ namespace lfs::io::project {
         bool private_staging = false;
         std::function<void(float, const std::string&)> progress;
         std::function<bool()> cancel;
+        // Optional PROJ metadata prepared by a closed-file Contents operation.
+        // It is published atomically with the compacted file.
+        std::vector<std::byte> project_chapter_override;
     };
 
     class LFS_IO_API ProjectWriter {
