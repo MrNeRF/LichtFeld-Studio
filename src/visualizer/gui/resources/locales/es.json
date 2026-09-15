@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "Preparando escena",
   "gallery.transfer.phase.applying": "Aplicando cambios de la Galería",
   "projects.gallery.error.account_changed": "La cuenta cambió. Revisa la galería antes de continuar.",
-  "projects.gallery.error.access": "Conecta tu cuenta en la barra de menús",
+  "projects.gallery.error.access": "El acceso a la galería no está disponible.",
   "projects.gallery.error.save": "No se pudo guardar el proyecto. La copia o descarga se conserva; resuelve el error antes de continuar.",
   "projects.gallery.error.link": "Revisa el vínculo del proyecto con la galería.",
   "projects.gallery.error.empty": "No hay splats visibles para publicar.",

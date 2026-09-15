@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "Przygotowywanie sceny",
   "gallery.transfer.phase.applying": "Stosowanie zmian z Galerii",
   "projects.gallery.error.account_changed": "Konto się zmieniło. Sprawdź galerię przed kontynuowaniem.",
-  "projects.gallery.error.access": "Połącz konto na pasku menu",
+  "projects.gallery.error.access": "Dostęp do galerii jest niedostępny.",
   "projects.gallery.error.save": "Nie można zapisać projektu. Kopia lub pobrany plik pozostaje; usuń błąd zapisu.",
   "projects.gallery.error.link": "Sprawdź połączenie tego projektu z galerią.",
   "projects.gallery.error.empty": "Brak widocznych splatów do opublikowania.",

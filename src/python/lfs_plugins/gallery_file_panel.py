@@ -116,7 +116,6 @@ class GalleryFilePanel(Panel):
             "error": lambda: self._error,
             "has_error": lambda: bool(self._error),
             "waiting": lambda: bool(self._state.get("busy")),
-            "disconnected": lambda: not bool(self._state.get("signed_in")) or bool(self._state.get("relink_required")),
         }
         for name, getter in values.items():
             model.bind_func(name, getter)

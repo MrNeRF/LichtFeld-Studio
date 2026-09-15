@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "シーンを準備中",
   "gallery.transfer.phase.applying": "ギャラリーの変更を適用中",
   "projects.gallery.error.account_changed": "アカウントが変わりました。続行する前にギャラリーを確認してください。",
-  "projects.gallery.error.access": "メニューバーでアカウントを接続してください",
+  "projects.gallery.error.access": "ギャラリーへのアクセスは利用できません。",
   "projects.gallery.error.save": "プロジェクトを保存できませんでした。バックアップやダウンロードは保持されています。保存エラーを解消してください。",
   "projects.gallery.error.link": "このプロジェクトのギャラリーリンクを確認してください。",
   "projects.gallery.error.empty": "公開できる表示中のスプラットがありません。",

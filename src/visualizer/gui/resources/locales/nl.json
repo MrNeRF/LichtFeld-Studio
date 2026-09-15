@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "Scène voorbereiden",
   "gallery.transfer.phase.applying": "Galerijwijzigingen toepassen",
   "projects.gallery.error.account_changed": "Het account is gewijzigd. Controleer de galerij voordat u doorgaat.",
-  "projects.gallery.error.access": "Verbind je account via de menubalk",
+  "projects.gallery.error.access": "Toegang tot de galerij is niet beschikbaar.",
   "projects.gallery.error.save": "Het project kon niet worden opgeslagen. Back-up of download blijft behouden; los de opslagfout op.",
   "projects.gallery.error.link": "Controleer de galerijkoppeling van dit project.",
   "projects.gallery.error.empty": "Er zijn geen zichtbare splats om te publiceren.",

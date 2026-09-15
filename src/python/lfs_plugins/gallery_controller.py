@@ -697,6 +697,11 @@ class GalleryController:
 
     def refresh(self):
         self._check_identity()
+        if not self.service.snapshot().get("signed_in"):
+            self._refresh_requested = False
+            self._message = ""
+            self._refresh_model()
+            return
         self._refresh_requested = True
         if not self.service.busy:
             self._refresh_requested = False
