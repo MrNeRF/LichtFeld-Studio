@@ -12,6 +12,12 @@
     border-color: @{border};
 }
 
+.asset-size-menu {
+    background-color: @{surface};
+    color: @{text};
+    border-color: @{border};
+}
+
 /* ── Toolbar ─────────────────────────────────────────────── */
 
 .asset-button {

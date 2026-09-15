@@ -141,6 +141,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._tray_height = 120.0
         self._inspector_expanded = False
         self._quick_look_visible = False
+        self._thumbnail_menu_visible = False
         self._thumbnail_sizes = {
             "compact": 112.0,
             "narrow": 136.0,
@@ -421,6 +422,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("search_is_empty", lambda: not self._search_query)
         model.bind("selected_folder_id", lambda: self._selected_folder_id or SCOPE_ALL, self._set_scope_value)
         model.bind("thumbnail_size", self.get_thumbnail_size, self.set_thumbnail_size)
+        model.bind_func("thumbnail_menu_visible", lambda: self._thumbnail_menu_visible)
+        model.bind_func("thumbnail_reset_label", lambda: tr("common.reset"))
         model.bind_func("is_gallery_view", lambda: self._view_mode == "gallery")
         model.bind_func("is_list_view", lambda: self._view_mode == "list")
         model.bind_func("sort_label", self.get_sort_label)
@@ -760,6 +763,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("open_sort_menu", self.open_sort_menu),
             ("close_quick_look", self.close_quick_look),
             ("open_view_menu", self.open_view_menu),
+            ("close_thumbnail_menu", self.close_thumbnail_menu),
+            ("reset_thumbnail_size", self.reset_thumbnail_size),
             ("open_filter_menu", self.open_filter_menu),
             ("toggle_inspector", self.toggle_inspector),
             ("toggle_inspector_section", self.toggle_inspector_section),
@@ -1803,9 +1808,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             {"label": tr("projects.gallery.action.grid"), "action": "gallery"},
             {"label": tr("projects.gallery.action.list"), "action": "list"},
             *self._sort_menu_items(),
-            {"label": f"{tr('projects.toolbar.thumbnail_size')} 112", "action": "thumbnail:112", "separator_before": True},
-            {"label": f"{tr('projects.toolbar.thumbnail_size')} 208", "action": "thumbnail:208"},
-            {"label": f"{tr('projects.toolbar.thumbnail_size')} 320", "action": "thumbnail:320"},
+            {"label": tr("projects.property.size") + " ›", "action": "thumbnail", "separator_before": True},
             {"label": tr("projects.action.check_gallery"), "action": "check_gallery", "separator_before": True},
             {"label": tr("projects.action.rescan_folders"), "action": "rescan_folders"},
         ]
@@ -1816,14 +1819,26 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self.set_view_mode(None, None, [action])
             elif action.startswith(("sort:", "order:")):
                 self._choose_sort(action)
-            elif action.startswith("thumbnail:"):
-                self.set_thumbnail_size(action.partition(":")[2])
+            elif action == "thumbnail":
+                self._thumbnail_menu_visible = True
+                self._dirty_fields("thumbnail_menu_visible")
             elif action == "check_gallery":
                 self._gallery_command("refresh")
             elif action == "rescan_folders":
                 self.refresh_catalog(scan_folders=True)
 
         self._show_shared_context_menu(items, choose)
+
+    def close_thumbnail_menu(self, _handle=None, _ev=None, _args=None) -> None:
+        if self._thumbnail_menu_visible:
+            self._thumbnail_menu_visible = False
+            self._dirty_fields("thumbnail_menu_visible")
+
+    def reset_thumbnail_size(self, _handle=None, _ev=None, _args=None) -> None:
+        self.set_thumbnail_size({
+            "compact": 112.0, "narrow": 136.0,
+            "medium": 168.0, "wide": 168.0,
+        }.get(self._layout_class, 168.0))
 
     def _add_folder_from_path(self, directory: str, *, recursive: bool = True) -> Optional[str]:
         if not self._asset_index or not directory.strip():
@@ -3121,6 +3136,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "asset_gallery_top_spacer_height",
                 "asset_gallery_bottom_spacer_height",
                 "asset_card_slot_width",
+                "asset_card_thumbnail_height",
                 "asset_list_wide",
                 "asset_list_show_folder",
                 "asset_list_gallery_compact",
@@ -3394,10 +3410,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         container = event.current_target()
         target = event.target()
         if rml_widgets.find_ancestor_with_attribute(target, "data-thumbnail-size", container) is not None:
-            self.set_thumbnail_size({
-                "compact": 112.0, "narrow": 136.0,
-                "medium": 168.0, "wide": 168.0,
-            }.get(self._layout_class, 168.0))
+            self.reset_thumbnail_size()
             self._stop_event(event)
             return
         resize_element = rml_widgets.find_ancestor_with_attribute(
@@ -3661,6 +3674,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             key = int(event.get_parameter("key_identifier", "0"))
         except (TypeError, ValueError):
             key = 0
+        if key == KI_ESCAPE and self._thumbnail_menu_visible:
+            self.close_thumbnail_menu()
+            self._stop_event(event)
+            return True
         if key == KI_ESCAPE and self._quick_look_visible:
             self.close_quick_look()
             self._stop_event(event)
@@ -4043,6 +4060,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return changed
 
     def on_unmount(self, doc):
+        self._thumbnail_menu_visible = False
         if self._gallery_toast_timer:
             self._gallery_toast_timer.cancel()
             self._gallery_toast_timer = None

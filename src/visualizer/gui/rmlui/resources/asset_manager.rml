@@ -387,6 +387,20 @@
         </div>
       </div>
 
+      <div class="asset-size-layer" data-if="thumbnail_menu_visible">
+        <div class="asset-size-dismiss" data-event-click="close_thumbnail_menu"></div>
+        <div class="asset-size-menu">
+          <div class="asset-size-heading">
+            <span class="asset-size-title">{{thumbnail_size_label}}</span><span>{{thumbnail_size}}</span>
+            <button class="asset-button asset-button--icon asset-button--toolbar24" data-event-click="close_thumbnail_menu" data-tooltip="common.close" aria-label="{{close_label}}"><span class="asset-button-glyph">&#215;</span></button>
+          </div>
+          <div class="asset-size-controls">
+            <input id="asset-thumbnail-menu-slider" class="asset-thumbnail-slider" type="range" min="112" max="320" step="8" data-thumbnail-size="true" data-value="thumbnail_size" aria-label="{{thumbnail_size_label}}"/>
+            <button class="asset-button asset-button--text asset-button--toolbar24" data-event-click="reset_thumbnail_size"><span>{{thumbnail_reset_label}}</span></button>
+          </div>
+        </div>
+      </div>
+
       <div class="asset-quick-look" data-if="quick_look_visible">
         <div class="asset-quick-look-card">
           <div class="asset-quick-look-heading">
