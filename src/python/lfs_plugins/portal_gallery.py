@@ -124,6 +124,7 @@ class PortalGalleryClient:
         self.expected_session = expected_session
         self.revision_domains = revision_domains
         self.list_etag = None
+        self.change_sequence = None
         self.max_file_bytes = None
         self.storage_hosts = None
         self._logged_storage_hosts = set()
@@ -176,25 +177,75 @@ class PortalGalleryClient:
             raise PortalProtocolError("Missing gallery revision tokens")
         return {"baseRevisions": tokens}
 
-    def list_scenes(self, etag=None):
+    def list_scenes(self, etag=None, *, owner_wide=False, origin_project_uuid=None):
+        # Old portals hash only page one. A conditional walk is safe only after
+        # this owner has advertised the change-sequence contract.
+        etag = etag if owner_wide and not origin_project_uuid else None
         try:
-            return self._list_pages(etag)
+            return self._list_pages(etag, origin_project_uuid)
         except PortalHTTPError as exc:
             if exc.status != 400 or "gallery listing expired" not in exc.error.lower():
                 raise
-            return self._list_pages(None)
+            return self._list_pages(None, origin_project_uuid)
 
-    def share_link(self, scene_id):
-        result = self._request("POST", f"/splats/{_identifier(scene_id)}/share-link", {})
+    def changes_since(self, since):
+        if type(since) is not int or since < 0:
+            raise PortalProtocolError("Invalid gallery change sequence")
+        result, cursor = [], since
+        while True:
+            payload = self._request("GET", "/changes?" + urllib.parse.urlencode({"since": cursor}))
+            changes, sequence = payload.get("changes"), payload.get("changeSequence")
+            if not isinstance(changes, list) or type(sequence) is not int or sequence < cursor:
+                raise PortalProtocolError("Invalid gallery changes")
+            last = cursor
+            for change in changes:
+                number = change.get("changeSequence")
+                if (type(number) is not int or not last < number <= sequence
+                        or change.get("type") not in ("upsert", "delete")
+                        or not isinstance(change.get("sceneId"), str)
+                        or not isinstance(change.get("scene"), dict)
+                        or change["scene"].get("id") != change["sceneId"]):
+                    raise PortalProtocolError("Invalid gallery change event")
+                last = number
+                result.append(change)
+            next_since = payload.get("nextSince")
+            if next_since is None:
+                self.change_sequence = sequence
+                return result
+            if type(next_since) is not int or next_since != last or next_since <= cursor:
+                raise PortalProtocolError("Invalid gallery change pagination")
+            cursor = next_since
+
+    def share_link_details(self, scene_id):
+        path = f"/splats/{_identifier(scene_id)}/share-links"
+        try:
+            payload = self._request("GET", path)
+            links = payload.get("links", payload.get("shareLinks", []))
+            if not isinstance(links, list):
+                raise PortalProtocolError("Invalid gallery share links")
+            result = next((link for link in links if link.get("active")), None)
+            if result is None:
+                result = self._request("POST", path, {"expiresIn": "never"})
+        except PortalHTTPError as exc:
+            if exc.status not in (404, 405):
+                raise
+            result = self._request("POST", f"/splats/{_identifier(scene_id)}/share-link", {})
         if not isinstance(result, dict) or not isinstance(result.get("url"), str):
             raise PortalProtocolError("Invalid gallery share link")
         from .portal_security import portal_url
-        return portal_url(self.account.base_url, result["url"])
+        return {**result, "url": portal_url(self.account.base_url, result["url"])}
 
-    def _list_pages(self, etag):
+    def share_link(self, scene_id):
+        return self.share_link_details(scene_id)["url"]
+
+    def _list_pages(self, etag, origin_project_uuid=None):
         result, cursor, seen = [], None, set()
+        self.change_sequence = None
         while True:
-            query = "?" + urllib.parse.urlencode({"cursor": cursor}) if cursor else ""
+            params = {"cursor": cursor} if cursor else {}
+            if origin_project_uuid:
+                params["originProjectUuid"] = _identifier(origin_project_uuid)
+            query = "?" + urllib.parse.urlencode(params) if params else ""
             if callable(getattr(self.account, "request_response_authenticated", None)):
                 status, headers, raw = self._response(f"/splats{query}", etag=etag if not cursor else None,
                                                        max_bytes=32 * 1024 * 1024)
@@ -210,6 +261,9 @@ class PortalGalleryClient:
                 payload = self._request("GET", f"/splats{query}")
             if not isinstance(payload, dict):
                 raise PortalProtocolError("Invalid gallery list")
+            sequence = payload.get("changeSequence")
+            if not cursor and type(sequence) is int and sequence >= 0:
+                self.change_sequence = sequence
             scenes = payload.get("scenes")
             if not isinstance(scenes, list):
                 raise PortalProtocolError("Invalid gallery list")
@@ -224,6 +278,15 @@ class PortalGalleryClient:
 
     def scene(self, scene_id):
         return self._request("GET", f"/splats/{_identifier(scene_id)}")
+
+    def set_cover(self, scene_id, scene, image, mime_type="image/png"):
+        import base64
+        tokens = {name: scene.get(name + "Revision") for name in ("presentation", "poster")}
+        if not all(isinstance(value, str) and value for value in tokens.values()):
+            raise PortalProtocolError("Missing gallery cover revision tokens")
+        return self._request("PUT", f"/splats/{_identifier(scene_id)}/cover", {
+            "baseRevisions": tokens, "imageBase64": base64.b64encode(image).decode("ascii"),
+            "mimeType": mime_type})
 
     def update(self, scene_id, baseline, **metadata):
         view = metadata.get("viewerSettings", {})
@@ -259,6 +322,21 @@ class PortalGalleryClient:
         cancel = cancel or threading.Event()
         if self.max_file_bytes is None:
             self._request("GET", "/me")
+        try:
+            options = self._request("GET", f"/splats/{_identifier(scene_id)}/download-options")
+        except PortalHTTPError as exc:
+            if exc.status not in (404, 405):
+                raise
+            options = {}
+        if "representations" in options:
+            choices = options["representations"]
+            if not isinstance(choices, list):
+                raise PortalProtocolError("Invalid gallery download options")
+            choice = next((item for item in choices if item.get("format") == "licht"), None)
+            if not choice or choice.get("status") != "ready":
+                raise GalleryTransferCanceled("The viewing copy is being prepared. Resume to check again.")
+            return self._download_representation(scene_id, choice, destination, cancel,
+                checkpoint, on_checkpoint, on_progress, on_message, final_destination)
         payload = self._request("GET", f"/splats/{_identifier(scene_id)}/download")
         scene = payload["scene"]
         total = scene["contentLength"]
@@ -411,6 +489,71 @@ class PortalGalleryClient:
             partial.unlink(missing_ok=True)
             raise
 
+    def _download_representation(self, scene_id, choice, destination, cancel, checkpoint,
+                                 on_checkpoint, on_progress, on_message, final_destination):
+        identifier, total, expected_hash = (choice.get(key) for key in ("representationId", "size", "sha256"))
+        if (not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,160}", identifier)
+                or type(total) is not int or total <= 0 or total > self.max_file_bytes
+                or expected_hash is not None and (not isinstance(expected_hash, str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", expected_hash))):
+            raise PortalProtocolError("Invalid gallery representation")
+        # Build the authenticated route ourselves. Never send credentials to a
+        # download URL supplied by the response.
+        route = f"/splats/{_identifier(scene_id)}/representations/{identifier}"
+        scene = self.scene(scene_id)
+        destination = Path(destination)
+        final = Path(final_destination) if final_destination else destination
+        disk_preflight([(destination, total * 2), (final, total)])
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        partial = destination.with_name("." + destination.name + ".part")
+        if partial.is_symlink() or destination.is_symlink():
+            raise ValueError("Download destination was redirected")
+        saved = dict(checkpoint or {})
+        pin = {"apiRepresentationId": identifier, "sceneId": scene_id, "size": total,
+               "expectedSha256": expected_hash}
+        resume = all(saved.get(key) == value for key, value in pin.items()) and partial.is_file()
+        if not resume or partial.stat().st_size > total:
+            if partial.exists():
+                on_message("The gallery representation changed. Restarting from zero.")
+            partial.unlink(missing_ok=True)
+        offset = partial.stat().st_size if partial.exists() else 0
+        on_checkpoint(pin)
+        flags = os.O_WRONLY | (os.O_APPEND if offset else os.O_CREAT | os.O_EXCL) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            with os.fdopen(os.open(partial, flags, 0o600), "ab" if offset else "wb") as output:
+                if os.fstat(output.fileno()).st_nlink != 1:
+                    raise ValueError("Partial download is linked to another file")
+                while offset < total:
+                    if cancel.is_set():
+                        raise GalleryTransferCanceled("Download paused")
+                    end = min(total, offset + 4 * 1024 * 1024) - 1
+                    status, headers, data = self.account.request_response_authenticated("GET", API + route,
+                        headers={"Range": f"bytes={offset}-{end}"}, max_bytes=end - offset + 1,
+                        expected_session=self.expected_session)
+                    headers = {key.lower(): value for key, value in headers.items()}
+                    if (len(data) != end - offset + 1 or status != 206
+                            or headers.get("content-range") != f"bytes {offset}-{end}/{total}"):
+                        raise GalleryTransferInvalid("Invalid gallery representation range")
+                    output.write(data)
+                    output.flush()
+                    os.fsync(output.fileno())
+                    offset += len(data)
+                    on_progress(offset, total)
+            checksum = _fingerprint(partial, cancel)
+            if expected_hash is not None and checksum != expected_hash:
+                raise GalleryTransferInvalid("Gallery representation checksum failed")
+            validate_download(partial, ".licht", cancel)
+            current = self.scene(scene_id)
+            if domain_tokens(current) != domain_tokens(scene) or current.get("presentationRevision") != scene.get("presentationRevision"):
+                raise GalleryTransferInvalid("The gallery scene changed while downloading. Check gallery again.")
+            on_checkpoint({**pin, "sha256": checksum})
+            os.replace(partial, destination)
+            return scene
+        except (GalleryTransferCanceled, OSError, PortalHTTPError):
+            raise
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
     def _await_processing(self, upload, upload_id, size, cancel, on_processing):
         try:
             return self._await_processing_checked(upload, upload_id, size, cancel, on_processing)
@@ -496,6 +639,7 @@ class PortalGalleryClient:
             if not all(isinstance(tokens.get(name), str) and tokens[name] for name in ("content", "metadata")):
                 raise PortalProtocolError("Missing gallery revision tokens")
         request = {**metadata, "sourceFormat": path.suffix.lower()[1:], "contentLength": size}
+        origin = {key: metadata[key] for key in ("originProjectUuid", "originCommitUuid", "originFileUuid", "clientMutationId") if key in metadata}
         if checkpoint is None:
             checkpoint = {"origin": self.account.base_url, "owner": identity, "sha256": fingerprint,
                           "request": request, "idempotencyKey": str(uuid.uuid4())}
@@ -530,7 +674,7 @@ class PortalGalleryClient:
                       scene_id=(upload.get("scene") or {}).get("id", ""))
             return upload
         if upload.get("status") == "failed" and upload.get("processing", {}).get("retryable"):
-            upload = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"idempotencyKey": checkpoint["idempotencyKey"], "parts": []})
+            upload = self._request("POST", f"/splats/uploads/{upload_id}/complete", {**origin, "idempotencyKey": checkpoint["idempotencyKey"], "parts": []})
         if upload.get("status") in ("processing", "conflict", "failed"):
             return self._await_processing(upload, upload_id, size, cancel, on_processing)
         if upload.get("status") not in ("created", "uploading"):
@@ -605,7 +749,7 @@ class PortalGalleryClient:
         if path.stat().st_size != size or _fingerprint(path, cancel) != fingerprint:
             raise ValueError("The export changed during upload. Export again before retrying.")
         try:
-            result = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"idempotencyKey": checkpoint["idempotencyKey"], "parts": [
+            result = self._request("POST", f"/splats/uploads/{upload_id}/complete", {**origin, "idempotencyKey": checkpoint["idempotencyKey"], "parts": [
                 {"partNumber": n, "etag": parts[n]["etag"]} for n in range(1, part_count + 1)]})
         except PortalHTTPError as exc:
             if exc.status != 409:

@@ -230,9 +230,9 @@ def test_listing_validator_only_on_first_page_and_304():
         calls.append((path, kwargs["headers"]))
         return next(responses)
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
-    assert client.list_scenes(etag='W/"old"') == [{"id": "a"}, {"id": "b"}]
+    assert client.list_scenes(etag='W/"old"', owner_wide=True) == [{"id": "a"}, {"id": "b"}]
     assert client.list_etag == 'W/"first"'
-    assert client.list_scenes(etag=client.list_etag) is None
+    assert client.list_scenes(etag=client.list_etag, owner_wide=True) is None
     assert calls == [(portal_gallery.API + "/splats", {"If-None-Match": 'W/"old"'}),
                      (portal_gallery.API + "/splats?cursor=cursor", {}),
                      (portal_gallery.API + "/splats", {"If-None-Match": 'W/"first"'})]
@@ -322,7 +322,7 @@ def test_expired_listing_restarts_unconditionally_once():
         return 200, {"ETag": 'W/"new"'}, json.dumps({"scenes": [], "nextCursor": "expired"}).encode()
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
     with pytest.raises(PortalHTTPError):
-        client.list_scenes(etag='W/"old"')
+        client.list_scenes(etag='W/"old"', owner_wide=True)
     assert len(calls) == 4
     assert calls[0][1] == {"If-None-Match": 'W/"old"'}
     assert all(not headers for _, headers in calls[1:])
@@ -332,3 +332,73 @@ def test_cached_scene_tokens_cannot_override_an_older_review():
     with pytest.raises(PortalProtocolError, match="Missing gallery revision tokens"):
         client.update(scene["id"], "older-review", title="Edited")
     assert all(call[0] == "GET" for call in calls)
+
+
+def test_old_portal_check_sees_title_changed_on_scene_101():
+    import json
+    calls, title = [], ["Before"]
+    def response(method, path, **kwargs):
+        calls.append((path, kwargs["headers"]))
+        assert not kwargs["headers"]
+        page = ({"scenes": [{"id": str(i)} for i in range(100)], "nextCursor": "page2"}
+                if "cursor=" not in path else {"scenes": [{"id": "101", "title": title[0]}], "nextCursor": None})
+        return 200, {"ETag": '"unchanged-page-one"'}, json.dumps(page).encode()
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
+    assert client.list_scenes()[-1]["title"] == "Before"
+    title[0] = "After"
+    assert client.list_scenes(etag=client.list_etag)[-1]["title"] == "After"
+    assert len(calls) == 4
+
+
+def test_change_feed_walk_pins_sequence_and_rejects_repeated_cursor():
+    pages = iter([
+        {"changeSequence": 12, "nextSince": 11, "changes": [dict(changeSequence=11, type="upsert", sceneId="s", scene={"id": "s"})]},
+        {"changeSequence": 12, "nextSince": None, "changes": [dict(changeSequence=12, type="delete", sceneId="s", scene={"id": "s"})]},
+    ])
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=lambda *_: next(pages)))
+    assert len(client.changes_since(10)) == 2
+    assert client.change_sequence == 12
+    client._request = lambda *_: {"changeSequence": 12, "changes": [], "nextSince": 10}
+    with pytest.raises(PortalProtocolError, match="pagination"):
+        client.changes_since(10)
+
+
+def test_origin_lookup_and_share_links_are_owner_scoped():
+    identifier, calls = str(uuid.uuid4()), []
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        if "originProjectUuid" in path:
+            return {"scenes": [], "nextCursor": None, "changeSequence": 1}
+        if method == "GET":
+            return {"links": []}
+        return {"id": "link", "url": "https://portal.example/gallery/share/example/", "expiresAt": None}
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
+    client.list_scenes(origin_project_uuid=identifier)
+    assert client.share_link_details(identifier)["expiresAt"] is None
+    assert calls[0][1].endswith("originProjectUuid=" + identifier)
+    assert calls[-1][2] == {"expiresIn": "never"}
+
+
+def test_pinned_download_uses_authenticated_ranges_and_checks_digest(tmp_path, monkeypatch):
+    import hashlib
+    data, identifier = b"viewing copy", str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p")
+    choice = dict(representationId="project-pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(), format="licht", status="ready")
+    calls = []
+    def request(method, path, body=None, **kwargs):
+        return {"representations": [choice]} if path.endswith("download-options") else scene
+    def response(method, path, **kwargs):
+        calls.append((path, kwargs))
+        assert kwargs["headers"]["Range"] == f"bytes=0-{len(data)-1}"
+        return 206, {"Content-Range": f"bytes 0-{len(data)-1}/{len(data)}"}, data
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=request, request_response_authenticated=response), expected_session=("test", "session"))
+    client.max_file_bytes = 1024
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *_: None)
+    target = tmp_path / "new.licht"
+    client.download(identifier, target)
+    assert target.read_bytes() == data
+    assert calls[0][1]["expected_session"] == ("test", "session")
+    choice["sha256"] = "0" * 64
+    with pytest.raises(portal_gallery.GalleryTransferInvalid, match="checksum"):
+        client.download(identifier, tmp_path / "bad.licht")
+    assert not (tmp_path / "bad.licht").exists()
