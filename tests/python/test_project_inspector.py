@@ -10,7 +10,6 @@ from lfs_plugins.project_inspector import (
     dialog_model,
     inspection_cache_key,
     operation_actions,
-    reduce_plan_rows,
 )
 
 
@@ -98,34 +97,15 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
     assert model["title"] == "Bicycle"
 
 
-def test_dialog_models_cover_history_reduce_export_license_and_repair():
-    details = SimpleNamespace(save_history=[SimpleNamespace(kind="EXPLICIT", saved_at_unix_ns=0, checkpoint_iteration=30, bytes_added=12, generation=3, holds_checkpoint=True)], license=None)
-    plan = SimpleNamespace(
-        physical_size=100,
-        retained_checkpoints=[SimpleNamespace(iteration=30, bytes=40, scng_bound=True)],
-        embedded_dataset=[],
-        drop_checkpoints=SimpleNamespace(allowed=True, reclaimable_bytes=20, projected_size=80),
-        drop_embedded_dataset=SimpleNamespace(allowed=False, reclaimable_bytes=0, projected_size=100),
-        compact=SimpleNamespace(allowed=True, reclaimable_bytes=10, projected_size=90),
-    )
-    for kind in ("save_history", "reduce_size", "export_as", "update_thumbnail", "set_license", "rename", "repair"):
-        model = dialog_model(kind, entry=_entry(), details=details, plan=plan, format_size=lambda n: f"{n} B", format_time=lambda n: "")
+def test_dialog_models_cover_contents_license_and_file_actions():
+    for kind in ("export_as", "update_thumbnail", "license", "rename", "repair"):
+        model = dialog_model(kind, entry=_entry(), details=SimpleNamespace(license=None))
         assert model["kind"] == kind
-    reduced = reduce_plan_rows(plan, format_size=lambda n: f"{n} B")
-    assert reduced["checkpoints"][0]["locked"] is True
-    assert reduced["drop_dataset_allowed"] is False
 
 
-def test_action_table_includes_operations_only_when_details_are_available():
-    entry = _entry()
-    assert operation_actions(entry, None)[-1]["action"] == "rename"
-    details = SimpleNamespace(
-        storage=SimpleNamespace(dead_ratio=0.289),
-        parameters=SimpleNamespace(embedded_dataset_present=False),
-        references=[SimpleNamespace(kind="dataset", reachable=True)],
-    )
-    actions = {row["action"] for row in operation_actions(entry, details)}
-    assert {"save_history", "reduce_size", "embed_dataset", "export_as", "update_thumbnail", "set_license", "rename"} <= actions
+def test_context_actions_open_contents_and_file_operations():
+    actions = {row["action"] for row in operation_actions(_entry())}
+    assert actions == {"contents", "export_as", "update_thumbnail", "rename"}
 
 
 def _wait(predicate, timeout=2.0):
@@ -278,10 +258,10 @@ def test_license_removal_size_counts_utf8_notice_bytes():
 
 def test_license_form_uses_chooser_and_escapes_custom_text():
     from lfs_plugins.project_dialog import form_content
-    body,_=form_content('set_license',dict(license_choice='custom',license_name='<scan>',license_text='<terms>'),tr=lambda key:key,confirm_label='Save',busy=False,resumable=False)
+    body,_=form_content('license',dict(license_choice='custom',license_name='<scan>',license_text='<terms>'),tr=lambda key:key,confirm_label='Save',busy=False)
     assert 'name="license_choice"' in body and 'name="license_name"' in body and 'name="license_text"' in body
     assert 'name="identifier"' not in body and 'name="notice"' not in body
     assert '&lt;scan&gt;' in body and '&lt;terms&gt;' in body
     for choice in ('CC0-1.0','LicenseRef-Proprietary'):
-        body,_=form_content('set_license',dict(license_choice=choice),tr=lambda key:key,confirm_label='Save',busy=False,resumable=False)
+        body,_=form_content('license',dict(license_choice=choice),tr=lambda key:key,confirm_label='Save',busy=False)
         assert 'name="attribution"' not in body and 'name="license_text"' not in body

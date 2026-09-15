@@ -276,74 +276,31 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     return model
 
 
-def reduce_plan_rows(plan: Any, *, format_size: Callable[[Any], str]) -> dict[str, Any]:
-    checkpoints = list(value(plan, "retained_checkpoints", []) or [])
-    payloads = list(value(plan, "embedded_dataset", []) or [])
-    drop_cp = value(plan, "drop_checkpoints", None)
-    drop_data = value(plan, "drop_embedded_dataset", None)
-    compact = value(plan, "compact", None)
-    return {
-        "physical_size": format_size(value(plan, "physical_size", 0)),
-        "reclaimable_bytes": format_size(
-            int(value(drop_cp, "reclaimable_bytes", 0) or 0)
-            + int(value(drop_data, "reclaimable_bytes", 0) or 0)
-            + int(value(compact, "reclaimable_bytes", 0) or 0)
-        ),
-        "checkpoints": [{"iteration": value(row, "iteration", 0), "bytes": format_size(value(row, "bytes", 0)), "locked": bool(value(row, "scng_bound", False))} for row in checkpoints],
-        "dataset": [{"path": str(value(row, "rel_path", "") or ""), "kind": str(value(row, "kind", "") or ""), "bytes": format_size(value(row, "bytes", 0)), "validated": bool(value(row, "external_replacement_validated", False))} for row in payloads],
-        "drop_checkpoints_allowed": bool(value(drop_cp, "allowed", False)),
-        "drop_dataset_allowed": bool(value(drop_data, "allowed", False)),
-        "projected_checkpoint_size": format_size(value(drop_cp, "projected_size", 0)),
-        "projected_dataset_size": format_size(value(drop_data, "projected_size", 0)),
-        "projected_compact_size": format_size(value(compact, "projected_size", 0)),
-    }
 
 
-def operation_actions(entry: Any, details: Any = None, *, has_operation: bool = False) -> list[dict[str, Any]]:
-    """Single action table shared by Inspector and context menus."""
+def operation_actions(entry: Any) -> list[dict[str, Any]]:
     status = str(value(entry, "status", "READING") or "READING")
-    path = str(value(entry, "path", "") or "")
-    rows: list[dict[str, Any]] = []
-    if not path or status in {"MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER"}:
-        return rows
+    if not value(entry, "path", "") or status in {"MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER"}:
+        return []
     if status == "REPAIR_ONLY":
         return [{"action": "repair", "label": "projects.action.repair"}]
-    if path and status not in {"MISSING", "UNREADABLE", "REPAIR_ONLY", "UNSUPPORTED_NEWER"}:
-        rows.append({"action": "save_history", "label": "projects.action.save_history"})
-    if details is not None:
-        storage = value(details, "storage", None)
-        reclaimable = float(value(storage, "dead_ratio", 0.0) or 0.0)
-        if reclaimable > 0.10:
-            rows.append({"action": "reduce_size", "label": "projects.action.reduce_size"})
-        params = value(details, "parameters", None)
-        if not bool(value(params, "embedded_dataset_present", False)) and any(str(value(ref, "kind", "")).lower() in {"dataset", "images", "data"} for ref in value(details, "references", []) or []):
-            rows.append({"action": "embed_dataset", "label": "projects.action.embed_dataset"})
-        if any(not bool(value(ref, "reachable", False)) for ref in value(details, "references", []) or []):
-            rows.append({"action": "locate_dataset", "label": "projects.action.locate_dataset"})
-    rows.extend([
+    return [
+        {"action": "contents", "label": "projects.contents.title"},
         {"action": "export_as", "label": "projects.action.export_as"},
         {"action": "update_thumbnail", "label": "projects.action.update_thumbnail"},
-        {"action": "set_license", "label": "projects.action.set_license"},
         {"action": "rename", "label": "projects.action.rename"},
-    ])
-    return rows
+    ]
 
 
-def dialog_model(kind: str, *, entry: Any = None, details: Any = None, plan: Any = None, format_size: Callable[[Any], str] = str, format_time: Callable[[Any], str] = str) -> dict[str, Any]:
+def dialog_model(kind: str, *, entry: Any = None, details: Any = None) -> dict[str, Any]:
     """Return a stable model for each Inspector dialog kind."""
     kind = str(kind or "")
-    base = {"kind": kind, "name": str(value(entry, "name", "") or ""), "path": str(value(entry, "path", "") or ""), "rows": []}
-    if kind == "save_history":
-        base["rows"] = [{"kind": str(value(row, "kind", "") or "").rsplit(".", 1)[-1].lower(), "date": format_time(value(row, "saved_at_unix_ns", 0)), "iteration": str(value(row, "checkpoint_iteration", "")) if value(row, "checkpoint_iteration", None) is not None else "", "bytes_added": format_size(value(row, "bytes_added", 0)), "generation": int(value(row, "generation", 0) or 0), "holds_checkpoint": bool(value(row, "holds_checkpoint", False))} for row in value(details, "save_history", []) or []]
-        base["generation"] = max((row["generation"] for row in base["rows"]), default=0)
-    elif kind == "reduce_size":
-        base.update(reduce_plan_rows(plan, format_size=format_size) if plan is not None else {})
-        base["confirm_is_destructive"] = True
-    elif kind == "export_as":
+    base = {"kind": kind, "name": str(value(entry, "name", "") or ""), "path": str(value(entry, "path", "") or "")}
+    if kind == "export_as":
         base.update({"format": "sog", "destination": "", "formats": ["ply", "sog", "ssog", "spz"]})
     elif kind == "update_thumbnail":
         base.update({"sources": ["viewport", "first_dataset", "first_embedded", "image_file"], "source": "first_dataset"})
-    elif kind == "set_license":
+    elif kind == "license":
         license_obj = value(details, "license", None)
         base.update(license_fields(license_obj))
     elif kind == "rename":

@@ -241,10 +241,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dialog_kind = ""
         self._dialog_asset_id = ""
         self._dialog_data: Dict[str, Any] = {}
-        self._dialog_plan = None
         self._dialog_busy = False
-        self._dialog_drop_checkpoints = True
-        self._dialog_drop_dataset = False
         self._dialog_serial = 0
         self._dialog_key = ""
         self._operations_expanded = None
@@ -744,49 +741,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         for field, key in labels.items():
             model.bind_func(field, lambda key=key: tr(key))
 
-        model.bind_func("dialog_visible", lambda: bool(self._dialog_kind))
-        model.bind_func("dialog_kind", lambda: self._dialog_kind)
-        model.bind_func("dialog_title", self.get_dialog_title)
-        model.bind_func("dialog_busy", lambda: self._dialog_busy)
-        model.bind_func("dialog_message", lambda: str(self._dialog_data.get("message", "")))
-        for field in ("name", "path", "identifier", "notice", "destination", "format", "source", "recovery_note"):
-            model.bind("dialog_" + field, lambda field=field: str(self._dialog_data.get(field, "")), lambda value, field=field: self._set_dialog_value(field, value))
-        model.bind_func("dialog_confirm_label", self.get_dialog_confirm_label)
-        model.bind_func("dialog_open_new_label", lambda: tr("projects.action.open_as_new_project"))
-        model.bind_func("dialog_resume_label", lambda: tr("projects.action.resume_from_here"))
-        model.bind_func("dialog_destination_placeholder", lambda: tr("projects.dialog.choose_destination"))
-        model.bind_func("dialog_identifier_placeholder", lambda: tr("projects.property.identifier"))
-        model.bind_func("dialog_notice_placeholder", lambda: tr("projects.property.notice"))
-        model.bind_func("dialog_name_placeholder", lambda: tr("projects.property.display_name"))
-        model.bind_func("dialog_projected_label", lambda: tr("projects.dialog.projected_size"))
-        model.bind_func("dialog_path_label", lambda: tr("projects.property.path"))
-        model.bind_func("dialog_reclaimable_label", lambda: tr("projects.property.reclaimable"))
-        model.bind_func("dialog_keep_latest_label", lambda: tr("projects.dialog.keep_latest_checkpoint"))
-        model.bind_func("dialog_drop_embedded_label", lambda: tr("projects.dialog.drop_embedded_dataset"))
-        model.bind_func("dialog_choose_destination_label", lambda: tr("projects.dialog.choose_destination"))
-        model.bind_func("dialog_current_viewport_label", lambda: tr("projects.dialog.current_viewport"))
-        model.bind_func("dialog_first_dataset_label", lambda: tr("projects.dialog.first_dataset_image"))
-        model.bind_func("dialog_first_embedded_label", lambda: tr("projects.dialog.first_embedded_image"))
-        model.bind_func("dialog_image_file_label", lambda: tr("projects.dialog.image_file"))
-        model.bind_func("dialog_cancel_label", lambda: tr("common.cancel"))
-        model.bind_func("dialog_has_rows", lambda: bool(self._dialog_data.get("rows")))
-        for field in ("path", "message", "reclaimable_bytes", "projected_compact_size"):
-            model.bind_func("dialog_has_" + field, lambda field=field: bool(self._dialog_data.get(field)))
-        for kind in ("save_history", "reduce_size", "export_as", "update_thumbnail", "set_license", "rename", "repair", "locate_dataset"):
-            model.bind_func("dialog_is_" + kind, lambda kind=kind: self._dialog_kind == kind)
-        model.bind_func("dialog_save_ready", lambda: self._dialog_kind == "save_history" and not self._dialog_busy)
-        model.bind_func("dialog_other_ready", lambda: bool(self._dialog_kind) and self._dialog_kind != "save_history" and not self._dialog_busy)
-        model.bind_func("dialog_reclaimable_bytes", lambda: str(self._dialog_data.get("reclaimable_bytes", "")))
-        model.bind_func("dialog_projected_size", lambda: str(self._dialog_data.get("projected_compact_size", "")))
-        model.bind_func("dialog_drop_checkpoints", lambda: self._dialog_drop_checkpoints)
-        model.bind_func("dialog_drop_dataset", lambda: self._dialog_drop_dataset)
-        model.bind_func("inspector_operation_actions", self.get_selected_operation_actions)
-
         model.bind_record_list("folders")
         model.bind_record_list("assets")
-        model.bind_record_list("inspector_operation_rows")
         model.bind_record_list("contents_rows")
-        model.bind_record_list("dialog_rows")
         for event, handler in (
             ("open_gallery", self.on_open_gallery),
             ("toggle_transfer_tray", self.toggle_transfer_tray),
@@ -815,18 +772,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_selected_fix", self.on_selected_fix),
             ("open_project_operation", self.open_project_operation),
             ("contents_action", self.on_contents_action),
-            ("dialog_cancel", self.close_project_dialog),
-            ("dialog_confirm", self.confirm_project_dialog),
-            ("dialog_restore_new", self.dialog_restore_new),
-            ("dialog_resume_here", self.dialog_resume_here),
-            ("dialog_choose_destination", self.dialog_choose_destination),
-            ("dialog_set_format", self.dialog_set_format),
-            ("dialog_set_source", self.dialog_set_source),
-            ("dialog_set_license", self.dialog_set_license),
-            ("dialog_set_name", self.dialog_set_name),
-            ("dialog_select_generation", self.dialog_select_generation),
-            ("dialog_toggle_checkpoints", self.dialog_toggle_checkpoints),
-            ("dialog_toggle_dataset", self.dialog_toggle_dataset),
             ("toggle_operations", self.toggle_operations),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
@@ -835,9 +780,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
         self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
-        self._handle.update_record_list("inspector_operation_rows", self.get_selected_operation_actions())
         self._handle.update_record_list("contents_rows", self.get_contents_rows())
-        self._handle.update_record_list("dialog_rows", self._dialog_data.get("rows", []))
 
     def get_search_query(self) -> str:
         return self._search_query
@@ -1113,38 +1056,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if error is not None:
             self._inspection_errors[asset_id] = str(error)
-            if kind == "details" and self._dialog_kind == "save_history" and self._dialog_asset_id == asset_id:
-                self._dialog_busy = False
-                self._dialog_data.update(message=str(error), blocked=True)
-                self._refresh_project_form()
             if kind == "card":
                 self._dirty_fields("assets", "selected_has_problem", "selected_health_label")
             return
         if kind == "details" and isinstance(result, dict) and "details" in result:
             self._inspection_by_asset.setdefault(asset_id, {})["plan"] = result["plan"]
             result = result["details"]
-        if asset_id != self.get_selected_asset_id() and kind == "details":
-            # Background details are useful for later selection but must not
-            # cause a hidden Inspector to redraw as if it were selected.
-            self._inspection_by_asset.setdefault(asset_id, {})[kind] = result
-        else:
-            self._inspection_by_asset.setdefault(asset_id, {})[kind] = result
+        self._inspection_by_asset.setdefault(asset_id, {})[kind] = result
         if kind == "details":
             iteration = self._details_iteration(result)
             if iteration is not None:
                 self._cache_iteration(asset_id, iteration)
-            if self._dialog_kind == "save_history" and self._dialog_busy and asset_id == self._dialog_asset_id:
-                self._dialog_busy = False
-                self._dialog_data = dialog_model(
-                    "save_history",
-                    entry=self._dialog_entry(),
-                    details=result,
-                    format_size=self._format_size,
-                    format_time=self._format_unix_ns,
-                )
-                if self._handle:
-                    self._handle.update_record_list("dialog_rows", self._dialog_data.get("rows", []))
-                self._refresh_project_form()
         self._refresh_records(assets=True)
         self._dirty_selection()
 
@@ -1188,28 +1110,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             format_size=self._format_size,
             format_time=self._format_unix_ns,
         )
-
-    def get_selected_operation_actions(self) -> List[Dict[str, Any]]:
-        asset = self._get_selected_asset()
-        if not asset:
-            return []
-        details = self._selected_inspection().get("details")
-        rows = operation_actions(
-            asset,
-            details,
-            has_operation=bool(self._project_operations),
-        )
-        keys = {
-            "save_history": "projects.action.save_history",
-            "reduce_size": "projects.action.reduce_size",
-            "embed_dataset": "projects.action.embed_dataset",
-            "locate_dataset": "projects.action.locate_dataset",
-            "export_as": "projects.action.export_as",
-            "update_thumbnail": "projects.action.update_thumbnail",
-            "set_license": "projects.action.set_license",
-            "rename": "projects.action.rename",
-        }
-        return [{**row, "label": tr(keys.get(row["action"], row["label"]))} for row in rows]
 
     def get_operations_expanded(self) -> bool:
         return self._operations_expanded is not False
@@ -1276,7 +1176,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._start_project_operation(asset["id"], tr("projects.action.locate_dataset"),
                     lambda _progress, _cancel: self._native_io_call("set_dataset_reference", path, directory))
         elif action in {"thumbnail", "license"}:
-            self.open_project_operation(None, None, ["update_thumbnail" if action == "thumbnail" else "set_license"])
+            self.open_project_operation(None, None, ["update_thumbnail" if action == "thumbnail" else "license"])
 
     def toggle_operations(self, _handle=None, _ev=None, _args=None) -> None:
         self._operations_expanded = not self.get_operations_expanded()
@@ -2205,7 +2105,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_license", "inspector_license_notice", "selected_project_title",
             "inspector_physical_size", "inspector_dead_bytes", "inspector_reclaimable",
             "inspector_saves", "inspector_autosave_newer", "inspector_has_details",
-            "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
+            "inspector_card_diagnostic", "inspector_can_resume",
             "inspector_operations_expanded", "contents_pending", "contents_has_pending",
             "inspector_gallery_action_label", "inspector_has_gallery_action", "inspector_gallery_action_enabled",
             "inspector_gallery_action_tooltip",
@@ -2215,7 +2115,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "has_catalog_notice",
         )
         if self._handle:
-            self._handle.update_record_list("inspector_operation_rows", self.get_selected_operation_actions())
             self._handle.update_record_list("contents_rows", self.get_contents_rows())
 
     def on_locate_file(self, _handle=None, _ev=None, args=None):
@@ -2305,11 +2204,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_dialog_title(self) -> str:
         return tr({
-            "save_history": "projects.dialog.save_history",
-            "reduce_size": "projects.dialog.reduce_size",
             "export_as": "projects.dialog.export_as",
             "update_thumbnail": "projects.dialog.update_thumbnail",
-            "set_license": "projects.contents.license_chooser",
+            "license": "projects.contents.license_chooser",
             "remove_content": "projects.contents.remove",
             "compact_content": "projects.contents.compact",
             "rename": "projects.dialog.rename_project",
@@ -2317,17 +2214,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "locate_dataset": "projects.dialog.locate_dataset",
         }.get(self._dialog_kind, "projects.inspector.operations"))
 
-    def _set_dialog_value(self, field: str, item: Any) -> None:
-        self._dialog_data[str(field)] = str(item or "")
-        self._dirty_fields("dialog_" + str(field))
-
     def get_dialog_confirm_label(self) -> str:
         return tr({
-            "save_history": "projects.action.resume_from_here",
-            "reduce_size": "projects.action.reduce_size",
             "export_as": "projects.action.export",
             "update_thumbnail": "projects.action.update_thumbnail",
-            "set_license": "common.save",
+            "license": "common.save",
             "remove_content": "projects.contents.remove",
             "compact_content": "projects.contents.compact",
             "rename": "common.save",
@@ -2342,7 +2233,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dialog_data = dict(data or {})
         self._dialog_busy = bool(self._dialog_data.get("busy"))
         if self._handle:
-            self._handle.update_record_list("dialog_rows", self._dialog_data.get("rows", []))
             self._handle.dirty_all()
         self._request_model_update()
         self._show_project_form()
@@ -2353,23 +2243,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._dialog_data["gallery_cover_available"] = bool(asset.get("id") in self._gallery_state.get("links", {}) and self._gallery_scene(asset))
             self._dialog_data["gallery_cover_blocked"] = not self._gallery_state.get("signed_in") or self._gallery_state.get("busy", False)
             self._dialog_data["gallery_cover_reason"] = "projects.gallery.eligibility.busy" if self._gallery_state.get("signed_in") else "projects.gallery.eligibility.connect"
-        if self._dialog_kind == "reduce_size" and self._dialog_plan is not None:
-            plan = self._dialog_plan
-            self._dialog_drop_checkpoints = self._dialog_drop_checkpoints and bool(self._dialog_data.get("drop_checkpoints_allowed"))
-            self._dialog_drop_dataset = self._dialog_drop_dataset and bool(self._dialog_data.get("drop_dataset_allowed"))
-            reclaim = int(getattr(plan.compact, "reclaimable_bytes", 0))
-            if self._dialog_drop_checkpoints:
-                reclaim += int(getattr(plan.drop_checkpoints, "reclaimable_bytes", 0))
-            if self._dialog_drop_dataset:
-                reclaim += int(getattr(plan.drop_embedded_dataset, "reclaimable_bytes", 0))
-            self._dialog_data.update(
-                selected_reclaimable=self._format_size(reclaim),
-                selected_projected_size=self._format_size(max(0, int(plan.physical_size) - reclaim)),
-                drop_checkpoints=self._dialog_drop_checkpoints, drop_dataset=self._dialog_drop_dataset,
-            )
         return form_content(self._dialog_kind, self._dialog_data, tr=tr,
-                            confirm_label=self.get_dialog_confirm_label(), busy=self._dialog_busy,
-                            resumable=bool(self._selected_checkpoint_uuid()))
+                            confirm_label=self.get_dialog_confirm_label(), busy=self._dialog_busy)
 
     def _show_project_form(self) -> None:
         if not self._dialog_kind:
@@ -2379,7 +2254,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         lf.ui.form_dialog(key, self.get_dialog_title(), body, buttons,
                           lambda label, values: self._project_form_result(key, label, values),
                           lambda values: self._project_form_changed(key, values),
-                          width=560 if self._dialog_kind in {"remove_content", "compact_content", "set_license"} else 720)
+                          width=560 if self._dialog_kind in {"remove_content", "compact_content", "license"} else 720)
 
     def _refresh_project_form(self, *, body: bool = True) -> None:
         if not self._dialog_kind:
@@ -2388,22 +2263,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         lf.ui.form_dialog_update(self._dialog_key, buttons, content if body else None)
 
     def _read_project_form(self, values) -> None:
-        for key in ("generation", "destination", "format", "source", "identifier", "notice", "name", "license_choice", "license_name", "license_text", "attribution"):
+        for key in ("destination", "format", "source", "name", "license_choice", "license_name", "license_text", "attribution"):
             if key in values:
                 self._dialog_data[key] = str(values[key])
-        if "drop_checkpoints" in values:
-            self._dialog_drop_checkpoints = bool(values["drop_checkpoints"])
         if "use_gallery_cover" in values:
             self._dialog_data["use_gallery_cover"] = bool(values["use_gallery_cover"])
-        if "drop_dataset" in values:
-            self._dialog_drop_dataset = bool(values["drop_dataset"])
 
     def _project_form_changed(self, key, values) -> None:
         if key != self._dialog_key or not self._dialog_kind:
             return
-        previous = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset, self._dialog_data.get("license_choice"))
+        previous = self._dialog_data.get("license_choice")
         self._read_project_form(values)
-        current = (self._selected_save_generation(), self._dialog_drop_checkpoints, self._dialog_drop_dataset, self._dialog_data.get("license_choice"))
+        current = self._dialog_data.get("license_choice")
         if previous != current:
             # Replace form content after the native control finishes its event.
             self._schedule_ui(lambda: self._refresh_project_form() if key == self._dialog_key else None)
@@ -2417,10 +2288,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if label == tr("projects.dialog.choose_destination"):
             self.dialog_choose_destination()
-        elif self._dialog_kind == "save_history" and label == tr("projects.action.open_as_new_project"):
-            self.dialog_restore_new()
-        elif self._dialog_kind == "save_history" and label == tr("projects.action.resume_from_here"):
-            self.dialog_resume_here()
         else:
             self.confirm_project_dialog()
         # A canceled native picker returns to the same form and its values.
@@ -2431,10 +2298,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dialog_kind = ""
         self._dialog_key = ""
         self._dialog_data = {}
-        self._dialog_plan = None
         self._dialog_busy = False
         if self._handle:
-            self._handle.update_record_list("dialog_rows", [])
             self._handle.dirty_all()
         self._request_model_update()
 
@@ -2450,7 +2315,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         self._dialog_asset_id = asset_id
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
-        if action in {"save_history", "reduce_size"}:
+        if action == "contents":
             self._inspector_expanded = True
             self._operations_expanded = True
             self._dirty_selection()
@@ -2460,53 +2325,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             action,
             entry=asset,
             details=details,
-            plan=self._dialog_plan,
-            format_size=self._format_size,
-            format_time=self._format_unix_ns,
         )
         data["name"] = self._get_asset_display_name(asset)
         self._set_dialog(action, data)
-
-    def _run_dialog_worker(self, function: Callable[[], Any], complete: Callable[[Any, Optional[Exception]], None]) -> None:
-        generation = self._mount_generation
-        key = self._dialog_key
-
-        def worker() -> None:
-            try:
-                result, error = function(), None
-            except Exception as exc:
-                result, error = None, exc
-            self._schedule_ui(lambda: complete(result, error) if generation == self._mount_generation and key == self._dialog_key else None)
-
-        threading.Thread(target=worker, daemon=True, name="ProjectsDialogWorker").start()
-
-    def _on_plan_ready(self, plan: Any, error: Optional[Exception]) -> None:
-        self._dialog_busy = False
-        if error is not None:
-            self._dialog_data["message"] = str(error)
-            self._dialog_data["blocked"] = True
-        else:
-            self._dialog_plan = plan
-            self._dialog_data.update(dialog_model(
-                "reduce_size",
-                entry=self._dialog_entry(),
-                plan=plan,
-                format_size=self._format_size,
-                format_time=self._format_unix_ns,
-            ))
-        if self._handle:
-            self._handle.update_record_list("dialog_rows", self._dialog_data.get("rows", []))
-            self._handle.dirty_all()
-        self._request_model_update()
-        self._refresh_project_form()
-
-    def dialog_select_generation(self, _handle=None, _ev=None, args=None) -> None:
-        value = self._resolve_event_value(args, _ev, "data-generation") or (str(args[0]) if args else "")
-        try:
-            self._dialog_data["generation"] = int(value)
-        except (TypeError, ValueError):
-            self._dialog_data["generation"] = 0
-        self._dirty_fields("dialog_rows")
 
     def dialog_choose_destination(self, _handle=None, _ev=None, _args=None) -> None:
         if self._dialog_kind == "export_as":
@@ -2516,76 +2337,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             path = lf.ui.save_project_file_dialog(source.stem + "-copy.licht", str(source.parent))
         if path:
             self._dialog_data["destination"] = str(path)
-            self._dirty_fields("dialog_destination")
-
-    def dialog_set_format(self, _handle=None, _ev=None, args=None) -> None:
-        if args:
-            self._dialog_data["format"] = str(args[0]).lower()
-            self._dirty_fields("dialog_format")
-
-    def dialog_set_source(self, _handle=None, _ev=None, args=None) -> None:
-        if args:
-            self._dialog_data["source"] = str(args[0])
-            self._dirty_fields("dialog_source")
-
-    def dialog_set_license(self, _handle=None, _ev=None, args=None) -> None:
-        if args:
-            self._dialog_data["identifier"] = str(args[0])
-            self._dirty_fields("dialog_identifier")
-
-    def dialog_set_name(self, _handle=None, _ev=None, args=None) -> None:
-        if args:
-            self._dialog_data["name"] = str(args[0])
-            self._dirty_fields("dialog_name")
-
-    def dialog_toggle_checkpoints(self, _handle=None, _ev=None, _args=None) -> None:
-        self._dialog_drop_checkpoints = not self._dialog_drop_checkpoints
-        self._dirty_fields("dialog_drop_checkpoints")
-
-    def dialog_toggle_dataset(self, _handle=None, _ev=None, _args=None) -> None:
-        self._dialog_drop_dataset = not self._dialog_drop_dataset
-        self._dirty_fields("dialog_drop_dataset")
-
-    def _selected_save_generation(self) -> int:
-        try:
-            return int(self._dialog_data.get("generation") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    def _selected_checkpoint_uuid(self) -> str:
-        details = self._inspection_by_asset.get(self._dialog_asset_id, {}).get("details")
-        checkpoints = list(getattr(details, "retained_checkpoints", []) or []) if details is not None else []
-        generation = self._selected_save_generation()
-        matching = [item for item in checkpoints if int(getattr(item, "source_generation", 0) or 0) == generation]
-        item = max(matching, key=lambda value: int(getattr(value, "iteration", 0) or 0), default=None)
-        return str(getattr(item, "instance_uuid", "") or "") if item is not None else ""
-
-    def dialog_restore_new(self, _handle=None, _ev=None, _args=None) -> None:
-        asset = self._dialog_entry()
-        if not asset:
-            return
-        destination = str(self._dialog_data.get("destination") or "")
-        if not destination:
-            self.dialog_choose_destination()
-            destination = str(self._dialog_data.get("destination") or "")
-        if destination:
-            generation = self._selected_save_generation()
-            self._start_project_operation(
-                asset["id"], "Open save as new project",
-                lambda _progress, _cancel: self._native_io_call("restore_save", asset["path"], generation, destination),
-            )
-            self.close_project_dialog()
-
-    def dialog_resume_here(self, _handle=None, _ev=None, _args=None) -> None:
-        asset = self._dialog_entry()
-        checkpoint_uuid = self._selected_checkpoint_uuid()
-        if not asset or not checkpoint_uuid:
-            return
-        self._start_project_operation(
-            asset["id"], "Resume from here",
-            lambda _progress, _cancel: self._native_io_call("rebind_checkpoint", asset["path"], checkpoint_uuid),
-        )
-        self.close_project_dialog()
 
     def confirm_project_dialog(self, _handle=None, _ev=None, _args=None) -> None:
         action = self._dialog_kind
@@ -2594,19 +2345,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         path = str(asset["path"])
         data = self._dialog_data
-        if action == "save_history":
-            generation = int(data.get("generation") or 0)
-            destination = str(data.get("destination") or "")
-            if not destination:
-                self.dialog_choose_destination()
-                destination = str(data.get("destination") or "")
-            if not destination:
-                return
-            self._start_project_operation(asset["id"], "Restore save", lambda progress, cancel: self._native_io_call("restore_save", path, generation, destination))
-        elif action == "reduce_size":
-            options = {"drop_unbound_checkpoints": self._dialog_drop_checkpoints, "drop_embedded_dataset": self._dialog_drop_dataset}
-            self._start_project_operation(asset["id"], "Reduce project size", lambda progress, cancel: self._native_io_call("reduce_size", path, options, progress, cancel))
-        elif action == "export_as":
+        if action == "export_as":
             destination = str(data.get("destination") or "")
             if not destination:
                 destination = self._choose_export_destination(str(data.get("format") or "sog"))
@@ -2616,7 +2355,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel))
         elif action == "update_thumbnail":
             self._start_thumbnail_operation(asset)
-        elif action == "set_license":
+        elif action == "license":
             try:
                 identifier, notice = license_value(data)
             except ValueError as error:
@@ -2654,7 +2393,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             directory = lf.ui.open_folder_dialog(tr("projects.dialog.select_dataset"), str(Path(path).parent))
             if directory:
                 self._start_project_operation(asset["id"], "Locate dataset", lambda _progress, _cancel: self._native_io_call("set_dataset_reference", path, directory))
-        if action not in {"save_history", "reduce_size", "export_as", "update_thumbnail", "set_license", "rename", "repair", "locate_dataset", "remove_content", "compact_content"}:
+        if action not in {"export_as", "update_thumbnail", "license", "rename", "repair", "locate_dataset", "remove_content", "compact_content"}:
             return
         self.close_project_dialog()
 
@@ -2914,21 +2653,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if details is not None or asset.get("status") == "REPAIR_ONLY":
             labels = {
                 "repair": "projects.action.repair",
-                "save_history": "projects.contents.title",
+                "contents": "projects.contents.title",
                 "embed_dataset": "projects.action.embed_dataset",
                 "locate_dataset": "projects.action.locate_dataset",
                 "export_as": "projects.action.export_as",
                 "update_thumbnail": "projects.action.update_thumbnail",
-                "set_license": "projects.action.set_license",
             }
-            for operation in operation_actions(asset, details):
+            for operation in operation_actions(asset):
                 action = str(operation.get("action") or "")
                 if action == "rename" or action not in labels:
                     continue
                 items.append({
                     "label": tr(labels[action]),
                     "action": "project:" + action,
-                    "separator_before": action == "save_history",
+                    "separator_before": action == "contents",
                 })
         return items
 
