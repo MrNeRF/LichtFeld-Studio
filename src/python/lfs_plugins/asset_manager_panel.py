@@ -3119,10 +3119,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                               results_header_height=header, sidebar_content_height=content)
         self._sidebar_height = layout["sidebar"]
         self._bottom_panel_height = layout["info"]
-        self._main_min_height = (
-            0.0 if self._layout_class in ("compact", "narrow")
-            else layout["main_min_height"]
-        )
+        # The navigator is beside the results. Its old stacked minimum must
+        # not force the browser and Inspector beyond the native host bounds.
+        self._main_min_height = 0.0
         self._dirty_fields("sidebar_height", "bottom_panel_height", "main_min_height")
         if scale_changed:
             self._dirty_layout_fields()

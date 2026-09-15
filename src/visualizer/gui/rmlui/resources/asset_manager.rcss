@@ -1073,11 +1073,11 @@
 
 #asset-main-row {
     display: flex;
-    flex: 1 1 auto;
+    flex: 1 1 0dp;
     overflow: hidden;
 }
 
-.asset-results-stack { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.asset-results-stack { display: flex; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow: hidden; }
 
 .asset-navigator {
     display: flex;
@@ -1114,7 +1114,7 @@
     background-color: rgba(128, 160, 220, 0.45);
 }
 
-#asset-gallery { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+#asset-gallery { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; }
 .asset-gallery-header { flex: 0 0 auto; min-width: 0; }
 .asset-gallery-header-row { min-height: 32dp; display: flex; align-items: center; gap: 8dp; padding: 4dp 12dp; }
 .asset-gallery-header-copy { display: flex; align-items: center; gap: 8dp; min-width: 0; flex: 1; }
@@ -1123,7 +1123,7 @@
 .asset-gallery-header-actions { display: flex; align-items: center; gap: 8dp; min-width: 0; }
 .asset-gallery-empty-search { display: flex; align-items: center; gap: 8dp; white-space: nowrap; }
 .asset-gallery-notice, .gallery-completion, .gallery-empty { padding: 8dp 12dp; }
-.asset-gallery-scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.asset-gallery-scroll { flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .asset-scroll-shell { min-width: 0; }
 
 .asset-card-grid { display: flex; flex-direction: column; gap: 0; padding: 12dp; }
