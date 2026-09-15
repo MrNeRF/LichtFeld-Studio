@@ -421,19 +421,6 @@ def iter_licht_projects(
         pending.extend(reversed(kept_directories))
 
 
-def discover_licht_projects(
-    directory: str,
-    cancel_event: threading.Event | None = None,
-    progress: AssetFolderScanProgress | None = None,
-) -> list[str]:
-    """Recursively list .licht files beneath one Asset Manager folder."""
-    cache = _DirectoryScanCache()
-    try:
-        return list(iter_licht_projects(directory, cancel_event, progress, scan_cache=cache))
-    finally:
-        cache.persist()
-
-
 def scan_asset_folder(
     index: Any,
     folder_id: str,

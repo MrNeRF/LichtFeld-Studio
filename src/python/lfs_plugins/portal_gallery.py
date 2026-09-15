@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 from http.client import IncompleteRead, RemoteDisconnected
 import json
-import logging
 import os
 import shutil
 import time

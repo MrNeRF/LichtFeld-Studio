@@ -21,10 +21,6 @@ def value(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
-def enum_name(obj: Any) -> str:
-    return str(getattr(obj, "name", obj) or "").upper()
-
-
 def inspection_cache_key(entry: Any) -> tuple[Any, ...]:
     """Return the stat and commit identity used by both inspection tiers."""
     stat = value(entry, "stat_identity", {}) or {}
@@ -274,8 +270,6 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     if has_samples:
         model["metrics"] = f"{model['metric_samples']} samples"
     return model
-
-
 
 
 def operation_actions(entry: Any) -> list[dict[str, Any]]:

@@ -18,7 +18,7 @@ from lfs_plugins.asset_index import (
     last_known_gallery_label,
     previous_scene_for,
 )
-from lfs_plugins.asset_watch import discover_licht_projects, scan_asset_folder
+from lfs_plugins.asset_watch import scan_asset_folder
 
 
 def _inspection(project_uuid, commit_uuid=None):
@@ -46,7 +46,7 @@ def test_reconcile_is_order_independent_and_keeps_replacement_reference(tmp_path
 
     def build(order):
         index = AssetIndex(tmp_path / f"{order}-library.json", tmp_path)
-        index.ensure_default_catalog()
+        index.load()
         index.reconcile_observations(
             [AssetObservation(str(p), "default", _inspection(old_id, "old"))],
             folder_ids=["default"],
@@ -72,7 +72,7 @@ def test_overwrite_records_previous_uuid_and_joins_only_the_old_journal_link(tmp
     path.write_bytes(b"0123456789")
     old_id, new_id = str(uuid.uuid4()), str(uuid.uuid4())
     index = AssetIndex(tmp_path / "library.json", tmp_path)
-    index.ensure_default_catalog()
+    index.load()
     index.reconcile_observations(
         [AssetObservation(str(path), "default", _inspection(old_id, "old"))],
         folder_ids=["default"],
@@ -88,7 +88,6 @@ def test_overwrite_records_previous_uuid_and_joins_only_the_old_journal_link(tmp
     links = {old_id: {"sceneId": "scene-1", "state": "equal"}}
     assert entry.previous_project_uuid == old_id
     assert previous_scene_for(entry, links)["sceneId"] == "scene-1"
-    assert index.health_state(entry, links) == "REPLACED_PUBLISHED"
     assert last_known_gallery_label(entry, None) is None
     assert last_known_gallery_label(entry, {"established": True, "links": {}}) == "Not published"
     assert path.stat().st_size == original_stat.st_size
@@ -101,7 +100,7 @@ def test_same_uuid_aliases_and_divergent_commits_are_stored(tmp_path):
     second.write_bytes(b"b")
     project_id = str(uuid.uuid4())
     index = AssetIndex(tmp_path / "library.json", tmp_path)
-    index.ensure_default_catalog()
+    index.load()
     index.reconcile_observations(
         [
             AssetObservation(str(first), "default", _inspection(project_id, "one")),
@@ -114,32 +113,6 @@ def test_same_uuid_aliases_and_divergent_commits_are_stored(tmp_path):
     assert entry.to_dict()["other_paths"]
     assert entry.status == "DIVERGED_COPIES"
     assert fix_action_for_health(entry.status) == "review_copies"
-
-
-def test_symlink_discovery_suppresses_target_duplicates_and_broken_target_is_missing(
-    monkeypatch, tmp_path
-):
-    storage = tmp_path / "storage"
-    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(storage))
-    target = tmp_path / "target.licht"
-    link = tmp_path / "alias.licht"
-    target.write_bytes(b"target")
-    link.symlink_to(target)
-    assert len(discover_licht_projects(str(tmp_path))) == 1
-
-    project_id = str(uuid.uuid4())
-    def inspect(path):
-        if not Path(path).is_file():
-            raise FileNotFoundError(path)
-        return _inspection(project_id, "c")
-
-    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
-    index = AssetIndex(tmp_path / "library.json", tmp_path)
-    index.ensure_default_catalog()
-    scan_asset_folder(index, "default", str(tmp_path))
-    target.unlink()
-    scan_asset_folder(index, "default", str(tmp_path))
-    assert index.get_asset(project_id).status == "MISSING"
 
 
 def test_v5_owner_catalog_migrates_once_with_distinct_backup(tmp_path):
@@ -191,7 +164,7 @@ def test_owner_copy_has_the_four_real_projects_and_folder_removal_keeps_links(tm
 
 def test_library_service_serializes_commands_and_exposes_clean_missing(tmp_path):
     index = AssetIndex(tmp_path / "library.json", tmp_path)
-    index.ensure_default_catalog()
+    index.load()
     with LibraryService(index) as service:
         assert service._worker.is_alive()
         folder = service.add_folder(str(tmp_path / "folder"))

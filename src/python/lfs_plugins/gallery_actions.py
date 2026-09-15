@@ -9,6 +9,14 @@ FILE_PROBLEMS = {"MISSING", "READING", "UNVERIFIED", "UNREADABLE", "UNSUPPORTED"
                  "DUPLICATE", "AMBIGUOUS"}
 
 
+def gallery_quota(facts):
+    quota, used, reserved = (facts.get(key) for key in ("quotaBytes", "usedBytes", "reservedBytes"))
+    if type(quota) is not int or quota < 0 or type(used) is not int or used < 0:
+        return None, 0, None
+    used += reserved if type(reserved) is int and reserved >= 0 else 0
+    return quota, used, max(0, quota - used)
+
+
 def gallery_eligibility(entry, facts):
     reasons = []
     if not facts.get("signed_in", True) or facts.get("relink_required"):
@@ -41,10 +49,8 @@ def gallery_eligibility(entry, facts):
         reasons.append("no_splats")
     if publication.get("externalPayloads"):
         reasons.append("external_payloads")
-    quota, used, reserved = (facts.get(key) for key in ("quotaBytes", "usedBytes", "reservedBytes"))
-    remaining = None
-    if type(quota) is int and type(used) is int and min(quota, used) >= 0:
-        remaining = max(0, quota - used - (reserved if type(reserved) is int and reserved >= 0 else 0))
+    _, _, remaining = gallery_quota(facts)
+    if remaining is not None:
         size = publication.get("preparedBytes")
         replaced = facts.get("replacedBytes", 0)
         replaced = replaced if type(replaced) is int and replaced >= 0 else 0

@@ -11,9 +11,9 @@ from pathlib import Path
 import lichtfeld as lf
 from .gallery_messages import tr, localize_message
 
-from .gallery_controller import asset_sync_state, get_gallery_controller, gallery_actions, gallery_eligibility
+from .gallery_controller import asset_sync_state, get_gallery_controller
+from .gallery_actions import gallery_actions, gallery_quota
 from .asset_index import display_name, last_known_gallery_label, previous_scene_for
-from .gallery_transfer_ui import transfer_rows
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
@@ -652,21 +652,13 @@ class GalleryAssetMixin:
         self._request_model_update()
 
     def _gallery_quota(self):
-        quota, used = self._gallery_quota_values()
+        quota, used, _ = gallery_quota(self._gallery_state)
         if quota is None:
             return ""
         return tr("quota.used", used=f"{used / 1e9:.1f}", quota=f"{quota / 1e9:g}")
 
-    def _gallery_quota_values(self):
-        state = self._gallery_state
-        quota, used = state.get("quotaBytes"), state.get("usedBytes")
-        if type(quota) is not int or quota < 0 or type(used) is not int or used < 0:
-            return None, 0
-        reserved = state.get("reservedBytes")
-        return quota, used + (reserved if type(reserved) is int and reserved >= 0 else 0)
-
     def _gallery_quota_warning(self):
-        quota, used = self._gallery_quota_values()
+        quota, used, _ = gallery_quota(self._gallery_state)
         size = (self._get_selected_asset() or {}).get("file_size_bytes", 0)
         return tr("quota.warning") if quota is not None and size > max(0, quota - used) else ""
 

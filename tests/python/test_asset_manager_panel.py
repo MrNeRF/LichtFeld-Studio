@@ -552,23 +552,6 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["saved_label"]
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
-def test_selecting_project_updates_info_without_rebuilding_rows(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    panel._handle = _Handle()
-    asset = _project()
-    panel._asset_index = _index(assets={asset["id"]: asset})
-
-    panel.toggle_asset_selection(None, None, [asset["id"]])
-
-    assert panel.get_selection_type() == "asset"
-    assert panel.get_selected_asset_name() == "Bicycle"
-    assert panel.get_selected_asset_path() == asset["path"]
-    assert panel.get_selected_asset_has_folder() is True
-    assert "selected_asset_path" in panel._handle.dirty_fields
-    assert "selected_asset_has_folder" in panel._handle.dirty_fields
-    assert "selected_asset_has_relocation_candidate" in panel._handle.dirty_fields
-    assert "has_catalog_notice" in panel._handle.dirty_fields
-    assert "assets" not in panel._handle.records
 
 def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -730,7 +713,7 @@ def test_import_registers_only_selected_licht_project(panel_module):
             calls.append((path, folder_id)) or SimpleNamespace(id=asset["id"]),
             True,
         ),
-        verify_projects=lambda: (0, 1),
+
     )
     panel.refresh_catalog = lambda **_kwargs: None
 
@@ -768,7 +751,7 @@ def test_add_folder_uses_real_directory_picker(panel_module):
     panel._asset_index = _index(
         add_folder=lambda path: calls.append(path)
         or SimpleNamespace(id="selected-folder"),
-        verify_projects=lambda: (0, 0),
+
     )
     panel.refresh_catalog = lambda **_kwargs: None
     panel._scan_asset_folders = lambda **_kwargs: None
@@ -1226,15 +1209,11 @@ def test_toolbar_refresh_does_not_verify_on_ui_thread_then_scans(
     assets = {missing["id"]: missing, present["id"]: present}
     calls = []
 
-    def verify_projects():
-        calls.append("verify")
-        return 1, 2
 
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
     panel._asset_index = _index(
         assets=assets,
-        verify_projects=verify_projects,
     )
     monkeypatch.setattr(panel, "_scan_asset_folders", lambda: calls.append("scan"))
     monkeypatch.setattr(panel, "_start_catalog_verify", lambda: calls.append("verify_bg"))
@@ -1256,7 +1235,7 @@ def test_delete_folder_requires_confirmation_with_project_count(panel_module):
         assets={first["id"]: first, second["id"]: second},
         folders={"projects": {"id": "projects", "name": "Work"}},
         delete_folder=lambda folder_id: deleted.append(folder_id) or True,
-        verify_projects=lambda: (0, 0),
+
     )
     panel.refresh_catalog = lambda **_kwargs: None
 
@@ -1430,7 +1409,7 @@ def test_add_folder_starts_scan(panel_module, monkeypatch):
     scans = []
     panel._asset_index = _index(
         add_folder=lambda _path: SimpleNamespace(id="selected-folder", path="/tmp/assets"),
-        verify_projects=lambda: (0, 0),
+
     )
     monkeypatch.setattr(
         panel,
@@ -1522,7 +1501,7 @@ def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
 
     monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
     panel = panel_module.AssetManagerPanel()
-    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._asset_index = _index()
     panel._scan_asset_folders()
     assert started.wait(timeout=2.0)
 
@@ -1565,7 +1544,7 @@ def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypat
     monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
-    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._asset_index = _index()
     panel._scan_asset_folders()
     assert started.wait(timeout=2.0)
 
@@ -1602,7 +1581,7 @@ def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
     panel._handle = _Handle()
     panel._asset_index = _index(
         add_folder=lambda path: SimpleNamespace(id="selected-folder", path=path),
-        verify_projects=lambda: (0, 0),
+
     )
     panel._add_folder_from_path("/tmp/mrnf_local")
     assert started.wait(timeout=2.0)
@@ -1633,7 +1612,7 @@ def test_on_mount_scans_all_folders_only_before_first_completed_scan(
     )
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
-    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._asset_index = _index()
     monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
     panel_module._folder_scan_completed_in_process = False
 
@@ -1666,7 +1645,7 @@ def test_refresh_during_scan_cancels_and_shows_stopped_status(panel_module, monk
     monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
-    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._asset_index = _index()
     panel._scan_asset_folders()
     assert started.wait(timeout=2.0)
     assert panel.get_scan_active() is True
@@ -1697,7 +1676,7 @@ def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
     monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
-    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._asset_index = _index()
     panel._scan_asset_folders()
     assert started.wait(timeout=2.0)
     assert panel.get_scan_active() is True
@@ -1726,7 +1705,7 @@ def test_use_found_location_relinks_selected_asset(panel_module):
     panel._asset_index = _index(
         assets={asset["id"]: asset},
         relink_asset=lambda asset_id, path: relinked.append((asset_id, path)) or True,
-        verify_projects=lambda: (0, 0),
+
     )
     panel._selected_asset_ids = {asset["id"]}
     panel._selection_cursor_id = asset["id"]
@@ -1765,7 +1744,7 @@ def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
     panel._asset_index = _index(
         assets={asset["id"]: asset},
         relink_asset=lambda asset_id, path: relinked.append((asset_id, path)) or True,
-        verify_projects=lambda: (0, 0),
+
     )
     panel._selected_asset_ids = {asset["id"]}
     panel._selection_cursor_id = asset["id"]
@@ -1802,7 +1781,7 @@ def test_completed_save_registers_new_project_inside_project_location(panel_modu
         find_asset_by_path=lambda _path: None,
         folder_id_for_path=lambda path: "default" if path.startswith("/tmp/projects") else None,
         register_licht_asset=lambda path: registered.append(path) or SimpleNamespace(id="new"),
-        verify_projects=lambda: (0, 0),
+
     )
     polls = [
         {"running": False, "generation": 4, "path": "", "error": ""},
@@ -1822,7 +1801,7 @@ def test_completed_save_outside_folder_is_ignored(panel_module):
         find_asset_by_path=lambda _path: None,
         folder_id_for_path=lambda _path: None,
         register_licht_asset=lambda path: registered.append(path),
-        verify_projects=lambda: (0, 0),
+
     )
     polls = [
         {"running": False, "generation": 4, "path": "", "error": ""},

@@ -36,18 +36,6 @@ SCHEMA_VERSION = 6
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
 
-HEALTH_STATES = frozenset(
-    {
-        "AVAILABLE",
-        "READING",
-        "MISSING",
-        "REPLACED_PUBLISHED",
-        "UNREADABLE",
-        "REPAIR_ONLY",
-        "UNSUPPORTED_NEWER",
-        "DIVERGED_COPIES",
-    }
-)
 HEALTH_FIX_ACTIONS = {
     "AVAILABLE": None,
     "READING": None,
@@ -231,7 +219,6 @@ def fix_action_for_health(state: str) -> Optional[str]:
     return HEALTH_FIX_ACTIONS.get(str(state), "verify")
 
 
-health_fix_action = fix_action_for_health
 
 
 def _path_is_within(path: str, directory: str) -> bool:
@@ -877,15 +864,6 @@ class AssetIndex:
             self._path_key(project.path): project_uuid
             for project_uuid, project in self._projects.items()
         }
-
-    def health_state(self, entry: Any, links_snapshot: Any = None) -> str:
-        state = str(_entry_value(entry, "status", "READING") or "READING")
-        if state == "UNVERIFIED":
-            state = "READING"
-        previous = _entry_value(entry, "previous_project_uuid", "")
-        if previous and previous_scene_for(entry, links_snapshot) is not None:
-            return "REPLACED_PUBLISHED"
-        return state if state in HEALTH_STATES else "READING"
 
     def _observation_from(self, value: Any, folder_id: str = "") -> AssetObservation:
         if isinstance(value, AssetObservation):
@@ -1553,12 +1531,6 @@ class AssetIndex:
             return False
 
     @_synchronized
-    def rebuild_gallery_projection(self, projection):
-        """Deprecated compatibility hook; the journal is joined at read time."""
-        _log.warning("rebuild_gallery_projection is deprecated and is now a no-op")
-        return True
-
-    @_synchronized
     def save(self) -> bool:
         temp_path: Optional[Path] = None
         try:
@@ -1605,10 +1577,6 @@ class AssetIndex:
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
-
-    @_synchronized
-    def ensure_default_catalog(self) -> None:
-        self._initialize_empty()
 
     @_synchronized
     def add_folder(self, directory: str) -> Optional[Folder]:
@@ -1973,14 +1941,6 @@ class AssetIndex:
             if changed:
                 self.save()
             return verified
-
-    def verify_projects(self) -> Tuple[int, int]:
-        with self._lock:
-            asset_ids = list(self._projects)
-        self.verify_projects_batch(asset_ids)
-        with self._lock:
-            unavailable = sum(not project.available for project in self._projects.values())
-            return unavailable, len(self._projects)
 
     @_synchronized
     def list_projects(self, folder_id: Optional[str] = None) -> List[Project]:

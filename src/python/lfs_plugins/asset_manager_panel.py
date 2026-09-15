@@ -43,7 +43,6 @@ from .project_inspector import (
     license_name,
     license_value,
     details_rows,
-    inspection_cache_key,
     operation_actions,
 )
 from .project_dialog import form_content
@@ -65,7 +64,6 @@ PRECISE_SCROLL_STEP = 32.0
 ASSET_LIST_ROW_HEIGHT_DP = 48.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
-ASSET_CARD_GRID_HORIZONTAL_CHROME_DP = 48.0
 ASSET_WINDOW_OVERSCAN_ROWS = 2
 ASSET_LIST_FALLBACK_ROWS = 24
 ASSET_GALLERY_FALLBACK_ROWS = 8
@@ -85,7 +83,7 @@ try:
         resolve_default_asset_directory,
         resolve_asset_manager_storage_path,
     )
-    from .asset_service import LibraryService
+    from .asset_index import LibraryService
 
     BACKEND_AVAILABLE = True
 except ImportError:
@@ -332,35 +330,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._sync_panel_layout()
         if self._handle:
             self._handle.dirty_all()
-
-    def _initialize_backend(self) -> bool:
-        self._catalog_load_failed = False
-        if not BACKEND_AVAILABLE:
-            self._catalog_load_failed = True
-            return False
-        try:
-            storage_path = resolve_asset_manager_storage_path()
-            storage_path.mkdir(parents=True, exist_ok=True)
-            self.STORAGE_PATH = storage_path
-            self.__class__.STORAGE_PATH = storage_path
-            try:
-                index = AssetIndex(
-                    library_path=storage_path / "library.json",
-                    default_folder_path=resolve_default_asset_directory(),
-                )
-            except TypeError:
-                index = AssetIndex()
-            self._library_service = LibraryService(index)
-            self._asset_index = self._library_service.index
-            loaded = self._library_service._call("load")
-            self._last_default_folder_path = str(resolve_default_asset_directory())
-            if not loaded:
-                self._catalog_load_failed = True
-            return loaded
-        except Exception as exc:
-            self._log_error("Failed to initialize Asset Manager: %s", exc)
-            self._catalog_load_failed = True
-            return False
 
     def _start_backend_initialization(self) -> None:
         if self._backend_load_active or not BACKEND_AVAILABLE:
@@ -958,9 +927,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_selected_count(self) -> int:
         return len(self._selected_asset_ids)
 
-    def get_selection_type(self) -> str:
-        return self._selection_type
-
     def get_selected_count_text(self) -> str:
         count = len(self._selected_asset_ids)
         if count == 0:
@@ -1303,10 +1269,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._selected_folder_id not in {*folders, SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES}:
             self._selected_folder_id = SCOPE_ALL
         self._update_selection_type()
-
-    def _repair_selected_folder(self) -> Optional[str]:
-        self._repair_selection()
-        return self._selected_folder_id
 
     def _update_selection_type(self) -> None:
         if len(self._selected_asset_ids) > 1:
@@ -2052,14 +2014,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_selection()
         self._start_inspection_refresh()
         return True
-
-    def toggle_asset_selection(self, _handle, _ev, args):
-        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        self._select_asset_id(
-            asset_id,
-            multi_select=self._event_multi_select(_ev),
-            range_select=self._event_range_select(_ev),
-        )
 
     def _dirty_selection(self) -> None:
         if self._handle:
@@ -3228,10 +3182,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._handle.dirty(field)
         self._request_model_update()
 
-    def _update_all_record_lists(self):
-        self._refresh_records(assets=True, folders=True)
-        return {"counts": {"folders": len(self.get_folder_list()), "assets": len(self.get_filtered_assets())}}
-
     def _dirty_model(self, *fields):
         field_set = set(fields)
         self._refresh_records(
@@ -3384,17 +3334,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         self._asset_window_scroll_top, self._asset_window_client_height, self._asset_window_client_width = values
         return any(abs(before - after) > 0.5 for before, after in zip(old, values))
-
-    def _sync_gallery_card_width(self, doc=None) -> bool:
-        old = self._asset_card_slot_width
-        self._sync_asset_window_viewport(doc)
-        if self._layout_class:
-            self._asset_card_slot_width = grid_slot_width(
-                self._asset_window_client_width, self.get_thumbnail_size()
-            )
-        else:
-            self._asset_card_slot_width = gallery_slot_width(self._asset_window_client_width)
-        return abs(old - self._asset_card_slot_width) > 0.5
 
     def _bind_dom_event_listeners(self, doc) -> None:
         shell = doc.get_element_by_id("asset-shell")
@@ -4280,13 +4219,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _on_close_panel(self, _handle=None, _event=None, _args=None):
         self._dismiss_gallery_undo()
         lf.ui.set_panel_enabled(self.id, False)
-
-    @staticmethod
-    def _log_info(message: str, *args: Any) -> None:
-        text = message % args if args else message
-        logger = getattr(lf, "log", None)
-        log = getattr(logger, "info", None)
-        (log if callable(log) else _log.info)(text)
 
     @staticmethod
     def _log_warn(message: str, *args: Any) -> None:

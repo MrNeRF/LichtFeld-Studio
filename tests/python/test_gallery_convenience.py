@@ -45,7 +45,7 @@ def test_gallery_quota_requires_server_usage(convenience):
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
     assert panel._gallery_quota() == '12.3 GB of 50 GB used'
     panel._gallery_state.update(quotaBytes=100, usedBytes=None)
-    assert panel._gallery_quota_values() == (None, 0)
+    assert panel._gallery_quota() == ''
     panel._gallery_state["usedBytes"] = 84
     local['file_size_bytes'] = 20
     assert 'may not fit' in panel._gallery_quota_warning()

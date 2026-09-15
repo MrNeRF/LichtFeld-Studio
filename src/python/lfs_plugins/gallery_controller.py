@@ -11,7 +11,7 @@ from pathlib import Path
 
 import lichtfeld as lf
 from .gallery_messages import tr, localize_message
-from .gallery_actions import gallery_actions, gallery_eligibility
+from .gallery_actions import gallery_actions
 from .gallery_transfer_ui import TransferEstimate, transfer_metrics, transfer_phase, transfer_rows
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
@@ -735,7 +735,7 @@ class GalleryController:
                     message=localize_message(self._message or state.get("message", "")),
                     actionError=localize_message(self._failure_notice),
                     actionErrorId=(state.get("actionFailure") or {}).get("id", ""),
-                    accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
+                    phase=self.phase(), preparationProgress=self._export_progress,
                     undoPull=copy.deepcopy(self._undo_pull), undoHistory=undo_history,
                     operationProject=self._operation_project,
                     pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
@@ -766,14 +766,9 @@ class GalleryController:
                 identity=state["identity"], jobId=job["id"], project=job["project"])
         return records
 
-    def _account_flow(self):
+    def _account_linking(self):
         account = getattr(self.service, "account", None)
-        if account is None:
-            return {}
-        snap = account.snapshot()
-        return {key: getattr(snap, key, default) for key, default in (
-            ("linking", False), ("user_code", ""), ("verification_uri_complete", ""),
-            ("countdown_seconds", 0), ("error", ""))}
+        return bool(account and getattr(account.snapshot(), "linking", False))
 
     def undo_pull(self, job_id=None):
         if job_id:
@@ -868,7 +863,7 @@ class GalleryController:
         return bool(self.service.busy or self.phase() != "idle" or self._native_use
                     or self._open_continuation or self._refresh_pending or self._refresh_requested or self._cancel_requests
                     or self._resume_queue or self._update_queue or self._batch_current
-                    or getattr(self, "_after_service", None) or self._account_flow().get("linking"))
+                    or getattr(self, "_after_service", None) or self._account_linking())
 
     def _poll_body(self):
         self._check_identity()
