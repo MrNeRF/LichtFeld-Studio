@@ -15,6 +15,23 @@
     min-height: 0;
 }
 
+/* Match the Rendering and Training panels throughout Projects. */
+#content-wrap scrollbarvertical {
+    width: 4dp;
+}
+
+#content-wrap scrollbarvertical sliderbar {
+    min-height: 12dp;
+}
+
+#content-wrap scrollbarhorizontal {
+    height: 4dp;
+}
+
+#content-wrap scrollbarhorizontal sliderbar {
+    min-width: 12dp;
+}
+
 #asset-floating-header {
     min-height: 28dp;
     display: flex;
@@ -668,15 +685,6 @@
 .asset-gallery-scroll scrollbarvertical,
 .asset-gallery-scroll scrollbarhorizontal {
     z-index: 20;
-}
-
-.asset-gallery-scroll::-webkit-scrollbar {
-    height: 8dp;
-    width: 8dp;
-}
-
-.asset-gallery-scroll::-webkit-scrollbar-thumb {
-    border-radius: 4dp;
 }
 
 .asset-list-header,
