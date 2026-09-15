@@ -1,0 +1,28 @@
+diff --git a/configure b/configure
+index 36c4f7af..8c01ca2b 100755
+--- a/configure
++++ b/configure
+@@ -345,16 +345,20 @@ rm -rf conftest*
+ # Construct a path to the specified directory relative to the working directory
+ relative_path() {
+     local base="${PWD%/}"
+-    local path="$(cd "$1" >/dev/null; printf '%s/.' "${PWD%/}")"
++    local path="$(cd "$1" >/dev/null; printf '%s' "${PWD%/}")"
+     local up=''
+ 
+-    while [[ $path != "$base/"* ]]; do
++    while [[ $path != "$base" && $path != "$base/"* ]]; do
+         base="${base%/*}"
+         up="../$up"
+     done
+ 
+-    dirname "$up${path#"$base/"}"
++    if [[ $path = "$base" ]]; then
++        printf '.\n'
++    else
++        printf '%s\n' "$up${path#"$base/"}"
++    fi
+ }
+ 
+ SRCPATH="$(relative_path "$(dirname "$0")")"
+ echo "$SRCPATH" | grep -q ' ' && die "Out of tree builds are impossible with whitespace in source path."
