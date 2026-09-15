@@ -547,35 +547,24 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     ]
     assert panel.get_selected_asset_id() == asset["id"]
 
-def test_gallery_transfers_stay_in_the_footer_tray(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    panel.on_open_gallery()
-    assert panel_module.lf._test_state.opened == []
-    assert panel_module.lf._test_state.enabled == []
+def test_gallery_overlay_details_opens_projects(panel_module, monkeypatch):
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+    monkeypatch.setattr(panel_module.lf.ui, 'request_redraw', lambda: None, raising=False)
+    overlay = GalleryTransferOverlay()
+    overlay._action(None, None, ['details'])
+    assert panel_module.lf._test_state.enabled == [('lfs.asset_manager', True)]
 
+
+def test_gallery_journal_recovery_event_opens_recovery_folder(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    calls, events = [], {}
+    monkeypatch.setattr(panel, '_controller', lambda: SimpleNamespace(command=calls.append))
     model = _BindingModel()
+    model.bind_event = lambda name, handler: events.__setitem__(name, handler)
     panel.on_bind_model(_BindingContext(model))
-    panel._gallery_state["jobs"] = [{
-        "id": "finished", "status": "completed", "completed": 10, "total": 10,
-        "metadata": {"title": "Finished project"},
-    }]
-    assert panel_module.transfer_rows(panel._gallery_state)[0]["title"] == "Finished project"
-    assert "transfer_rows" in (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    events['transfer_open_recovery'](None, None, ['journal'])
+    assert calls == ['show_recovery_folder']
 
-
-@pytest.mark.parametrize("job_id,verb", [("preparation:project", "retry"), ("handoff:intent", "replace_review")])
-def test_tray_review_selects_its_own_project(panel_module, monkeypatch, job_id, verb):
-    panel = panel_module.AssetManagerPanel()
-    panel._gallery_state["jobs"] = [dict(id=job_id, project="project")]
-    calls = []
-    monkeypatch.setattr(panel, "_select_asset_id", lambda identifier: calls.append(("select", identifier)) or True)
-    monkeypatch.setattr(panel, "_gallery_command", lambda action: calls.append(("review", action)))
-    panel._transfer_command("resume", [job_id])
-    assert calls == [("select", "project"), ("review", verb)]
-    monkeypatch.setattr(panel, "_select_asset_id", lambda identifier: False)
-    calls.clear()
-    panel._transfer_command("resume", [job_id])
-    assert not calls and panel._gallery_notice
 
 def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1708,8 +1697,6 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
         elif scope == "folder":
             assert field in folders[0], expr
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
-        elif scope == "transfer":
-            assert field in {"can_pause", "can_resume", "can_cancel", "can_resolve", "can_recover", "can_undo"}, expr
         elif scope == "part":
             from lfs_plugins.project_inspector import contents_rows
             parts = contents_rows(asset, SimpleNamespace(), tr=lambda key: key,
@@ -2114,7 +2101,7 @@ def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
 
 @pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (1024, '1.0 KB'),
     (137114, '134 KB'), (10 * 1024, '10 KB'), (1024**2, '1.0 MB'), (42 * 1024**2, '42 MB'), (1024**3, '1.0 GB')])
-def test_A4_adaptive_sizes_match_tray_cards_and_info(panel_module, monkeypatch, size, expected):
+def test_A4_adaptive_sizes_match_overlay_cards_and_info(panel_module, monkeypatch, size, expected):
     from lfs_plugins.asset_format import format_size
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     locale = json.loads((Path(__file__).resolve().parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
@@ -2184,16 +2171,6 @@ def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module
     assert panel._gallery_notice_text() == ''
     panel._gallery_state['signed_in'] = True
     assert panel._gallery_notice_text() == 'Sign in'
-
-
-def test_finished_transfers_keep_the_history_tray_reachable(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    model = _BindingModel()
-    panel.on_bind_model(_BindingContext(model))
-    panel._gallery_state["jobs"] = [dict(id="done", project="project", status="completed", kind="upload")]
-    assert model.func_bindings["has_gallery_transfers"]()
-    panel._gallery_state["jobs"] = []
-    assert not model.func_bindings["has_gallery_transfers"]()
 
 
 def test_gallery_review_keeps_typing_and_delete_out_of_projects(panel_module, monkeypatch):
@@ -2284,7 +2261,6 @@ def test_translated_message_has_no_english_append(panel_module):
 def test_project_operation_thread_start_failure_restores_controls(panel_module, monkeypatch, caplog):
     panel = panel_module.AssetManagerPanel()
     monkeypatch.setattr(panel, '_asset_dict', lambda _id: {'id': 'project', 'path': '/项目.licht'})
-    monkeypatch.setattr(panel, '_refresh_transfer_rows', lambda: None)
     monkeypatch.setattr(panel, '_dirty_selection', lambda: None)
     class FailedThread:
         def __init__(self, **_kwargs):
@@ -2294,19 +2270,27 @@ def test_project_operation_thread_start_failure_restores_controls(panel_module, 
     monkeypatch.setattr(panel_module.threading, 'Thread', FailedThread)
     panel._start_project_operation('project', 'Set license', lambda *_args: None)
     row = next(iter(panel._project_operations.values()))
-    assert row['status'] == 'failed' and row['reason'] == 'thread start marker'
+    assert row['status'] == 'failed'
+    assert panel._contents_feedback['project'] == dict(row_id='', status='failed', reason='thread start marker')
     assert not panel._contents_busy('project')
     assert 'path=/项目.licht' in caplog.text
 
 
-def test_project_operation_refresh_failure_restores_controls(panel_module, monkeypatch, caplog):
-    from lfs_plugins.project_operations import ProjectOperations
+def test_project_operation_refresh_failure_restores_controls(panel_module, monkeypatch, caplog, tmp_path):
+    from lfs_plugins import project_operations
     panel = panel_module.AssetManagerPanel()
     monkeypatch.setattr(panel, '_asset_dict', lambda _id: {'id': 'project', 'path': '/项目.licht'})
-    monkeypatch.setattr(panel, '_refresh_transfer_rows', lambda: None)
     monkeypatch.setattr(panel, '_dirty_selection', lambda: None)
-    monkeypatch.setattr(ProjectOperations, 'run', lambda *_args, **_kwargs: (None, {'backup_path': '/backup'}))
-    monkeypatch.setattr(panel_module.lf, 'io', SimpleNamespace(), raising=False)
+    backup = tmp_path / 'backup.licht'
+    backup.write_bytes(b'recovery copy')
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(project_uuid='project', commit_uuid='saved'),
+        backup_project_file=lambda _path: backup,
+        run_project_operation=lambda _path, _project, _commit, action: action(),
+    )
+    store = project_operations.ProjectOperations(io, tmp_path / 'records')
+    monkeypatch.setattr(project_operations, 'ProjectOperations', lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, 'io', io, raising=False)
     class InlineThread:
         def __init__(self, target, **_kwargs):
             self.target = target
@@ -2317,8 +2301,13 @@ def test_project_operation_refresh_failure_restores_controls(panel_module, monke
         raise OSError('refresh marker')
     panel._start_project_operation('project', 'Rename', lambda *_args: None, after=fail)
     row = next(iter(panel._project_operations.values()))
-    assert row['status'] == 'failed' and row['reason'] == 'refresh marker'
-    assert row['backup_path'] == '/backup'
+    assert row['status'] == 'failed'
+    assert panel._contents_feedback['project'] == dict(row_id='', status='failed', reason='refresh marker')
+    records = store.recover()
+    assert len(records) == 1
+    record = next(iter(records.values()))
+    assert record['status'] == 'completed' and record['backup_path'] == str(backup)
+    assert backup.read_bytes() == b'recovery copy'
     assert not panel._contents_busy('project')
     assert 'operation=Rename path=/项目.licht' in caplog.text
 
@@ -2352,7 +2341,10 @@ def test_catalog_worker_start_failure_restores_controls(panel_module, monkeypatc
 
 def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
-    asset = {'id': 'project', 'path': '/项目.licht'}
+    asset = _project(project_id='project', path='/项目.licht')
+    panel._asset_index = _index(assets={asset['id']: asset})
+    panel._gallery_state['signed_in'] = True
+    panel._select_asset_id(asset['id'])
     job = {'id': 'job', 'project': 'project', 'status': 'error', 'requiresPreparation': True,
            'metadata': {'title': 'Project'}}
     calls = []
@@ -2360,11 +2352,11 @@ def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monk
         discard=lambda identifier: calls.append(('discard', identifier)))
     controller = SimpleNamespace(service=service, _schedule_poll=lambda: None)
     monkeypatch.setattr(panel, '_controller', lambda: controller)
-    monkeypatch.setattr(panel, '_asset_dict', lambda _identifier: asset)
-    monkeypatch.setattr(panel, '_select_asset_id', lambda _identifier: True)
     monkeypatch.setattr(panel, '_open_gallery_review', lambda current, action: calls.append(('review', current['id'], action)))
     panel._gallery_state['jobs'] = [job]
-    panel._transfer_command('resume', ['job'])
+    badge = panel._gallery_badge(asset)
+    assert badge['gallery_action'] == 'retry'
+    panel._gallery_command(badge['gallery_action'])
     assert calls == [('discard', 'job')]
     controller._after_service()
     assert calls == [('discard', 'job')]

@@ -14,12 +14,9 @@ from .gallery_messages import localize_message, tr as gallery_tr
 tr = partial(gallery_tr, prefix="gallery.transfer.")
 
 
-def show_transfer_tray():
+def open_projects_panel():
     import lichtfeld as lf
     lf.ui.set_panel_enabled("lfs.asset_manager", True)
-    panel = lf.ui.get_panel_object("lfs.asset_manager")
-    if panel:
-        panel.on_open_gallery()
 
 
 def transfer_phase(job):

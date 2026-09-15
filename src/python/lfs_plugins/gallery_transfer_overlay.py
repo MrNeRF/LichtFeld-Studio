@@ -6,7 +6,7 @@ from __future__ import annotations
 import lichtfeld as lf
 
 from .gallery_logging import failure as log_failure
-from .gallery_transfer_ui import show_transfer_tray, tr
+from .gallery_transfer_ui import open_projects_panel, tr
 from .gallery_messages import localize_message
 from .ui import RuntimeState
 
@@ -91,7 +91,7 @@ class GalleryTransferOverlay:
 
     def show(self):
         if lf.ui.is_panel_enabled("lfs.asset_manager"):
-            show_transfer_tray()
+            open_projects_panel()
             return
         self._visible = True
         self._collapsed = False
@@ -108,7 +108,7 @@ class GalleryTransferOverlay:
         elif action == "close":
             self._visible = False
         elif action == "details":
-            show_transfer_tray()
+            open_projects_panel()
         else:
             from .gallery_controller import get_gallery_controller
             identifier = str(args[1]) if len(args) > 1 else None
