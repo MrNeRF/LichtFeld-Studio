@@ -167,7 +167,7 @@ def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_pro
     native_io.run_project_operation(path, str(card.project_uuid), str(card.commit_uuid), edit)
     assert alias.is_symlink() and native_io.inspect_project_card(path).title == "项目"
     result = native_io.restore_save(alias, 1, alias)
-    assert alias.is_symlink() and result.project_uuid != card.project_uuid
+    assert alias.is_symlink() and result.project_uuid == card.project_uuid
 
 
 @pytest.mark.parametrize("operation", ["backup", "restore_backup"])
