@@ -916,3 +916,33 @@ def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path
     changed = bytearray(original)
     changed[row+72] ^= 1  # A new payload checksum, with unchanged SCNG and VIEW.
     assert stamp(changed) != before
+
+
+def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery):
+    from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
+    asset = {"id": "project", "exists": True, "status": "AVAILABLE"}
+    facts = dict(state="local", relationship="linked", linked=True, sceneReady=True,
+                 signed_in=True, established=True, source_formats=["licht"])
+    assert gallery_actions(asset, facts)[0]["id"] == "update"
+    disabled = gallery_actions(asset, dict(facts, signed_in=False))[0]
+    assert not disabled["enabled"] and disabled["reason"].endswith("eligibility.connect")
+    assert gallery_actions(dict(asset, status="UNREADABLE"), facts) == []
+    cached = dict(facts, cachedUnverified=True)
+    assert gallery_actions(dict(asset, status="UNREADABLE"), cached) == []
+    assert gallery_actions(dict(asset, status="MISSING"), cached)[0]["id"] == "locate"
+    interrupted = dict(facts, activity="interrupted", job={"id": "j", "status": "paused"})
+    assert [a["id"] for a in gallery_actions(asset, interrupted)] == ["resume", "cancel"]
+    processing = dict(facts, activity="processing", active=True, job={"needsAttention": True})
+    assert [a["id"] for a in gallery_actions(asset, processing)] == ["keep_waiting", "cancel"]
+    assert gallery_actions(asset, dict(facts, activity="applying", active=True)) == []
+    assert gallery_actions(asset, dict(facts, viewingCopy=True, state="equal"))[0]["id"] == "publish_new"
+    assert gallery_actions(asset, dict(facts, viewingCopy=True, state="remote"))[0]["id"] == "publish_new"
+    queued = dict(facts, activity="queued", active=True, job={"id": "j", "status": "queued"})
+    assert [a["id"] for a in gallery_actions(asset, queued)] == ["resume", "cancel"]
+    assert gallery_eligibility(asset, dict(facts, quotaBytes=100))["remainingBytes"] is None
+    publication = dict(asset, publication={"checked": True, "preparedBytes": 30})
+    quota = gallery_eligibility(publication, dict(facts, quotaBytes=100, usedBytes=60, reservedBytes=20))
+    assert quota["remainingBytes"] == 20 and quota["reasons"] == ["space"]
+    assert gallery_eligibility(dict(asset, embedded_dataset_complete=False), facts)["status"] == "not_checked"
+    reasons = gallery_eligibility(dict(asset, publication={"visibleSplats": 0, "externalPayloads": True}), facts)
+    assert reasons["reasons"] == ["no_splats", "external_payloads"]

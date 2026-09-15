@@ -19,14 +19,21 @@ def localize_message(message):
         return ""
     import lichtfeld as lf
     text = redact(message)
+    if text.startswith("projects.gallery.") and " " not in text:
+        return lf.ui.tr(text)
     if text == lf.ui.tr("projects.gallery.error.unsafe_url"):
         return text
     if text.startswith("gallery_project_"):
-        return text
+        key = {"gallery_project_no_splats": "eligibility.no_splats",
+               "gallery_project_payload_unavailable": "eligibility.external_payloads",
+               "gallery_project_not_supported": "eligibility.format",
+               "gallery_project_commit_mismatch": "error.project_changed"}.get(text.split(":", 1)[0])
+        return tr(key) if key else text
     lower = text.casefold()
     if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
         return text  # Keep the explanation of restart versus resume visible.
     rules = (
+        (r'^gallery cover updated', 'info.cover'),
         (r'^ready to download', 'action.pull'),
         (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
         (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
