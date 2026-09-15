@@ -471,6 +471,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("is_narrow", lambda: self._layout_class == "narrow")
         model.bind_func("is_medium", lambda: self._layout_class == "medium")
         model.bind_func("is_wide", lambda: self._layout_class == "wide")
+        model.bind_func("gallery_review_open", self._gallery_review_open)
         model.bind_func("navigator_width", lambda: f"{self._navigator_width:.1f}dp")
         model.bind_func("navigator_style_width", self.get_navigator_style_width)
         model.bind_func("inspector_width", lambda: f"{self._inspector_width:.1f}dp")
@@ -3892,6 +3893,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return True
 
     def _on_asset_manager_keydown(self, event):
+        if self._input_capture_active():
+            return False
         try:
             key = int(event.get_parameter("key_identifier", "0"))
         except (TypeError, ValueError):
@@ -3931,6 +3934,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return self._on_gallery_shortcut(event)
 
     def _on_asset_results_keydown(self, event) -> None:
+        if self._input_capture_active():
+            return
         if self._on_gallery_shortcut(event):
             return
         try:
@@ -4011,7 +4016,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             pass
 
     @staticmethod
+    def _gallery_review_open() -> bool:
+        get_panel = getattr(lf.ui, "get_panel_object", None)
+        panel = get_panel("lfs.gallery_file") if callable(get_panel) else None
+        return bool(panel and getattr(panel, "_review", None))
+
+    @staticmethod
     def _input_capture_active() -> bool:
+        if AssetManagerPanel._gallery_review_open():
+            return True
         is_capturing = getattr(getattr(lf, "keymap", None), "is_capturing", None)
         try:
             return bool(is_capturing()) if callable(is_capturing) else False

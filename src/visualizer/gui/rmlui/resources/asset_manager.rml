@@ -20,6 +20,7 @@
        data-class-is-medium="is_medium"
        data-class-is-wide="is_wide"
        data-class-is-floating="is_floating"
+       data-class-gallery-review-open="gallery_review_open"
        data-class-inspector-expanded="inspector_expanded">
     <div id="asset-popup">
       <div id="asset-popup-toolbar">

@@ -1064,6 +1064,7 @@ def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, mo
 
 def test_gallery_review_survives_a_locale_document_reload(gallery, monkeypatch):
     from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_file_panel").lf.ui, "get_panel_object", lambda _: None, raising=False)
     monkeypatch.setattr(GalleryFilePanel.__bases__[0], 'on_unmount', lambda *_: None, raising=False)
     panel = GalleryFilePanel()
     closed = []

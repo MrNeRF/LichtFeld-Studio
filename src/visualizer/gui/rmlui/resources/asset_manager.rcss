@@ -1109,6 +1109,7 @@
 }
 .asset-toolbar-filter { display: inline-flex; }
 .asset-toolbar-view { display: none; }
+.asset-shell.gallery-review-open { pointer-events: none; }
 .asset-check-gallery { display: flex; align-items: center; flex: 0 1 auto; max-width: 320dp; }
 .asset-check-gallery .asset-button-text,
 .asset-check-gallery .gallery-checked {

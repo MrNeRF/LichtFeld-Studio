@@ -2421,6 +2421,16 @@ def test_finished_transfers_keep_the_history_tray_reachable(panel_module):
     panel._gallery_state["jobs"] = []
     assert not model.func_bindings["has_gallery_transfers"]()
 
+
+def test_gallery_review_keeps_typing_and_delete_out_of_projects(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    review = SimpleNamespace(_review={"mode": "publish"})
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda _: review, raising=False)
+    panel._delete_selected_assets = lambda: pytest.fail("Delete reached Projects under a review")
+    panel._on_asset_results_keydown(_Event(params={"key_identifier": str(panel_module.KI_DELETE)}))
+    panel._on_asset_results_keydown(_Event(params={"key_identifier": "18"}))
+    assert panel._search_query == ""
+
 def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
     poster = _write_png(tmp_path / "portal poster.png")

@@ -77,8 +77,21 @@ class GalleryFilePanel(Panel):
         if self._unsubscribe:
             self._unsubscribe()
         self._unsubscribe = controller.subscribe(self._changed)
+        self._update_library_input()
         self._dirty()
         lf.ui.set_panel_enabled(self.id, True)
+
+    def _update_library_input(self):
+        library = lf.ui.get_panel_object("lfs.asset_manager")
+        if not library:
+            return
+        doc = getattr(library, "_doc", None)
+        if self._review and doc:
+            for element in doc.query_selector_all(":focus"):
+                element.blur()
+        handle = getattr(library, "_handle", None)
+        if handle:
+            handle.dirty("gallery_review_open")
 
     def _changed(self, state):
         self._state = state
@@ -265,6 +278,7 @@ class GalleryFilePanel(Panel):
 
     def _finish(self, submitted):
         review, self._review = self._review, None
+        self._update_library_input()
         if review and review["on_done"]:
             review["on_done"](submitted)
 
@@ -274,6 +288,7 @@ class GalleryFilePanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        self._update_library_input()
         if self._review and not self._unsubscribe:
             self._unsubscribe = self._review["controller"].subscribe(self._changed)
         self._dirty()
