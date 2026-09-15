@@ -6,6 +6,7 @@ from __future__ import annotations
 import lichtfeld as lf
 
 from .gallery_transfer_ui import show_transfer_tray, tr
+from .gallery_messages import localize_message
 from .ui import RuntimeState
 
 
@@ -34,7 +35,7 @@ class GalleryTransferOverlay:
             "expanded": lambda: not self._collapsed,
             "empty": lambda: not self._state.get("rows"),
             "header": self._header,
-            "message": lambda: self._message or self._state.get("message", ""),
+            "message": lambda: localize_message(self._message or self._state.get("message", "")),
             "message_error": lambda: bool(self._message),
             "toggle_label": lambda: tr("action.expand" if self._collapsed else "action.collapse"),
             "toggle_icon": lambda: "+" if self._collapsed else "−",
@@ -84,9 +85,6 @@ class GalleryTransferOverlay:
         self._projects_open = projects_open
         self._last_signature = signature
         rows = state.get("rows", [])
-        account = RuntimeState.gallery_state.value
-        if not account.get("signed_in") or account.get("relink_required"):
-            rows = [dict(row, reason=lf.ui.tr("projects.gallery.account.connect_menu_bar")) if row.get("reason") else row for row in rows]
         self._handle.update_record_list("gallery_transfer_rows", rows)
         return True
 
@@ -112,17 +110,13 @@ class GalleryTransferOverlay:
             show_transfer_tray()
         else:
             from .gallery_controller import get_gallery_controller
-            from .gallery_messages import localize_message
             identifier = str(args[1]) if len(args) > 1 else None
             try:
                 get_gallery_controller().command("pause" if identifier == "native" else action,
                                                  None if identifier == "native" else identifier)
                 self._message = ""
             except Exception as exc:
-                account = RuntimeState.gallery_state.value
-                self._message = (lf.ui.tr("projects.gallery.account.connect_menu_bar")
-                                 if not account.get("signed_in") or account.get("relink_required")
-                                 else localize_message(str(exc)))
+                self._message = localize_message(str(exc))
         if self._handle:
             self._handle.dirty_all()
         lf.ui.request_redraw()

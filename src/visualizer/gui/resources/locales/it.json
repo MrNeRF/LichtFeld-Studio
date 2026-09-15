@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "Preparazione della scena",
   "gallery.transfer.phase.applying": "Applicazione delle modifiche della Galleria",
   "projects.gallery.error.account_changed": "L’account è cambiato. Verifica la galleria prima di continuare.",
-  "projects.gallery.error.access": "Collega il tuo account nella barra dei menu",
+  "projects.gallery.error.access": "L’accesso alla galleria non è disponibile.",
   "projects.gallery.error.save": "Impossibile salvare il progetto. La copia o il download rimane; risolvi l’errore prima di continuare.",
   "projects.gallery.error.link": "Verifica il collegamento di questo progetto alla galleria.",
   "projects.gallery.error.empty": "Non ci sono splat visibili da pubblicare.",

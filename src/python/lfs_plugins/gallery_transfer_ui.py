@@ -9,7 +9,7 @@ from collections import deque
 from functools import partial
 
 from .asset_format import format_size
-from .gallery_messages import tr as gallery_tr
+from .gallery_messages import localize_message, tr as gallery_tr
 
 tr = partial(gallery_tr, prefix="gallery.transfer.")
 
@@ -94,7 +94,7 @@ def transfer_rows(snapshot, history_limit=30):
                "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else "" if job.get("batchQueued") else tr("bytes", done=format_size(done), total=format_size(total))),
                "phase": phase_label,
-               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
+               "reason": localize_message(job.get("message", "")) if status in ("error", "conflict", "paused") else "",
                "detail": job.get("transferDetail", ""),
                "progress": progress, "progress_width": f"{35 if indeterminate else progress:.1f}%",
                "indeterminate": indeterminate,
@@ -115,7 +115,7 @@ def transfer_rows(snapshot, history_limit=30):
     if failure:
         pending.insert(0, {"id": failure["id"], "title": failure.get("metadata", {}).get("title", "Gallery upload"),
             "direction": "↑", "status": "error", "bytes": "", "phase": tr("phase.error"),
-            "reason": failure.get("message", "Scene preparation failed."), "detail": "",
+            "reason": localize_message(failure.get("message", "Scene preparation failed.")), "detail": "",
             "progress": 0, "progress_width": "0%", "indeterminate": False,
             "can_pause": False, "can_resume": False, "can_cancel": False})
     if snapshot.get("batchQueued") and not any(j.get("batchQueued") for j in snapshot.get("jobs", [])):

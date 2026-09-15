@@ -2657,7 +2657,7 @@
   "gallery.transfer.phase.preparing": "Preparing scene",
   "gallery.transfer.phase.applying": "Applying Gallery changes",
   "projects.gallery.error.account_changed": "The account changed. Review the gallery before continuing.",
-  "projects.gallery.error.access": "Connect your account in the menu bar",
+  "projects.gallery.error.access": "Gallery access is unavailable.",
   "projects.gallery.error.save": "The project could not be saved. Your backup or download is kept; resolve the save error before continuing.",
   "projects.gallery.error.link": "Review this project’s gallery link before continuing.",
   "projects.gallery.error.empty": "There are no visible splats to publish.",

@@ -487,7 +487,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             and not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
         model.bind_func("open_button_label", lambda: tr(
             "projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.open"))
-        model.bind_func("inspector_gallery_action_tooltip", lambda: self._gallery_account_reason() or (
+        model.bind_func("inspector_gallery_action_tooltip", lambda: (
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
         model.bind_func("inspector_more_label", lambda: tr("common.more"))
@@ -1222,11 +1222,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         projects_by_job = {job["id"]: job.get("project", "") for job in self._gallery_state.get("jobs", ())}
         for row in rows:
             row["project"] = projects_by_job.get(row["id"], "")
-        account_reason = tr("projects.gallery.account.connect_menu_bar") if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required") else ""
-        if account_reason:
-            for row in rows:
-                if row["reason"]:
-                    row["reason"] = account_reason
         for operation in self._project_operations.values():
             progress = float(operation.get("progress", 0.0) or 0.0)
             status = str(operation.get("status", "running"))
@@ -2109,7 +2104,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
             "inspector_operations_expanded",
             "inspector_gallery_action_label", "inspector_has_gallery_action",
-            "gallery_account_reason", "gallery_has_account_reason", "inspector_gallery_action_tooltip",
+            "inspector_gallery_action_tooltip",
             "inspector_training_tooltip", "inspector_model_tooltip", "inspector_reclaimable_tooltip",
             "inspector_verify_result",
             "catalog_notice",

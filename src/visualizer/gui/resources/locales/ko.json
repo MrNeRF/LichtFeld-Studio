@@ -2658,7 +2658,7 @@
   "gallery.transfer.phase.preparing": "장면 준비 중",
   "gallery.transfer.phase.applying": "갤러리 변경 적용 중",
   "projects.gallery.error.account_changed": "계정이 변경되었습니다. 계속하기 전에 갤러리를 확인하세요.",
-  "projects.gallery.error.access": "메뉴 모음에서 계정을 연결하세요",
+  "projects.gallery.error.access": "갤러리에 접근할 수 없습니다.",
   "projects.gallery.error.save": "프로젝트를 저장하지 못했습니다. 백업이나 다운로드는 유지됩니다. 저장 오류를 해결하세요.",
   "projects.gallery.error.link": "이 프로젝트의 갤러리 연결을 확인하세요.",
   "projects.gallery.error.empty": "게시할 표시된 스플랫이 없습니다.",

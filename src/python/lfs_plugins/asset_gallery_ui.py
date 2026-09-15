@@ -269,27 +269,13 @@ class GalleryAssetMixin:
         checked = self._gallery_state.get("checkedAt", 0)
         return tr("sidebar.checked_relative", time=relative_time(checked)) if checked else tr("sidebar.not_checked")
 
-    def _gallery_account_label(self):
-        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
-            return tr("sidebar.not_connected")
-        name = self._gallery_state.get("display_name") or self._gallery_state.get("email", "")
-        return tr("sidebar.connected_as", name=name)
-
-    def _gallery_account_reason(self):
-        if self._gallery_state.get("signed_in") and not self._gallery_state.get("relink_required"):
-            return ""
-        if self._selected_gallery_action() in ("publish", "update", "pull", "publish_new", "retry", "resume", "resolve", "relink"):
-            return tr("account.connect_menu_bar")
-        return ""
-
     def _gallery_notice_text(self):
-        if self._gallery_notice == tr("account.connect_menu_bar"):
-            return ""
+        from .gallery_messages import localize_message
         if self._gallery_notice:
-            return self._gallery_notice
-        if not self._gallery_state.get("signed_in"):
+            return localize_message(self._gallery_notice)
+        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
             return ""
-        return self._gallery_state.get("message", "")
+        return localize_message(self._gallery_state.get("message", ""))
 
     def _gallery_aggregate(self):
         jobs = self._gallery_state.get("jobs", [])
@@ -306,9 +292,6 @@ class GalleryAssetMixin:
         values = {
             "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
             "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
-            "gallery_account": self._gallery_account_label,
-            "gallery_account_reason": self._gallery_account_reason,
-            "gallery_has_account_reason": lambda: bool(self._gallery_account_reason()),
             "gallery_checked": self._gallery_checked_label,
             "gallery_quota": self._gallery_quota,
             "gallery_has_toast": lambda: bool(self._gallery_toast),
@@ -368,9 +351,8 @@ class GalleryAssetMixin:
         try:
             self._controller().command(command, None if identifier == "native" else identifier)
         except Exception as exc:
-            self._gallery_notice = (tr("account.connect_menu_bar")
-                                    if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required")
-                                    else str(exc))
+            from .gallery_messages import localize_message
+            self._gallery_notice = localize_message(str(exc))
             self._request_model_update()
 
     def _gallery_context_items(self, asset):
