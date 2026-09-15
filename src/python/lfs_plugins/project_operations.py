@@ -63,7 +63,7 @@ class ProjectOperations:
             FileBackend(self.path).write(json.dumps(
                 {"version": 1, "operations": rows}, ensure_ascii=False).encode("utf-8"))
 
-    def run(self, identifier, asset, title, operation, *, backup=True):
+    def run(self, identifier, asset, title, operation, *, backup=True, metadata=None, on_backup=None):
         path = str(Path(asset["path"]).resolve())
         if not backup:
             if asset.get("status") != "REPAIR_ONLY":
@@ -73,6 +73,7 @@ class ProjectOperations:
             return operation(), {}
         row = dict(id=identifier, asset_id=asset["id"], path=path, title=title,
                    status="preparing", input_commit="", backup_path="")
+        row.update(metadata or {})
         result = None
 
         def guarded():
@@ -82,9 +83,12 @@ class ProjectOperations:
             self._put(row)
             if backup:
                 row["backup_path"] = str(self.io.backup_project_file(path))
+                if on_backup:
+                    on_backup(row["backup_path"])
             row["status"] = "running"
             self._put(row)
             result = operation()
+            row["output_commit"] = str(self.io.inspect_project_card(path).commit_uuid)
             row["status"] = "completed"
             self._put(row)
 
@@ -97,6 +101,16 @@ class ProjectOperations:
             self._put(row)
             raise ProjectOperationFailure(str(exc), row) from exc
         return result, row
+
+    def undo(self, identifier):
+        with self._lock, _locked_sidecar(self.root / "contents.lock"):
+            row = dict(self._read()[identifier])
+        if not row.get("backup_path") or not row.get("output_commit") or row.get("undone"):
+            raise ValueError("This operation has no available Undo.")
+        # The native expected-commit check refuses to overwrite a newer edit.
+        self.io.restore_project_backup(row["path"], row["backup_path"], row["asset_id"], row["output_commit"])
+        row["undone"] = True
+        self._put(row)
 
     def _recover(self, row):
         path = row["path"]

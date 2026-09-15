@@ -230,11 +230,6 @@ def _latest_checkpoint(details: Any) -> Any:
     return max(checkpoints, key=lambda item: int(value(item, "iteration", 0) or 0), default=None)
 
 
-def _latest_save(details: Any) -> Any:
-    saves = list(value(details, "save_history", []) or [])
-    return max(saves, key=lambda item: int(value(item, "sequence", 0) or 0), default=None)
-
-
 def _format_path(path: Any) -> str:
     return str(path or "")
 
@@ -246,8 +241,11 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     params = value(details, "parameters", None)
     scene = value(details, "scene_graph", None)
     latest = _latest_checkpoint(details)
-    latest_save = _latest_save(details)
-    saves = list(value(details, "save_history", []) or [])
+    saves = save_groups(details)
+    current_generation = int(value(card, "generation", 0) or 0)
+    current_save = next((group for group in saves if group["generation"] == current_generation), saves[-1] if saves else None)
+    latest_save = current_save["save"] if current_save else None
+    save_count = sum(group["numbered"] for group in saves)
     references = list(value(details, "references", []) or [])
     metrics = value(details, "metrics", None)
     embedded = bool(value(params, "embedded_dataset_present", False))
@@ -265,7 +263,7 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     if iteration is None:
         iteration = value(latest, "iteration", None)
     model = {
-        "saved": f"Save {int(value(latest_save, 'sequence', len(saves)) or len(saves))} of {len(saves)}" if saves else "",
+        "saved": f"Save {saves.index(current_save) + 1} of {save_count}" if current_save and current_save["numbered"] else "",
         "saved_at": format_time(value(latest_save, "saved_at_unix_ns", value(card, "saved_at_unix_ns", 0))),
         "opened": format_time(value(entry, "last_opened_at_unix_ns", value(entry, "opened_at_unix_ns", 0))),
         "iteration": str(iteration) if iteration is not None else "",
@@ -289,7 +287,7 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
         "physical_size": format_size(physical),
         "dead_bytes": format_size(dead_bytes),
         "reclaimable_percent": f"{ratio * 100.0:.1f}%",
-        "saves": str(len(saves)),
+        "saves": str(save_count),
         "autosave_newer": bool(value(details, "autosave_sidecar_present", False)),
         "chapter_count": str(len(list(value(details, "chapters", []) or []))),
         "has_metrics": has_samples,
@@ -390,6 +388,44 @@ def pending_removals(details: Any) -> list[dict[str, Any]]:
         return []
 
 
+def commit_kind(save: Any) -> str:
+    kind = value(save, "kind", "EXPLICIT")
+    return str(value(kind, "name", kind)).rsplit(".", 1)[-1].upper()
+
+
+def save_groups(details: Any) -> list[dict[str, Any]]:
+    """Keep the user state and its later Contents edits in one restore row."""
+    groups = []
+    for save in value(details, "save_history", []) or []:
+        generation = int(value(save, "generation", len(groups) + 1))
+        if commit_kind(save) in {"CONTENTS", "COMPACTION"}:
+            source_generation = int(value(save, "source_save_generation", 0) or 0)
+            group = next((item for item in reversed(groups)
+                          if item["source_generation"] == source_generation), None)
+            if group is None and groups:
+                group = groups[-1]
+            if group is None:
+                # Compaction keeps the source save's facts in native inspection.
+                # An older file without that provenance is an unnumbered state.
+                source_date = int(value(save, "source_saved_at_unix_ns", 0) or 0)
+                source = dict(saved_at_unix_ns=source_date,
+                              kind=value(save, "source_save_kind", "EXPLICIT"),
+                              checkpoint_iteration=value(save, "checkpoint_iteration"),
+                              planned_iterations=value(save, "planned_iterations"),
+                              strategy=value(save, "strategy", ""),
+                              gaussians=value(save, "gaussians"))
+                group = dict(save=source, source_generation=source_generation or generation,
+                             generation=generation, edits=[], bytes=0, numbered=bool(source_date))
+                groups.append(group)
+            group["generation"] = generation
+            group["edits"].append(save)
+            group["bytes"] += int(value(save, "bytes_added", 0) or 0)
+        else:
+            groups.append(dict(save=save, source_generation=generation, generation=generation,
+                               edits=[], bytes=int(value(save, "bytes_added", 0) or 0), numbered=True))
+    return groups
+
+
 def contents_rows(entry: Any, details: Any, plan: Any = None, *,
                   tr: Callable[[str], str], format_size: Callable[[Any], str],
                   format_time: Callable[[Any], str], busy: bool = False) -> list[dict[str, Any]]:
@@ -398,10 +434,10 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         return []
     rows = []
     pending = pending_removals(details)
-    removed_ids = {str(row.get("id", "")) for row in pending}
     params = value(details, "parameters", None)
-    saves = list(value(details, "save_history", []) or [])
-    current = max((int(value(save, "generation", 0)) for save in saves), default=0)
+    saves = save_groups(details)
+    current = int(value(value(details, "card", None), "generation", 0) or
+                  max((save["generation"] for save in saves), default=0))
     chapters = list(value(details, "chapters", []) or [])
     def size_of(code):
         return sum(int(value(part, "stored_bytes", 0)) for part in chapters if str(value(part, "fourcc", "")) == code)
@@ -410,20 +446,53 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
                       action=action, action_label=tr(action_label) if action_label else "",
                       action_tooltip=tr("projects.action.resume_training") if action == "resume" else tr(action_label) if action_label else "",
                       secondary=secondary, secondary_label=tr(secondary_label) if secondary_label else "",
-                      removable=remove, disabled=busy, pending=False, remove_label=tr("projects.contents.remove"), **extra)
+                      removable=remove, disabled=busy, pending=False, remove_label=tr("projects.contents.remove"),
+                      tooltip=label, detail="", current=False, autosave=False, undo=False, error="", **extra)
         rows.append(result)
         return result
-    for index, save in reversed(list(enumerate(saves, 1))):
-        generation = int(value(save, "generation", index))
-        if "save:" + str(generation) in removed_ids:
-            continue
-        label = tr("projects.contents.save").format(number=index, total=len(saves))
+    numbered = [save for save in saves if save["numbered"]]
+    pending_saves = set()
+    for index, group in reversed(list(enumerate(saves, 1))):
+        save = group["save"]
+        generation = group["generation"]
+        removed = next((part for part in pending if part.get("kind") == "save" and
+                        int(part.get("generation", 0)) in {generation, group["source_generation"]}), None)
+        label = (tr("projects.contents.save").format(number=sum(item["numbered"] for item in saves[:index]), total=len(numbered))
+                 if group["numbered"] else tr("projects.contents.saved_state"))
         date = format_time(value(save, "saved_at_unix_ns", 0))
         if date: label += ", " + date
-        if generation == current: label += ", " + tr("projects.contents.current")
-        row("save:" + str(generation), "save", label, value(save, "bytes_added", 0),
-            "restore" if generation != current else "", "projects.contents.restore" if generation != current else "",
-            generation != current, generation=generation)
+        iteration = value(save, "checkpoint_iteration", None)
+        planned = value(save, "planned_iterations", None)
+        if iteration is not None:
+            label += ", " + (tr("projects.contents.step_of").format(step=f"{iteration:,}", total=f"{planned:,}")
+                              if planned else tr("projects.contents.step").format(step=f"{iteration:,}"))
+        strategy = str(value(save, "strategy", "") or "")
+        gaussians = value(save, "gaussians", None)
+        if strategy: label += ", " + strategy
+        if gaussians:
+            count = f"{gaussians / 1_000_000:.1f} M" if gaussians >= 1_000_000 else f"{gaussians:,}"
+            label += ", " + tr("projects.contents.gaussians").format(count=count)
+        available = generation != current and removed is None
+        r = row("save:" + str(group["source_generation"]), "save", label, group["bytes"],
+                "restore" if available else "", "projects.contents.restore" if available else "",
+                available, generation=generation)
+        r.update(number=sum(item["numbered"] for item in saves[:index]), total=len(numbered))
+        r.update(current=generation == current, autosave=commit_kind(save) == "AUTOSAVE")
+        if index == len(saves):
+            r["tooltip"] = label + "\n" + tr("projects.contents.save_explanation")
+        edits = []
+        for edit in group["edits"]:
+            operation = str(value(edit, "operation", "") or
+                            ("compacted" if commit_kind(edit) == "COMPACTION" else "changed"))
+            edits.append(tr("projects.contents.edited").format(
+                time=format_time(value(edit, "saved_at_unix_ns", 0)).rsplit(" ", 1)[-1],
+                change=tr("projects.contents.edit." + operation)))
+        r["detail"] = "; ".join(dict.fromkeys(edits))
+        if removed:
+            pending_saves.add(str(removed.get("id", "")))
+            r.update(pending=True, undo=True, removal_id=removed["id"],
+                     detail=tr("projects.contents.removed"), bytes=int(removed.get("bytes", 0)),
+                     size=format_size(removed.get("bytes", 0)))
     checkpoints = list(value(details, "retained_checkpoints", []) or [])
     sizes = {str(value(cp, "instance_uuid", "")): int(value(cp, "bytes", 0)) for cp in value(plan, "retained_checkpoints", []) or []}
     strategy = str(value(params, "active_strategy", "") or "")
@@ -441,7 +510,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
     if embedded:
         count = int(value(params, "embedded_images", 0))
         r = row("dataset:embedded", "dataset", tr("projects.contents.dataset_embedded").format(count=count),
-                sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []), remove=True)
+                sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []), remove=True, images=count)
         r["remove_disabled"] = not bool(value(value(plan, "drop_embedded_dataset", None), "allowed", False))
         r["remove_label"] = tr("projects.contents.dataset_kept") if r["remove_disabled"] else tr("projects.contents.remove")
     else:
@@ -469,23 +538,30 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         action="license", action_label="projects.contents.change" if identifier else "projects.contents.add", remove=bool(identifier))
     for removed in pending:
         kind = removed.get("kind", "")
-        if kind == "save": label = tr("projects.contents.save").format(number=removed.get("generation", ""), total=len(saves))
-        elif kind == "checkpoint": label = tr("projects.contents.checkpoint").format(iteration=removed.get("iteration", 0))
-        elif kind == "dataset": label = tr("projects.contents.dataset_embedded").format(count=removed.get("images", 0))
-        elif kind == "metrics": label = tr("projects.contents.metrics").format(count=removed.get("samples", 0))
-        elif kind == "license": label = tr("projects.contents.license").format(name=license_name(removed.get("identifier", ""), tr))
-        else: label = tr("projects.contents.thumbnail")
-        r = row("removed:" + str(len(rows)), kind, label + ", " + tr("projects.contents.removed"), removed.get("bytes", 0))
-        r.update(pending=True, disabled=True)
+        # Payload removals already changed the active generation. Only old saves
+        # remain addressable until Compact, and get a dim row with Undo.
+        if kind != "save" or str(removed.get("id", "")) in pending_saves:
+            continue
+        label = tr("projects.contents.saved_state")
+        date = format_time(removed.get("date", 0))
+        if date:
+            label += ", " + date
+        r = row("removed:" + str(len(rows)), kind, label, removed.get("bytes", 0))
+        r.update(pending=True, undo=True, removal_id=removed["id"], detail=tr("projects.contents.removed"))
     storage = value(details, "storage", None)
     ratio = float(value(storage, "dead_ratio", 0) or 0)
-    if ratio >= 0.01:
-        row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),
-            value(storage, "dead_bytes", 0), "compact", "projects.contents.compact")
+    if ratio >= 0.01 or pending:
+        compact = row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),
+                      value(storage, "dead_bytes", 0), "compact", "projects.contents.compact")
+        if pending:
+            compact["detail"] = tr("projects.contents.compact_removals").format(count=len(pending))
     for r in rows:
         r["has_action"] = bool(r["action"])
         r["has_secondary"] = bool(r["secondary"])
+        r["has_detail"] = bool(r["detail"])
+        r["has_error"] = bool(r["error"])
         r.setdefault("action_disabled", False)
         r.setdefault("remove_disabled", False)
+        r.setdefault("removal_id", "")
         r["disabled"] = bool(r["disabled"] or not value(entry, "path", "") or str(value(entry, "status", "")) in {"MISSING", "UNREADABLE", "REPAIR_ONLY", "UNSUPPORTED_NEWER", "IDENTITY_MISMATCH"})
     return rows

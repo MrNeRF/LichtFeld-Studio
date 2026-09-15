@@ -325,6 +325,8 @@
 .asset-tray { background-color: @{surface}; }
 .asset-tray-progress { background-color: @{statusbar.progress_bg}; }
 .asset-tray-progress span { background-color: @{primary}; }
+.contents-tag { color: @{text_dim}; background-color: @{surface_bright}; }
+.contents-row--pending { color: @{text_dim}; }
 
 .gallery-activity > img { image-color: @{text_dim}; opacity: 0.35; }
 .gallery-activity > progress, .gallery-activity > progress fill { image-color: @{primary}; }

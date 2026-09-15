@@ -1266,6 +1266,11 @@
 
 /* Contents keeps its actions visible while long part names ellipsize. */
 .inspector-contents { display: flex; flex-direction: column; gap: 4dp; min-width: 0; }
+.contents-part { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; width: 100%; }
+.contents-detail { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contents-error { display: block; width: 100%; min-width: 0; line-height: 18dp; white-space: normal; word-break: break-all; }
+.contents-tag { flex: 0 0 auto; padding: 0 4dp; line-height: 18dp; font-size: 10dp; border-radius: 3dp; }
+.asset-tray-recovery { display: flex; align-items: center; min-height: 24dp; }
 .contents-row { display: flex; align-items: center; flex: 0 0 24dp; height: 24dp; min-height: 24dp; width: 100%; min-width: 0; gap: 4dp; }
 .contents-label { display: block; flex: 1 1 0dp; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24dp; }
 .contents-size { display: block; flex: 0 0 auto; white-space: nowrap; line-height: 24dp; }

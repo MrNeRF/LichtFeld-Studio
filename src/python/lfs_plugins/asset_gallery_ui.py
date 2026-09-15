@@ -439,6 +439,9 @@ class GalleryAssetMixin:
                 self._controller().command("show_recovery_folder")
                 return
             if action == "undo":
+                if identifier in self._project_operations:
+                    self._undo_project_operation(identifier)
+                    return
                 self._controller().undo_pull(identifier)
                 return
             if action == "resolve":
