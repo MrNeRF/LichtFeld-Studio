@@ -1130,13 +1130,14 @@
 .asset-card-grid-window { display: flex; flex-wrap: wrap; gap: 12dp; align-items: flex-start; }
 .asset-card-slot { flex: 0 0 auto; min-width: 0; }
 .asset-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
-.asset-card-thumb { width: 100%; min-height: 1dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.asset-card-body { min-width: 0; height: 40dp; padding: 4dp 8dp; display: flex; flex-direction: column; justify-content: center; }
+.asset-card-thumb { box-sizing: border-box; width: 100%; min-height: 1dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.asset-card-body { box-sizing: border-box; flex: 0 0 40dp; min-width: 0; height: 40dp; padding: 4dp 8dp; display: flex; flex-direction: column; justify-content: center; }
 .asset-card-title-row, .asset-card-meta { min-width: 0; height: 16dp; line-height: 16dp; display: flex; gap: 8dp; }
 .asset-card-title-row { margin-bottom: 0; }
 .asset-card-meta { flex-direction: row; }
 .asset-card-title, .asset-card-meta span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-card-title { flex: 1; font-size: 12dp; }
+.asset-card.is-selected .asset-card-title { font-size: 14dp; }
 .asset-card-menu { position: absolute; top: 4dp; right: 4dp; visibility: hidden; }
 .asset-card:hover .asset-card-menu, .asset-card:focus .asset-card-menu, .asset-card.is-selected .asset-card-menu { visibility: visible; }
 .gallery-badge { position: absolute; top: 6dp; right: 6dp; width: 20dp; height: 20dp; display: flex; align-items: center; justify-content: center; border-radius: 10dp; }

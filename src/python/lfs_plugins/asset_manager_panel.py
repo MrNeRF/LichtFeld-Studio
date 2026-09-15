@@ -21,6 +21,7 @@ from . import rml_widgets
 from .asset_layout import (
     breakpoint_metrics,
     breakpoint_for_width,
+    card_geometry,
     gallery_columns,
     gallery_slot_width,
     grid_columns,
@@ -445,7 +446,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func(
             "asset_card_thumbnail_height",
-            lambda: f"{self._asset_card_slot_width * 10.0 / 16.0:.1f}dp",
+            lambda: f"{card_geometry(max(1.0, self._asset_card_slot_width - 2.0))['thumbnail_height']:.1f}dp",
         )
         for field in (
             "asset_list_top_spacer_height",
@@ -1384,7 +1385,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._asset_card_slot_width = grid_slot_width(
                     self._asset_window_client_width, self.get_thumbnail_size()
                 )
-                card_height = self._asset_card_slot_width * 10.0 / 16.0 + 40.0
+                card_height = card_geometry(max(1.0, self._asset_card_slot_width - 2.0))["height"] + 2.0
                 row_height = card_height + 12.0
             else:
                 columns = gallery_columns(self._asset_window_client_width)
