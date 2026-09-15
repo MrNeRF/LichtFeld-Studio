@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "L’elemento è cambiato. Controlla la galleria e confronta entrambe le versioni prima di sostituirlo.",
   "projects.gallery.error.too_large": "Questo progetto supera il limite del portale. Scegli un formato di caricamento più piccolo o riducine le dimensioni.",
   "projects.gallery.error.portal_busy": "Il portale è occupato. Attendi un momento, poi riprendi il trasferimento.",
-  "projects.gallery.error.server": "Il portale è temporaneamente non disponibile. I file locali sono al sicuro. Riprova più tardi."
+  "projects.gallery.error.server": "Il portale è temporaneamente non disponibile. I file locali sono al sicuro. Riprova più tardi.",
+  "projects.gallery.info.prepare_again": "La copia preparata è stata rimossa dopo l’errore. Riprova apre una nuova verifica."
 }

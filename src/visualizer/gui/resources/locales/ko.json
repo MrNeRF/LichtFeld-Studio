@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "갤러리 항목이 변경되었습니다. 갤러리를 확인하고 두 버전을 검토한 후 교체하세요.",
   "projects.gallery.error.too_large": "이 프로젝트가 포털의 크기 제한을 초과합니다. 더 작은 업로드 형식을 선택하거나 크기를 줄이세요.",
   "projects.gallery.error.portal_busy": "포털이 사용 중입니다. 잠시 기다린 후 전송을 재개하세요.",
-  "projects.gallery.error.server": "포털을 일시적으로 사용할 수 없습니다. 로컬 파일은 안전합니다. 나중에 다시 시도하세요."
+  "projects.gallery.error.server": "포털을 일시적으로 사용할 수 없습니다. 로컬 파일은 안전합니다. 나중에 다시 시도하세요.",
+  "projects.gallery.info.prepare_again": "실패 후 준비된 복사본을 삭제했습니다. 재시도하면 새 검토 화면이 열립니다."
 }

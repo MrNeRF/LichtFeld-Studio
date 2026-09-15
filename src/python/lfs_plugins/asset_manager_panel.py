@@ -2548,7 +2548,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._show_shared_context_menu([
             {"label": tr("gallery.transfer.action.details"), "action": "show_all"},
             {"label": tr("gallery.transfer.action.show_older"), "action": "show_older"},
-            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] and row.get("action") in ("resume", "retry", "keep_waiting") and not row["id"].startswith("preparation:") for row in rows), "separator_before": True},
+            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] and row.get("action") in ("resume", "retry", "keep_waiting") and not row["id"].startswith("preparation:") and not row.get("requiresPreparation") for row in rows), "separator_before": True},
             {"label": tr("gallery.transfer.action.clear_finished"), "action": "clear_finished", "enabled": any(row["status"] in ("completed", "canceled") for row in rows)},
         ], self._transfer_tray_command)
 

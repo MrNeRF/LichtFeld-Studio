@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "L’élément a changé. Vérifiez la galerie et comparez les deux versions avant de le remplacer.",
   "projects.gallery.error.too_large": "Ce projet dépasse la limite du portail. Choisissez un format d’envoi plus petit ou réduisez sa taille.",
   "projects.gallery.error.portal_busy": "Le portail est occupé. Patientez un instant, puis reprenez le transfert.",
-  "projects.gallery.error.server": "Le portail est temporairement indisponible. Vos fichiers locaux sont conservés. Réessayez plus tard."
+  "projects.gallery.error.server": "Le portail est temporairement indisponible. Vos fichiers locaux sont conservés. Réessayez plus tard.",
+  "projects.gallery.info.prepare_again": "La copie préparée a été supprimée après l’échec. Réessayer ouvre une nouvelle vérification."
 }

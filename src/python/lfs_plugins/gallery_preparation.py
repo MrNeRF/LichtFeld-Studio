@@ -13,6 +13,12 @@ from .gallery_logging import failure as log_failure
 
 def staging_path(root, value):
     root, path = Path(root).absolute(), Path(value).absolute()
+    if root.is_symlink() or getattr(root, "is_junction", lambda: False)():
+        raise ValueError("Scene preparation was redirected. Keep it for recovery.")
+    root = root.resolve()
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        raise ValueError("Scene preparation was redirected. Keep it for recovery.")
+    path = path.resolve()
     if path.parent != root or path.suffix != ".scene":
         raise ValueError("Scene preparation is outside its temporary folder.")
     try:

@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "Het galerij-item is gewijzigd. Controleer de galerij en bekijk beide versies voordat je het vervangt.",
   "projects.gallery.error.too_large": "Dit project overschrijdt de portaallimiet. Kies een kleiner uploadformaat of verklein het project.",
   "projects.gallery.error.portal_busy": "Het portaal is bezet. Wacht even en hervat de overdracht.",
-  "projects.gallery.error.server": "Het portaal is tijdelijk niet beschikbaar. Je lokale bestanden zijn veilig. Probeer het later opnieuw."
+  "projects.gallery.error.server": "Het portaal is tijdelijk niet beschikbaar. Je lokale bestanden zijn veilig. Probeer het later opnieuw.",
+  "projects.gallery.info.prepare_again": "De voorbereide kopie is na de fout verwijderd. Opnieuw proberen opent een nieuwe controle."
 }

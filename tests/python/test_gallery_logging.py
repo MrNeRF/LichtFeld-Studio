@@ -8,6 +8,7 @@ import logging
 import sys
 import urllib.error
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -100,6 +101,8 @@ def test_preparation_exception_is_logged_and_journaled(tmp_path, monkeypatch, ca
     assert "preparation marker" in job["failureReason"]
     assert "gallery failure stage=transfer" in caplog.text
     assert "RuntimeError" in caplog.text
+    assert not directory.exists() and not Path(job["path"]).exists()
+    assert job["requiresPreparation"]
 
 
 def test_malformed_url_does_not_recurse_or_expose_credentials():

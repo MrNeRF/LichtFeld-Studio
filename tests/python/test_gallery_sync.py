@@ -1239,3 +1239,82 @@ def test_settings_undo_survives_its_follow_up_upload(tmp_path, monkeypatch):
     finish(service)
     assert path.read_bytes() == b"original geometry and checkpoint"
     assert service.snapshot()["links"]["project"] == before
+
+
+@pytest.mark.parametrize('paused', [False, True])
+def test_owned_upload_failure_removes_copies_but_pause_keeps_them(tmp_path, monkeypatch, paused):
+    import uuid
+    service = connected(tmp_path, monkeypatch)
+    path = tmp_path / (str(uuid.uuid4()) + '.licht')
+    path.write_bytes(b'prepared upload')
+    def fail(*_args, **_kwargs):
+        raise GalleryTransferCanceled() if paused else ValueError('upload marker')
+    monkeypatch.setattr(Client, 'upload', fail, raising=False)
+    identifier = service.queue_upload(path, {'title': 'Scene'}, 'project', owned_export=True)
+    finish(service)
+    job = service.snapshot()['jobs'][0]
+    assert path.exists() is paused
+    assert bool(job.get('requiresPreparation')) is not paused
+    if not paused:
+        assert job['preparedRemoved']
+        with pytest.raises(ValueError, match='Review the project'):
+            service.resume(identifier)
+
+
+def test_startup_finishes_prepared_upload_cleanup_intent(tmp_path, monkeypatch):
+    import uuid
+    service = connected(tmp_path, monkeypatch)
+    path = tmp_path / (str(uuid.uuid4()) + '.licht')
+    path.write_bytes(b'prepared upload')
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs:
+        (_ for _ in ()).throw(GalleryTransferCanceled()), raising=False)
+    service.queue_upload(path, {'title': 'Scene'}, 'project', owned_export=True)
+    finish(service)
+    job = service._bucket()['jobs'][0]
+    job.update(status='error', requiresPreparation=True)
+    service._save()
+    assert path.exists()
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    assert not path.exists()
+    records = [job for bucket in restarted._data['accounts'].values() for job in bucket['jobs']]
+    assert records[0]['preparedRemoved']
+
+
+@pytest.mark.parametrize('kill_point', ['before_save', 'after_save'])
+def test_handoff_sigkill_keeps_one_durable_link(tmp_path, monkeypatch, kill_point):
+    import os
+    import signal
+    if not hasattr(os, 'fork'):
+        pytest.skip('process kill fixture requires fork')
+    service = connected(tmp_path, monkeypatch)
+    path, metadata = handoff_upload(service, tmp_path)
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs:
+        {'scene': dict(id='scene', title='Title', contentRevision='new-c', metadataRevision='m')}, raising=False)
+    child = os.fork()
+    if child == 0:
+        try:
+            signal.alarm(15)
+            metadata['_handoff'] = service.remember_replacement(metadata['_handoff'])
+            save = service._save
+            def kill_at_commit():
+                if service._bucket()['jobs'] and service._bucket()['jobs'][0]['status'] == 'completed':
+                    if kill_point == 'after_save':
+                        save()
+                    os.kill(os.getpid(), signal.SIGKILL)
+                save()
+            service._save = kill_at_commit
+            service.queue_upload(path, metadata, 'new')
+            finish(service)
+        finally:
+            os._exit(2)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh(); finish(restarted)
+    if kill_point == 'before_save':
+        assert set(restarted.snapshot()['links']) == {'old'}
+        job = restarted.snapshot()['jobs'][0]
+        restarted.resume(job['id']); finish(restarted)
+    assert set(restarted.snapshot()['links']) == {'new'}
+    assert restarted.snapshot()['jobs'][0]['handoff']['state'] == 'completed'
+    assert not restarted.snapshot().get('handoffIntents')

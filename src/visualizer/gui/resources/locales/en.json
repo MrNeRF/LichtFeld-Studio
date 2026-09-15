@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "The gallery item changed. Check the gallery and review both versions before replacing it.",
   "projects.gallery.error.too_large": "This project is larger than the portal allows. Choose a smaller upload format or reduce its size.",
   "projects.gallery.error.portal_busy": "The portal is busy. Wait a moment, then resume the transfer.",
-  "projects.gallery.error.server": "The portal is temporarily unavailable. Your local files are safe. Try again later."
+  "projects.gallery.error.server": "The portal is temporarily unavailable. Your local files are safe. Try again later.",
+  "projects.gallery.info.prepare_again": "The prepared copy was removed after failure. Retry opens a fresh review."
 }

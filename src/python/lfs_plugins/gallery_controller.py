@@ -222,7 +222,8 @@ class GalleryController:
                 self.service.discard(job_id)
         elif name == "resume_all":
             self._resume_queue = [j["id"] for j in self.service.snapshot()["jobs"]
-                                  if j["status"] in ("paused", "error", "queued") and j.get("retryable") is not False]
+                                  if j["status"] in ("paused", "error", "queued") and j.get("retryable") is not False
+                                  and not j.get("requiresPreparation")]
         elif name == "keep_waiting":
             self.service.resume(job_id, keep_waiting=True)
         elif name == "clear_finished":

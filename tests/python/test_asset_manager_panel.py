@@ -2593,3 +2593,26 @@ def test_catalog_worker_start_failure_restores_controls(panel_module, monkeypatc
     assert not panel._backend_load_active
     assert panel._catalog_load_failed
     assert 'Start Projects catalog worker failed' in caplog.text
+
+
+def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = {'id': 'project', 'path': '/项目.licht'}
+    job = {'id': 'job', 'project': 'project', 'status': 'error', 'requiresPreparation': True,
+           'metadata': {'title': 'Project'}}
+    calls = []
+    service = SimpleNamespace(identity=lambda: 'account', snapshot=lambda: {'jobs': [job]},
+        discard=lambda identifier: calls.append(('discard', identifier)))
+    controller = SimpleNamespace(service=service, _schedule_poll=lambda: None)
+    monkeypatch.setattr(panel, '_controller', lambda: controller)
+    monkeypatch.setattr(panel, '_asset_dict', lambda _identifier: asset)
+    monkeypatch.setattr(panel, '_select_asset_id', lambda _identifier: True)
+    monkeypatch.setattr(panel, '_open_gallery_review', lambda current, action: calls.append(('review', current['id'], action)))
+    panel._gallery_state['jobs'] = [job]
+    panel._transfer_command('resume', ['job'])
+    assert calls == [('discard', 'job')]
+    controller._after_service()
+    assert calls == [('discard', 'job')]
+    job['status'] = 'canceled'
+    controller._after_service()
+    assert calls[-1] == ('review', 'project', 'publish')

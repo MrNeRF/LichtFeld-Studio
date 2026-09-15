@@ -449,6 +449,12 @@ class GalleryAssetMixin:
                 return
             if action == "resume":
                 job = next((job for job in self._gallery_state.get("jobs", []) if job["id"] == identifier), {})
+                if job.get("requiresPreparation"):
+                    asset = self._asset_dict(job.get("project", ""))
+                    if not asset:
+                        raise ValueError(tr("error.link"))
+                    self._restart_failed_upload(asset, job)
+                    return
                 if job.get("needsAttention"):
                     command = "keep_waiting"
             self._controller().command(command, None if identifier == "native" else identifier)
@@ -457,6 +463,27 @@ class GalleryAssetMixin:
             from .gallery_messages import localize_message
             self._gallery_notice = localize_message(str(exc))
             self._request_model_update()
+
+    def _restart_failed_upload(self, asset, job):
+        controller = self._controller()
+        identity = controller.service.identity()
+        asset_id, job_id = asset["id"], job["id"]
+
+        def review():
+            current = next((row for row in controller.service.snapshot()["jobs"] if row["id"] == job_id), {})
+            if controller.service.identity() != identity or current.get("status") != "canceled":
+                return
+            if not self._select_asset_id(asset_id):
+                return
+            current_asset = self._asset_dict(asset_id)
+            if job.get("handoff"):
+                self._open_replacement_review(current_asset)
+            else:
+                self._open_gallery_review(current_asset, "update" if job.get("metadata", {}).get("replaceSceneId") else "publish")
+
+        controller.service.discard(job_id)
+        controller._after_service = review
+        controller._schedule_poll()
 
     def _gallery_context_items(self, asset):
         return [{"label": action["label"], "action": "gallery:" + action["id"],
@@ -547,6 +574,8 @@ class GalleryAssetMixin:
                     self._open_gallery_review(asset, action)
             elif action == "resolve":
                 self._controller().resolve_asset(asset, self._gallery_details())
+            elif action == "retry" and facts.get("job", {}).get("requiresPreparation"):
+                self._restart_failed_upload(asset, facts["job"])
             elif action == "retry" and facts.get("job", {}).get("nativePreparation"):
                 self._open_gallery_review(asset, "update" if facts.get("linked") else "publish")
             elif action in ("retry", "resume", "keep_waiting") and facts["jobId"]:

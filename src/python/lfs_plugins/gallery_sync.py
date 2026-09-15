@@ -115,7 +115,7 @@ def _validate_journal(data):
             for key in ('createdAt', 'finishedAt', 'processingDeadline'):
                 require(key not in job or (type(job[key]) in (int, float) and math.isfinite(job[key]) and job[key] >= 0))
             require('attempts' not in job or (type(job['attempts']) is int and job['attempts'] >= 0))
-            for key in ("serverProcessing", "packaged", "needsAttention", "retryable"):
+            for key in ("serverProcessing", "packaged", "needsAttention", "retryable", "requiresPreparation", "preparedRemoved"):
                 require(key not in job or type(job[key]) is bool)
             if "preparation" in job:
                 require(isinstance(job["preparation"], str) and job.get("kind", "upload") == "upload"
@@ -183,7 +183,7 @@ def file_stamp(path):
 class GallerySync:
     def __init__(self, account, root):
         self.account = account
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._persist_lock = threading.Lock()
@@ -265,6 +265,17 @@ class GallerySync:
                 self._data = data
             self._disk_digest = digest
             self._journal_problem = self._stale = False
+        if recover_interrupted:
+            pending_cleanup = [job for bucket in self._data["accounts"].values() for job in bucket["jobs"]
+                               if job["status"] in ("error", "completed", "canceled") and job.get("ownedExport")
+                               and (not job.get("preparedRemoved") or job.get("cleanupPending"))]
+            for job in pending_cleanup:
+                if job["status"] == "error":
+                    job.update(requiresPreparation=True, retryable=True)
+            if pending_cleanup:
+                self._save()
+                for job in pending_cleanup:
+                    self._retire_export(job)
 
     def _save(self):
         with self._persist_lock:
@@ -837,6 +848,8 @@ class GallerySync:
             job = self._job(job_id)
             if job["status"] in ("completed", "canceled"):
                 raise ValueError("This transfer is already finished.")
+            if job.get("requiresPreparation"):
+                raise ValueError("The prepared upload was removed after failure. Review the project to start a fresh upload.")
             if job.get("retryable") is False:
                 raise ValueError(job["message"])
             bucket = self._bucket()
@@ -938,7 +951,7 @@ class GallerySync:
                 if job.get("preparation") and not job.get("packaged"):
                     self._client()
                     staging = gallery_preparation.staging_path(self.root, job["preparation"])
-                    destination = Path(job["path"]).absolute()
+                    destination = Path(job["path"]).resolve()
                     if destination != staging.with_suffix(".licht") or destination.is_symlink():
                         raise ValueError("Scene preparation no longer matches its transfer. Keep it for recovery.")
                     nodes, total = gallery_preparation.read_staging(self.root, job["preparation"])
@@ -1059,7 +1072,11 @@ class GallerySync:
                     elif isinstance(exc, GalleryTransferCanceled) and job.get("preparation") and not job.get("packaged"):
                         job["message"] = "Preparation paused. Resume to prepare the saved scene and upload it."
                     self.message = job["message"]
+                    if job["status"] == "error" and job.get("ownedExport"):
+                        job.update(requiresPreparation=True, retryable=True)
                 self._save()
+                if job.get("requiresPreparation"):
+                    self._retire_export(job)
         def attempted():
             self._client()
             with self._lock:
@@ -1385,10 +1402,15 @@ class GallerySync:
 
     def _cleanup_paths(self, job, references):
         paths = []
-        root = self.root.absolute()
+        root = self.root
+        if root.resolve() != root:
+            raise ValueError("The transfer folder was redirected. Keep it for recovery.")
 
         def owned(value, directory, identifier=None):
             path = Path(value).absolute()
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+                raise ValueError("A transfer file was redirected. Keep it for recovery.")
+            path = path.resolve()
             if path.parent != directory or path.suffix not in (".licht",):
                 raise ValueError("A transfer file is outside its saved temporary folder. Keep it for recovery.")
             try:
@@ -1423,7 +1445,7 @@ class GallerySync:
             owned(job["path"], root)
             if job.get("preparation"):
                 directory = gallery_preparation.staging_path(root, job["preparation"])
-                if Path(job["path"]).absolute() != directory.with_suffix(".licht"):
+                if Path(job["path"]).resolve() != directory.with_suffix(".licht"):
                     raise ValueError("Scene preparation no longer matches its transfer. Keep it for recovery.")
                 paths.extend(gallery_preparation.staging_files(root, directory))
         for path in paths:
@@ -1523,10 +1545,14 @@ class GallerySync:
         try:
             for path in self._cleanup_paths(job, self._cleanup_references()):
                 self._unlink_temporary(path)
+            job.pop("cleanupPending", None)
+            job["preparedRemoved"] = True
+            self._save()
+            log_stage("export_cleanup", job_id=job["id"], path=job["path"], status=job["status"])
         except (ValueError, OSError) as exc:
             log_failure("export_cleanup", exc, job_id=job["id"])
             with self._lock:
-                job.update(cleanupPending=True, message=("Upload complete." if job["status"] == "completed" else "Upload discarded.")
+                job.update(cleanupPending=True, message=("Upload complete." if job["status"] == "completed" else "Upload failed." if job["status"] == "error" else "Upload discarded.")
                     + " Some temporary files were kept. Open the recovery folder to review them.")
                 self.message = job["message"]
             self._save()

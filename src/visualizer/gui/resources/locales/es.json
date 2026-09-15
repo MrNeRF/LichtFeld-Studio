@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "El elemento ha cambiado. Comprueba la galería y revisa ambas versiones antes de reemplazarlo.",
   "projects.gallery.error.too_large": "Este proyecto supera el límite del portal. Elige un formato de carga más pequeño o reduce su tamaño.",
   "projects.gallery.error.portal_busy": "El portal está ocupado. Espera un momento y reanuda la transferencia.",
-  "projects.gallery.error.server": "El portal no está disponible temporalmente. Tus archivos locales están a salvo. Inténtalo más tarde."
+  "projects.gallery.error.server": "El portal no está disponible temporalmente. Tus archivos locales están a salvo. Inténtalo más tarde.",
+  "projects.gallery.info.prepare_again": "La copia preparada se eliminó tras el error. Reintentar abre una nueva revisión."
 }

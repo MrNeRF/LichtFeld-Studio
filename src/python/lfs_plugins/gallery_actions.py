@@ -103,6 +103,10 @@ def gallery_actions(entry, facts):
     if job.get("localUpdate", {}).get("interrupted") or job.get("localUpdate", {}).get("state") == "failed":
         add("open_recovery", account=False)
         return actions
+    if job.get("requiresPreparation"):
+        add("retry", enabled=not busy)
+        add("cancel", enabled=not busy)
+        return actions
     if job.get("nativePreparation"):
         add("retry", enabled=not busy and eligibility["status"] != "blocked", reason=eligibility["reason"])
         return actions

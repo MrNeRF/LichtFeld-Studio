@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "ギャラリー項目が変更されました。ギャラリーを確認し、両方のバージョンを比較してから置き換えてください。",
   "projects.gallery.error.too_large": "このプロジェクトはポータルの上限を超えています。小さいアップロード形式を選ぶか、サイズを減らしてください。",
   "projects.gallery.error.portal_busy": "ポータルが混雑しています。少し待ってから転送を再開してください。",
-  "projects.gallery.error.server": "ポータルは一時的に利用できません。ローカルファイルは安全です。後でもう一度お試しください。"
+  "projects.gallery.error.server": "ポータルは一時的に利用できません。ローカルファイルは安全です。後でもう一度お試しください。",
+  "projects.gallery.info.prepare_again": "失敗後に準備済みコピーを削除しました。再試行すると確認画面が開きます。"
 }

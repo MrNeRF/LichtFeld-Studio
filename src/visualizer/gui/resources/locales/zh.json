@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "图库项目已更改。请检查图库并比较两个版本后再替换。",
   "projects.gallery.error.too_large": "此项目超过了门户的大小限制。请选择更小的上传格式或减小项目大小。",
   "projects.gallery.error.portal_busy": "门户正忙。请稍候再继续传输。",
-  "projects.gallery.error.server": "门户暂时不可用。本地文件是安全的。请稍后重试。"
+  "projects.gallery.error.server": "门户暂时不可用。本地文件是安全的。请稍后重试。",
+  "projects.gallery.info.prepare_again": "失败后已删除准备好的副本。重试将打开新的审核页面。"
 }

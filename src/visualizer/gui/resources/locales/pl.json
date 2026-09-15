@@ -2848,5 +2848,6 @@
   "projects.gallery.error.http_conflict": "Element galerii uległ zmianie. Sprawdź galerię i porównaj obie wersje przed zastąpieniem.",
   "projects.gallery.error.too_large": "Projekt przekracza limit portalu. Wybierz mniejszy format przesyłania lub zmniejsz jego rozmiar.",
   "projects.gallery.error.portal_busy": "Portal jest zajęty. Poczekaj chwilę i wznów transfer.",
-  "projects.gallery.error.server": "Portal jest chwilowo niedostępny. Pliki lokalne są bezpieczne. Spróbuj ponownie później."
+  "projects.gallery.error.server": "Portal jest chwilowo niedostępny. Pliki lokalne są bezpieczne. Spróbuj ponownie później.",
+  "projects.gallery.info.prepare_again": "Przygotowana kopia została usunięta po błędzie. Ponowienie otwiera nowy przegląd."
 }
