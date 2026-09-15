@@ -25,8 +25,8 @@ LichtFeld-Studio -d DATASET -o OUTPUT --iter 3000 --refine-camera-poses
 
 The default schedule starts at iteration 500 and freezes poses at 80% of the
 training duration (iteration 2400 in this example). There must be an update window
-between warmup and freeze. Each eligible camera visit permits at most two update
-steps, with subsequent bursts spaced by eight visits to that camera. The
+between warmup and freeze. New sessions perform one update per eligible training
+image. Restored sessions retain their saved cadence. The
 initialization log reports the camera count, warmup, freeze iteration and cadence.
 
 The activation stays outside the collapsible settings in Training > Advanced.
@@ -104,34 +104,35 @@ Reprojection residuals use pixels at a 1600-pixel long edge and a one-pixel Hube
 threshold, independently of source resolution and training resize. The coefficient
 weights each observation, with no division by track or camera count. This follows
 the summed BA formulation in [GloSplat](https://arxiv.org/abs/2603.04847), implemented
-independently. The bounded alternating solver and canonical pixel coordinates
-are adaptations, not a reproduction of its Adam optimizer or reported results.
+independently. The safety bounds and canonical pixel coordinates
+are adaptations, not a reproduction of the complete method or its reported results.
 
-Each scheduled visit first relaxes incident points with camera poses fixed.
-It then holds those points fixed while optimizing the active pose using the
-combined objective and its matching analytic left-tangent gradient. Candidate
-search does not repeat the point solve. The robust camera reprojection curvature
-preconditions the combined gradient in scene-normalized coordinates, with identity
-damping. This accounts for translation/rotation coupling without claiming to
-model photometric curvature or recover unobservable geometry. The direction must
-pass the existing descent, motion-bound and nonlinear acceptance checks; it shares
-the candidate budget with the fallback search. A small increase in either component can
-be accepted when the combined objective decreases sufficiently; there is no
-separate non-increase reprojection veto. Motion bounds, source priors and valid
-projections still apply. Pose and point state commit together;
-exceptions and cancellation discard pending changes. Point-only improvement may
-be retained even when no camera step is accepted. Point displacement is bounded
-relative to imported coordinates by the configured camera-center displacement
-limit in scene units. This is alternating local refinement, not global bundle
-adjustment or a guarantee that incorrect correspondences can be recovered.
+Each sampled image supplies its photometric gradient. All observations of its
+incident tracks supply gradients to their points and every supported movable
+camera in those tracks, not just the sampled camera. Anchor observations remain
+in the objective, but anchors never move. Sampling an anchor can therefore still
+refine its neighbours and shared points. Evaluation and disabled cameras do not
+participate.
+
+Camera and point Adam updates use the same frozen batch state, with learning
+rate `1e-5`, beta values `0.9` and `0.999`, and epsilon `1e-8`. Translation and
+point coordinates are normalized by the fixed source scene scale; rotations
+use radians. The point learning rate is an implementation choice, not a claim
+to reproduce an unspecified reference setting. There is no nested triangulation
+or per-image monotonic line search in this path. Source priors, displacement
+bounds, finite-value and projection checks still apply. The whole batch, including
+optimizer moments, commits atomically; exceptions and cancellation discard it.
+Sparse track points remain separate from Gaussian means. Stochastic loss can
+increase on an individual batch; updated status is not a quality certificate.
 
 Cameras without sufficient shared support retain the fixed-source constraint
 below, or photometric-only acceptance when sparse support is unavailable.
 Legacy pose checkpoints retain their original objective on resume: version one
 uses fixed sources and version two uses the strict shared-geometry gate.
-Version three persists the combined-objective weight, including an empty shared
-graph when no suitable tracks exist. Changing objectives requires a new training
-session; opening an older checkpoint does not silently migrate it.
+The combined state persists an explicit update-rule identity, the objective
+weight, camera and point Adam moments and step counts. Reset clears these along
+with the corrections. An experimental checkpoint with a different update rule
+cannot silently resume using this optimizer; start a new training session.
 
 The sparse constraint selects a fixed set of source-visible observations,
 discarding source residuals above the larger of four times the median and four
@@ -161,12 +162,18 @@ Imported observations retain the original 64-bit COLMAP point ID. This identity
 is local to the reconstruction and is not a Gaussian index. Shared-point
 utilities group observations by that ID, exclude non-training views, reject
 duplicate-camera or inconsistent tracks, and require at least three views.
-The point block minimizes robust reprojection error at fixed poses within a
-cumulative displacement bound. Current shared positions live in the pose session
+The point block uses robust reprojection gradients within a cumulative
+displacement bound. Current shared positions live in the pose session
 and are saved with source positions and graph fingerprints in its checkpoint.
 Resume requires matching source poses, membership, measurements and calibration;
 incompatible geometry is rejected before the loaded model is committed. Original
 COLMAP files and imported Camera observations are never overwritten.
+
+In the legacy strict-gate solver, the baseline and all candidate poses solve their shared
+points from identical initial positions with the same iteration budget. A
+candidate cannot obtain extra point-relaxation iterations by starting from the
+already-optimized baseline. This also applies to robust tracks that have not
+converged and points at their cumulative movement limit.
 
 Shared points are geometric constraints, not Gaussian means. Gaussian positions
 remain managed by their existing optimizer and densification lifecycle, using
@@ -261,6 +268,10 @@ Candidate-render counters include completed and cancelled visits, but not visits
 that throw.
 
 ## Image evaluator
+
+Pose refinement uses the training photometric objective and SSIM weight, without
+an additional image-blurring objective. Mask, ROI and appearance-correction paths
+retain their dedicated objective. Gaussian training without refinement is unchanged.
 
 `FastGSPoseEvaluator` connects a session to full-image FastGS rendering and
 camera-only backward. A baseline forward is reused for backward; candidate

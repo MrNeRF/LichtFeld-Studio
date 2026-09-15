@@ -66,6 +66,71 @@ namespace lfs::training::camera_pose {
         double source_cost, candidate_cost;
     };
 
+    struct SparsePointAdam {
+        SparsePointPosition first{}, second{};
+        std::uint64_t steps = 0;
+    };
+
+    struct JointReprojectionObjective {
+        double cost = 0;
+        std::map<int, std::array<double, 6>> cameras;
+        std::vector<SparsePointPosition> points;
+    };
+
+    // Differentiate the SAME observation sum with respect to every incident
+    // camera and point, at one frozen state. Membership/gauge are the caller's
+    // responsibility; never omit an anchor's observations from the point loss.
+    inline std::optional<JointReprojectionObjective> joint_reprojection_objective(
+        std::span<const SparsePointTrack> tracks, std::span<const SparsePointPosition> points) {
+        if (tracks.empty() || tracks.size() != points.size())
+            return std::nullopt;
+        JointReprojectionObjective result;
+        result.points.resize(points.size());
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            for (const auto& m : tracks[i].measurements) {
+                const auto& p = m.pose;
+                const auto& k = m.calibration;
+                if (!m.training || k.width <= 0 || k.height <= 0 || k.fx <= 0 || k.fy <= 0)
+                    return std::nullopt;
+                const auto& point = points[i];
+                const double x = p[0] * point[0] + p[1] * point[1] + p[2] * point[2] + p[3];
+                const double y = p[4] * point[0] + p[5] * point[1] + p[6] * point[2] + p[7];
+                const double z = p[8] * point[0] + p[9] * point[1] + p[10] * point[2] + p[11];
+                if (!std::isfinite(z) || z <= 0)
+                    return std::nullopt;
+                const double scale = 1600.0 / std::max(k.width, k.height);
+                const double ru = (k.fx * x / z + k.cx - m.u) * scale;
+                const double rv = (k.fy * y / z + k.cy - m.v) * scale;
+                const double r = std::hypot(ru, rv);
+                if (!std::isfinite(r))
+                    return std::nullopt;
+                const double w = r <= 1 ? 1 : 1 / r;
+                result.cost += r <= 1 ? 0.5 * r * r : r - 0.5;
+                const double u = k.fx * scale / z, v = k.fy * scale / z;
+                const std::array<double, 6> ju{u, 0, -u * x / z, -u * x * y / z, u * (z + x * x / z), -u * y};
+                const std::array<double, 6> jv{0, v, -v * y / z, -v * (z + y * y / z), v * x * y / z, v * x};
+                auto& gradient = result.cameras[m.camera_uid];
+                for (size_t a = 0; a < 6; ++a)
+                    gradient[a] += w * (ju[a] * ru + jv[a] * rv);
+                for (size_t a = 0; a < 3; ++a)
+                    result.points[i][a] += w * (u * (p[a] - x / z * p[8 + a]) * ru +
+                                                v * (p[4 + a] - y / z * p[8 + a]) * rv);
+            }
+        }
+        auto finite = [](const auto& g) {
+            return std::all_of(g.begin(), g.end(), [](double v) { return std::isfinite(v); });
+        };
+        if (!std::isfinite(result.cost))
+            return std::nullopt;
+        for (const auto& [uid, g] : result.cameras)
+            if (!finite(g))
+                return std::nullopt;
+        for (const auto& g : result.points)
+            if (!finite(g))
+                return std::nullopt;
+        return result;
+    }
+
     // Reprojection is measured in pixels at a 1600-pixel long edge, independent
     // of source/training image resolution. SUM over incident track observations:
     // the BA coefficient weights each observation, not a dataset-dependent mean.

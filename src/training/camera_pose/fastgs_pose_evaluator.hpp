@@ -56,7 +56,8 @@ namespace lfs::training::camera_pose {
     // GPU reduction, scalar readback only; clone target once per visit owner,
     // not per candidate. Does not replace the normal training loss implicitly.
     [[nodiscard]] PoseObjective make_pose_mse_objective(const lfs::core::Tensor& target);
-    [[nodiscard]] PoseObjective make_pose_photometric_objective(const lfs::core::Tensor& target, float lambda_dssim);
+    [[nodiscard]] PoseObjective make_pose_photometric_objective(const lfs::core::Tensor& target, float lambda_dssim,
+                                                              bool multiscale = false);
     [[nodiscard]] FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose);
     [[nodiscard]] SparseReprojectionGuard make_sparse_reprojection_guard(const lfs::core::Camera& camera);
     // Explicit membership must come from the current training dataset, not just

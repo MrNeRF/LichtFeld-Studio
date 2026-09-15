@@ -13,8 +13,10 @@ namespace lfs::training::camera_pose {
         Json settings(const PoseSessionConfig& config) {
             const auto& opt = config.optimizer;
             Json result = {{"total_iterations", config.total_iterations}, {"warmup_iterations", config.warmup_iterations}, {"freeze_fraction", config.freeze_fraction}, {"visits_between_updates", config.visits_between_updates}, {"steps_per_visit", config.steps_per_visit}, {"choose_anchors", config.choose_anchors}, {"optimizer", {{"scene_scale", opt.scene_scale}, {"max_center_fraction", opt.max_center_fraction}, {"max_rotation_radians", opt.max_rotation_radians}, {"step_center_fraction", opt.step_center_fraction}, {"step_rotation_radians", opt.step_rotation_radians}, {"center_prior", opt.center_prior}, {"rotation_prior", opt.rotation_prior}, {"min_relative_improvement", opt.min_relative_improvement}, {"max_backtracks", opt.max_backtracks}}}};
-            if (config.joint_reprojection_weight > 0)
+            if (config.joint_reprojection_weight > 0) {
                 result["joint_reprojection_weight"] = config.joint_reprojection_weight;
+                result["joint_update_rule"] = "simultaneous_adam";
+            }
             return result;
         }
 
@@ -87,6 +89,8 @@ namespace lfs::training::camera_pose {
         for (const auto& entry : entries_) {
             const auto pose = entry.optimizer.snapshot();
             cameras.push_back({{"uid", pose.uid}, {"role", static_cast<int>(entry.role)}, {"source", pose.source}, {"current", pose.current}, {"revision", pose.revision}, {"accepted_steps", pose.accepted_steps}, {"rejected_steps", pose.rejected_steps}, {"display_state", static_cast<int>(entry.state)}, {"eligible_visits", entry.visits}, {"candidate_renders", entry.renders}});
+            if (config_.joint_reprojection_weight > 0)
+                cameras.back()["adam"] = {{"steps", pose.adaptive_steps}, {"first", pose.first_moment}, {"second", pose.second_moment}};
         }
         Json result = {{"version", config_.joint_reprojection_weight > 0 ? 3 : sparse_tracks_.empty() ? 1
                                                                                                       : 2},
@@ -99,6 +103,8 @@ namespace lfs::training::camera_pose {
             for (size_t i = 0; i < sparse_tracks_.size(); ++i) {
                 const auto& track = sparse_tracks_[i];
                 points.push_back({{"id", track.point_id}, {"source", track.source}, {"current", sparse_positions_[i]}, {"fingerprint", sparse_track_fingerprint(track)}});
+                if (config_.joint_reprojection_weight > 0)
+                    points.back()["adam"] = {{"steps", sparse_adam_[i].steps}, {"first", sparse_adam_[i].first}, {"second", sparse_adam_[i].second}};
             }
             result["points"] = std::move(points);
         }
@@ -123,7 +129,7 @@ namespace lfs::training::camera_pose {
         auto working = entries_;
         std::vector<bool> seen(working.size(), false);
         for (const auto& camera : cameras) {
-            if (!camera.is_object() || camera.size() != 10)
+            if (!camera.is_object() || camera.size() != (config_.joint_reprojection_weight > 0 ? 11u : 10u))
                 throw std::invalid_argument("Invalid saved camera pose record");
             const int uid = integer(camera.at("uid"));
             const auto found = index_.find(uid);
@@ -140,6 +146,15 @@ namespace lfs::training::camera_pose {
             pose.revision = counter(camera.at("revision"));
             pose.accepted_steps = counter(camera.at("accepted_steps"));
             pose.rejected_steps = counter(camera.at("rejected_steps"));
+            if (config_.joint_reprojection_weight > 0) {
+                const auto& adam = camera.at("adam");
+                if (!adam.is_object() || adam.size() != 3 || !adam.at("first").is_array() || adam.at("first").size() != 6 ||
+                    !adam.at("second").is_array() || adam.at("second").size() != 6)
+                    throw std::invalid_argument("Invalid adaptive pose state");
+                pose.adaptive_steps = counter(adam.at("steps"));
+                pose.first_moment = adam.at("first").get<std::array<double, 6>>();
+                pose.second_moment = adam.at("second").get<std::array<double, 6>>();
+            }
             entry.optimizer.restore(pose);
             const int display = integer(camera.at("display_state"));
             // Only internal last-attempt states are durable; role/freeze states
@@ -149,10 +164,11 @@ namespace lfs::training::camera_pose {
             entry.state = static_cast<PoseDisplayState>(display);
             entry.visits = counter(camera.at("eligible_visits"));
             entry.renders = counter(camera.at("candidate_renders"));
-            if (entry.renders < pose.accepted_steps)
+            if (config_.joint_reprojection_weight == 0 && entry.renders < pose.accepted_steps)
                 throw std::invalid_argument("Saved pose accepted steps exceed candidate renders");
         }
         auto positions = sparse_positions_;
+        auto point_adam = sparse_adam_;
         if (version >= 2) {
             const auto& points = state.at("points");
             if (!points.is_array() || points.size() != sparse_tracks_.size())
@@ -161,10 +177,24 @@ namespace lfs::training::camera_pose {
             for (size_t i = 0; i < points.size(); ++i) {
                 const auto& point = points[i];
                 const auto& track = sparse_tracks_[i];
-                if (!point.is_object() || point.size() != 4 ||
+                if (!point.is_object() || point.size() != (config_.joint_reprojection_weight > 0 ? 5u : 4u) ||
                     point.at("id") != Json(track.point_id) || point.at("source") != Json(track.source) ||
                     point.at("fingerprint") != Json(sparse_track_fingerprint(track)))
                     throw std::invalid_argument("Shared point source graph changed");
+                if (config_.joint_reprojection_weight > 0) {
+                    const auto& adam = point.at("adam");
+                    if (!adam.is_object() || adam.size() != 3 || !adam.at("first").is_array() || adam.at("first").size() != 3 ||
+                        !adam.at("second").is_array() || adam.at("second").size() != 3)
+                        throw std::invalid_argument("Invalid shared point Adam state");
+                    auto& saved = point_adam[i];
+                    saved.steps = counter(adam.at("steps"));
+                    saved.first = adam.at("first").get<SparsePointPosition>();
+                    saved.second = adam.at("second").get<SparsePointPosition>();
+                    for (size_t a = 0; a < 3; ++a)
+                        if (!std::isfinite(saved.first[a]) || !std::isfinite(saved.second[a]) || saved.second[a] < 0 ||
+                            (saved.steps == 0 && (saved.first[a] != 0 || saved.second[a] != 0)))
+                            throw std::invalid_argument("Invalid shared point Adam moments");
+                }
                 const auto& current = point.at("current");
                 if (!current.is_array() || current.size() != 3)
                     throw std::invalid_argument("Shared point requires three coordinates");
@@ -192,6 +222,7 @@ namespace lfs::training::camera_pose {
         const auto snapshot = make_snapshot(working, iteration, paused, sequence_ + 1);
         entries_ = std::move(working);
         sparse_positions_ = std::move(positions);
+        sparse_adam_ = std::move(point_adam);
         diagnostics_ = {};
         iteration_ = iteration;
         paused_ = paused;

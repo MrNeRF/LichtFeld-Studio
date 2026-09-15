@@ -132,6 +132,8 @@ namespace lfs::training::camera_pose {
             std::uint64_t renders = 0;
         };
         [[nodiscard]] bool in_window() const noexcept;
+        PoseVisitResult visit_joint(int uid, const std::function<PoseImageEvaluation(const Matrix4&)>& evaluate,
+                                    std::stop_token stop, const std::function<bool(const Matrix4&)>& candidate_allowed);
         void log_diagnostics() const;
         [[nodiscard]] std::shared_ptr<const PoseSessionSnapshot> make_snapshot(
             const std::vector<Entry>& entries, int iteration, bool paused, std::uint64_t sequence) const;
@@ -145,6 +147,7 @@ namespace lfs::training::camera_pose {
         std::unordered_map<int, size_t> index_;
         std::vector<SparsePointTrack> sparse_tracks_;
         std::vector<SparsePointPosition> sparse_positions_;
+        std::vector<SparsePointAdam> sparse_adam_;
         std::unordered_map<int, std::vector<size_t>> tracks_by_camera_;
         PoseDiagnostics diagnostics_;
         std::chrono::steady_clock::time_point next_publish_{};

@@ -41,6 +41,9 @@ namespace lfs::training::camera_pose {
         std::uint64_t rejected_steps = 0;
         double center_displacement = 0.0;
         double rotation_displacement = 0.0;
+        std::array<double, 6> first_moment{};
+        std::array<double, 6> second_moment{};
+        std::uint64_t adaptive_steps = 0;
     };
 
     struct PoseEvaluation {
@@ -53,8 +56,9 @@ namespace lfs::training::camera_pose {
         // Scalar data objective and its matching gradient. Normally photometric;
         // combined sessions supply image + reprojection (source prior is internal).
         double image_loss = 0.0;
-        Twist image_gradient{}; // Fresh left-tangent gradient, not matrix gradient
+        Twist image_gradient{};                    // Fresh left-tangent gradient, not matrix gradient
         std::optional<Twist> geometric_proposal{}; // World-unit left increment; never an acceptance override.
+        bool adaptive = false;                     // Small persistent Adam direction; same nonlinear acceptance.
     };
 
     struct PoseStepResult {
@@ -77,6 +81,11 @@ namespace lfs::training::camera_pose {
         // Restore durable pose/counters, invalidate old evaluations and restart
         // curvature history. Source and role belong to the current dataset.
         void restore(const PoseSnapshot& saved);
+
+        // Joint stochastic update: no per-image monotonic line search. The
+        // session commits all involved cameras/points as one transaction after
+        // checking finite values, projection and source-relative safety bounds.
+        [[nodiscard]] bool joint_step(const std::array<double, 6>& gradient);
 
         // Candidate callback must only render/evaluate; it must not update
         // Gaussian/appearance optimizers. At most max_backtracks callbacks.

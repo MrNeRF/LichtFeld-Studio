@@ -99,10 +99,12 @@ namespace lfs::training::camera_pose {
     // geometry acceptance still belong to the caller's transaction.
     inline std::optional<Twist> propose_joint_pose(
         int uid, const Matrix4& pose, std::span<const SparsePointTrack> tracks,
-        std::span<const SparsePointPosition> positions, double scene_scale) {
+        std::span<const SparsePointPosition> positions, double scene_scale,
+        std::optional<Twist> photometric_gradient = {}, double geometry_weight = 1e-4) {
         using namespace joint_detail;
         if (uid < 0 || tracks.size() < 12 || tracks.size() != positions.size() ||
-            !std::isfinite(scene_scale) || scene_scale <= 0)
+            !std::isfinite(scene_scale) || scene_scale <= 0 ||
+            (photometric_gradient && (!std::isfinite(geometry_weight) || geometry_weight <= 0)))
             return std::nullopt;
         try {
             (void)BoundedPoseOptimizer(uid, pose, BoundedPoseConfig{});
@@ -143,10 +145,10 @@ namespace lfs::training::camera_pose {
                 const double z = p[8] * point[0] + p[9] * point[1] + p[10] * point[2] + p[11];
                 if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || z <= 0)
                     return std::nullopt;
-                const double n = std::max(k.width, k.height);
+                const double n = std::max(k.width, k.height) / (photometric_gradient ? 1600.0 : 1.0);
                 const double ru = (k.fx * x / z + k.cx - m.u) / n;
                 const double rv = (k.fy * y / z + k.cy - m.v) / n;
-                const double r = std::hypot(ru, rv), delta = 2.0 / n;
+                const double r = std::hypot(ru, rv), delta = photometric_gradient ? 1.0 : 2.0 / n;
                 if (!std::isfinite(r))
                     return std::nullopt;
                 const double w = r <= delta ? 1.0 : delta / r;
@@ -194,6 +196,19 @@ namespace lfs::training::camera_pose {
                     reduced[i][j] += value;
                     reduced[j][i] = reduced[i][j];
                 }
+            }
+        }
+        // Joint mode retains the Schur point response, then adds the image
+        // gradient to the same reduced system. Unit damping is expressed in
+        // scene-normalized tangent coordinates, not added to the loss.
+        if (photometric_gradient) {
+            for (size_t i = 0; i < 6; ++i) {
+                const double image_gradient = (*photometric_gradient)[i] * (i < 3 ? scene_scale : 1.0);
+                if (!std::isfinite(image_gradient))
+                    return std::nullopt;
+                rhs[i] = geometry_weight * rhs[i] - image_gradient;
+                for (size_t j = 0; j < 6; ++j)
+                    reduced[i][j] = geometry_weight * reduced[i][j] + (i == j ? 1.0 : 0.0);
             }
         }
         Factor<6> factor;

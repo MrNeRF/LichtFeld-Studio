@@ -1151,7 +1151,7 @@ namespace {
                                       objective, {}, false, session.get());
         const auto result = evaluator.visit(*session, 5, 1);
         EXPECT_TRUE(result.scheduled);
-        EXPECT_EQ(session->diagnostics().point_solves, session->shared_point_count());
+        EXPECT_EQ(session->diagnostics().point_solves, 0u);
         expect_bytes_equal(scene->means(), means);
         ASSERT_EQ(session->save_state()["version"], 3);
         lfs::core::param::TrainingParameters params;
@@ -1209,6 +1209,23 @@ namespace {
                 EXPECT_NEAR(image.gradient[axis], expected_gradient[axis], 1e-6 + std::abs(expected_gradient[axis]) * 1e-4);
         }
         EXPECT_THROW((void)make_pose_photometric_objective(target, -0.1f), std::invalid_argument);
+        auto rendered = forward(pose);
+        // Keep every L1 residual away from zero: a finite difference crossing
+        // its kink does not test the derivative at the baseline. Isolate the
+        // filter adjoint from SSIM's separate derivative contract above.
+        rendered.first.image = target + 0.1f;
+        auto multiscale = make_pose_photometric_objective(target, 0.0f, true);
+        const auto analytic = multiscale(rendered.first, true);
+        EXPECT_DOUBLE_EQ(analytic.loss, multiscale(rendered.first, false).loss);
+        const auto direction = Tensor::ones_like(rendered.first.image);
+        auto plus = rendered.first;
+        auto minus = rendered.first;
+        plus.image = rendered.first.image + direction * 0.001f;
+        minus.image = rendered.first.image - direction * 0.001f;
+        const double numerical = (multiscale(plus, false).loss - multiscale(minus, false).loss) / 0.002;
+        const double predicted = (analytic.grad_image * direction).sum().item<float>();
+        EXPECT_NEAR(predicted, numerical, 2e-4);
+        rendered.second.release_forward_context();
     }
 
     TEST_F(CameraPoseTrainerIntegrationTest, CheckpointRestoresPoseStateWithModel) {

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "training/camera_pose/pose_refinement_session.hpp"
 #include "training/camera_pose/joint_pose_proposal.hpp"
+#include "training/camera_pose/pose_refinement_session.hpp"
 #include <algorithm>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -357,7 +357,7 @@ namespace {
         EXPECT_FALSE(sparse_pose_objective(30, identity_transform(), tracks, points));
     }
 
-    TEST(CameraPoseCombinedObjectiveTest, PhotometricGainCanOutweighReprojectionIncreaseWithoutNestedPointSolves) {
+    TEST(CameraPoseCombinedObjectiveTest, PhotometricGainCanOutweighReprojectionIncreaseWithBoundedPointResponses) {
         auto measurements = shared_measurements();
         for (auto& m : measurements) {
             m.source[0] -= 0.002;
@@ -385,9 +385,45 @@ namespace {
         const double weight = combined_config().joint_reprojection_weight;
         EXPECT_LT(loss(session.current_pose(30)) + weight * after->cost,
                   loss(identity_transform()) + weight * before->cost);
-        EXPECT_EQ(session.diagnostics().point_solves, tracks.size());
+        EXPECT_EQ(session.diagnostics().point_solves, 0u); // No nested point solves in stochastic updates.
+        EXPECT_LE(session.diagnostics().candidate_checks,
+                  combined_config().steps_per_visit * combined_config().optimizer.max_backtracks);
         for (const int uid : {10, 20, 90})
             EXPECT_EQ(session.current_pose(uid), uid == 10 ? identity_transform() : cameras()[1].source);
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, CandidatePointResponseUsesSameInitialStateAndBudget) {
+        auto measurements = shared_measurements();
+        // Inconsistent robust tracks do not necessarily converge in one bounded
+        // solve. Extra iterations must not masquerade as a camera improvement.
+        for (auto& m : measurements) {
+            m.u += m.camera_uid == 10 ? 3.0 : -0.7;
+            m.v += m.camera_uid == 20 ? 2.0 : -0.3;
+        }
+        auto cfg = combined_config();
+        cfg.steps_per_visit = 1;
+        PoseRefinementSession session(1, cameras(), cfg);
+        session.configure_sparse_points(measurements);
+        auto tracks = build_sparse_point_tracks(measurements);
+        std::vector<SparsePointPosition> initial;
+        for (const auto& track : tracks)
+            initial.push_back(track.source);
+        const auto baseline = joint_reprojection_objective(tracks, initial);
+        ASSERT_TRUE(baseline);
+        const auto result = session.visit(30, 10, 1, evaluate, loss);
+        ASSERT_GT(result.accepted_steps, 0);
+        const auto state = session.save_state();
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            // Points use exactly the original batch gradient, NOT a second
+            // evaluation after the cameras have moved or a nested point solve.
+            const auto actual = state["points"][i]["current"].get<SparsePointPosition>();
+            for (size_t axis = 0; axis < 3; ++axis) {
+                const double g = cfg.joint_reprojection_weight * cfg.optimizer.scene_scale * baseline->points[i][axis];
+                const double expected = initial[i][axis] - 1e-5 * cfg.optimizer.scene_scale * g / (std::abs(g) + 1e-8);
+                EXPECT_NEAR(actual[axis], expected, 1e-12) << "track " << i;
+            }
+            EXPECT_EQ(state["points"][i]["adam"]["steps"], 1);
+        }
     }
 
     TEST(CameraPoseCombinedObjectiveTest, ReprojectionGainCanOutweighPhotometricIncrease) {
@@ -415,7 +451,7 @@ namespace {
             return PoseImageEvaluation{image_loss(pose), left_increment_gradient(pose, gradient)}; }, image_loss);
         ASSERT_GT(result.accepted_steps, 0);
         EXPECT_GT(image_loss(session.current_pose(30)), image_loss(identity_transform()));
-        EXPECT_EQ(session.diagnostics().point_solves, session.shared_point_count());
+        EXPECT_EQ(session.diagnostics().point_solves, 0u);
     }
 
     TEST(CameraPoseCombinedObjectiveTest, ObservationSumAndOnePixelHuberAreNotDatasetAverages) {
@@ -536,6 +572,157 @@ namespace {
             EXPECT_EQ(session.save_state()["points"], before["points"]);
             EXPECT_EQ(session.save_state()["cameras"], before["cameras"]);
         }
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, EveryIncidentCameraAndPointMatchesFiniteDifferences) {
+        auto tracks = build_sparse_point_tracks(shared_measurements());
+        std::vector<SparsePointPosition> points;
+        for (const auto& track : tracks)
+            points.push_back(track.source);
+        for (auto& track : tracks)
+            for (auto& m : track.measurements)
+                m.pose = apply_left_increment({0.004f, -0.002f, 0.001f, 0.002f, 0.001f, -0.001f}, m.pose);
+        const auto objective = joint_reprojection_objective(tracks, points);
+        ASSERT_TRUE(objective);
+        for (const int uid : {10, 20, 30}) {
+            for (size_t a = 0; a < 6; ++a) {
+                auto plus = tracks, minus = tracks;
+                Twist delta{};
+                constexpr float h = 1e-4f;
+                delta[a] = h;
+                for (auto& t : plus)
+                    for (auto& m : t.measurements)
+                        if (m.camera_uid == uid)
+                            m.pose = apply_left_increment(delta, m.pose);
+                delta[a] = -h;
+                for (auto& t : minus)
+                    for (auto& m : t.measurements)
+                        if (m.camera_uid == uid)
+                            m.pose = apply_left_increment(delta, m.pose);
+                const auto p = joint_reprojection_objective(plus, points);
+                const auto n = joint_reprojection_objective(minus, points);
+                ASSERT_TRUE(p);
+                ASSERT_TRUE(n);
+                const double numerical = (p->cost - n->cost) / (2 * h);
+                EXPECT_NEAR(objective->cameras.at(uid)[a], numerical, .03 + .003 * std::abs(numerical));
+            }
+        }
+        for (size_t i = 0; i < points.size(); ++i)
+            for (size_t a = 0; a < 3; ++a) {
+                auto plus = points, minus = points;
+                constexpr double h = 1e-6;
+                plus[i][a] += h;
+                minus[i][a] -= h;
+                const auto p = joint_reprojection_objective(tracks, plus);
+                const auto n = joint_reprojection_objective(tracks, minus);
+                ASSERT_TRUE(p);
+                ASSERT_TRUE(n);
+                EXPECT_NEAR(objective->points[i][a], (p->cost - n->cost) / (2 * h), 1e-5);
+            }
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, JointBatchRecoversConnectedPosesAndResumesAllMoments) {
+        auto inputs = cameras();
+        inputs[0].source[3] = .012f;
+        auto neighbour = identity_transform();
+        neighbour[3] = .39f; // Ground truth is .4.
+        inputs.push_back({40, neighbour, PoseRole::Train});
+        auto measurements = shared_measurements();
+        for (auto& m : measurements)
+            if (m.camera_uid == 30)
+                m.pose = inputs[0].source;
+        const auto original = measurements;
+        for (const auto& m : original)
+            if (m.camera_uid == 30) {
+                auto n = m;
+                n.camera_uid = 40;
+                n.pose = neighbour;
+                n.u += n.calibration.fx * .4 / (n.source[2] - .003);
+                measurements.push_back(n);
+            }
+        auto cfg = combined_config();
+        cfg.total_iterations = 12000;
+        cfg.warmup_iterations = 0;
+        cfg.freeze_fraction = 1;
+        cfg.visits_between_updates = cfg.steps_per_visit = 1;
+        PoseRefinementSession session(1, inputs, cfg);
+        session.configure_sparse_points(measurements);
+        ASSERT_TRUE(session.joint_geometry_enabled(40));
+        auto flat = [](const Matrix4&) { return PoseImageEvaluation{1, {}}; };
+        auto loss_only = [](const Matrix4&) { return 1.; };
+        auto cost = [&](const nlohmann::json& state) {
+            auto tracks = build_sparse_point_tracks(measurements);
+            std::vector<SparsePointPosition> points;
+            for (size_t i = 0; i < tracks.size(); ++i) {
+                points.push_back(state["points"][i]["current"].get<SparsePointPosition>());
+                for (auto& m : tracks[i].measurements)
+                    for (const auto& camera : state["cameras"])
+                        if (camera["uid"] == m.camera_uid)
+                            m.pose = camera["current"].get<Matrix4>();
+            }
+            const auto objective = joint_reprojection_objective(tracks, points);
+            EXPECT_TRUE(objective);
+            return objective ? objective->cost : std::numeric_limits<double>::infinity();
+        };
+        const auto before = session.save_state();
+        for (const bool cancel : {false, true}) {
+            auto burst_config = cfg;
+            burst_config.steps_per_visit = 2;
+            PoseRefinementSession burst(3, inputs, burst_config);
+            burst.configure_sparse_points(measurements);
+            const auto intact = burst.save_state();
+            std::stop_source stop;
+            int calls = 0;
+            auto interrupted = [&](const Matrix4&) -> PoseImageEvaluation {
+                if (++calls == 2) {
+                    if (!cancel)
+                        throw std::runtime_error("Interrupted joint burst");
+                    stop.request_stop();
+                }
+                return {1, {}};
+            };
+            if (cancel)
+                EXPECT_TRUE(burst.visit(30, 0, 1, interrupted, loss_only, stop.get_token()).cancelled);
+            else
+                EXPECT_THROW((void)burst.visit(30, 0, 1, interrupted, loss_only), std::runtime_error);
+            EXPECT_EQ(calls, 2);
+            EXPECT_EQ(burst.save_state(), intact);
+        }
+        // Even a sampled anchor's tracks must update its movable neighbours.
+        ASSERT_GT(session.visit(10, 0, 1, flat, loss_only).accepted_steps, 0);
+        EXPECT_NE(session.current_pose(30), inputs[0].source);
+        EXPECT_NE(session.current_pose(40), neighbour);
+        EXPECT_EQ(session.current_pose(10), identity_transform());
+        EXPECT_EQ(session.current_pose(20), inputs[2].source);
+        EXPECT_EQ(session.current_pose(90), inputs[1].source);
+        const auto saved = session.save_state();
+        PoseRefinementSession resumed(2, inputs, pose_session_config_from_state(saved));
+        resumed.configure_sparse_points(measurements);
+        resumed.restore_state(saved);
+        (void)session.visit(30, 1, 2, flat, loss_only);
+        (void)resumed.visit(30, 1, 2, flat, loss_only);
+        EXPECT_EQ(session.save_state()["points"], resumed.save_state()["points"]);
+        for (const int uid : {30, 40})
+            EXPECT_EQ(session.current_pose(uid), resumed.current_pose(uid));
+        auto bad = saved;
+        bad["points"][0]["adam"]["second"][0] = -1;
+        const auto intact = resumed.save_state();
+        EXPECT_THROW(resumed.restore_state(bad), std::invalid_argument);
+        EXPECT_EQ(resumed.save_state(), intact);
+        for (int i = 2; i < 3000; ++i)
+            (void)session.visit(30, i, i + 1, flat, loss_only);
+        RecordProperty("translation_error_ratio_at_3000",
+                       std::hypot(session.current_pose(30)[3], session.current_pose(40)[3] - .4) / std::hypot(.012, .01));
+        for (int i = 3000; i < 10000; ++i)
+            (void)session.visit(30, i, i + 1, flat, loss_only);
+        const double ratio = cost(session.save_state()) / cost(before);
+        RecordProperty("joint_reprojection_ratio", ratio);
+        EXPECT_LT(ratio, .01);
+        const double error = std::hypot(session.current_pose(30)[3], session.current_pose(40)[3] - .4);
+        RecordProperty("joint_translation_error_ratio", error / std::hypot(.012, .01));
+        EXPECT_LT(error, .5 * std::hypot(.012, .01));
+        session.reset();
+        EXPECT_EQ(session.save_state()["points"], before["points"]);
     }
 
     TEST(CameraPoseJointGeometryTest, PointOnlyRefinementPersistsAndResetRestoresSource) {

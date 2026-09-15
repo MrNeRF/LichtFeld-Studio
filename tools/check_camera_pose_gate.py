@@ -423,9 +423,17 @@ def inspect_schur_gate(root: ET.Element) -> dict:
 
 
 COMBINED_SUITES = {
+    "CameraPoseAdaptiveTest": {
+        "BiasCorrectionPersistsAcrossModelRevisionsAndRestore",
+        "ExceptionsAndInvalidRestoreAreAtomicAndResetClearsMoments",
+        "OrdinaryControllerKeepsOriginalStepAndNoAdaptiveState",
+    },
     "CameraPoseCombinedObjectiveTest": {
         "AnalyticGradientMatchesLeftRetractionAndResolutionScaling",
-        "PhotometricGainCanOutweighReprojectionIncreaseWithoutNestedPointSolves",
+        "PhotometricGainCanOutweighReprojectionIncreaseWithBoundedPointResponses",
+        "CandidatePointResponseUsesSameInitialStateAndBudget",
+        "EveryIncidentCameraAndPointMatchesFiniteDifferences",
+        "JointBatchRecoversConnectedPosesAndResumesAllMoments",
         "ReprojectionGainCanOutweighPhotometricIncrease",
         "CoupledDirectionSolvesDampedSystemAndPreservesWorldUnits",
         "ObservationSumAndOnePixelHuberAreNotDatasetAverages",
@@ -452,7 +460,21 @@ def inspect_combined_gate(root: ET.Element) -> dict:
                     or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
                 raise ValueError(f"Combined objective test not successfully executed: {case.get('name')}")
         result["tests"] += len(cases)
-    result.update(combined_objective_contracts=True, reconstruction_quality_validated=False)
+    recovery = root.find(".//testcase[@name='JointBatchRecoversConnectedPosesAndResumesAllMoments']")
+    properties = recovery.findall("./properties/property")
+    values = {p.get("name"): p.get("value") for p in properties}
+    if len(values) != len(properties):
+        raise ValueError("Duplicate joint recovery properties")
+    metrics = {}
+    for key, ceiling in (("joint_reprojection_ratio", .01), ("joint_translation_error_ratio", .5)):
+        try:
+            value = float(values[key])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Missing joint recovery metric: {key}") from error
+        if not math.isfinite(value) or not 0 <= value < ceiling:
+            raise ValueError(f"Joint recovery threshold failed: {key}={value}")
+        metrics[key] = value
+    result.update(combined_objective_contracts=True, joint_recovery=metrics, reconstruction_quality_validated=False)
     return result
 
 

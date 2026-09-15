@@ -15,6 +15,79 @@ namespace {
 
     constexpr ReprojectionCalibration calibration{800, 780, 800, 600, 1600, 1200};
 
+    TEST(CameraPoseAdaptiveTest, BiasCorrectionPersistsAcrossModelRevisionsAndRestore) {
+        BoundedPoseConfig config;
+        config.center_prior = config.rotation_prior = 0;
+        BoundedPoseOptimizer optimizer(30, identity_transform(), config);
+        auto advance = [](BoundedPoseOptimizer& controller, float gradient, std::uint64_t model) {
+            const auto pose = controller.snapshot();
+            const auto loss = [gradient](const Matrix4& p) { return 1.0 + gradient * p[3]; };
+            PoseEvaluation evaluation{30, model, pose.revision, loss(pose.current), {gradient, 0, 0, 0, 0, 0}};
+            evaluation.adaptive = true;
+            return controller.step(evaluation, loss);
+        };
+        ASSERT_EQ(advance(optimizer, 1, 1).status, PoseStepStatus::Accepted);
+        auto first = optimizer.snapshot();
+        EXPECT_NEAR(first.current[3], -1e-5, 1e-11);
+        EXPECT_DOUBLE_EQ(first.first_moment[0], 0.1);
+        EXPECT_DOUBLE_EQ(first.second_moment[0], 0.001);
+        EXPECT_EQ(first.adaptive_steps, 1u);
+        ASSERT_EQ(advance(optimizer, 2, 2).status, PoseStepStatus::Accepted);
+        const auto second = optimizer.snapshot();
+        const double expected = -1e-5 * (0.29 / (1 - 0.9 * 0.9)) /
+                                (std::sqrt(0.004999 / (1 - 0.999 * 0.999)) + 1e-8);
+        EXPECT_NEAR(second.current[3] - first.current[3], expected, 1e-11);
+        EXPECT_NEAR(second.first_moment[0], 0.29, 1e-15);
+        EXPECT_NEAR(second.second_moment[0], 0.004999, 1e-15);
+        EXPECT_EQ(second.adaptive_steps, 2u);
+        BoundedPoseOptimizer resumed(30, identity_transform(), config);
+        resumed.restore(second);
+        ASSERT_EQ(advance(optimizer, 3, 3).status, PoseStepStatus::Accepted);
+        ASSERT_EQ(advance(resumed, 3, 3).status, PoseStepStatus::Accepted);
+        EXPECT_EQ(resumed.snapshot().current, optimizer.snapshot().current);
+        EXPECT_EQ(resumed.snapshot().first_moment, optimizer.snapshot().first_moment);
+        EXPECT_EQ(resumed.snapshot().second_moment, optimizer.snapshot().second_moment);
+        EXPECT_EQ(resumed.snapshot().adaptive_steps, optimizer.snapshot().adaptive_steps);
+    }
+
+    TEST(CameraPoseAdaptiveTest, ExceptionsAndInvalidRestoreAreAtomicAndResetClearsMoments) {
+        BoundedPoseOptimizer optimizer(30, identity_transform(), {});
+        PoseEvaluation evaluation{30, 1, 0, 1, {1, 0, 0, 0, 0, 0}};
+        evaluation.adaptive = true;
+        EXPECT_THROW((void)optimizer.step(evaluation, [](const Matrix4&) -> double {
+            throw std::runtime_error("cancelled evaluation");
+        }),
+                     std::runtime_error);
+        EXPECT_EQ(optimizer.snapshot().adaptive_steps, 0u);
+        EXPECT_EQ(optimizer.snapshot().current, identity_transform());
+        ASSERT_EQ(optimizer.step(evaluation, [](const Matrix4& p) { return 1.0 + p[3]; }).status,
+                  PoseStepStatus::Accepted);
+        const auto valid = optimizer.snapshot();
+        auto invalid = valid;
+        invalid.second_moment[0] = -1;
+        EXPECT_THROW(optimizer.restore(invalid), std::invalid_argument);
+        EXPECT_EQ(optimizer.snapshot().second_moment, valid.second_moment);
+        EXPECT_EQ(optimizer.snapshot().revision, valid.revision);
+        BoundedPoseOptimizer anchor(30, identity_transform(), {}, PoseRole::Anchor);
+        EXPECT_THROW(anchor.restore(valid), std::invalid_argument);
+        optimizer.reset();
+        EXPECT_EQ(optimizer.snapshot().adaptive_steps, 0u);
+        EXPECT_EQ(optimizer.snapshot().first_moment, (std::array<double, 6>{}));
+        EXPECT_EQ(optimizer.snapshot().second_moment, (std::array<double, 6>{}));
+        EXPECT_EQ(optimizer.snapshot().current, identity_transform());
+    }
+
+    TEST(CameraPoseAdaptiveTest, OrdinaryControllerKeepsOriginalStepAndNoAdaptiveState) {
+        BoundedPoseOptimizer optimizer(30, identity_transform(), {});
+        const PoseEvaluation evaluation{30, 1, 0, 1, {1, 0, 0, 0, 0, 0}};
+        ASSERT_EQ(optimizer.step(evaluation, [](const Matrix4& p) { return 1.0 + p[3]; }).status,
+                  PoseStepStatus::Accepted);
+        EXPECT_NEAR(optimizer.snapshot().current[3], -0.003, 1e-9);
+        EXPECT_EQ(optimizer.snapshot().adaptive_steps, 0u);
+        EXPECT_EQ(optimizer.snapshot().first_moment, (std::array<double, 6>{}));
+        EXPECT_EQ(optimizer.snapshot().second_moment, (std::array<double, 6>{}));
+    }
+
     std::vector<SparsePointTrack> joint_tracks(double scale = 1.0) {
         std::vector<SparsePointTrack> result;
         for (int i = 0; i < 20; ++i) {
@@ -73,6 +146,7 @@ namespace {
 
     TEST(CameraPoseSchurTest, ProposalIsInvariantToWorldUnits) {
         std::optional<Twist> reference;
+        std::optional<Twist> combined_reference;
         for (const double scale : {1.0, 100.0}) {
             auto tracks = joint_tracks(scale);
             std::vector<SparsePointPosition> points;
@@ -88,6 +162,19 @@ namespace {
                 for (int i = 0; i < 6; ++i)
                     EXPECT_NEAR((*step)[i], (*reference)[i], 1e-6);
             reference = step;
+            const Twist image_gradient{static_cast<float>(0.02 / scale), 0, 0, 0, 0.03f, 0};
+            auto combined = propose_joint_pose(1, pose, tracks, points, scale, image_gradient);
+            ASSERT_TRUE(combined);
+            for (int i = 0; i < 3; ++i)
+                (*combined)[i] = static_cast<float>((*combined)[i] / scale);
+            if (combined_reference)
+                for (int i = 0; i < 6; ++i)
+                    EXPECT_NEAR((*combined)[i], (*combined_reference)[i], 1e-6);
+            combined_reference = combined;
+            auto invalid_gradient = image_gradient;
+            invalid_gradient[0] = std::numeric_limits<float>::quiet_NaN();
+            EXPECT_FALSE(propose_joint_pose(1, pose, tracks, points, scale, invalid_gradient));
+            EXPECT_FALSE(propose_joint_pose(1, pose, tracks, points, scale, image_gradient, -1));
         }
     }
 

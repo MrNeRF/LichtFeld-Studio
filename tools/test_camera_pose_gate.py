@@ -412,12 +412,29 @@ class CameraPoseCombinedGateTests(unittest.TestCase):
         for name, inventory in COMBINED_SUITES.items():
             suite = ET.SubElement(root, "testsuite", name=name)
             for case in sorted(inventory):
-                ET.SubElement(suite, "testcase", name=case, status="run", result="completed")
+                node = ET.SubElement(suite, "testcase", name=case, status="run", result="completed")
+                if case == "JointBatchRecoversConnectedPosesAndResumesAllMoments":
+                    properties = ET.SubElement(node, "properties")
+                    ET.SubElement(properties, "property", name="joint_reprojection_ratio", value="0.001")
+                    ET.SubElement(properties, "property", name="joint_translation_error_ratio", value="0.2")
         return root
+
+    def test_joint_recovery_requires_finite_measured_improvement(self):
+        for key in ("joint_reprojection_ratio", "joint_translation_error_ratio"):
+            for value in (None, "nan", "inf", "-1", "1", "invalid"):
+                root = self.report()
+                props = root.find(".//testcase[@name='JointBatchRecoversConnectedPosesAndResumesAllMoments']/properties")
+                prop = props.find(f"property[@name='{key}']")
+                if value is None:
+                    props.remove(prop)
+                else:
+                    prop.set("value", value)
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    inspect_combined_gate(root)
 
     def test_combined_contracts_do_not_certify_quality(self):
         result = inspect_combined_gate(self.report())
-        self.assertEqual(result["tests"], 81)
+        self.assertEqual(result["tests"], 87)
         self.assertTrue(result["combined_objective_contracts"])
         self.assertFalse(result["reconstruction_quality_validated"])
 

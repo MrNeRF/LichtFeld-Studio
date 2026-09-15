@@ -95,6 +95,9 @@ namespace lfs::training::camera_pose {
     }
 
     void BoundedPoseOptimizer::reset() noexcept {
+        state_.first_moment = {};
+        state_.second_moment = {};
+        state_.adaptive_steps = 0;
         state_.current = state_.source;
         ++state_.revision; // Do not make old baseline evaluations valid again.
         state_.accepted_steps = state_.rejected_steps = 0;
@@ -105,6 +108,12 @@ namespace lfs::training::camera_pose {
 
     void BoundedPoseOptimizer::restore(const PoseSnapshot& saved) {
         const auto limit = std::numeric_limits<std::uint64_t>::max();
+        if (saved.adaptive_steps == limit || (role_ != PoseRole::Train && saved.adaptive_steps != 0))
+            throw std::invalid_argument("Invalid adaptive pose counter");
+        for (size_t a = 0; a < 6; ++a)
+            if (!std::isfinite(saved.first_moment[a]) || !std::isfinite(saved.second_moment[a]) || saved.second_moment[a] < 0 ||
+                (saved.adaptive_steps == 0 && (saved.first_moment[a] != 0 || saved.second_moment[a] != 0)))
+                throw std::invalid_argument("Invalid adaptive pose moments");
         if (saved.uid != state_.uid || saved.source != state_.source || !rigid(saved.current) ||
             saved.revision == limit || state_.revision == limit || saved.rejected_steps == limit ||
             saved.accepted_steps > saved.revision ||
@@ -158,6 +167,47 @@ namespace lfs::training::camera_pose {
         auto result = working.step_impl(baseline, candidate_loss);
         *this = std::move(working);
         return result;
+    }
+
+    bool BoundedPoseOptimizer::joint_step(const std::array<double, 6>& gradient) {
+        if (frozen_ || role_ != PoseRole::Train ||
+            !std::all_of(gradient.begin(), gradient.end(), [](double v) { return std::isfinite(v); }))
+            return false;
+        auto candidate = state_;
+        if (candidate.adaptive_steps >= std::numeric_limits<std::uint64_t>::max() - 1 ||
+            candidate.revision >= std::numeric_limits<std::uint64_t>::max() - 1)
+            return false;
+        ++candidate.adaptive_steps;
+        Vector prior_gradient{};
+        (void)prior(state_.current, &prior_gradient);
+        Twist step{};
+        for (size_t a = 0; a < 6; ++a) {
+            const double scale = a < 3 ? config_.scene_scale : 1;
+            const double g = (gradient[a] + prior_gradient[a]) * scale;
+            candidate.first_moment[a] = 0.9 * candidate.first_moment[a] + 0.1 * g;
+            candidate.second_moment[a] = 0.999 * candidate.second_moment[a] + 0.001 * g * g;
+            const double m = candidate.first_moment[a] / (1 - std::pow(0.9, candidate.adaptive_steps));
+            const double v = candidate.second_moment[a] / (1 - std::pow(0.999, candidate.adaptive_steps));
+            step[a] = static_cast<float>(-1e-5 * scale * m / (std::sqrt(v) + 1e-8));
+            if (!std::isfinite(step[a]) || !std::isfinite(v))
+                return false;
+        }
+        candidate.current = apply_left_increment(step, state_.current);
+        candidate.center_displacement = center_distance(candidate.current, candidate.source);
+        candidate.rotation_displacement = rotation_distance(candidate.current, candidate.source);
+        if (!rigid(candidate.current) ||
+            center_distance(candidate.current, state_.current) > config_.step_center_fraction * config_.scene_scale ||
+            rotation_distance(candidate.current, state_.current) > config_.step_rotation_radians ||
+            candidate.center_displacement > config_.max_center_fraction * config_.scene_scale ||
+            candidate.rotation_displacement > config_.max_rotation_radians)
+            return false;
+        if (candidate.current != state_.current) {
+            ++candidate.revision;
+            ++candidate.accepted_steps;
+        }
+        state_ = candidate;
+        clear_history();
+        return true;
     }
 
     PoseStepResult BoundedPoseOptimizer::step_impl(const PoseEvaluation& baseline,
@@ -226,7 +276,32 @@ namespace lfs::training::camera_pose {
         }
         std::array<Vector, 2> directions{direction, direction};
         int direction_count = 1;
-        if (baseline.geometric_proposal && config_.max_backtracks >= 2) {
+        if (baseline.adaptive) {
+            // Standard bias-corrected Adam in scene-normalized tangent units.
+            // Moments survive model revisions: Gaussian training is stochastic.
+            // Snapshot copies make exceptions/cancelled session visits atomic.
+            if (state_.adaptive_steps == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("Adaptive pose counter exhausted");
+            ++state_.adaptive_steps;
+            const double correction1 = 1 - std::pow(0.9, static_cast<double>(state_.adaptive_steps));
+            const double correction2 = 1 - std::pow(0.999, static_cast<double>(state_.adaptive_steps));
+            Vector denominator{};
+            for (size_t a = 0; a < 6; ++a) {
+                state_.first_moment[a] = 0.9 * state_.first_moment[a] + 0.1 * gradient[a];
+                state_.second_moment[a] = 0.999 * state_.second_moment[a] + 0.001 * gradient[a] * gradient[a];
+                if (!std::isfinite(state_.first_moment[a]) || !std::isfinite(state_.second_moment[a]))
+                    throw std::invalid_argument("Nonfinite adaptive pose moments");
+                denominator[a] = std::sqrt(state_.second_moment[a] / correction2) + 1e-8;
+                direction[a] = -1e-5 * (state_.first_moment[a] / correction1) / denominator[a];
+            }
+            // Stale momentum must not become an ascent proposal. Retain the
+            // second-moment scaling, but use the current gradient for this step.
+            if (dot(direction, gradient) >= 0)
+                for (size_t a = 0; a < 6; ++a)
+                    direction[a] = -1e-5 * gradient[a] / denominator[a];
+            directions[0] = direction;
+        }
+        if (!baseline.adaptive && baseline.geometric_proposal && config_.max_backtracks >= 2) {
             Vector geometric{};
             for (int i = 0; i < 6; ++i)
                 geometric[i] = (*baseline.geometric_proposal)[i] / (i < 3 ? config_.scene_scale : 1.0);

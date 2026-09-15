@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "fastgs_pose_evaluator.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/nn/ops.hpp"
 #include "losses/photometric_loss.hpp"
 #include <algorithm>
 #include <cmath>
@@ -146,12 +147,33 @@ namespace lfs::training::camera_pose {
         return session.visit(camera_.uid(), iteration, model_revision, [this](const Matrix4& pose) { return evaluate(pose); }, [this](const Matrix4& pose) { return loss(pose); }, stop, [this](const Matrix4& pose) { return allows(pose); });
     }
 
-    PoseObjective make_pose_photometric_objective(const Tensor& target, float lambda_dssim) {
+    PoseObjective make_pose_photometric_objective(const Tensor& target, float lambda_dssim, bool multiscale) {
         if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1 ||
             !target.is_valid() || gpu_backend_of(target) != GpuBackend::CUDA || target.ndim() != 3 ||
             target.shape()[0] != 3 || target.numel() == 0 ||
             (target.dtype() != DataType::Float32 && target.dtype() != DataType::UInt8))
             throw std::invalid_argument("Invalid pose photometric target or SSIM weight");
+        if (multiscale) {
+            // A separable symmetric box filter with fixed zero padding is its
+            // own adjoint. Apply it to the coarse image gradient too; simply
+            // returning the blurred loss gradient would violate the chain rule.
+            auto smooth = [](const Tensor& image) {
+                auto nchw = image.unsqueeze(0);
+                auto horizontal = nn::avg_pool2d(nchw, 1, 9, 1, 1, 0, 4, true);
+                return nn::avg_pool2d(horizontal, 9, 1, 1, 1, 4, 0, true).squeeze(0);
+            };
+            auto normalized = target.dtype() == DataType::UInt8 ? target.to(DataType::Float32) / 255.0f : target;
+            auto fine = make_pose_photometric_objective(target, lambda_dssim);
+            auto coarse = make_pose_photometric_objective(smooth(normalized), lambda_dssim);
+            return [fine = std::move(fine), coarse = std::move(coarse), smooth](const RenderOutput& output, bool gradients) {
+                auto fine_result = fine(output, gradients);
+                auto blurred = output;
+                blurred.image = smooth(output.image);
+                auto coarse_result = coarse(blurred, gradients);
+                return PoseObjectiveResult{0.5 * (fine_result.loss + coarse_result.loss),
+                                           gradients ? (fine_result.grad_image + smooth(coarse_result.grad_image)) * 0.5f : Tensor{}, {}};
+            };
+        }
         return [fixed_target = target.clone(), lambda_dssim,
                 loss = std::make_shared<losses::PhotometricLoss>()](const RenderOutput& output, bool gradients) {
             if (output.image.stream() != fixed_target.stream())
