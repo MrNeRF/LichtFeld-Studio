@@ -35,7 +35,7 @@ def staging_files(root, value):
     for entry in path.iterdir():
         if len(files) >= gallery_validation.MAX_NODES + 5:
             raise ValueError("Scene preparation contains too many files.")
-        if (entry.name not in ("manifest.json", "manifest.json.tmp", "environment.lfsenv", "project.licht", "project.licht.lock")
+        if (entry.name not in ("manifest.json", "manifest.json.tmp", "environment.lfsenv", "project.licht", "project.licht.lock", "project.licht.preview.tmp")
                 and not re.fullmatch(r"(?:0|[1-9][0-9]{0,3})\.(?:ply|sog|ssog|spz)", entry.name)):
             raise ValueError("Scene preparation contains an unexpected file. Keep it for recovery.")
         if not stat.S_ISREG(entry.lstat().st_mode) or getattr(entry, "is_junction", lambda: False)():
@@ -135,3 +135,101 @@ def publication_view_metadata(root, value):
         render = project.chapters[b"VIEW"]["render_settings"]
         return {"environment": {"exposure": render["environment_exposure"],
                                 "rotation": render["environment_rotation_degrees"]}}
+
+
+def attach_preview(path, png, *, cancel=None):
+    """Add THMB to the fresh publishing subset, preserving every scene payload.
+
+    Both inputs and the completed container are validated. The temporary file
+    replaces only the private prepared copy, after it has been flushed to disk.
+    """
+    import os
+    import struct
+    from .portable_project import ProjectFile, _crc
+    from .portal_gallery import GalleryTransferCanceled, disk_preflight
+
+    path = Path(path)
+    temporary = path.with_name("project.licht.preview.tmp")
+    if path.name != "project.licht" or path.is_symlink() or temporary.is_symlink():
+        raise ValueError("The prepared project was redirected.")
+    if (not isinstance(png, bytes) or not 33 <= len(png) <= 2 * 1024**2
+            or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR"
+            or not all(0 < n <= 2048 for n in struct.unpack_from(">II", png, 16))):
+        raise ValueError("The project thumbnail must be a bounded PNG image.")
+    def aligned(value):
+        return (value + 63) // 64 * 64
+    def checksum(value):
+        struct.pack_into("<I", value, len(value) - 4, _crc(value[:-4]))
+    def read_at(source, offset, size):
+        source.seek(offset)
+        return bytearray(source.read(size))
+    try:
+        with path.open("rb") as source:
+            project = ProjectFile(source)
+            if b"THMB" in project.chapters:
+                if project.chapters[b"THMB"] != png:
+                    raise ValueError("The prepared thumbnail changed. Prepare the project again.")
+                return
+            stamp = gallery_validation._stamp(source)
+            disk_preflight([(temporary, stamp[2] + len(png) + 1024)])
+            head_offset = next(offset for offset in (4096, 8192) if read_at(source, offset, 8) == b"LFSHEAD\0")
+            head = read_at(source, head_offset, 4096)
+            commit = read_at(source, struct.unpack_from("<Q", head, 80)[0], 256)
+            old_index_offset, old_index_size = struct.unpack_from("<QQ", commit, 136)
+            index = read_at(source, old_index_offset, old_index_size)
+            header_offset = aligned(old_index_offset)
+            payload_offset = header_offset + 64
+            index_offset = aligned(payload_offset + len(png))
+            header = bytearray(64)
+            struct.pack_into("<4sHH16s", header, 0, b"THMB", 1, 64, head[32:48])
+            struct.pack_into("<QQ", header, 32, len(png), len(png))
+            struct.pack_into("<I", header, 56, _crc(png))
+            checksum(header)
+            row = bytearray(96)
+            struct.pack_into("<4sH", row, 0, b"THMB", 1)
+            row[16:32] = head[32:48]
+            struct.pack_into("<QQQQQII", row, 32, header_offset, payload_offset, len(png), len(png), 1,
+                             struct.unpack_from("<I", header, 56)[0], struct.unpack_from("<I", header, 60)[0])
+            rows = [index[offset:offset + 96] for offset in range(64, len(index), 96)] + [row]
+            index = index[:64] + b"".join(sorted(rows, key=lambda value: value[:4] + value[16:32]))
+            struct.pack_into("<Q", index, 16, len(rows))
+            commit_offset = aligned(index_offset + len(index))
+            end = commit_offset + 256
+            struct.pack_into("<QQQII", commit, 136, index_offset, len(index), len(index), _crc(index), _crc(index))
+            struct.pack_into("<Q", commit, 176, end)
+            checksum(commit)
+            struct.pack_into("<Q", head, 80, commit_offset)
+            struct.pack_into("<Q", head, 96, end)
+            struct.pack_into("<I", head, 104, struct.unpack_from("<I", commit, 252)[0])
+            struct.pack_into("<QII", head, 112, payload_offset, len(png), 1)
+            checksum(head)
+            temporary.unlink(missing_ok=True)
+            with temporary.open("xb") as output:
+                source.seek(0)
+                remaining = old_index_offset
+                while remaining:
+                    if cancel and cancel.is_set():
+                        raise GalleryTransferCanceled()
+                    block = source.read(min(remaining, gallery_validation.CHUNK_BYTES))
+                    if not block:
+                        raise ValueError("The prepared project changed.")
+                    output.write(block)
+                    remaining -= len(block)
+                output.write(bytes(header_offset - output.tell()))
+                output.write(header)
+                output.write(png)
+                output.write(bytes(index_offset - output.tell()))
+                output.write(index)
+                output.write(bytes(commit_offset - output.tell()))
+                output.write(commit)
+                output.seek(head_offset)
+                output.write(head)
+                output.flush()
+                os.fsync(output.fileno())
+            if gallery_validation._stamp(source) != stamp:
+                raise ValueError("The prepared project changed.")
+        with temporary.open("rb") as result:
+            ProjectFile(result)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
