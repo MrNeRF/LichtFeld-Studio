@@ -980,6 +980,13 @@ namespace lfs::io::project {
     }
 
     static lfs::Result<std::filesystem::path> backup_locked_project_file(const std::filesystem::path& path) {
+        if (active_operation_identity) {
+            if (auto checked = active_operation_identity->validate(); !checked)
+                return std::move(checked).error();
+        }
+        auto source_identity = detail::ProjectPathIdentity::capture(path);
+        if (!source_identity)
+            return std::move(source_identity).error();
         auto reader = ProjectReader::open(path);
         if (!reader)
             return std::move(reader).error();
@@ -989,6 +996,9 @@ namespace lfs::io::project {
         const auto recovery = paths->backupDir() / "contents" /
                               reader->superblock().project_uuid.to_string() /
                               (reader->commit().commit_uuid.to_string() + ".licht.bak");
+        auto recovery_identity = detail::ProjectPathIdentity::capture(recovery);
+        if (!recovery_identity)
+            return std::move(recovery_identity).error();
         std::error_code error;
         if (std::filesystem::exists(recovery, error)) {
             auto backup = ProjectReader::open(recovery);
@@ -1011,7 +1021,13 @@ namespace lfs::io::project {
             return fail<std::filesystem::path>(lfs::ErrorCode::PermissionDenied, temporary,
                                                "The recovery copy could not be created.", reason, "recovery_copy");
         }
-        auto copied = lfs::io::replace_atomic_output_file(temporary, recovery, lfs::io::AtomicOutputDurability::Durable);
+        for (const auto* identity : {&*source_identity, &*recovery_identity}) {
+            if (auto checked = identity->validate(); !checked) {
+                std::filesystem::remove(temporary, error);
+                return std::move(checked).error();
+            }
+        }
+        auto copied = lfs::io::replace_atomic_output_file(temporary, recovery_identity->canonical_path, lfs::io::AtomicOutputDurability::Durable);
         if (!copied) {
             std::filesystem::remove(temporary, error);
             return fail<std::filesystem::path>(lfs::ErrorCode::PermissionDenied, recovery,
@@ -1037,6 +1053,9 @@ namespace lfs::io::project {
         auto identity = detail::ProjectPathIdentity::capture(path);
         if (!identity)
             return lfs::Result<void>::failure(std::move(identity).error());
+        auto backup_identity = detail::ProjectPathIdentity::capture(backup);
+        if (!backup_identity)
+            return lfs::Result<void>::failure(std::move(backup_identity).error());
         auto current = ProjectReader::open(path);
         auto recovery = ProjectReader::open(backup);
         if (!current)
@@ -1051,7 +1070,7 @@ namespace lfs::io::project {
                               "recovery refused to overwrite a different project or commit", "recovery.identity");
         if (auto verified = recovery->verify_all(); !verified)
             return lfs::Result<void>::failure(std::move(verified).error());
-        const auto temporary = lfs::io::make_atomic_temp_output_path(path);
+        const auto temporary = lfs::io::make_atomic_temp_output_path(identity->canonical_path);
         std::error_code error;
         if (!std::filesystem::copy_file(backup, temporary, std::filesystem::copy_options::none, error)) {
             const auto reason = error.message();
@@ -1060,6 +1079,10 @@ namespace lfs::io::project {
                               "The recovery copy could not be restored.", reason, "recovery.copy");
         }
         if (auto checked = identity->validate(); !checked) {
+            std::filesystem::remove(temporary, error);
+            return checked;
+        }
+        if (auto checked = backup_identity->validate(); !checked) {
             std::filesystem::remove(temporary, error);
             return checked;
         }

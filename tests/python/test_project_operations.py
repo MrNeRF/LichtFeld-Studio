@@ -136,6 +136,63 @@ def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_pro
     assert alias.is_symlink() and result.project_uuid != card.project_uuid
 
 
+@pytest.mark.parametrize("operation", ["backup", "restore_backup"])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_contents_recovery_write_refuses_changed_project(native_io, identity_project, tmp_path, operation, swap):
+    path, card = identity_project
+    backup = native_io.backup_project_file(path)
+    other = tmp_path / "other.licht"
+    native_io.restore_save(path, 1, other)
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    if swap == "path":
+        other.write_bytes(path.read_bytes())
+    before = other.read_bytes()
+
+    def write_recovery():
+        if swap == "identity":
+            os.replace(other, path)
+        else:
+            alias.unlink()
+            alias.symlink_to(other)
+        if operation == "backup":
+            native_io.backup_project_file(alias)
+        else:
+            native_io.restore_project_backup(alias, backup, str(card.project_uuid), str(card.commit_uuid))
+
+    with pytest.raises(Exception, match="(identity|path).*changed"):
+        native_io.run_project_operation(alias, str(card.project_uuid), str(card.commit_uuid), write_recovery)
+    assert alias.read_bytes() == before
+
+
+def test_contents_backup_refuses_a_different_existing_recovery(native_io, identity_project, tmp_path):
+    path, _ = identity_project
+    backup = native_io.backup_project_file(path)
+    other = tmp_path / "other.licht"
+    native_io.restore_save(path, 1, other)
+    backup.write_bytes(other.read_bytes())
+    before = backup.read_bytes()
+    with pytest.raises(Exception, match="belongs to another file"):
+        native_io.backup_project_file(path)
+    assert backup.read_bytes() == before
+
+
+def test_contents_recovery_accepts_unicode_relative_alias(native_io, identity_project, tmp_path, monkeypatch):
+    path, card = identity_project
+    original = path.read_bytes()
+    alias = tmp_path / "别名-é.licht"
+    alias.symlink_to(path)
+    monkeypatch.chdir(tmp_path)
+    relative = Path(alias.name)
+    backup = native_io.backup_project_file(relative)
+    changed = native_io.set_project_title(relative, "Changed")
+    native_io.restore_project_backup(relative, backup, str(card.project_uuid), str(changed.commit_uuid))
+    assert alias.is_symlink() and path.read_bytes() == original
+    destination = Path("另一个.licht")
+    restored = native_io.restore_save(relative, 1, destination)
+    assert restored.project_uuid != card.project_uuid and destination.is_file()
+
+
 def _fixture() -> Path:
     configured = os.environ.get("LFS_PROJECT_OPERATIONS_FIXTURE")
     if configured:

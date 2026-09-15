@@ -151,12 +151,14 @@ namespace lfs::io::project {
                     "project.path");
             }
             std::error_code error;
-            auto absolute = std::filesystem::weakly_canonical(path, error);
+            auto absolute = std::filesystem::absolute(path, error);
+            if (!error)
+                absolute = std::filesystem::weakly_canonical(absolute, error);
             if (error) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
                     "The project path could not be resolved.",
-                    std::format("filesystem::absolute failed: {}", error.message()),
+                    std::format("project path resolution failed: {}", error.message()),
                     "project.path");
             }
             return absolute.lexically_normal();

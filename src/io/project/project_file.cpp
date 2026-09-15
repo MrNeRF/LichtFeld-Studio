@@ -42,8 +42,9 @@ namespace lfs::io::project {
         normalized_lock_anchor(
             const std::filesystem::path& path) noexcept {
             std::error_code error;
-            auto absolute =
-                std::filesystem::weakly_canonical(path, error);
+            auto absolute = std::filesystem::absolute(path, error);
+            if (!error)
+                absolute = std::filesystem::weakly_canonical(absolute, error);
             return (error ? path : absolute)
                 .lexically_normal();
         }
@@ -136,11 +137,12 @@ namespace lfs::io::project::detail {
 
     lfs::Result<ProjectPathIdentity> ProjectPathIdentity::capture(const std::filesystem::path& path) {
         std::error_code error;
-        auto canonical = std::filesystem::weakly_canonical(path, error);
+        const auto absolute = std::filesystem::absolute(path, error);
+        auto canonical = error ? absolute : std::filesystem::weakly_canonical(absolute, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project path could not be checked.", error.message(), path);
-        ProjectPathIdentity identity{path, std::move(canonical), std::nullopt};
+        ProjectPathIdentity identity{absolute, std::move(canonical), std::nullopt};
         const bool exists = std::filesystem::exists(path, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
@@ -829,7 +831,9 @@ namespace lfs::io::project::detail {
 
     lfs::Result<WriterLock> WriterLock::acquire(const std::filesystem::path& project_path) {
         std::error_code error;
-        auto lock_path = std::filesystem::weakly_canonical(project_path, error);
+        auto lock_path = std::filesystem::absolute(project_path, error);
+        if (!error)
+            lock_path = std::filesystem::weakly_canonical(lock_path, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project path could not be locked.", error.message(), project_path);
