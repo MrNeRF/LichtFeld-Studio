@@ -104,6 +104,7 @@ if(BUILD_TEMPORAL_CPU_TESTS)
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_fsr3_pipeline_contract.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp
     )
     target_include_directories(lichtfeld_temporal_cpu_tests PRIVATE

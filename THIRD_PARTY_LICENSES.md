@@ -58,6 +58,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | Project | Description | License |
 |---------|-------------|---------|
 | [NVIDIA nvImageCodec](https://github.com/NVIDIA/nvImageCodec) | GPU-accelerated image encoding/decoding | Apache-2.0 |
+| [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | Optional FSR 3.1 scene-reconstruction plugin | MIT |
 | [Intel TBB](https://github.com/oneapi-src/oneTBB) | Threading Building Blocks | Apache-2.0 |
 
 ## ML Inference & Models

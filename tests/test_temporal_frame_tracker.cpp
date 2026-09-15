@@ -154,6 +154,25 @@ namespace lfs::vis {
         EXPECT_EQ(convergence.jitter(), temporalJitterPixels(sequence));
     }
 
+    TEST(TemporalFrameTracker, BackendSpecificPhaseControlsSettleAndWrapsJitter) {
+        TemporalConvergenceController convergence;
+        constexpr std::uint32_t phase_count = 18;
+        convergence.prepare(true, true, true, phase_count, phase_count);
+
+        EXPECT_EQ(convergence.remaining(), phase_count);
+        for (std::uint32_t sample = 0; sample < phase_count; ++sample) {
+            EXPECT_EQ(convergence.jitter(), temporalJitterPixels(sample));
+            static_cast<void>(convergence.completeSuccessfulFrame());
+            convergence.prepare(true, false, true, phase_count, phase_count);
+        }
+        EXPECT_EQ(convergence.remaining(), 0u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(0));
+
+        convergence.prepare(true, false, true, 23, 23);
+        EXPECT_EQ(convergence.remaining(), 23u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(18));
+    }
+
     TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {
         const glm::mat4 projection(1.0f);
         const glm::vec4 point(0.2f, -0.1f, 0.5f, 1.0f);

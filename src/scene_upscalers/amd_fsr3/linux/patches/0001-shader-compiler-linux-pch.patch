@@ -1,0 +1,48 @@
+diff --git a/tools/ffx_shader_compiler/src/pch.hpp b/tools/ffx_shader_compiler/src/pch.hpp
+index c017698..026e098 100644
+--- a/tools/ffx_shader_compiler/src/pch.hpp
++++ b/tools/ffx_shader_compiler/src/pch.hpp
+@@ -22,6 +22,38 @@
+ 
+ #pragma once
+ 
++#ifdef FFX_LINUX_SHADER_COMPILER
++
++#include <assert.h>
++#include <stdio.h>
++#include <exception>
++#include <string>
++#include <vector>
++#include <deque>
++#include <thread>
++#include <mutex>
++#include <unordered_map>
++#include <unordered_set>
++#include <sstream>
++#include <iomanip>
++#include <bitset>
++#include <iostream>
++#include <algorithm>
++#include <fstream>
++#include <filesystem>
++#include <memory>
++#include <optional>
++#include <cstdint>
++#include <cmath>
++#include <cctype>
++
++namespace fs = std::filesystem;
++
++#include <process.hpp>
++namespace tpl = TinyProcessLib;
++
++#else
++
+ #define NOMINMAX
+ #define WIN32_LEAN_AND_MEAN
+ #include <Windows.h>
+@@ -52,3 +84,4 @@ namespace fs = std::filesystem;
+ #include <process.hpp>
+ namespace tpl = TinyProcessLib;
+ 
++#endif
