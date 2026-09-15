@@ -313,7 +313,8 @@ namespace {
             for (int axis = 0; axis < 6; ++axis) {
                 SCOPED_TRACE(::testing::Message() << "axis=" << axis << " epsilon=" << step);
                 const double numeric = (scalar_product(render(offset(pose, axis, step), true), weights) -
-                    scalar_product(render(offset(pose, axis, -step), true), weights)) / (2 * step);
+                                        scalar_product(render(offset(pose, axis, -step), true), weights)) /
+                                       (2 * step);
                 EXPECT_NEAR(analytic[axis], numeric, 2.0e-5 + 0.06 * std::abs(numeric));
             }
         }
@@ -686,8 +687,8 @@ namespace {
         result.second.release_forward_context();
         auto mip = forward(identity_transform(), 0, 0, true);
         EXPECT_NO_THROW(fast_rasterize_backward(mip.second, upstream, *scene, *optimizer,
-                                               {}, {}, DensificationType::None, 1, {}, {}, {}, &output,
-                                               FastGSBackwardMode::CameraOnly));
+                                                {}, {}, DensificationType::None, 1, {}, {}, {}, &output,
+                                                FastGSBackwardMode::CameraOnly));
     }
 
     TEST_F(CameraPosePhotometricTest, RecoversPerturbedPoseFromImagesWithFixedGeometry) {
@@ -1121,7 +1122,7 @@ namespace {
 
     class CameraPoseCombinedIntegrationTest : public CameraPoseJointIntegrationTest {};
 
-    TEST_F(CameraPoseCombinedIntegrationTest, ProductionObjectiveAndVersionThreeCheckpointRoundTrip) {
+    TEST_F(CameraPoseCombinedIntegrationTest, ProductionObjectiveAndCheckpointRoundTrip) {
         auto session = joint_session(true);
         const auto target = Tensor::from_vector(render(identity_transform()), {3, HEIGHT, WIDTH}, Device::CUDA);
         auto means = scene->means().clone();
@@ -1153,7 +1154,8 @@ namespace {
         EXPECT_TRUE(result.scheduled);
         EXPECT_EQ(session->diagnostics().point_solves, 0u);
         expect_bytes_equal(scene->means(), means);
-        ASSERT_EQ(session->save_state()["version"], 3);
+        ASSERT_EQ(session->save_state()["format"], "lichtfeld.camera_pose");
+        ASSERT_EQ(session->save_state()["version"], 1);
         lfs::core::param::TrainingParameters params;
         params.optimization.strategy = "mcmc";
         params.optimization.iterations = 100;
@@ -1181,6 +1183,19 @@ namespace {
             auto bad = state;
             bad["settings"]["joint_reprojection_weight"] = invalid_weight;
             loaded_params.camera_pose_state_json = bad.dump();
+            EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+        }
+        for (const int version : {1, 2, 3}) {
+            auto experimental = state;
+            experimental.erase("format");
+            experimental["version"] = version;
+            loaded_params.camera_pose_state_json = experimental.dump();
+            EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+        }
+        for (const char* field : {"points", "paused", "settings"}) {
+            auto incomplete = state;
+            incomplete.erase(field);
+            loaded_params.camera_pose_state_json = incomplete.dump();
             EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
         }
     }

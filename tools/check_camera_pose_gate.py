@@ -325,7 +325,7 @@ JOINT_SESSION_TESTS = {
     "AcceptedPoseAndSharedPointsRoundTripTogether",
     "ChangedMeasurementsRejectRestoreWithoutMutation",
     "CorruptPointStateCannotPartiallyRestoreSession",
-    "LegacyStateCannotSilentlySwitchGeometryModel",
+    "StateCannotSilentlySwitchGeometryMembership",
     "EvaluationAndDisabledMeasurementsNeverEnterGraph",
 }
 
@@ -437,11 +437,12 @@ COMBINED_SUITES = {
         "ReprojectionGainCanOutweighPhotometricIncrease",
         "CoupledDirectionSolvesDampedSystemAndPreservesWorldUnits",
         "ObservationSumAndOnePixelHuberAreNotDatasetAverages",
-        "VersionThreePreservesObjectiveAndLegacyRemainsExplicit",
+        "StateSchemaPreservesObjectiveAndGeometryMode",
+        "ExperimentalStateFormatsAreRejectedAtomically",
         "CancelledOrInvalidEvaluationNeverCommitsPartialGeometry",
     },
     "CameraPoseCombinedIntegrationTest": {
-        "ProductionObjectiveAndVersionThreeCheckpointRoundTrip",
+        "ProductionObjectiveAndCheckpointRoundTrip",
     },
 }
 
@@ -511,7 +512,7 @@ def main() -> int:
     parser.add_argument("--joint-integration", action="store_true", help="Also require production joint evaluator and checkpoint envelope contracts; not reconstruction quality validation")
     parser.add_argument("--diagnostics", action="store_true", help="Also require non-persistent diagnostics contracts")
     parser.add_argument("--schur", action="store_true", help="Also require joint Schur proposal contracts; not reconstruction quality validation")
-    parser.add_argument("--combined", action="store_true", help="Also require combined objective and version-three checkpoint contracts; not reconstruction quality validation")
+    parser.add_argument("--combined", action="store_true", help="Also require combined objective and checkpoint schema contracts; not reconstruction quality validation")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate

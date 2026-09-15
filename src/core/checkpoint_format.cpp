@@ -275,6 +275,29 @@ namespace lfs::core {
         }
     }
 
+    std::expected<void, std::string> validate_camera_pose_state_schema(const nlohmann::json& state) {
+        if (!state.is_object() || !state.contains("format") || !state.at("format").is_string() ||
+            state.at("format").get_ref<const std::string&>() != CAMERA_POSE_STATE_FORMAT ||
+            !state.contains("version") || !state.at("version").is_number_integer() ||
+            state.at("version") != CAMERA_POSE_STATE_VERSION)
+            return std::unexpected("Unsupported camera pose state format; experimental checkpoints require their original implementation");
+        if (state.size() != 7 || !state.contains("settings") || !state.at("settings").is_object() ||
+            !state.contains("iteration") || !state.at("iteration").is_number_integer() ||
+            !state.contains("paused") || !state.at("paused").is_boolean() ||
+            !state.contains("cameras") || !state.at("cameras").is_array() ||
+            !state.contains("points") || !state.at("points").is_array())
+            return std::unexpected("Camera pose state payload is invalid");
+        const auto& settings = state.at("settings");
+        if (!settings.contains("joint_reprojection_weight") || !settings.at("joint_reprojection_weight").is_number() ||
+            !settings.contains("joint_update_rule"))
+            return std::unexpected("Camera pose objective is missing");
+        const double weight = settings.at("joint_reprojection_weight").get<double>();
+        if (!std::isfinite(weight) || weight < 0 ||
+            settings.at("joint_update_rule") != (weight > 0 ? "simultaneous_adam" : "bounded_photometric"))
+            return std::unexpected("Camera pose objective weight or update rule is invalid");
+        return {};
+    }
+
     lfs::Status validate_checkpoint_pose_state(
         const CheckpointHeader& header, const param::TrainingParameters& params) {
         const auto invalid = [](std::string detail) {
@@ -292,25 +315,12 @@ namespace lfs::core {
             return {};
         try {
             const auto state = nlohmann::json::parse(params.camera_pose_state_json);
-            if (!state.is_object() || !state.at("version").is_number_integer() ||
-                (state.at("version") != 1 && state.at("version") != 2 && state.at("version") != 3) ||
-                !state.at("iteration").is_number_integer() || state.at("iteration") != header.iteration ||
-                !state.at("cameras").is_array() || !state.at("settings").is_object())
-                return invalid("Checkpoint camera pose version, iteration or payload is invalid");
+            if (auto schema = validate_camera_pose_state_schema(state); !schema)
+                return invalid(schema.error());
+            if (state.at("iteration") != header.iteration)
+                return invalid("Checkpoint camera pose iteration is invalid");
             // Dataset-dependent graph/pose validation happens transactionally
             // in the Trainer, before committing the loaded model.
-            if (state.at("version") == 2 &&
-                (!state.contains("points") || !state.at("points").is_array() || state.at("points").empty()))
-                return invalid("Checkpoint shared camera geometry is missing");
-            if (state.at("version") == 3) {
-                const auto& settings = state.at("settings");
-                if (!state.contains("points") || !state.at("points").is_array() ||
-                    !settings.contains("joint_reprojection_weight") || !settings.at("joint_reprojection_weight").is_number())
-                    return invalid("Checkpoint combined camera objective is missing");
-                const double weight = settings.at("joint_reprojection_weight").get<double>();
-                if (!std::isfinite(weight) || weight <= 0)
-                    return invalid("Checkpoint combined camera objective weight is invalid");
-            }
         } catch (const std::exception& error) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::DataLoss,

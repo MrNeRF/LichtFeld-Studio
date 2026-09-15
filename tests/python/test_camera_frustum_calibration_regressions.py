@@ -150,5 +150,15 @@ def test_pose_composition_keeps_shared_updates_outside_pose_visits():
     integration = _read("src/training/camera_pose/trainer_pose_integration.cpp")
     assert "resolved_camera_pose_stop_step()" in integration
     assert "pose_session_config_from_state(saved)" in integration
+    # Restoring must rebuild the graph even though the unified wire schema is
+    # version one. Never infer geometry availability from a schema revision.
+    assert 'saved.at("version")' not in integration
+    assert integration.index("session->configure_sparse_points(") < integration.index("session->restore_state(saved)")
+    checkpoint = _read("src/core/checkpoint_format.cpp")
+    state = _read("src/training/camera_pose/pose_refinement_state.cpp")
+    assert "validate_camera_pose_state_schema(state)" in checkpoint
+    assert "validate_camera_pose_state_schema(state)" in state
+    bindings = _read("src/python/lfs/py_params.cpp")
+    assert "self.params().camera_pose_validation_error(true)" in bindings
     assert "source_cameras = scene_->getActiveCameras()" in trainer
     assert "camera_pose_sources_ = source_cameras" in trainer

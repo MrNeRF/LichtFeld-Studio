@@ -434,7 +434,7 @@ class CameraPoseCombinedGateTests(unittest.TestCase):
 
     def test_combined_contracts_do_not_certify_quality(self):
         result = inspect_combined_gate(self.report())
-        self.assertEqual(result["tests"], 87)
+        self.assertEqual(result["tests"], 88)
         self.assertTrue(result["combined_objective_contracts"])
         self.assertFalse(result["reconstruction_quality_validated"])
 

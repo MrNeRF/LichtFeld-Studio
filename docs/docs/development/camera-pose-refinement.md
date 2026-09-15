@@ -92,7 +92,7 @@ seed images retain their matching pose across subsequent camera updates.
 
 Candidate acceptance holds the Gaussian model fixed. New sessions refine shared sparse points
 when at least three active training cameras observe the same COLMAP point ID.
-The point solve minimizes image-size-normalized Huber reprojection error over
+The point updates minimize robust reprojection error over
 all training observations in each track. Evaluation and disabled cameras are
 excluded; reference poses remain fixed but their observations constrain points.
 Camera support requires at least 12 observations spanning 10% of both image
@@ -127,9 +127,7 @@ increase on an individual batch; updated status is not a quality certificate.
 
 Cameras without sufficient shared support retain the fixed-source constraint
 below, or photometric-only acceptance when sparse support is unavailable.
-Legacy pose checkpoints retain their original objective on resume: version one
-uses fixed sources and version two uses the strict shared-geometry gate.
-The combined state persists an explicit update-rule identity, the objective
+The state persists an explicit update-rule identity, the objective
 weight, camera and point Adam moments and step counts. Reset clears these along
 with the corrections. An experimental checkpoint with a different update rule
 cannot silently resume using this optimizer; start a new training session.
@@ -169,31 +167,12 @@ Resume requires matching source poses, membership, measurements and calibration;
 incompatible geometry is rejected before the loaded model is committed. Original
 COLMAP files and imported Camera observations are never overwritten.
 
-In the legacy strict-gate solver, the baseline and all candidate poses solve their shared
-points from identical initial positions with the same iteration budget. A
-candidate cannot obtain extra point-relaxation iterations by starting from the
-already-optimized baseline. This also applies to robust tracks that have not
-converged and points at their cumulative movement limit.
-
 Shared points are geometric constraints, not Gaussian means. Gaussian positions
 remain managed by their existing optimizer and densification lifecycle, using
 the accepted camera poses in normal training. No Gaussian is teleported by
 matching a COLMAP ID to an array index. Reconstruction gains and solve overhead
 must be measured on the dataset; an improved sparse residual alone does not
 establish better novel-view rendering.
-
-In legacy version-two sessions, the pose proposal uses a reduced Gauss-Newton system.
-Huber-weighted reprojection Jacobians include both the active camera's left
-SE(3) increment and each incident point's world-space increment. Eliminating
-the point blocks with a Schur complement accounts for point motion before
-choosing the camera direction. Other cameras remain fixed during this local
-solve; it is not a simultaneous multi-camera bundle adjustment. Singular
-point or reduced camera blocks yield no geometric proposal, retaining the
-photometric search. World-unit normalization does not change the physical step.
-Nonlinear candidate verification retains the same point budget, cumulative
-bounds and separate geometric and photometric acceptance requirements. A
-candidate's point solve stops once its nonnegative partial cost exceeds the
-full acceptance ceiling; incomplete candidates never commit.
 
 For the fixed-source fallback, when observations constrain all six pose dimensions, their reprojection
 Jacobian supplies a Gauss-Newton proposal for coupled translation and rotation.
@@ -310,6 +289,14 @@ timing. It retains scheduling configuration, iteration, pause state, camera UIDs
 roles, source/current poses, revisions and update/candidate counters. Serialized
 camera order is not significant.
 
+All sessions use the `lichtfeld.camera_pose` state format, version `1`, with
+explicit optimizer identity and weight, camera and point Adam state, and a
+`points` array that is empty when shared geometry is unavailable. Changing
+geometry availability does not select a different serialization format.
+Checkpoints from unpublished experiments without this format identifier must
+be opened with their original implementation; they are rejected rather than
+silently converted or loaded without their corrections.
+
 Restoration requires an exact match with the current session's configuration,
 membership, source matrices and reference/evaluation roles. Non-rigid transforms,
 out-of-bounds displacements, invalid counters and moved fixed/evaluation cameras
@@ -319,7 +306,8 @@ installing the new state, so a malformed record cannot partially restore cameras
 
 The receiving session retains its own generation and advances snapshot and pose
 revisions, invalidating earlier evaluations. Poses, pause state and per-camera
-cadence are preserved; inverse-BFGS history is restarted because its model/objective
+cadence are preserved. Joint camera and point Adam moments and step counts are
+restored. For the bounded photometric fallback, inverse-BFGS history is restarted because its model/objective
 identity cannot be inferred from pose metadata. This is a controlled warm restart,
 not an identical continuation of optimizer internals.
 
@@ -348,7 +336,7 @@ scene scale come from the Trainer and model. Evaluation and disabled cameras are
 excluded from the effective training membership.
 
 At scheduled visits, refinement runs before the Gaussian update with the model,
-target and background fixed for the complete burst. The normal FastGS forward
+target and background fixed for the complete burst. The normal 3DGS forward
 then receives the accepted current pose. Imported Camera tensors remain unchanged.
 Objective allocation is lazy, so unscheduled visits do not clone targets or
 allocate a photometric workspace. Pause and training completion publish snapshots.
@@ -452,6 +440,23 @@ The panel prevents selecting an unsupported backend while pose refinement is
 selected, but leaves already-selected options correctable. Native validation remains
 authoritative for scripts and pending parameter changes; a pending edit is not
 proof that an active Trainer accepted it.
+
+### Python and MCP configuration
+
+The GUI Python API exposes the same registered optimization properties through
+`lichtfeld.optimization_params()`: `refine_camera_poses`,
+`camera_pose_start_step` and `camera_pose_end_percent`. The read-only
+`camera_pose_conflict` returns the localization key for the current configuration
+error, while `camera_pose_edit_block_reason` also accounts for initialization.
+Configuration validation is shared with the native start/resume preflight.
+
+For GUI MCP clients, these properties are accessible through `editor.run` and
+the Python API before initialization. `scene.load_dataset` does not itself expose
+camera refinement arguments. Discover the available tools and operators from
+the runtime catalog rather than assuming identical tools in GUI and headless
+sessions. `training.start` reports initialization failures; an editor command
+that successfully changes a pending property is not confirmation that training
+can start or resume. Check the operation result and training state separately.
 
 Rigid six-degree-of-freedom refinement cannot recover missing scene coverage or
 correct motion blur and rolling-shutter distortion. Narrow image coverage alone

@@ -343,7 +343,8 @@ namespace lfs::core {
                 camera_pose_end_percent < 1 || camera_pose_end_percent > 100)
                 return 0;
             const uint64_t total = iterations + (enable_sparsity ? static_cast<uint64_t>(sparsify_steps) : 0);
-            if (total > limit) return 0;
+            if (total > limit)
+                return 0;
             int stop = static_cast<int>(total * static_cast<uint64_t>(camera_pose_end_percent) / 100);
             if (ppisp_use_controller) {
                 if (!std::isfinite(steps_scaler) || 5000.0 * std::max(steps_scaler, 1.0f) >= limit)
@@ -449,13 +450,17 @@ namespace lfs::core {
             return {};
         }
 
+        std::string OptimizationParameters::camera_pose_validation_error(bool localization_key) const {
+            if (!refine_camera_poses)
+                return {};
+            if (camera_pose_start_step < 0 || camera_pose_start_step >= resolved_camera_pose_stop_step())
+                return localization_key ? "training.pose.schedule" : "Camera pose start must be nonnegative and precede the effective stop step (before controller distillation); stop percentage must be in [1,100]";
+            return camera_pose_incompatibility(localization_key);
+        }
+
         std::string OptimizationParameters::validate() const {
-            if (refine_camera_poses) {
-                if (camera_pose_start_step < 0 || camera_pose_start_step >= resolved_camera_pose_stop_step())
-                    return "Camera pose start must be nonnegative and precede the effective stop step (before controller distillation); stop percentage must be in [1,100]";
-                if (auto error = camera_pose_incompatibility(); !error.empty())
-                    return error;
-            }
+            if (auto error = camera_pose_validation_error(); !error.empty())
+                return error;
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
                     return std::format("{} must be finite and nonnegative (got {})", name, value);

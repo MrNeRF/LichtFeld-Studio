@@ -352,6 +352,7 @@ namespace lfs::core {
             [[nodiscard]] std::string validate() const;
 
             [[nodiscard]] std::string camera_pose_incompatibility(bool localization_key = false) const;
+            [[nodiscard]] std::string camera_pose_validation_error(bool localization_key = false) const;
 
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();

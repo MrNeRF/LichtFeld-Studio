@@ -135,20 +135,27 @@ TEST(McpSharedSceneToolsTest, CameraPoseStartRejectionNeverReportsSuccess) {
     lfs::core::param::OptimizationParameters params;
     params.refine_camera_poses = true;
     params.camera_pose_start_step = -1;
-    const auto expected_error = params.validate();
-    ASSERT_FALSE(expected_error.empty());
     backend.start_training = [&]() -> std::expected<void, std::string> {
         if (auto error = params.validate(); !error.empty())
             return std::unexpected(error);
         return {};
     };
     lfs::mcp::register_shared_scene_tools(backend);
-    const auto rejected = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
-    ASSERT_TRUE(rejected.contains("error"));
-    ASSERT_TRUE(rejected.at("error").is_object());
-    EXPECT_EQ(rejected.at("error").at("message").get<std::string>(), expected_error);
-    EXPECT_EQ(rejected.at("error_message").get<std::string>(), expected_error);
-    EXPECT_FALSE(rejected.value("success", false));
+    for (const int defect : {0, 1, 2}) {
+        params.camera_pose_start_step = defect == 0 ? -1 : 500;
+        params.camera_pose_end_percent = defect == 1 ? 101 : 80;
+        params.gut = defect == 2;
+        const auto expected_error = params.camera_pose_validation_error();
+        ASSERT_FALSE(expected_error.empty());
+        EXPECT_EQ(params.validate(), expected_error);
+        const auto rejected = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
+        ASSERT_TRUE(rejected.contains("error"));
+        ASSERT_TRUE(rejected.at("error").is_object());
+        EXPECT_EQ(rejected.at("error").at("message").get<std::string>(), expected_error);
+        EXPECT_EQ(rejected.at("error_message").get<std::string>(), expected_error);
+        EXPECT_FALSE(rejected.value("success", false));
+    }
+    params.gut = false;
     params.camera_pose_start_step = 500;
     const auto accepted = lfs::mcp::ToolRegistry::instance().call_tool("training.start", json::object());
     EXPECT_TRUE(accepted.at("success").get<bool>());

@@ -37,9 +37,9 @@ namespace lfs::training::camera_pose {
         int visits_between_updates = 8;
         int steps_per_visit = 2;
         bool choose_anchors = true;
-        // Zero preserves the legacy strict geometry gate. New Trainer sessions
-        // use a combined image + weighted summed robust reprojection objective.
-        // Persisted with the session so resume never silently changes objectives.
+        // Zero selects the bounded photometric solver with geometric guards.
+        // Production Trainer sessions use the combined objective below. Both
+        // use the same state schema; resume never silently changes objectives.
         double joint_reprojection_weight = 0.0;
         static constexpr double DEFAULT_JOINT_REPROJECTION_WEIGHT = 1.0e-4;
         // scene_scale is explicit in scene units; caller must estimate it once

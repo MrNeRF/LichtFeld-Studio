@@ -86,6 +86,14 @@ set(TRAINING_NEW_SOURCES
     camera_pose/pose_refinement_state.cpp
     camera_pose/trainer_pose_integration.cpp
     camera_pose/fastgs_pose_evaluator.cpp
+    camera_pose/se3.hpp
+    camera_pose/bounded_pose_optimizer.hpp
+    camera_pose/pose_refinement_session.hpp
+    camera_pose/trainer_pose_integration.hpp
+    camera_pose/fastgs_pose_evaluator.hpp
+    camera_pose/sparse_reprojection_guard.hpp
+    camera_pose/sparse_point_refinement.hpp
+    camera_pose/joint_pose_proposal.hpp
     optimizer/adam_optimizer.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp

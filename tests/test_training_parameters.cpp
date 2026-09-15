@@ -109,6 +109,62 @@ namespace {
         }
     };
 
+    TEST_F(TrainingParametersTest, CameraPoseRegistryRoundTripAndValidationAgree) {
+        for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
+            SCOPED_TRACE(strategy);
+            auto params = OptimizationParameters::defaults_for_strategy(strategy);
+            const auto original = params.to_json();
+            EXPECT_FALSE(params.refine_camera_poses);
+            auto ref = PropertyObjectRef::cpp(&params);
+            const auto enabled = optimization_meta("refine_camera_poses");
+            const auto start = optimization_meta("camera_pose_start_step");
+            const auto end = optimization_meta("camera_pose_end_percent");
+            ASSERT_TRUE(enabled.setter);
+            ASSERT_TRUE(start.setter);
+            ASSERT_TRUE(end.setter);
+            enabled.setter(ref, std::any{true});
+            start.setter(ref, std::any{600});
+            end.setter(ref, std::any{50});
+            EXPECT_TRUE(std::any_cast<bool>(enabled.getter(ref)));
+            EXPECT_EQ(std::any_cast<int>(start.getter(ref)), 600);
+            EXPECT_EQ(std::any_cast<int>(end.getter(ref)), 50);
+            const auto restored = OptimizationParameters::from_json(params.to_json());
+            EXPECT_TRUE(restored.refine_camera_poses);
+            EXPECT_EQ(restored.camera_pose_start_step, 600);
+            EXPECT_EQ(restored.camera_pose_end_percent, 50);
+            EXPECT_TRUE(restored.camera_pose_validation_error().empty());
+            EXPECT_TRUE(restored.camera_pose_validation_error(true).empty());
+
+            start.setter(ref, std::any{-1});
+            EXPECT_EQ(params.camera_pose_validation_error(true), "training.pose.schedule");
+            EXPECT_EQ(params.validate(), params.camera_pose_validation_error());
+            enabled.setter(ref, std::any{false});
+            EXPECT_TRUE(params.camera_pose_validation_error().empty());
+            EXPECT_TRUE(params.camera_pose_validation_error(true).empty());
+            // Property edits must not rewrite strategy defaults or other options.
+            auto edited = params.to_json();
+            for (const auto* name : {"refine_camera_poses", "camera_pose_start_step", "camera_pose_end_percent"})
+                edited[name] = original.at(name);
+            EXPECT_EQ(edited, original);
+        }
+    }
+
+    TEST_F(TrainingParametersTest, CameraPoseValidationPreservesConflictPriorityAndDisabledPath) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.refine_camera_poses = true;
+        params.gut = true;
+        params.camera_pose_start_step = -1;
+        EXPECT_EQ(params.camera_pose_validation_error(true), "training.pose.schedule");
+        params.camera_pose_start_step = 500;
+        EXPECT_EQ(params.camera_pose_validation_error(true), "training.pose.backend");
+        params.gut = false;
+        params.lambda_dssim = 2.0f;
+        EXPECT_EQ(params.camera_pose_validation_error(true), "training.pose.ssim");
+        params.refine_camera_poses = false;
+        EXPECT_TRUE(params.camera_pose_validation_error(true).empty());
+        EXPECT_TRUE(params.camera_pose_validation_error().empty());
+    }
+
     // The MRNF sentinels cross several member types and factory overrides, catching wrong-member
     // getter wiring, MRNF factory drift, and a resolver that falls back to stored constants.
     TEST_F(TrainingParametersTest, ResolvesMrnfFactorySentinels) {

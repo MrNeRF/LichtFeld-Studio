@@ -1122,10 +1122,7 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.refine_camera_poses = v; }); },
                 "Refine camera poses during training")
             .def_prop_ro("camera_pose_conflict", [](PyOptimizationParams& self) {
-                if (self.params().refine_camera_poses && (self.params().camera_pose_start_step < 0 ||
-                    self.params().camera_pose_start_step >= self.params().resolved_camera_pose_stop_step()))
-                    return std::string("training.pose.schedule");
-                return self.params().refine_camera_poses ? self.params().camera_pose_incompatibility(true) : std::string{};
+                return self.params().camera_pose_validation_error(true);
             })
             .def_prop_ro("camera_pose_stop_step", [](PyOptimizationParams& self) {
                 const auto* tm = get_trainer_manager();

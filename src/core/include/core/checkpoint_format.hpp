@@ -10,6 +10,7 @@
 #include <expected>
 #include <filesystem>
 #include <iosfwd>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <string_view>
 
@@ -24,6 +25,8 @@ namespace lfs::core {
     constexpr uint64_t MAX_CHECKPOINT_JSON_BYTES = 16ULL * 1024ULL * 1024ULL;
     constexpr uint32_t MAX_CHECKPOINT_STRATEGY_NAME_BYTES = 64;
     constexpr uint32_t MAX_CHECKPOINT_GAUSSIANS = 1'000'000'000;
+    constexpr std::string_view CAMERA_POSE_STATE_FORMAT = "lichtfeld.camera_pose";
+    constexpr int CAMERA_POSE_STATE_VERSION = 1;
 
     enum class CheckpointFlags : uint32_t {
         NONE = 0,
@@ -58,6 +61,9 @@ namespace lfs::core {
         uint64_t file_size);
     LFS_CORE_API lfs::Status validate_checkpoint_pose_state(
         const CheckpointHeader& header, const param::TrainingParameters& params);
+    // Shared wire contract. Dataset-dependent validation belongs to the Trainer.
+    LFS_CORE_API std::expected<void, std::string> validate_camera_pose_state_schema(
+        const nlohmann::json& state);
 
     LFS_CORE_API std::expected<CheckpointHeader, std::string> load_checkpoint_header(
         const std::filesystem::path& path);

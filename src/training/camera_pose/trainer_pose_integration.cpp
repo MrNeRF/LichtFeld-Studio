@@ -120,17 +120,15 @@ namespace lfs::training {
         }
         static std::atomic<std::uint64_t> next_generation{1};
         auto session = std::make_shared<PoseRefinementSession>(next_generation.fetch_add(1), std::move(inputs), config);
-        // Legacy checkpoints retain their original fixed-structure objective.
-        // New sessions and shared-geometry checkpoints use the active training
-        // membership and the already-prepared undistortion calibration.
-        if (saved.is_null() || saved.at("version") == 2 || saved.at("version") == 3) {
-            std::vector<SparseTrackMeasurement> measurements;
-            for (const auto& camera : camera_pose_sources_) {
-                auto observations = make_sparse_track_measurements(*camera, training.contains(camera->uid()));
-                measurements.insert(measurements.end(), observations.begin(), observations.end());
-            }
-            session->configure_sparse_points(std::move(measurements));
+        // Reconstruct the source graph before both initialization and restore.
+        // Its membership and prepared undistortion calibration are validated
+        // against the saved graph before the model is adopted.
+        std::vector<SparseTrackMeasurement> measurements;
+        for (const auto& camera : camera_pose_sources_) {
+            auto observations = make_sparse_track_measurements(*camera, training.contains(camera->uid()));
+            measurements.insert(measurements.end(), observations.begin(), observations.end());
         }
+        session->configure_sparse_points(std::move(measurements));
         if (!saved.is_null()) {
             session->restore_state(saved);
         }
@@ -152,7 +150,7 @@ namespace lfs::training {
         LOG_INFO("Camera pose SfM geometry: {} shared points; {}/{} movable cameras use joint reprojection, {} use fixed source reprojection, {} use photometric-only acceptance",
                  session->shared_point_count(), joint, movable, guarded, movable - guarded - joint);
         LOG_INFO("Camera pose objective: {}; reprojection weight={}",
-                 config.joint_reprojection_weight > 0 ? "photometric + summed reprojection, one-pixel Huber, simultaneous camera-point Adam" : "legacy strict reprojection gate",
+                 config.joint_reprojection_weight > 0 ? "photometric + summed reprojection, one-pixel Huber, simultaneous camera-point Adam" : "bounded photometric with reprojection guards",
                  config.joint_reprojection_weight);
         LOG_INFO("Camera pose refinement: {} cameras, warmup={}, freeze at={}, steps/visit={}, visits between updates={}, restored={}",
                  session->published_snapshot()->cameras.size(), config.warmup_iterations, static_cast<int>(std::floor(config.total_iterations * config.freeze_fraction)),

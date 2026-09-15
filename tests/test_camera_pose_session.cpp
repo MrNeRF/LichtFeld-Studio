@@ -247,6 +247,11 @@ namespace {
         const auto snapshot = session.published_snapshot();
         using Json = nlohmann::json;
         const std::vector<std::function<void(Json&)>> corruptions{
+            [](Json& j) { j["format"] = nullptr; },
+            [](Json& j) { j["format"] = "unrecognized.camera_pose"; },
+            [](Json& j) { j.erase("points"); },
+            [](Json& j) { j["cameras"][2].erase("adam"); },
+            [](Json& j) { j["cameras"][2]["adam"]["second"][0] = -1; },
             [](Json& j) { j["version"] = 2; },
             [](Json& j) { j["settings"]["steps_per_visit"] = 8; },
             [](Json& j) { j["iteration"] = 101; },
@@ -527,13 +532,14 @@ namespace {
         EXPECT_FALSE(propose_combined_pose(*geometry, gradient, -weight, scale));
     }
 
-    TEST(CameraPoseCombinedObjectiveTest, VersionThreePreservesObjectiveAndLegacyRemainsExplicit) {
+    TEST(CameraPoseCombinedObjectiveTest, StateSchemaPreservesObjectiveAndGeometryMode) {
         for (const bool with_points : {false, true}) {
             PoseRefinementSession source(1, cameras(), combined_config());
             if (with_points)
                 source.configure_sparse_points(shared_measurements());
             const auto state = source.save_state();
-            ASSERT_EQ(state["version"], 3);
+            ASSERT_EQ(state["format"], "lichtfeld.camera_pose");
+            ASSERT_EQ(state["version"], 1);
             const auto saved_config = pose_session_config_from_state(state);
             EXPECT_EQ(saved_config.joint_reprojection_weight, combined_config().joint_reprojection_weight);
             PoseRefinementSession restored(2, cameras(), saved_config);
@@ -548,10 +554,30 @@ namespace {
             wrong["settings"].erase("joint_reprojection_weight");
             EXPECT_THROW((void)pose_session_config_from_state(wrong), std::invalid_argument);
         }
-        PoseRefinementSession legacy(1, cameras(), config());
-        legacy.configure_sparse_points(shared_measurements());
-        EXPECT_EQ(legacy.save_state()["version"], 2);
-        EXPECT_EQ(pose_session_config_from_state(legacy.save_state()).joint_reprojection_weight, 0);
+        PoseRefinementSession bounded(1, cameras(), config());
+        bounded.configure_sparse_points(shared_measurements());
+        EXPECT_EQ(bounded.save_state()["version"], 1);
+        EXPECT_EQ(bounded.save_state()["settings"]["joint_update_rule"], "bounded_photometric");
+        EXPECT_EQ(pose_session_config_from_state(bounded.save_state()).joint_reprojection_weight, 0);
+    }
+
+    TEST(CameraPoseCombinedObjectiveTest, ExperimentalStateFormatsAreRejectedAtomically) {
+        PoseRefinementSession session(1, cameras(), combined_config());
+        session.configure_sparse_points(shared_measurements());
+        const auto before = session.save_state();
+        for (const int version : {1, 2, 3}) {
+            auto experimental = before;
+            experimental.erase("format");
+            experimental["version"] = version;
+            EXPECT_THROW((void)pose_session_config_from_state(experimental), std::invalid_argument);
+            EXPECT_THROW(session.restore_state(experimental), std::invalid_argument);
+            EXPECT_EQ(session.save_state(), before);
+        }
+        auto future = before;
+        future["version"] = 2;
+        EXPECT_THROW((void)pose_session_config_from_state(future), std::invalid_argument);
+        EXPECT_THROW(session.restore_state(future), std::invalid_argument);
+        EXPECT_EQ(session.save_state(), before);
     }
 
     TEST(CameraPoseCombinedObjectiveTest, CancelledOrInvalidEvaluationNeverCommitsPartialGeometry) {
@@ -847,16 +873,18 @@ namespace {
         }
     }
 
-    TEST(CameraPoseJointGeometryTest, LegacyStateCannotSilentlySwitchGeometryModel) {
-        PoseRefinementSession legacy(1, cameras(), config());
+    TEST(CameraPoseJointGeometryTest, StateCannotSilentlySwitchGeometryMembership) {
+        PoseRefinementSession photometric(1, cameras(), config());
         PoseRefinementSession joint(2, cameras(), config());
         joint.configure_sparse_points(shared_measurements());
-        const auto old_state = legacy.save_state(), joint_state = joint.save_state();
+        const auto old_state = photometric.save_state(), joint_state = joint.save_state();
         EXPECT_EQ(old_state.at("version"), 1);
-        EXPECT_EQ(joint_state.at("version"), 2);
+        EXPECT_EQ(joint_state.at("version"), 1);
+        EXPECT_TRUE(old_state.at("points").empty());
+        EXPECT_FALSE(joint_state.at("points").empty());
         EXPECT_THROW(joint.restore_state(old_state), std::invalid_argument);
-        EXPECT_THROW(legacy.restore_state(joint_state), std::invalid_argument);
-        EXPECT_EQ(legacy.save_state(), old_state);
+        EXPECT_THROW(photometric.restore_state(joint_state), std::invalid_argument);
+        EXPECT_EQ(photometric.save_state(), old_state);
         EXPECT_EQ(joint.save_state(), joint_state);
     }
 
