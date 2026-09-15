@@ -1799,6 +1799,7 @@ class AssetIndex:
             project.folder_id = target.id
         if "name" in kwargs:
             project.name = str(kwargs["name"])
+            project.name_origin = "user"
         if not save:
             self._touch_catalog()
         if save and not self.save():
