@@ -1358,7 +1358,8 @@ class GalleryController:
                     if not commit or (source and commit != source):
                         raise ValueError("The prepared project commit does not match the reviewed version.")
                     metadata["_commitUuid"] = commit
-                    metadata["viewerSettings"] = gallery_preparation.publication_view_metadata(self.service.root, export)
+                    saved_view = gallery_preparation.publication_view_metadata(self.service.root, export)
+                    metadata["viewerSettings"] = saved_view | metadata.get("viewerSettings", {})
                 self.service.queue_prepared_upload(export, metadata, project_id)
                 self._message = ""
             except Exception as exc:

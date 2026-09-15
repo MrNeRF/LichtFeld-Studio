@@ -124,17 +124,44 @@ def unpack_project(root, source, destination, *, progress=None):
 
 
 def publication_view_metadata(root, value):
-    """The native file owns VIEW/SEQR; only mirror HDR for the packaging guard."""
+    """Read the reviewed viewing settings from the exact prepared commit."""
+    import math
     from .portable_project import ProjectFile
+    from .gallery_view import TONEMAPPING, viewer_vector
     path = staging_path(root, value)
     staging_files(root, path)
     with (path / "project.licht").open("rb") as source:
         project = ProjectFile(source)
-        if "environment" not in project.manifest:
-            return {}
-        render = project.chapters[b"VIEW"]["render_settings"]
-        return {"environment": {"exposure": render["environment_exposure"],
-                                "rotation": render["environment_rotation_degrees"]}}
+        view = project.chapters[b"VIEW"]
+        render = view["render_settings"]
+        panel = next(item for item in view["panel_cameras"] if item["panel"] == "primary")
+        up = viewer_vector(panel["R"][3:6])
+        length = math.hypot(*up)
+        if not math.isfinite(length) or length < 1e-8:
+            raise ValueError("The saved camera orientation is invalid.")
+        vertical = "long_axis_fov_degrees" not in view
+        fov = (2 * math.degrees(math.atan(12 / render["focal_length_mm"])) if vertical
+               else view["long_axis_fov_degrees"])
+        camera = dict(position=viewer_vector(panel["t"]), target=viewer_vector(panel["pivot"]),
+                      up=[component / length for component in up], fov=fov)
+        if render.get("orthographic"):
+            camera.update(projection="orthographic", orthoScale=panel["ortho_extent_world"])
+        result = dict(camera=camera, verticalFov=vertical,
+                      exposure=render.get("color_exposure", 1.0),
+                      tonemapping=TONEMAPPING[render.get("color_tonemapping", 0)],
+                      renderProfile="studio" if render.get("splat_render_profile", 0) == 0 else "standard",
+                      shDegree=render["sh_degree"], antialiasing=render["mip_filter"],
+                      renderMode=render["raster_backend"], background=render["background_color"])
+        sequencer = project.chapters.get(b"SEQR", {})
+        timeline = sequencer.get("timeline", {})
+        if timeline.get("keyframes"):
+            result["cameraPath"] = dict(version=1, duration=timeline["clip_duration"],
+                                       loopMode=sequencer["loop_mode"], playbackSpeed=sequencer["playback_speed"],
+                                       keyframes=timeline["keyframes"])
+        if "environment" in project.manifest:
+            result["environment"] = {"exposure": render["environment_exposure"],
+                                     "rotation": render["environment_rotation_degrees"]}
+        return result
 
 
 def attach_preview(path, png, *, cancel=None):
