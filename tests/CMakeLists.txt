@@ -115,8 +115,6 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
-    test_project_inspector.cpp
-    test_project_operations.cpp
     licht_format_test_runtime.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
@@ -124,21 +122,23 @@ set(LICHT_FORMAT_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
     ${CMAKE_SOURCE_DIR}/src/core/property_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
     ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
-    ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
-    ${CMAKE_SOURCE_DIR}/src/io/project/project_operations.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
 )
 
 set(LICHT_FORMAT_NON_WINDOWS_FILES
     ${LICHT_FORMAT_WINDOWS_FILES}
+    test_project_inspector.cpp
+    test_project_operations.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_inspector.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_operations.cpp
     test_selection_chapter.cpp
     test_p8_compatibility.cpp
     licht_format_tensor_runtime.cpp
