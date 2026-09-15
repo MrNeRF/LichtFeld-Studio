@@ -2433,7 +2433,8 @@
     "points_count": "Punten: {}/3",
     "up": "OMHOOG",
     "hint_picking": "Klik: plaatsen/selecteren. Marker slepen: verplaatsen. Del: geselecteerde. Backspace: laatste. Esc: annuleren.",
-    "hint_review": "Enter/Toepassen: uitlijnen. Markers slepen. Del: geselecteerde. Backspace: laatste punt. Esc: annuleren.",
+    "hint_review": "Voorbeeld: bekijk het resultaat. Toepassen: behouden. Sleep de punten om aan te passen. Esc: annuleren.",
+    "status_targets_changed": "De selectie is gewijzigd. Kies de uitlijnpunten opnieuw.",
     "status_colinear": "Punten liggen bijna op een lijn. Verplaats een punt.",
     "status_no_surface": "Geen oppervlak onder de cursor.",
     "status_no_target": "Geen transformeerbaar doel om uit te lijnen.",
@@ -2441,7 +2442,10 @@
     "apply": "Toepassen",
     "clear": "Wissen",
     "snap": "Assnap",
-    "edge_to_axis": "Rand op as uitlijnen"
+    "edge_to_axis": "Zet het vlak waterpas en draait de rand van 1 naar 2 naar de rode X-pijl. Vergelijk met Voorbeeld.",
+    "edge_label": "1 → 2 langs X",
+    "edge_on_help": "Rand van 1 naar 2 langs X: AAN. Zet het vlak waterpas en draait de scène zodat de rand de rode X-pijl volgt.",
+    "edge_off_help": "Rand van 1 naar 2 langs X: UIT. Zet het vlak waterpas zonder de extra draai."
   },
   "toast": {
     "trainer_not_restored": {

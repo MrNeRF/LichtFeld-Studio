@@ -2433,7 +2433,8 @@
     "points_count": "Punti: {}/3",
     "up": "SU",
     "hint_picking": "Clic: posiziona/seleziona. Trascina marcatore: sposta. Canc: rimuovi selezionato. Backspace: ultimo. Esc: annulla.",
-    "hint_review": "Invio/Applica: allinea. Trascina marcatori. Canc: rimuovi selezionato. Backspace: ultimo punto. Esc: annulla.",
+    "hint_review": "Anteprima: mostra il risultato. Applica: conferma. Trascina i punti per regolare. Esc: annulla.",
+    "status_targets_changed": "La selezione è cambiata. Scegli di nuovo i punti di allineamento.",
     "status_colinear": "I punti sono quasi in linea. Sposta un punto.",
     "status_no_surface": "Nessuna superficie sotto il cursore.",
     "status_no_target": "Nessun obiettivo trasformabile da allineare.",
@@ -2441,7 +2442,10 @@
     "apply": "Applica",
     "clear": "Cancella",
     "snap": "Snap assi",
-    "edge_to_axis": "Allinea spigolo all'asse"
+    "edge_to_axis": "Livella il piano, poi ruota il bordo da 1 a 2 verso la freccia X rossa. Usa l’anteprima per confrontare.",
+    "edge_label": "1 → 2 lungo X",
+    "edge_on_help": "Bordo da 1 a 2 lungo X: SÌ. Livella il piano, poi ruota la scena affinché il bordo segua la freccia X rossa.",
+    "edge_off_help": "Bordo da 1 a 2 lungo X: NO. Livella il piano senza la rotazione aggiuntiva."
   },
   "toast": {
     "trainer_not_restored": {

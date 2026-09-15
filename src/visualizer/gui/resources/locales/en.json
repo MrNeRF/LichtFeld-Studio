@@ -2432,7 +2432,7 @@
     "points_count": "Points: {}/3",
     "up": "UP",
     "hint_picking": "Click: place/select. Drag marker: move. Del: remove selected. Backspace: remove last. Esc: cancel.",
-    "hint_review": "Preview (eye): compare options. Enter/Apply: align. Drag markers to adjust. Del: remove selected. Backspace: remove last point. Esc: cancel.",
+    "hint_review": "Preview: see the result. Apply: keep it. Drag points to adjust. Esc: cancel.",
     "status_targets_changed": "Selection changed. Pick the alignment points again.",
     "status_colinear": "Points are nearly in a line. Move a point.",
     "status_no_surface": "No surface under the cursor.",
@@ -2441,7 +2441,10 @@
     "apply": "Apply",
     "clear": "Clear",
     "snap": "Axis snap",
-    "edge_to_axis": "Turn edge 1 → 2 toward +X"
+    "edge_to_axis": "Levels the plane, then turns edge 1 to 2 toward the red X arrow. Use Preview to compare.",
+    "edge_label": "1 → 2 along X",
+    "edge_on_help": "Edge 1 to 2 along X: ON. Levels the plane, then turns the scene so edge 1 to 2 follows the red X arrow.",
+    "edge_off_help": "Edge 1 to 2 along X: OFF. Levels the plane without the extra turn."
   },
   "toast": {
     "trainer_not_restored": {

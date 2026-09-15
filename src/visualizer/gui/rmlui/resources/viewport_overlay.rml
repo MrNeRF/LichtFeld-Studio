@@ -128,7 +128,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -159,12 +159,13 @@
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
-            <div id="primary-align-toolbar" class="toolbar-container hidden"
+            <div id="primary-align-toolbar" class="toolbar-container align-toolbar hidden"
                  data-class-hidden="!show_align_toolbar">
                 <div class="icon-btn"
                      data-for="button : align_action_buttons"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
+                     data-class-has-label="button.label != ''"
                      data-attr-data-action="button.action_id"
                      data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
@@ -172,6 +173,7 @@
                      data-class-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
+                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
             <div id="primary-crop-toolbar" class="toolbar-container hidden"
@@ -398,7 +400,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
             <div id="secondary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -429,12 +431,13 @@
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
-            <div id="secondary-align-toolbar" class="toolbar-container hidden"
+            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar hidden"
                  data-class-hidden="!show_align_toolbar">
                 <div class="icon-btn"
                      data-for="button : align_action_buttons"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
+                     data-class-has-label="button.label != ''"
                      data-attr-data-action="button.action_id"
                      data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
@@ -442,6 +445,7 @@
                      data-class-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
+                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
             <div id="secondary-crop-toolbar" class="toolbar-container hidden"

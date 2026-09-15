@@ -1998,3 +1998,30 @@ body {
     font-family: "JetBrains Mono";
     font-weight: normal;
 }
+
+/* Leave room for the tool strip and corner axis control in each pane. */
+.toolbar-hcenter.align-active {
+    padding-left: 44dp;
+    padding-right: 90dp;
+    box-sizing: border-box;
+}
+
+/* Keep labeled alignment options inside narrow viewport panes. */
+.toolbar-hcenter .align-toolbar {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* Alignment options need names as well as icons. */
+.toolbar-hcenter .align-toolbar .icon-btn.has-label {
+    width: auto;
+    padding-left: 7dp;
+    padding-right: 7dp;
+    gap: 5dp;
+}
+
+.align-button-label {
+    white-space: nowrap;
+    font-size: 13dp;
+}

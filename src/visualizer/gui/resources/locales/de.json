@@ -2433,7 +2433,8 @@
     "points_count": "Punkte: {}/3",
     "up": "OBEN",
     "hint_picking": "Klick: setzen/auswählen. Marker ziehen: bewegen. Entf: Auswahl. Rücktaste: letzter. Esc: abbrechen.",
-    "hint_review": "Enter/Anwenden: ausrichten. Marker ziehen. Entf: Auswahl. Rücktaste: letzter Punkt. Esc: abbrechen.",
+    "hint_review": "Vorschau: Ergebnis ansehen. Anwenden: übernehmen. Punkte zum Anpassen ziehen. Esc: abbrechen.",
+    "status_targets_changed": "Auswahl geändert. Wählen Sie die Ausrichtungspunkte erneut.",
     "status_colinear": "Punkte liegen fast auf einer Linie. Punkt verschieben.",
     "status_no_surface": "Keine Oberfläche unter dem Cursor.",
     "status_no_target": "Kein transformierbares Ziel zum Ausrichten.",
@@ -2441,7 +2442,10 @@
     "apply": "Anwenden",
     "clear": "Löschen",
     "snap": "Achsen-Snap",
-    "edge_to_axis": "Kante an Achse ausrichten"
+    "edge_to_axis": "Ebene ausrichten und Kante 1–2 zum roten X-Pfeil drehen. Mit der Vorschau vergleichen.",
+    "edge_label": "1 → 2 entlang X",
+    "edge_on_help": "Kante 1–2 entlang X: AN. Richtet die Ebene aus und dreht die Szene, sodass Kante 1–2 dem roten X-Pfeil folgt.",
+    "edge_off_help": "Kante 1–2 entlang X: AUS. Richtet die Ebene ohne die zusätzliche Drehung aus."
   },
   "toast": {
     "trainer_not_restored": {

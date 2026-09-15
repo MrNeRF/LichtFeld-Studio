@@ -490,12 +490,15 @@ namespace lfs::vis::tools {
 
         const float hud_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
         const float padding = 10.0f * ui_scale;
-        const glm::vec2 hud_pos(info_x, panel_proj.info.y + 48.0f * ui_scale);
-        const float max_width = std::max(80.0f, panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding);
+        const float max_width = std::max(40.0f, std::min(560.0f * ui_scale,
+                                                         panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding));
         const char* hint_key = services().getAlignPreviewEnabled() ? "align.hint_preview"
                                : in_review                         ? lichtfeld::Strings::Align::HINT_REVIEW
                                                                    : lichtfeld::Strings::Align::HINT_PICKING;
         const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto option_lines = in_review
+                                      ? wrapHint(*overlay, LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help"), hud_size, max_width)
+                                      : std::vector<std::string>{};
         const auto count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, picked_points.size());
         const auto* status = services().getAlignStatusMessage();
         float width = overlay->measureText(count_text, t.fonts.large_size).x;
@@ -505,15 +508,23 @@ namespace lfs::vis::tools {
                                          : std::vector<std::string>{};
         for (const auto& line : status_lines)
             width = std::max(width, overlay->measureText(line, hud_size).x);
+        for (const auto& line : option_lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
         const float line_height = hud_size + 5.0f * ui_scale;
         const float height = t.fonts.large_size + 8.0f * ui_scale +
-                             (lines.size() + status_lines.size()) * line_height;
+                             (lines.size() + option_lines.size() + status_lines.size()) * line_height;
+        const glm::vec2 hud_pos(info_x, std::max(panel_proj.info.y + padding,
+                                                 panel_proj.info.y + panel_proj.info.height - height - padding - 12.0f * ui_scale));
         overlay->addRectFilled(hud_pos - glm::vec2(padding),
                                hud_pos + glm::vec2(width + padding, height + padding),
                                toOverlay(t.overlay.background, 0.96f));
         overlay->addText(hud_pos, count_text.c_str(), toOverlay(t.overlay.text), t.fonts.large_size);
         glm::vec2 text_pos(hud_pos.x, hud_pos.y + t.fonts.large_size + 8.0f * ui_scale);
         for (const auto& line : lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
+            text_pos.y += line_height;
+        }
+        for (const auto& line : option_lines) {
             overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
             text_pos.y += line_height;
         }

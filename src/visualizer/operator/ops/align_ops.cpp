@@ -4,7 +4,6 @@
 
 #include "align_ops.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -31,10 +30,6 @@ namespace lfs::vis::op {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
 
-        [[nodiscard]] bool isAlignTransformTarget(const core::SceneNode& node) {
-            return cap::isAlignTransformTargetType(node.type);
-        }
-
         [[nodiscard]] core::NodeId resolveAlignTargetId(const core::Scene& scene,
                                                         const core::SceneNode& node) {
             core::NodeId target_id = core::NULL_NODE;
@@ -42,11 +37,11 @@ namespace lfs::vis::op {
                  node.type == core::NodeType::ELLIPSOID) &&
                 node.parent_id != core::NULL_NODE) {
                 const auto* const parent = scene.getNodeById(node.parent_id);
-                if (parent && isAlignTransformTarget(*parent)) {
+                if (parent && cap::isAlignTransformTargetType(parent->type)) {
                     target_id = parent->id;
                 }
             }
-            if (target_id == core::NULL_NODE && isAlignTransformTarget(node)) {
+            if (target_id == core::NULL_NODE && cap::isAlignTransformTargetType(node.type)) {
                 target_id = node.id;
             }
             if (target_id == core::NULL_NODE) {
@@ -722,95 +717,32 @@ namespace lfs::vis::op {
     }
 
     bool AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {
-        if (picked_points_.size() != 3) {
-            return false;
-        }
-
-        if (services().getAlignPreviewEnabled()) {
-            auto& scene = ctx.scene().getScene();
-            std::vector<glm::mat4> originals;
-            std::vector<std::string> names;
-            for (const auto& saved : preview_targets_) {
-                const auto* node = scene.getNodeById(saved.id);
-                if (!node || node->uuid != saved.uuid || node->locked) {
-                    restorePreview(ctx);
-                    return false;
-                }
-                names.push_back(node->name);
-                originals.push_back(saved.local);
-            }
-            auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
-            if (!entry->captureTransformsBefore(names, originals)) {
-                restorePreview(ctx);
-                return false;
-            }
-            entry->captureAfter();
-            pushSceneSnapshotIfChanged(std::move(entry));
-            preview_targets_.clear();
-            preview_snap_world_.reset();
-            services().setAlignPreviewEnabled(false);
-            return true;
-        }
-
-        const auto target_ids = resolveAlignmentTargets(ctx);
-        if (target_ids.empty()) {
-            LOG_WARN("3-point alignment has no transformable selected target");
-            setStatus(lichtfeld::Strings::Align::STATUS_NO_TARGET, 2.0);
+        if (!services().getAlignPreviewEnabled() && !updatePreview(ctx)) {
             return false;
         }
 
         auto& scene = ctx.scene().getScene();
-        std::vector<std::string> node_names;
-        node_names.reserve(target_ids.size());
-        for (const auto node_id : target_ids) {
-            const auto* const node = scene.getNodeById(node_id);
-            if (node) {
-                node_names.push_back(node->name);
+        std::vector<glm::mat4> originals;
+        std::vector<std::string> names;
+        for (const auto& saved : preview_targets_) {
+            const auto* node = scene.getNodeById(saved.id);
+            if (!node || node->uuid != saved.uuid || node->locked) {
+                restorePreview(ctx);
+                return false;
             }
+            names.push_back(node->name);
+            originals.push_back(saved.local);
         }
-
         auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
-        entry->captureTransforms(node_names);
-
-        AlignTransformInputs inputs;
-        inputs.p0 = picked_points_[0];
-        inputs.p1 = picked_points_[1];
-        inputs.p2 = picked_points_[2];
-        inputs.camera_pos = services().getAlignCameraPosition();
-        if (services().getAlignAxisSnapEnabled()) {
-            inputs.snap_node_world = resolveAlignSnapTargetWorld(ctx.scene());
-        }
-        inputs.edge_to_world_x = services().getAlignEdgeToAxisEnabled();
-
-        const auto visualizer_transform = computeAlignTransform(inputs);
-        if (!visualizer_transform) {
-            setStatus(lichtfeld::Strings::Align::STATUS_COLINEAR, 2.0);
+        if (!entry->captureTransformsBefore(names, originals)) {
+            restorePreview(ctx);
             return false;
         }
-
-        for (const auto node_id : target_ids) {
-            const auto* const node = scene.getNodeById(node_id);
-            if (!node) {
-                continue;
-            }
-
-            const glm::mat4 old_visualizer_world = vis::scene_coords::nodeVisualizerWorldTransform(scene, node_id);
-            const glm::mat4 new_visualizer_world = *visualizer_transform * old_visualizer_world;
-            const auto new_local =
-                vis::scene_coords::nodeLocalTransformFromVisualizerWorld(scene, node_id, new_visualizer_world);
-            if (!new_local) {
-                continue;
-            }
-
-            ctx.scene().setNodeTransform(node->name, *new_local);
-        }
-
         entry->captureAfter();
         pushSceneSnapshotIfChanged(std::move(entry));
-
-        if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
-        }
+        preview_targets_.clear();
+        preview_snap_world_.reset();
+        services().setAlignPreviewEnabled(false);
         return true;
     }
 

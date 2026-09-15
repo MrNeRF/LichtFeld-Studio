@@ -2433,7 +2433,8 @@
     "points_count": "点: {}/3",
     "up": "上",
     "hint_picking": "点击：放置/选择。拖动标记：移动。Del：删除所选。Backspace：删除上一个。Esc：取消。",
-    "hint_review": "Enter/应用：对齐。拖动标记调整。Del：删除所选。Backspace：删除上一个点。Esc：取消。",
+    "hint_review": "预览：查看结果。应用：保留结果。拖动点进行调整。Esc：取消。",
+    "status_targets_changed": "选择已更改。请重新选取对齐点。",
     "status_colinear": "这些点几乎共线。请移动一个点。",
     "status_no_surface": "光标下没有表面。",
     "status_no_target": "没有可对齐的可变换目标。",
@@ -2441,7 +2442,10 @@
     "apply": "应用",
     "clear": "清除",
     "snap": "轴向吸附",
-    "edge_to_axis": "边对齐到轴"
+    "edge_to_axis": "先将平面调平，再将点1到点2的边转向红色X箭头。使用预览比较效果。",
+    "edge_label": "1 → 2沿X方向",
+    "edge_on_help": "点1到点2的边沿X方向：开。先将平面调平，再旋转场景，让这条边沿红色X箭头方向。",
+    "edge_off_help": "点1到点2的边沿X方向：关。只将平面调平，不做额外旋转。"
   },
   "toast": {
     "trainer_not_restored": {

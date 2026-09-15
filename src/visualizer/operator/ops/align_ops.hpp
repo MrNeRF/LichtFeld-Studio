@@ -13,7 +13,7 @@
 
 namespace lfs::vis::op {
 
-    class AlignPickPointOperator : public Operator {
+    class LFS_VIS_API AlignPickPointOperator : public Operator {
     public:
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
@@ -66,21 +66,21 @@ namespace lfs::vis::op {
 
     // Shared by apply path and overlay preview. Returns true if normal was snapped.
     inline constexpr float kAlignAxisSnapDegrees = 3.0f;
-    [[nodiscard]] bool snapAlignNormalToNodeAxes(glm::vec3& normal,
-                                                 const glm::mat4& node_world,
-                                                 float max_degrees = kAlignAxisSnapDegrees);
+    [[nodiscard]] LFS_VIS_API bool snapAlignNormalToNodeAxes(glm::vec3& normal,
+                                                             const glm::mat4& node_world,
+                                                             float max_degrees = kAlignAxisSnapDegrees);
 
     // Flip face normal so it points toward the camera (shared by apply + overlay preview).
-    void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos);
+    LFS_VIS_API void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos);
 
     // True when exactly 3 points define a non-degenerate triangle (cross length > 1e-6).
-    [[nodiscard]] bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points);
+    [[nodiscard]] LFS_VIS_API bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points);
 
     // Optional in-plane yaw after normal→up: aligns projected (p1-p0) with world +X.
     // Returns the yaw rotation to left-multiply onto the up-alignment rotation (identity if skipped).
-    [[nodiscard]] glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
-                                                      const glm::vec3& p0,
-                                                      const glm::vec3& p1);
+    [[nodiscard]] LFS_VIS_API glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
+                                                                  const glm::vec3& p0,
+                                                                  const glm::vec3& p1);
 
     struct AlignTransformInputs {
         glm::vec3 p0{};
@@ -93,7 +93,7 @@ namespace lfs::vis::op {
 
     // Visualizer-world transform mapping the picked plane normal (camera-facing, optionally
     // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
-    [[nodiscard]] std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
+    [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
 
     [[nodiscard]] std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
 

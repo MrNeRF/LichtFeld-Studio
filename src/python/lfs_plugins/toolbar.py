@@ -212,13 +212,14 @@ def _crop_roi_param_state():
 def _button_record(button_id, action, value, icon_src, *,
                    tooltip_key="", tooltip_text="", action_id="",
                    shortcut_text="", selected=False, enabled=True,
-                   separator_before=False):
+                   separator_before=False, label=""):
     enabled = bool(enabled)
     record = {
         "button_id": button_id,
         "action": action,
         "value": value,
         "icon_src": icon_src,
+        "label": label,
         "tooltip_key": tooltip_key,
         "tooltip_text": _ui_label(tooltip_key, tooltip_text),
         "action_id": action_id,
@@ -773,6 +774,7 @@ class _GizmoToolbarController:
             _button_record(
                 "align-preview", "align_toggle_preview", "", _icon_src("scene/visible"),
                 tooltip_key="align.preview", tooltip_text="Preview alignment",
+                label=_ui_label("align.preview", "Preview alignment"),
                 selected=lf.ui.get_align_preview(), enabled=active and can_apply,
             ),
             _button_record(
@@ -800,6 +802,7 @@ class _GizmoToolbarController:
                 _icon_src("world"),
                 tooltip_key="align.snap",
                 tooltip_text="Axis snap",
+                label=_ui_label("align.snap", "Axis snap"),
                 selected=snap_on,
                 enabled=active,
             ),
@@ -809,7 +812,8 @@ class _GizmoToolbarController:
                 "",
                 _icon_src("local"),
                 tooltip_key="align.edge_to_axis",
-                tooltip_text="Align edge to axis",
+                tooltip_text="Levels the plane, then turns edge 1 to 2 toward the red X arrow. Use Preview to compare.",
+                label=_ui_label("align.edge_label", "1 → 2 along X"),
                 selected=edge_to_axis_on,
                 enabled=active,
             ),

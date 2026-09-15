@@ -282,6 +282,20 @@ namespace lfs::vis::op {
         EXPECT_EQ(undoHistory().undoCount(), 0u);
     }
 
+    TEST_F(AlignPreviewTest, ApplyWithoutPreviewMatchesPreviewAndCreatesOneUndoStep) {
+        const auto original = transform();
+        action(Services::AlignUiAction::TogglePreview);
+        const auto preview = transform();
+        action(Services::AlignUiAction::TogglePreview);
+        ASSERT_EQ(transform(), original);
+        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(transform(), preview);
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
+        EXPECT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(transform(), original);
+    }
+
     TEST_F(AlignPreviewTest, ApplyCommitsOneUndoStepMatchingThePreview) {
         const auto original = transform();
         action(Services::AlignUiAction::TogglePreview);
