@@ -62,6 +62,7 @@
                   aria-label="{{check_gallery_label}}">
             <span class="asset-check-gallery-icon" aria-hidden="true">&#x21BB;</span>
             <span class="asset-button-text">{{check_gallery_label}}</span>
+            <span class="gallery-checked text-muted">{{gallery_checked}}</span>
           </button>
           <button class="asset-button asset-button--text asset-button--primary asset-import-button"
                   data-event-click="on_import_project" data-attr-title="import_project_tooltip">
