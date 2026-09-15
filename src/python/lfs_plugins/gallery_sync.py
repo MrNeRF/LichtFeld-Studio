@@ -1784,6 +1784,22 @@ class GallerySync:
         self._launch_metadata(action)
 
 
+    def find_publications(self, project_id):
+        """Recover one unambiguous origin link after authenticating its owner."""
+        def action():
+            scenes = self._client().list_scenes(origin_project_uuid=project_id)
+            scenes = [scene for scene in scenes if scene.get("originProjectUuid") == project_id
+                      and scene.get("status") == "ready"]
+            bucket = self._bucket()
+            if len(scenes) == 1 and project_id not in bucket["links"]:
+                scene = scenes[0]
+                bucket["links"][project_id] = exchange_link(scene, scene.get("originCommitUuid") or "")
+                self.scenes = [item for item in self.scenes if item["id"] != scene["id"]] + [scene]
+                self._save()
+        self._launch_metadata(action)
+
+
+
 
 
 
