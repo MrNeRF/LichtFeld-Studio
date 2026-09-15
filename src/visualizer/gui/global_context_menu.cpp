@@ -59,6 +59,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_label", &ContextMenuItem::is_label);
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
+            handle.RegisterMember("icon", &ContextMenuItem::icon);
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
@@ -355,6 +356,9 @@ namespace lfs::vis::gui {
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {
         assert(owner);
         auto* target = event.GetTargetElement();
+        while (target && target != owner->el_ctx_menu_ && target->GetId() != "backdrop" &&
+               !target->HasAttribute("data-ctx-action"))
+            target = target->GetParentNode();
         if (!target)
             return;
 
