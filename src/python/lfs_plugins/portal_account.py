@@ -813,6 +813,8 @@ class PortalAccountService:
             raise PortalHTTPError(401, "invalid_token")
         if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
             raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
+        if method != "GET":
+            raise PortalHTTPError(401, "access_refreshed")
         try:
             return self._request_with_bearer(
                 method,
@@ -850,8 +852,7 @@ class PortalAccountService:
         )
 
     def _request_json(self, method, path, body=None, headers=None, *, timeout=None, response_options=None):
-        idempotent = method in ("GET", "HEAD") or (method == "POST" and path.endswith("/complete")
-            and bool((body or {}).get("idempotencyKey")))
+        idempotent = method == "GET"
         original = self._current_credentials()
         def request():
             if headers and 'Authorization' in headers and self._current_credentials() != original:

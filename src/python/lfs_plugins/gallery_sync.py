@@ -155,6 +155,7 @@ def _validate_journal(data):
 
 
 def friendly_error(exc):
+    status = getattr(exc, "status", getattr(exc, "code", None))
     if isinstance(exc, PortalHTTPError):
         if exc.error == "gallery_relink_required":
             return "Use the Portal button to approve gallery access. Your local work is safe."
@@ -162,13 +163,13 @@ def friendly_error(exc):
                 "Invalid portable LichtFeld project.", "Project checksum failed.",
                 "Embedded project asset checksum failed."):
             return "The downloaded file is damaged or was changed on the portal."
-        return {
-            401: "Sign in again, then resume the transfer.",
-            403: "Gallery access is unavailable for this account. Check your account on the portal.",
-            404: "This gallery item is no longer available. Refresh the gallery.",
-            409: "The gallery item changed. Refresh and review both versions before replacing it.",
-            429: "The portal is busy. Wait a moment, then resume.",
-        }.get(exc.status, "The portal could not finish this operation. Your local work is safe. Retry when ready.")
+    if isinstance(status, int):
+        key = {401: "authorization_expired", 403: "access", 404: "not_found",
+               409: "http_conflict", 413: "too_large", 429: "portal_busy"}.get(status)
+        if key is None and 500 <= status <= 599:
+            key = "server"
+        if key:
+            return "projects.gallery.error." + key
     if isinstance(exc, (ValueError, PortalProtocolError)):
         return redact(exc)
     return "The connection or local storage was interrupted. Check your connection and disk space, then resume."

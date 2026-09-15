@@ -41,7 +41,8 @@ def test_python_logging_bridge_delivers_records_to_native_logger(monkeypatch):
     assert any(level == "info" and "bridge marker" in message for level, message in delivered)
 
 
-def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("status", [400, 401, 403, 413, 503])
+def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, caplog, status):
     upload_id = "11111111-1111-4111-8111-111111111111"
     calls = []
 
@@ -62,9 +63,11 @@ def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, cap
     source = tmp_path / "scene.licht"
     source.write_bytes(b"data")
 
-    def failed_put(_request, **_kwargs):
+    put_calls = []
+    def failed_put(_request, **kwargs):
+        put_calls.append(kwargs["timeout"])
         raise urllib.error.HTTPError(
-            "https://portal.example/part/1?signature=secret", 400, "bad part", {}, io.BytesIO(b"bad"))
+            "https://portal.example/part/1?signature=secret", status, "bad part", {}, io.BytesIO(b"bad"))
 
     monkeypatch.setattr(portal_gallery, "urlopen", failed_put)
     with caplog.at_level(logging.DEBUG, logger="lfs_plugins.portal_gallery"):
@@ -76,6 +79,7 @@ def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, cap
     assert "exception_class=HTTPError" in caplog.text
     assert "signature=secret" not in caplog.text
     assert calls[-1][1].endswith("/part-upload-urls")
+    assert put_calls == [120]
 
 
 def test_preparation_exception_is_logged_and_journaled(tmp_path, monkeypatch, caplog):

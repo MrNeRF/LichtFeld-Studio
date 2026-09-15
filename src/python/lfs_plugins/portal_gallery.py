@@ -735,22 +735,15 @@ class PortalGalleryClient:
                             if isinstance(exc, urllib.error.HTTPError):
                                 try:
                                     exc.response_body = safe_text(exc.read(65536).decode("utf-8", errors="replace"))
-                                except (OSError, UnicodeError):
-                                    pass
+                                except (OSError, UnicodeError) as body_error:
+                                    log_failure("read_upload_error", body_error, path=path, upload_id=upload_id, part=number)
                             log_failure("part_put", exc, upload_id=upload_id, part=number,
                                         bytes=length, retry_count=put_part.attempts - 1,
                                         http_status=getattr(exc, "code", "unknown"))
                             raise
                     put_part.attempts = 0
-                    return retry_call(send, idempotent=True)
-                for renewal in range(2):
-                    try:
-                        etag = put_part()
-                        break
-                    except urllib.error.HTTPError as exc:
-                        if exc.code not in (401, 403) or renewal:
-                            raise
-                        exc.close()  # Renew an expired presigned URL once, same part bytes.
+                    return send()
+                etag = put_part()
                 parts[number] = {"partNumber": number, "etag": etag, "size": length}
                 completed += length
                 on_progress(completed, size)

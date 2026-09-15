@@ -19,6 +19,9 @@ def localize_message(message):
         return ""
     import lichtfeld as lf
     text = redact(message)
+    if "Traceback (most recent call last)" in text:
+        text = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")
+        text = re.sub(r"^[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception):\s*", "", text)
     if text.startswith("projects.gallery.") and " " not in text:
         return lf.ui.tr(text)
     if text == lf.ui.tr("projects.gallery.error.unsafe_url"):

@@ -434,3 +434,62 @@ def test_pinned_download_storage_redirect_never_forwards_account_token(tmp_path,
     location[0] = "https://untrusted.example/data"
     with pytest.raises(PortalProtocolError):
         client.download(identifier, tmp_path / "unsafe.licht")
+
+
+@pytest.mark.parametrize('method,attempts', [('GET', 4), ('HEAD', 1), ('POST', 1), ('PUT', 1), ('PATCH', 1), ('DELETE', 1)])
+def test_only_get_requests_retry_transient_failures(monkeypatch, method, attempts):
+    from lfs_plugins import portal_account, portal_retry
+    service = object.__new__(portal_account.PortalAccountService)
+    service._current_credentials = lambda: None
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise PortalHTTPError(503, 'busy')
+    service._request_json_once = fail
+    monkeypatch.setattr(portal_retry.time, 'sleep', lambda _delay: None)
+    with pytest.raises(PortalHTTPError):
+        service._request_json(method, '/uploads/id/complete', {'idempotencyKey': 'key'}, timeout=7)
+    assert len(calls) == attempts
+    assert all(kwargs['timeout'] == 7 for _args, kwargs in calls)
+
+
+def test_expired_authorization_refresh_does_not_repeat_a_post(monkeypatch):
+    from lfs_plugins.portal_account import PortalAccountService
+    service = object.__new__(PortalAccountService)
+    credentials = SimpleNamespace(access_token='old', connection_enabled=True)
+    service._current_credentials = lambda: credentials
+    service.snapshot = lambda: SimpleNamespace(disconnecting=False)
+    calls = []
+    def fail(*args, **_kwargs):
+        calls.append(args[0])
+        raise PortalHTTPError(401, 'invalid_token')
+    service._request_with_bearer = fail
+    refreshed = []
+    service._refresh_tokens = lambda token, **_kwargs: refreshed.append(token) or 'ok'
+    with pytest.raises(PortalHTTPError) as failure:
+        service._authenticated_request('POST', '/uploads')
+    assert failure.value.status == 401
+    assert calls == ['POST'] and refreshed == ['old']
+
+
+@pytest.mark.parametrize('status,key', [(401, 'authorization_expired'), (403, 'access'),
+    (404, 'not_found'), (409, 'http_conflict'), (413, 'too_large'), (429, 'portal_busy'), (500, 'server'), (503, 'server')])
+def test_http_status_reasons_remain_distinct_at_the_ui(monkeypatch, status, key):
+    import json
+    import sys
+    from pathlib import Path
+    from lfs_plugins.gallery_sync import friendly_error
+    from lfs_plugins.gallery_messages import localize_message
+    translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: translations.get(key, key))))
+    expected = translations['projects.gallery.error.' + key]
+    assert localize_message(friendly_error(PortalHTTPError(status, 'reason'))) == expected
+    assert localize_message(friendly_error(urllib.error.HTTPError('https://host', status, 'reason', {}, io.BytesIO()))) == expected
+
+
+def test_gallery_notice_never_contains_a_python_traceback(monkeypatch):
+    import sys
+    from lfs_plugins.gallery_messages import localize_message
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: key)))
+    text = 'Traceback (most recent call last):\n  File "/private/path.py", line 7\nRuntimeError: request marker'
+    assert localize_message(text) == 'request marker'

@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "Riprendi"
+  "projects.contents.resume": "Riprendi",
+  "projects.gallery.error.authorization_expired": "L’autorizzazione della galleria è scaduta. Controlla il tuo account nel menu account, poi riprendi il trasferimento.",
+  "projects.gallery.error.not_found": "Questo elemento non è più disponibile. Controlla di nuovo la galleria.",
+  "projects.gallery.error.http_conflict": "L’elemento è cambiato. Controlla la galleria e confronta entrambe le versioni prima di sostituirlo.",
+  "projects.gallery.error.too_large": "Questo progetto supera il limite del portale. Scegli un formato di caricamento più piccolo o riducine le dimensioni.",
+  "projects.gallery.error.portal_busy": "Il portale è occupato. Attendi un momento, poi riprendi il trasferimento.",
+  "projects.gallery.error.server": "Il portale è temporaneamente non disponibile. I file locali sono al sicuro. Riprova più tardi."
 }

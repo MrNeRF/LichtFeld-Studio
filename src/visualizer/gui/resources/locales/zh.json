@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "继续训练"
+  "projects.contents.resume": "继续训练",
+  "projects.gallery.error.authorization_expired": "图库授权已过期。请在账户菜单中检查账户后继续传输。",
+  "projects.gallery.error.not_found": "此图库项目已不可用。请重新检查图库。",
+  "projects.gallery.error.http_conflict": "图库项目已更改。请检查图库并比较两个版本后再替换。",
+  "projects.gallery.error.too_large": "此项目超过了门户的大小限制。请选择更小的上传格式或减小项目大小。",
+  "projects.gallery.error.portal_busy": "门户正忙。请稍候再继续传输。",
+  "projects.gallery.error.server": "门户暂时不可用。本地文件是安全的。请稍后重试。"
 }

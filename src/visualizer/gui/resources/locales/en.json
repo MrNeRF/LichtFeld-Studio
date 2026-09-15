@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "Resume training"
+  "projects.contents.resume": "Resume training",
+  "projects.gallery.error.authorization_expired": "Gallery authorization expired. Resume the transfer after checking your account in the account menu.",
+  "projects.gallery.error.not_found": "This gallery item is no longer available. Check the gallery again.",
+  "projects.gallery.error.http_conflict": "The gallery item changed. Check the gallery and review both versions before replacing it.",
+  "projects.gallery.error.too_large": "This project is larger than the portal allows. Choose a smaller upload format or reduce its size.",
+  "projects.gallery.error.portal_busy": "The portal is busy. Wait a moment, then resume the transfer.",
+  "projects.gallery.error.server": "The portal is temporarily unavailable. Your local files are safe. Try again later."
 }

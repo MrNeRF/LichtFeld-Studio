@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "Wznów trening"
+  "projects.contents.resume": "Wznów trening",
+  "projects.gallery.error.authorization_expired": "Autoryzacja galerii wygasła. Sprawdź konto w menu konta i wznów transfer.",
+  "projects.gallery.error.not_found": "Ten element galerii nie jest już dostępny. Sprawdź galerię ponownie.",
+  "projects.gallery.error.http_conflict": "Element galerii uległ zmianie. Sprawdź galerię i porównaj obie wersje przed zastąpieniem.",
+  "projects.gallery.error.too_large": "Projekt przekracza limit portalu. Wybierz mniejszy format przesyłania lub zmniejsz jego rozmiar.",
+  "projects.gallery.error.portal_busy": "Portal jest zajęty. Poczekaj chwilę i wznów transfer.",
+  "projects.gallery.error.server": "Portal jest chwilowo niedostępny. Pliki lokalne są bezpieczne. Spróbuj ponownie później."
 }

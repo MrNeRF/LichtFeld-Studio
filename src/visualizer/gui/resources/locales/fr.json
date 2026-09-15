@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "Reprendre"
+  "projects.contents.resume": "Reprendre",
+  "projects.gallery.error.authorization_expired": "L’autorisation de la galerie a expiré. Vérifiez votre compte dans le menu du compte, puis reprenez le transfert.",
+  "projects.gallery.error.not_found": "Cet élément n’est plus disponible. Vérifiez à nouveau la galerie.",
+  "projects.gallery.error.http_conflict": "L’élément a changé. Vérifiez la galerie et comparez les deux versions avant de le remplacer.",
+  "projects.gallery.error.too_large": "Ce projet dépasse la limite du portail. Choisissez un format d’envoi plus petit ou réduisez sa taille.",
+  "projects.gallery.error.portal_busy": "Le portail est occupé. Patientez un instant, puis reprenez le transfert.",
+  "projects.gallery.error.server": "Le portail est temporairement indisponible. Vos fichiers locaux sont conservés. Réessayez plus tard."
 }

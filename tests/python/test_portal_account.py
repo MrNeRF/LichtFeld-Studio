@@ -85,7 +85,7 @@ def test_gallery_request_rejects_different_session_before_network(tmp_path, monk
     assert network.requests == []
 
 
-def test_gallery_delete_preserves_revision_body_through_token_refresh(tmp_path, monkeypatch):
+def test_gallery_delete_preserves_revision_body_on_explicit_retry_after_refresh(tmp_path, monkeypatch):
     from dataclasses import replace
     from lfs_plugins.portal_gallery import PortalGalleryClient
     path = tmp_path / 'credentials.json'
@@ -99,6 +99,9 @@ def test_gallery_delete_preserves_revision_body_through_token_refresh(tmp_path, 
         return 'ok'
     monkeypatch.setattr(account, '_refresh_tokens', refresh)
     client = PortalGalleryClient(account, expected_session=(old.email, old.connected_since), revision_domains=1)
+    with pytest.raises(portal_account.PortalHTTPError, match='access_refreshed'):
+        client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', {'contentRevision': 'content', 'metadataRevision': 'metadata'})
+    assert len(network.requests) == 1
     client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', {'contentRevision': 'content', 'metadataRevision': 'metadata'})
     assert len(network.requests) == 2
     assert all(r.method == 'DELETE' and json.loads(r.data) == {'baseRevisions': {'content': 'content', 'metadata': 'metadata'}}

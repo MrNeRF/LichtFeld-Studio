@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "Training fortsetzen"
+  "projects.contents.resume": "Training fortsetzen",
+  "projects.gallery.error.authorization_expired": "Die Galerieautorisierung ist abgelaufen. Prüfe dein Konto im Kontomenü und setze die Übertragung fort.",
+  "projects.gallery.error.not_found": "Dieser Galerieeintrag ist nicht mehr verfügbar. Prüfe die Galerie erneut.",
+  "projects.gallery.error.http_conflict": "Der Galerieeintrag hat sich geändert. Prüfe beide Versionen vor dem Ersetzen.",
+  "projects.gallery.error.too_large": "Dieses Projekt überschreitet die Portalgrenze. Wähle ein kleineres Uploadformat oder verkleinere es.",
+  "projects.gallery.error.portal_busy": "Das Portal ist ausgelastet. Warte kurz und setze die Übertragung fort.",
+  "projects.gallery.error.server": "Das Portal ist vorübergehend nicht erreichbar. Deine lokalen Dateien sind sicher. Versuche es später erneut."
 }

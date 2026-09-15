@@ -2842,5 +2842,11 @@
   "projects.license.by_nc_sa": "CC BY-NC-SA 4.0",
   "projects.license.by_nd": "CC BY-ND 4.0",
   "projects.license.by_nc_nd": "CC BY-NC-ND 4.0",
-  "projects.contents.resume": "学習を再開"
+  "projects.contents.resume": "学習を再開",
+  "projects.gallery.error.authorization_expired": "ギャラリーの認証が期限切れです。アカウントメニューでアカウントを確認してから転送を再開してください。",
+  "projects.gallery.error.not_found": "このギャラリー項目は利用できなくなりました。ギャラリーを再確認してください。",
+  "projects.gallery.error.http_conflict": "ギャラリー項目が変更されました。ギャラリーを確認し、両方のバージョンを比較してから置き換えてください。",
+  "projects.gallery.error.too_large": "このプロジェクトはポータルの上限を超えています。小さいアップロード形式を選ぶか、サイズを減らしてください。",
+  "projects.gallery.error.portal_busy": "ポータルが混雑しています。少し待ってから転送を再開してください。",
+  "projects.gallery.error.server": "ポータルは一時的に利用できません。ローカルファイルは安全です。後でもう一度お試しください。"
 }

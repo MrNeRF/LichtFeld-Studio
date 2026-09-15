@@ -1010,7 +1010,7 @@ def test_upload_transport_failure_classification(tmp_path, monkeypatch, failure)
     assert job['completed'] == path.stat().st_size // 2
     assert not completed and not service.snapshot()['links']
     assert transfer_rows(service.snapshot())[0]['can_resume'] == resumable
-    assert len(calls) == (5 if resumable else 2)
+    assert len(calls) == 2
     if transient:
         assert job['message'] == 'Paused (connection lost)'
     elif not resumable:
