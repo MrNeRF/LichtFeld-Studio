@@ -18,6 +18,7 @@ from typing import Callable, Iterator, Mapping, Optional
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
+from .gallery_logging import safe_text
 from .portal_retry import retry_call, retry_after
 
 _log = logging.getLogger(__name__)
@@ -54,11 +55,13 @@ class PortalHTTPError(PortalAccountError):
         error: str,
         retry_after: Optional[float] = None,
         detail: Optional[Mapping[str, object]] = None,
+        response_body: Optional[str] = None,
     ) -> None:
         self.status = status
         self.error = error
         self.retry_after = retry_after
         self.detail = dict(detail) if detail is not None else None
+        self.response_body = response_body
         super().__init__(redact(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}"))
 
 
@@ -908,7 +911,8 @@ class PortalAccountService:
             raw = exc.read(65536)
             retry_after = _retry_after_seconds(getattr(exc, "headers", None))
             error, detail = _error_response(raw)
-            raise PortalHTTPError(int(exc.code), error, retry_after, detail) from None
+            body = safe_text(raw.decode("utf-8", errors="replace")[:65536])
+            raise PortalHTTPError(int(exc.code), error, retry_after, detail, body) from None
 
         if response_options is not None and (200 <= status < 300 or status == 304):
             return status, dict(response_headers or {}), raw
@@ -921,6 +925,7 @@ class PortalAccountService:
                 error,
                 _retry_after_seconds(response_headers),
                 detail,
+                safe_text(raw.decode("utf-8", errors="replace")[:65536]),
             )
         try:
             payload = json.loads(raw.decode("utf-8"))

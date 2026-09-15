@@ -8,6 +8,7 @@ import stat
 import uuid
 
 from . import gallery_validation
+from .gallery_logging import failure as log_failure
 
 
 def staging_path(root, value):
@@ -115,7 +116,8 @@ def unpack_project(root, source, destination, *, progress=None):
             with marker.open('x') as output:
                 json.dump(metadata, output, allow_nan=False)
             if progress: progress(completed, total)
-    except Exception:
+    except Exception as exc:
+        log_failure("download_preparation", exc, source=source, destination=destination)
         for path in outputs: path.unlink(missing_ok=True)
         destination.rmdir()
         raise
