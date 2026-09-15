@@ -186,7 +186,7 @@ namespace lfs::io::project {
             const auto* reader = document.source_reader();
             auto details = inspect_project_details(reader->path());
             if (!details)
-                return std::move(details).error();
+                return lfs::Result<void>::failure(std::move(details).error());
             if (details->save_history.empty())
                 return {};
             return document.edit_project().dom().set_json("contents_edit", {
