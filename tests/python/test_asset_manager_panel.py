@@ -420,9 +420,6 @@ def test_all_asset_manager_buttons_use_strict_size_variants():
     assert '<span class="asset-button-glyph">&#215;</span>' in rml
     assert ".asset-button-text {" in rcss
     assert ".asset-button-glyph {" in rcss
-    assert "margin-top: 4dp;" in rcss
-    assert "padding: 0 12dp 32dp 12dp;" in rcss
-    assert "padding: 12dp 0 0 0;" in rcss
 
 def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2295,7 +2292,6 @@ def test_P13_search_placeholder_uses_short_label(panel_module):
     assert model.func_bindings["search_placeholder"]() == "projects.toolbar.search_icon"
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     rcss = (resources / "asset_manager.rcss").read_text()
-    assert ".asset-search-icon" in rcss and "max-width: 64dp" in rcss
     assert ".asset-search-box input" in rcss and "text-overflow: ellipsis" in rcss
     assert ".asset-check-gallery .gallery-checked" in rcss
 

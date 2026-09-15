@@ -227,7 +227,7 @@ body {
 .form-modal selectvalue .modal-option-name { line-height: 26dp; }
 .form-modal selectvalue .modal-option-meaning { display: none; }
 .modal-note { display: block; margin: 8dp 0; line-height: 20dp; }
-.modal-check, .modal-history-head, .modal-history-row {
+.modal-check {
     display: flex;
     align-items: center;
     box-sizing: border-box;
@@ -238,7 +238,7 @@ body {
     padding: 0;
     margin: 8dp 0;
 }
-.modal-check input, .modal-history-row input, .modal-radio-space {
+.modal-check input {
     box-sizing: border-box;
     width: 16dp;
     height: 16dp;
@@ -246,9 +246,4 @@ body {
     margin: 0;
     padding: 0;
 }
-.modal-check span, .modal-history-row span, .modal-history-head span { display: block; line-height: 28dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.modal-history-head { font-weight: bold; }
-.modal-history-0 { width: 112dp; flex-shrink: 0; }
-.modal-history-1 { flex: 1; min-width: 144dp; }
-.modal-history-2 { width: 80dp; flex-shrink: 0; text-align: right; }
-.modal-history-3 { width: 96dp; flex-shrink: 0; text-align: right; }
+.modal-check span { display: block; line-height: 28dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

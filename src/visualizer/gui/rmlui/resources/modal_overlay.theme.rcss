@@ -48,7 +48,6 @@
     color: @{text_dim};
 }
 
-.modal-history-row:hover { background-color: @{alpha(primary,0.25)}; }
 .modal-note { color: @{text_dim}; }
 .modal-dialog.form-modal { background-color: @{alpha(surface,1)}; border-color: @{border}; }
 .form-modal .btn[disabled] { background-color: @{surface_bright}; color: @{text_dim}; border-color: @{border}; opacity: 0.5; cursor: default; }
