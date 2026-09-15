@@ -1132,3 +1132,31 @@ def test_reviewed_replacement_keeps_separate_local_and_gallery_guards(tmp_path, 
     monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(id="scene", title="Title", contentRevision="published-c", metadataRevision="new-remote-m")}, raising=False)
     service.queue_upload(path, metadata, "new"); finish(service)
     assert set(service.snapshot()["links"]) == {"new"}
+
+
+def test_publish_cover_adds_only_a_thumbnail_to_the_prepared_copy(tmp_path):
+    import base64
+    import io
+    import shutil
+    from pathlib import Path
+    from lfs_plugins import gallery_preparation, portable_project
+    original = Path(__file__).parents[1] / "data" / "portable-sog.licht"
+    prepared = tmp_path / "project.licht"
+    shutil.copyfile(original, prepared)
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=")
+    gallery_preparation.attach_preview(prepared, png)
+    with original.open("rb") as before, prepared.open("rb") as after:
+        a, b = portable_project.ProjectFile(before), portable_project.ProjectFile(after)
+        assert b.chapters[b"THMB"] == png
+        assert {k: v for k, v in b.chapters.items() if k != b"THMB"} == a.chapters
+        for index in range(len(a.manifest["nodes"])):
+            first, second = io.BytesIO(), io.BytesIO()
+            a.copy_node(index, first)
+            b.copy_node(index, second)
+            assert first.getvalue() == second.getvalue()
+    content = prepared.read_bytes()
+    gallery_preparation.attach_preview(prepared, png)
+    assert prepared.read_bytes() == content
+    with pytest.raises(ValueError, match="PNG"):
+        gallery_preparation.attach_preview(prepared, b"private text")
+    assert prepared.read_bytes() == content
