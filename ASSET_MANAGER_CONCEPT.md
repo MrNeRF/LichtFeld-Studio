@@ -416,3 +416,9 @@ Execution: Codex gpt-5.6-luna lanes implement each phase from this document; gpt
 - A Library service with application lifetime owns catalog commands and snapshots; panel, chooser, File menu and gallery imports go through it (F10).
 - Publishing eligibility is eligible, blocked or not yet checked, from visible payload bindings, format and HDR capabilities, account and operation state; an external training dataset does not block a self-contained viewing payload; sizes are estimates and the server stays authoritative (F11). Metadata-only updates keep the conservative fallback until native content evidence exists for compressed indexes (F13).
 - Phase order corrected (F14): freeze the shared state, action and cache contracts; then P0 together with P3a (read-only inspection, CLI on the binding); then P1 and P2; then the P3 operations and P4; then P5. The unconditional Check gallery walk moves into P0; durable Undo history belongs to P4 with a completed-transfers access point; two P0 lanes need disjoint file ownership. Estimates: P0 4 to 6, P1 9 to 13, P2 9 to 14, P3 22 to 35 (Repair 4 to 7 of them), P4 10 to 15, P5 12 to 18 lane-days.
+
+## 17. Owner notes 2026-09-15 (binding)
+
+- Alignment: every control sits on the 8 dp grid, one control height per row, vertical centers within 1 dp, left edges aligned to their column; gpt-6-astra runs a geometry-dump alignment pass on every round and each finding is fixed before the phase closes.
+- The gallery transfer overlay in the lower right of the viewport is part of the design: same tokens, heights, spacing and vocabulary as the panel, no duplication of the tray.
+- Efficiency: the panel is event driven. No per-frame layout or polling work while nothing changes; idle CPU with the panel open must stay within 1 percentage point of the panel closed at every breakpoint; UI redraw rate at idle must fall to the app's idle rate. Measured on every round (30 s top average, four states) and reported.
