@@ -40,6 +40,7 @@ def shared_fields(scene):
 def exchange_link(scene, commit_uuid=""):
     now = time.time()
     return {"sceneId": scene["id"], **domain_tokens(scene),
+            "acknowledgedPresentationRevision": scene.get("presentationRevision", ""),
             "metadata": copy.deepcopy(scene), "sharedFields": shared_fields(scene),
             "commitUuid": commit_uuid, "exchangedAt": now, "checkedAt": now}
 JOURNAL_RECOVERY_MESSAGE = (
@@ -1755,6 +1756,33 @@ class GallerySync:
                     bucket["handoffIntents"], self._data["version"] = previous, version
                     raise
             return copy.deepcopy(intent)
+
+
+    def acknowledge_presentation(self, project_id, scene):
+        def action():
+            link = self._bucket()["links"].get(project_id)
+            if link and link["sceneId"] == scene["id"]:
+                link["acknowledgedPresentationRevision"] = scene.get("presentationRevision", "")
+                self._save()
+        self._launch_metadata(action)
+
+
+
+    def set_cover(self, project_id, scene, png):
+        scene = copy.deepcopy(scene)
+        def action():
+            client = self._client()
+            link = self._bucket()["links"].get(project_id)
+            if not link or link["sceneId"] != scene["id"]:
+                raise ValueError("The Gallery link changed. Check gallery before setting its cover.")
+            client.set_cover(scene["id"], scene, png)
+            updated = client.scene(scene["id"])
+            self.scenes = [item for item in self.scenes if item["id"] != scene["id"]] + [updated]
+            link["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
+            self._save()
+            self.message = "projects.gallery.info.cover"
+        self._launch_metadata(action)
+
 
 
 
