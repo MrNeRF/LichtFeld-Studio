@@ -13,7 +13,7 @@
         <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
         <span class="text-muted">{{format_hint}}</span>
         <span class="text-muted" data-attr-title="estimate">{{estimate}}</span>
-        <label class="gallery-cover-option"><input type="checkbox" data-checked="use_cover" data-attr-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
+        <label class="gallery-cover-option"><input type="checkbox" data-checked="use_cover" data-attrif-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
         <span class="text-muted">{{includes}}</span>
         <span class="text-muted">{{eligibility_reason}}</span>
       </div>
@@ -39,8 +39,8 @@
     <div class="gallery-replacement" data-if="is_replacement">
       <span class="status-warning gallery-file-name" data-attr-title="replacement_warning">{{replacement_warning}}</span>
       <span class="text-muted">@tr:projects.gallery.replacement.question</span>
-      <div class="gallery-choice-row"><div class="gallery-choice-description"><span>@tr:projects.gallery.replacement.replace</span><span class="text-muted">@tr:projects.gallery.replacement.replace_hint</span></div><button class="btn btn--primary" data-attr-disabled="!can_submit" data-event-click="replacement('replace')" title="@tr:projects.gallery.replacement.replace_button">@tr:projects.gallery.replacement.replace_button</button></div>
-      <div class="gallery-choice-row"><div class="gallery-choice-description"><span>@tr:projects.gallery.replacement.leave</span><span class="text-muted">@tr:projects.gallery.replacement.leave_hint</span></div><button class="btn btn--secondary" data-attr-disabled="!can_submit" data-event-click="replacement('keep')" title="@tr:projects.gallery.replacement.keep_button">@tr:projects.gallery.replacement.keep_button</button></div>
+      <div class="gallery-choice-row"><div class="gallery-choice-description"><span>@tr:projects.gallery.replacement.replace</span><span class="text-muted">@tr:projects.gallery.replacement.replace_hint</span></div><button class="btn btn--primary" data-attrif-disabled="!can_submit" data-event-click="replacement('replace')" title="@tr:projects.gallery.replacement.replace_button">@tr:projects.gallery.replacement.replace_button</button></div>
+      <div class="gallery-choice-row"><div class="gallery-choice-description"><span>@tr:projects.gallery.replacement.leave</span><span class="text-muted">@tr:projects.gallery.replacement.leave_hint</span></div><button class="btn btn--secondary" data-attrif-disabled="!can_submit" data-event-click="replacement('keep')" title="@tr:projects.gallery.replacement.keep_button">@tr:projects.gallery.replacement.keep_button</button></div>
       <div class="gallery-choice-row"><div class="gallery-choice-description"><span>@tr:projects.gallery.replacement.find</span><span class="text-muted">@tr:projects.gallery.replacement.find_hint</span></div><button class="btn btn--secondary" data-event-click="replacement('locate')" title="@tr:projects.gallery.local.locate">@tr:projects.gallery.local.locate</button></div>
     </div>
     <span class="text-muted">{{quota}}</span><span class="status-warning">{{warning}}</span>
@@ -49,7 +49,7 @@
     <span class="status-error" data-if="has_error">{{error}}</span>
     <div class="gallery-file-actions">
       <button class="btn btn--secondary" data-event-click="cancel" data-attr-title="cancel_label">{{cancel_label}}</button>
-      <button class="btn btn--primary" data-if="!is_replacement" data-attr-disabled="!can_submit" data-event-click="submit" data-attr-title="submit_label">{{submit_label}}</button>
+      <button class="btn btn--primary" data-if="!is_replacement" data-attrif-disabled="!can_submit" data-event-click="submit" data-attr-title="submit_label">{{submit_label}}</button>
     </div>
   </div>
 </body></rml>

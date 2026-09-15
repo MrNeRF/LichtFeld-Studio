@@ -156,6 +156,8 @@ class GalleryFilePanel(Panel):
         if not self._review or not args:
             return
         action = str(args[0])
+        if action != "locate" and not self._can_submit():
+            return
         try:
             self._review["on_submit"](action)
             self._close(True)

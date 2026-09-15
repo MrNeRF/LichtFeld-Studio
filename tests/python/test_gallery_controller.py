@@ -1053,3 +1053,15 @@ def test_gallery_review_survives_a_locale_document_reload(gallery, monkeypatch):
     assert panel._review is review and not closed
     panel._finish(False)
     assert panel._review is None and closed == [False]
+
+
+def test_replacement_buttons_wait_for_the_account_and_transfer(gallery):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    panel = GalleryFilePanel()
+    actions = []
+    panel._review = dict(mode="replacement", on_submit=actions.append)
+    for state in ({"signed_in": False}, {"signed_in": True, "busy": True}):
+        panel._state = state
+        panel._replacement(["replace"])
+        panel._replacement(["keep"])
+    assert not actions
