@@ -162,14 +162,9 @@ def panel_layout(height, *, folder_count=0, folders_collapsed=False, info_height
 
 
 def list_columns(width):
-    # Match the list shell/row padding, gaps and fixed columns in projects.rcss.
-    gallery, size, modified_width, folder_width = 96.0, 48.0, 72.0, 58.0
-    modified, folder = width >= 380, width >= 600
-    def name_width(gallery_width):
-        count = 3 + int(modified) + int(folder)
-        return width - 46.0 - 6.0 * (count - 1) - gallery_width - size - modified * modified_width - folder * folder_width
-    if name_width(gallery) < 64:
-        modified = False
-    spare_gallery = width - 46.0 - 6.0 * (2 + int(modified)) - size - modified * modified_width - folder * folder_width - 64.0
-    gallery = min(200.0, max(96.0, spare_gallery))
-    return dict(modified=modified, folder=folder, name=name_width(gallery), gallery=gallery)
+    """Columns that fit the browser width, after the other panel regions yield space."""
+    size, modified, folder = width >= 360, width >= 560, width >= 700
+    gallery = 24.0 if width < 480 else 128.0
+    gaps = 8.0 * (2 + int(size) + int(modified) + int(folder))
+    name = width - 24.0 - 32.0 - gaps - gallery - size * 72.0 - modified * 96.0 - folder * 100.0
+    return dict(size=size, modified=modified, folder=folder, name=name, gallery=gallery)

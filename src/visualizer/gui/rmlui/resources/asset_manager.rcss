@@ -1234,7 +1234,7 @@
     top: 0;
     width: 8dp;
     min-width: 8dp;
-    height: 20dp;
+    height: 24dp;
     margin-left: auto;
     border-right-width: 1dp;
     border-right-color: transparent;
@@ -1377,18 +1377,6 @@
 .asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; row-gap: 16dp; }
 .asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
 .asset-shell.is-compact .asset-tray, .asset-shell.is-narrow .asset-tray { min-height: 120dp; }
-.asset-shell.is-compact .asset-col-folder, .asset-shell.is-compact .asset-col-modified, .asset-shell.is-compact .asset-col-size { display: none; }
-.asset-shell.is-compact .asset-col-name { min-width: 80dp; }
-.asset-shell.is-compact .asset-list-row { height: 40dp; min-height: 40dp; }
-.asset-shell.is-compact .asset-list-secondary { display: block; }
-.asset-shell.is-compact .asset-col-gallery { min-width: 24dp; flex: 0 0 24dp; }
-.asset-shell.is-compact .asset-col-gallery span { display: none; }
-.asset-shell.is-narrow .asset-col-folder { display: none; }
-.asset-shell.is-narrow .asset-col-modified { display: none; }
-.asset-shell.is-narrow .asset-col-name { min-width: 120dp; }
-.asset-shell.is-narrow .asset-col-gallery { min-width: 96dp; }
-.asset-shell.is-narrow .asset-list-header,
-.asset-shell.is-compact .asset-list-header { display: none; }
 .asset-shell.is-narrow #asset-popup-toolbar,
 .asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
 .asset-shell.is-compact .asset-check-gallery { display: inline-flex; }
@@ -1398,3 +1386,17 @@
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
 .asset-shell.is-medium .asset-col-folder { display: none; }
 .asset-shell.is-medium .asset-col-name { min-width: 120dp; }
+
+/* The header and rows share one browser column grid at every UI scale. */
+.asset-list-sort { box-sizing: border-box; display: block; width: 100%; min-width: 0; max-width: none; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0; margin: 0; border-width: 0; background-color: transparent; text-align: left; font-size: 12dp; cursor: pointer; }
+.asset-col-size .asset-list-sort { text-align: right; }
+.asset-list-header .asset-col.hidden, .asset-list-row .asset-col.hidden { display: none; }
+.asset-list-header-gallery-icon { display: none; }
+.asset-list-header.gallery-compact .asset-col-gallery .asset-list-header-label { display: none; }
+.asset-list-header.gallery-compact .asset-list-header-gallery-icon { display: block; width: 16dp; height: 16dp; margin: 4dp; }
+.asset-scroll-shell-list.gallery-compact .asset-col-gallery > span { display: none; }
+.asset-scroll-shell-list.gallery-compact .asset-col-gallery { justify-content: center; gap: 0; }
+.asset-list-header.gallery-compact .asset-col-gallery .asset-list-column-handle { display: none; }
+.asset-scroll-shell-list.gallery-compact .asset-list-row { height: 48dp; min-height: 48dp; }
+.asset-scroll-shell-list.gallery-compact .asset-col-name { height: 32dp; line-height: 16dp; }
+.asset-scroll-shell-list.gallery-compact .asset-list-primary, .asset-scroll-shell-list.gallery-compact .asset-list-secondary { display: block; height: 16dp; line-height: 16dp; }

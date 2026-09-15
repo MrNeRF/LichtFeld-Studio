@@ -188,11 +188,11 @@
                data-class-show-folder="asset_list_show_folder"
                data-class-gallery-compact="asset_list_gallery_compact">
             <span class="asset-list-thumb asset-list-header-spacer" aria-hidden="true"></span>
-            <span class="asset-col asset-col-name" data-style-width="asset_list_name_width"><span class="asset-list-header-label">{{col_name_label}}</span><span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
-            <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width"><span class="asset-list-header-label">{{col_gallery_label}}</span><span class="asset-list-column-handle" data-resize="list-column:gallery"></span></span>
-            <span class="asset-col asset-col-size" data-style-width="asset_list_size_width"><span class="asset-list-header-label">{{col_size_label}}</span><span class="asset-list-column-handle" data-resize="list-column:size"></span></span>
-            <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width"><span class="asset-list-header-label">{{col_modified_label}}</span><span class="asset-list-column-handle" data-resize="list-column:modified"></span></span>
-            <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width"><span class="asset-list-header-label">{{col_folder_label}}</span><span class="asset-list-column-handle" data-resize="list-column:folder"></span></span>
+            <span class="asset-col asset-col-name" data-style-width="asset_list_name_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('name')" data-attr-title="col_name_label"><span class="asset-list-header-label">{{col_name_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
+            <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('gallery')" data-attr-title="col_gallery_label"><span class="asset-list-header-label">{{col_gallery_label}}</span><img class="asset-list-header-gallery-icon" src="../icon/gallery-cloud.png"/></button><span class="asset-list-column-handle" data-resize="list-column:gallery"></span></span>
+            <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('size')" data-attr-title="col_size_label"><span class="asset-list-header-label">{{col_size_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:size"></span></span>
+            <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('modified')" data-attr-title="col_modified_label"><span class="asset-list-header-label">{{col_modified_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:modified"></span></span>
+            <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('folder')" data-attr-title="col_folder_label"><span class="asset-list-header-label">{{col_folder_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:folder"></span></span>
           </div>
 
           <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
@@ -253,7 +253,7 @@
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
                         <span data-if="!asset.has_problem">{{asset.gallery_label}}</span><span data-if="asset.has_problem">{{asset.health_label}}</span>
                       </span>
-                      <span class="asset-col asset-col-size" data-style-width="asset_list_size_width">{{asset.size_label}}</span>
+                      <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width">{{asset.saved_label}}</span>
                       <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width">{{asset.folder_name}}</span>
                       <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active">

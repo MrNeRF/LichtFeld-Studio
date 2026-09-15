@@ -109,7 +109,7 @@ __lfs_panel_ids__ = ["lfs.asset_manager"]
 class AssetManagerPanel(GalleryAssetMixin, Panel):
     """Dockable `.licht` project catalog."""
 
-    SORT_MODES = ("name", "size", "iteration", "saved", "opened", "published")
+    SORT_MODES = ("name", "size", "iteration", "saved", "opened", "published", "gallery", "folder")
     STORAGE_PATH: Optional[Path] = None
 
     def __init__(self):
@@ -444,15 +444,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "show_selection_multiple", lambda: self._selection_type == "multiple"
         )
 
-        model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["modified"])
-        model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["folder"])
+        model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width)["modified"])
+        model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width)["folder"])
+        model.bind_func("asset_list_show_size", lambda: list_columns(self._asset_window_client_width)["size"])
         for column in ("name", "gallery", "size", "modified", "folder"):
             model.bind_func(
                 f"asset_list_{column}_width",
                 lambda column=column: f"{self._list_column_width(column):.1f}dp",
             )
-        model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["gallery"] < 140)
-        model.bind_func("col_gallery_label", lambda: tr("projects.gallery.sidebar.title"))
+            label_binding = "col_" + column + "_label"
+            model.bind_func(label_binding, lambda column=column: self._list_header_label(column))
+        model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width)["gallery"] == 24)
         model.bind_func(
             "check_gallery_tooltip",
             lambda: f"{tr('projects.action.check_gallery')} · {self._gallery_checked_label()}",
@@ -653,10 +655,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "search_icon_label": "projects.toolbar.search_icon",
             "all_assets_label": "projects.sidebar.all_assets",
             "folders_title": "projects.sidebar.folders",
-            "col_name_label": "projects.property.name",
-            "col_folder_label": "projects.property.folder",
-            "col_size_label": "projects.property.size",
-            "col_modified_label": "projects.property.modified",
             "info_tab_label": "projects.info_panel.info",
             "select_item_hint": "projects.status.select_item",
             "asset_details_title": "projects.info_panel.asset_details",
@@ -761,6 +759,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
             ("open_sort_menu", self.open_sort_menu),
+            ("sort_list_column", self.sort_list_column),
             ("close_quick_look", self.close_quick_look),
             ("open_view_menu", self.open_view_menu),
             ("close_thumbnail_menu", self.close_thumbnail_menu),
@@ -874,6 +873,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "name": "projects.property.name", "saved": "projects.property.saved",
             "opened": "projects.property.opened", "size": "projects.property.size",
             "iteration": "projects.sort.iteration", "published": "projects.gallery.sidebar.published",
+            "gallery": "projects.gallery.sidebar.title", "folder": "projects.property.folder",
         }[field])
 
     def get_sort_tooltip(self) -> str:
@@ -884,7 +884,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         fields = ["name", "saved", "opened", "size"]
         if any(self._cached_iteration(asset) is not None for asset in self._asset_index_assets().values()):
             fields.append("iteration")
-        fields.append("published")
+        fields.extend(("published", "gallery", "folder"))
         items = [{"label": self._sort_field_label(field), "action": "sort:" + field,
                   "is_active": self._sort_mode == field} for field in fields]
         items.extend([
@@ -898,7 +898,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         kind, _, value = action.partition(":")
         if kind == "sort" and value in self.SORT_MODES:
             self._sort_mode = value
-            self._sort_descending = value != "name"
+            self._sort_descending = value not in ("name", "gallery", "folder")
         elif kind == "order" and value in ("ascending", "descending"):
             self._sort_descending = value == "descending"
         else:
@@ -909,6 +909,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def open_sort_menu(self, _handle=None, _event=None, _args=None) -> None:
         self._show_shared_context_menu(self._sort_menu_items(), self._choose_sort)
+
+    def _list_header_label(self, column: str) -> str:
+        field = "saved" if column == "modified" else column
+        label = self._sort_field_label(field)
+        if self._sort_mode == field:
+            arrow = "↓" if self._sort_descending else "↑"
+            return f"{arrow} {label}" if column == "size" else f"{label} {arrow}"
+        return label
+
+    def sort_list_column(self, _handle=None, _event=None, args=None) -> None:
+        column = str((args or [""])[0])
+        field = "saved" if column == "modified" else column
+        if field == self._sort_mode:
+            self._choose_sort("order:" + ("ascending" if self._sort_descending else "descending"))
+        else:
+            self._choose_sort("sort:" + field)
 
     def get_filter_label(self) -> str:
         return tr({
@@ -1499,6 +1515,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "iteration": self._cached_iteration(asset) or 0,
                     "opened": recent.get(str(Path(asset.get("path") or "")), -len(recent) - 1),
                     "published": float(links.get(asset.get("id"), {}).get("exchangedAt") or 0),
+                    "gallery": self._sort_text(self._gallery_badge(asset)["gallery_label"]) if self._sort_mode == "gallery" else "",
+                    "folder": self._sort_text(self._folder_name(asset.get("folder_id"))),
                 }[self._sort_mode]
                 return value, name
             rows.sort(key=sort_value, reverse=self._sort_descending)
@@ -1536,7 +1554,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_list_top_spacer_height = 0.0
             self._asset_list_bottom_spacer_height = 0.0
         else:
-            row_height = list_row_height(gallery_column_visible=True) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
             visible = (
                 math.ceil(client_height / row_height)
@@ -3139,7 +3157,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "asset_card_thumbnail_height",
                 "asset_list_wide",
                 "asset_list_show_folder",
+                "asset_list_show_size",
                 "asset_list_gallery_compact",
+                "col_name_label", "col_gallery_label", "col_size_label", "col_modified_label", "col_folder_label",
                 "asset_list_name_width", "asset_list_gallery_width", "asset_list_size_width",
                 "asset_list_modified_width", "asset_list_folder_width",
             ):
@@ -3561,7 +3581,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             start = row * row_height
             end = start + row_height
         else:
-            row_height = list_row_height(gallery_column_visible=True) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = index * row_height
             end = start + row_height
         top = self._asset_window_scroll_top
@@ -3800,17 +3820,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_resize("inspector-height", event)
 
     def _list_column_width(self, column: str) -> float:
-        width = self._asset_window_client_width / self._ui_scale()
+        width = self._asset_window_client_width
         columns = list_columns(width)
-        widths = {"size": 48.0, "modified": 72.0, "folder": 58.0,
+        widths = {"size": 72.0, "modified": 96.0, "folder": 100.0,
                   "gallery": columns["gallery"]}
         widths.update(self._list_column_overrides)
-        fixed = widths["size"] + columns["modified"] * widths["modified"] + columns["folder"] * widths["folder"]
-        gaps = 8.0 * (3 + int(columns["modified"]) + int(columns["folder"]))
+        if columns["gallery"] == 24:
+            widths["gallery"] = 24.0
+        fixed = columns["size"] * widths["size"] + columns["modified"] * widths["modified"] + columns["folder"] * widths["folder"]
+        gaps = 8.0 * (2 + int(columns["size"]) + int(columns["modified"]) + int(columns["folder"]))
         remaining = max(0.0, width - 24.0 - 32.0 - gaps - fixed)
-        if "gallery" not in self._list_column_overrides:
-            widths["gallery"] = min(widths["gallery"], max(96.0, remaining - 64.0))
-        widths["name"] = self._list_column_overrides.get("name", max(64.0, remaining - widths["gallery"]))
+        widths["name"] = self._list_column_overrides.get("name", max(80.0 if width < 420 else 120.0, remaining - widths["gallery"]))
+        if "name" in self._list_column_overrides and "gallery" not in self._list_column_overrides:
+            widths["gallery"] = max(columns["gallery"] if columns["gallery"] == 24 else 96.0,
+                                    remaining - widths["name"])
         return float(widths[column])
 
     def _start_resize(self, region: str, event) -> None:
@@ -3893,9 +3916,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._stop_event(event)
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
-            self._list_column_overrides[column] = min(
-                280.0, max(64.0, self._resize_start_column_width + delta_x)
-            )
+            minimum_name = 80.0 if self._asset_window_client_width < 420 else 120.0
+            if column == "name":
+                minimum_gallery = 24.0 if self._asset_window_client_width < 480 else 96.0
+                maximum = self._list_column_width("name") + max(0.0, self._list_column_width("gallery") - minimum_gallery)
+                minimum = minimum_name
+                self._list_column_overrides.pop("gallery", None)
+            else:
+                maximum = min(280.0, self._list_column_width(column) + max(0.0, self._list_column_width("name") - minimum_name))
+                minimum = 64.0
+                self._list_column_overrides.pop("name", None)
+            self._list_column_overrides[column] = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
             self._dirty_fields(
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )

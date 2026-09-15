@@ -419,3 +419,6 @@
 .gallery-tone-warning, .gallery-tone-warning img { color: @{warning}; image-color: @{warning}; }
 .gallery-tone-error, .gallery-tone-error img { color: @{error}; image-color: @{error}; }
 .gallery-tone-text_dim, .gallery-tone-text_dim img { color: @{text_dim}; image-color: @{text_dim}; }
+
+.asset-list-sort { color: @{text_dim}; }
+.asset-list-sort:hover, .asset-list-sort:focus { background-color: @{surface_bright}; color: @{text}; }
