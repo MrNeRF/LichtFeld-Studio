@@ -3453,7 +3453,8 @@ namespace lfs::io::project {
         std::vector<std::byte> dataset_preview;
         std::span<const std::byte> preview_png = options.preview_png;
 #if !defined(LFS_FORMAT_TEST_TARGET)
-        if (!is_autosave &&
+        if (!is_autosave && options.regenerate_dataset_preview &&
+            !options.remove_preview &&
             !options.leave_unbound &&
             (options.commit.kind == CommitKind::Explicit ||
              options.commit.kind == CommitKind::Recovered)) {
@@ -4006,6 +4007,12 @@ namespace lfs::io::project {
             }
         }
         for (const auto& [key, source] : impl_->source_rows) {
+            if (options.remove_preview && key.fourcc == FOURCC_THMB) {
+                if (auto removed = writer->erase(key); !removed) {
+                    return std::move(removed).error();
+                }
+                continue;
+            }
             if (!preview_png.empty() &&
                 key.fourcc == FOURCC_THMB) {
                 continue;

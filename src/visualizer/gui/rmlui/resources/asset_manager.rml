@@ -363,17 +363,23 @@
                     <div class="inspector-section-body" data-if="inspector_gallery_expanded">
                       <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
                       <span class="inspector-gallery-reason" data-if="selected_gallery_has_reason" data-attr-title="selected_gallery_reason">{{selected_gallery_reason}}</span>
+                      <div class="parameter-row" data-if="inspector_has_license"><span class="parameter-label">{{inspector_license_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_license_notice">{{inspector_license}}</span></div>
                       <span class="inspector-gallery-summary text-muted" data-if="gallery_linked" data-attr-title="gallery_exchange_summary">{{gallery_exchange_summary}}</span>
                     </div>
                   </div>
+                  </div>
                   <div class="inspector-section">
                     <button class="asset-button asset-button--text asset-button--toolbar24 inspector-section-title" data-event-click="toggle_operations" data-attr-aria-expanded="inspector_operations_expanded"><img class="inspector-disclosure" data-class-is-expanded="inspector_operations_expanded" src="../icon/dropdown-arrow.png"/><span>{{operations_section_title}}</span></button>
-                    <div class="inspector-operations" data-if="inspector_operations_expanded">
-                      <button class="btn btn--secondary asset-button--toolbar24 inspector-operation" data-for="operation : inspector_operation_rows"
-                              data-attr-data-project-operation="operation.action" data-attr-title="operation.label"
-                              data-event-click="open_project_operation(operation.action)"><span>{{operation.label}}</span></button>
+                    <div class="inspector-contents" data-if="inspector_operations_expanded">
+                      <div class="contents-row" data-for="part : contents_rows" data-attr-data-content-id="part.id" data-attr-title="part.label" data-class-contents-row--pending="part.pending" data-class-contents-row--disabled="part.disabled">
+                        <span class="contents-label" data-attr-title="part.label">{{part.label}}</span>
+                        <span class="contents-size" data-attr-title="part.size">{{part.size}}</span>
+                        <button class="btn btn--secondary contents-action" data-if="part.has_action" data-attr-disabled="part.disabled || part.action_disabled" data-event-click="contents_action(part.id, part.action)" data-attr-title="part.action_tooltip"><span>{{part.action_label}}</span></button>
+                        <button class="btn btn--secondary contents-action" data-if="part.has_secondary" data-attr-disabled="part.disabled" data-event-click="contents_action(part.id, part.secondary)" data-attr-title="part.secondary_label"><span>{{part.secondary_label}}</span></button>
+                        <button class="asset-button asset-button--small-icon contents-remove" data-if="part.removable" data-attr-disabled="part.disabled || part.remove_disabled" data-event-click="contents_action(part.id, 'remove')" data-attr-title="part.remove_label"><span class="asset-button-glyph">&#215;</span></button>
+                      </div>
+                      <span class="contents-pending text-muted" data-if="contents_has_pending" data-attr-title="contents_pending">{{contents_pending}}</span>
                     </div>
-                  </div>
                   </div>
                 </div>
               </div>

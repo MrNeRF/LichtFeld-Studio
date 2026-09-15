@@ -805,6 +805,12 @@ namespace lfs::python {
             };
             const bool drop_unbound_checkpoints = read_option("drop_unbound_checkpoints", true);
             const bool drop_embedded_dataset = read_option("drop_embedded_dataset", false);
+            project::ProjectReduceSelection selection;
+            selection.compact = read_option("compact", true);
+            selection.thumbnail = read_option("drop_thumbnail", false);
+            selection.metrics = read_option("drop_metrics", false);
+            if (options.contains("save_generation")) selection.save_generation = nb::cast<std::uint64_t>(options["save_generation"]);
+            if (options.contains("checkpoint_uuid")) selection.checkpoint = parse_reference_uuid(nb::cast<std::string>(options["checkpoint_uuid"]));
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
             std::optional<lfs::Result<project::ProjectReduceResult>> result;
@@ -817,7 +823,7 @@ namespace lfs::python {
                         : project::ProjectOperationProgress{},
                     cancel_callback.callback && !cancel_callback.callback.is_none()
                         ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{});
+                        : project::ProjectOperationCancel{}, selection);
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("options") = nb::dict(), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 

@@ -1442,3 +1442,21 @@
 .asset-card-menu { top: auto; bottom: 44dp; right: 6dp; }
 
 .asset-health-badge > span { display: block; line-height: 16dp; }
+
+
+/* Contents keeps its actions visible while long part names ellipsize. */
+.inspector-contents { display: flex; flex-direction: column; gap: 4dp; min-width: 0; }
+.contents-row { display: flex; align-items: center; flex: 0 0 24dp; height: 24dp; min-height: 24dp; width: 100%; min-width: 0; gap: 4dp; }
+.contents-label { display: block; flex: 1 1 0dp; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24dp; }
+.contents-size { display: block; flex: 0 0 auto; white-space: nowrap; line-height: 24dp; }
+.contents-action { box-sizing: border-box; display: flex; align-items: center; flex: 0 0 auto; height: 24dp; min-height: 24dp; padding: 0 6dp; margin: 0; white-space: nowrap; }
+.contents-action span { display: block; line-height: 16dp; white-space: nowrap; }
+.contents-remove { box-sizing: border-box; flex: 0 0 24dp; width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 4dp; margin: 0; }
+.contents-remove img { display: block; width: 16dp; height: 16dp; image-color: #d8dee9; }
+.contents-row--pending { opacity: 0.65; }
+.contents-row--disabled { opacity: 0.5; }
+.contents-pending { display: block; line-height: 24dp; min-height: 24dp; white-space: normal; }
+
+.asset-shell.is-compact .inspector-section { padding-left: 8dp; padding-right: 8dp; }
+.asset-shell.is-compact .contents-row { gap: 2dp; }
+.asset-shell.is-compact .contents-action { padding-left: 4dp; padding-right: 4dp; }

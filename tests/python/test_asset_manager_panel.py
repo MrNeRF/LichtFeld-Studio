@@ -1874,6 +1874,11 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
         elif scope == "transfer":
             assert field in {"can_pause", "can_resume", "can_cancel"}, expr
+        elif scope == "part":
+            from lfs_plugins.project_inspector import contents_rows
+            parts = contents_rows(asset, SimpleNamespace(), tr=lambda key: key,
+                                  format_size=str, format_time=str)
+            assert parts and all(isinstance(part[field], bool) for part in parts), expr
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
 
@@ -2351,13 +2356,17 @@ def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     assert 'asset-button--toolbar24' in strip_open.get('class').split()
     assert strip_open.get('data-event-click') == 'on_strip_action'
     assert strip_open.find('span').text == '{{strip_action_label}}'
-    operations = root.find('.//div[@class="inspector-operations"]')
-    action = operations.find('button')
-    assert action.get('data-for') == 'operation : inspector_operation_rows'
-    assert action.get('data-event-click') == 'open_project_operation(operation.action)'
-    assert action.get('data-attr-data-project-operation') == 'operation.action'
-    assert action.get('data-attr-title') == 'operation.label'
-    assert operations.findall('span') == []
+    contents = root.find('.//div[@class="inspector-contents"]')
+    row = contents.find('div')
+    assert row.get('data-for') == 'part : contents_rows'
+    assert row.get('data-attr-data-content-id') == 'part.id'
+    actions = row.findall('button')
+    assert [e.get('data-event-click') for e in actions] == [
+        'contents_action(part.id, part.action)', 'contents_action(part.id, part.secondary)',
+        "contents_action(part.id, 'remove')"]
+    assert 'contents-remove' in actions[-1].get('class').split()
+    assert actions[-1].find('span').get('class') == 'asset-button-glyph'
+    assert row.find('span').get('data-attr-title') == 'part.label'
     for name in ('asset_manager.rml', 'gallery_file_panel.rml', 'viewport_overlay.rml'):
         content = (resources / name).read_text()
         for obsolete in ('sign_in', 'sign-in', 'sign in', 'account.connect_menu_bar', 'gallery_account_reason'):

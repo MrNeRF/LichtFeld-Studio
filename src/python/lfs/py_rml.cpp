@@ -1141,6 +1141,18 @@ namespace lfs::python {
         if (it != documents_.end() && it->second != doc)
             release_rml_document_state(it->second);
         documents_[name] = doc;
+
+        // Language reload binds models while the previous document still exists.
+        // Once the replacement is mounted, send model updates to its document.
+        Rml::ElementList model_elements;
+        doc->QuerySelectorAll(model_elements, "[data-model]");
+        model_elements.push_back(doc);
+        for (const auto* element : model_elements) {
+            const auto model_name = element->GetAttribute<Rml::String>("data-model", "");
+            const auto context = s_model_contexts.find(model_name);
+            if (context != s_model_contexts.end() && context->second == doc->GetContext())
+                s_model_documents[model_name] = doc;
+        }
     }
 
     void RmlDocumentRegistry::unregister_document(const std::string& name) {

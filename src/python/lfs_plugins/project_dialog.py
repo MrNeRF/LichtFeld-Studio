@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Escaped content and explicit actions for the shared project operation modal."""
 from html import escape
+from .project_inspector import LICENSES
 from typing import Any, Callable
 
 
@@ -30,7 +31,9 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
     def button(key: str, style: str = "secondary", disabled: bool = False) -> dict[str, Any]:
         return dict(label=tr(key), style=style, disabled=disabled)
 
-    body = '<div class="project-form">' + fact("projects.property.path", data.get("path", ""))
+    body = '<div class="project-form">'
+    if kind not in {"set_license", "remove_content", "compact_content"}:
+        body += fact("projects.property.path", data.get("path", ""))
     buttons = []
     if busy:
         body += f'<div class="modal-note">{label("projects.status.reading")}</div>'
@@ -75,7 +78,22 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
         keys = {"viewport": "projects.dialog.current_viewport", "first_dataset": "projects.dialog.first_dataset_image", "first_embedded": "projects.dialog.first_embedded_image", "image_file": "projects.dialog.image_file"}
         body += choice("source", "projects.dialog.source", [(key, tr(value)) for key, value in keys.items()])
     elif kind == "set_license":
-        body += field("identifier", "projects.property.identifier") + field("notice", "projects.property.notice")
+        selected = str(data.get("license_choice") or "CC-BY-4.0")
+        options = ''.join(
+            f'<option value="{text(identifier)}"{" selected" if selected == identifier else ""}>'
+            f'<span class="license-option-name">{label("projects.license." + key)}</span>'
+            f'<span class="license-option-meaning">{label("projects.license.meaning_" + key)}</span></option>'
+            for identifier, key in LICENSES)
+        body += (f'<label class="modal-field"><span class="modal-field-label">{label("projects.property.license")}</span>'
+                 f'<select id="license_choice" class="license-choice" name="license_choice">{options}</select></label>')
+        meaning = next((key for identifier, key in LICENSES if identifier == selected), "custom")
+        body += '<div class="modal-note">' + label("projects.license.meaning_" + meaning) + '</div>'
+        if selected == "custom":
+            body += field("license_name", "projects.license.name")
+            body += (f'<label class="modal-field modal-field--stacked"><span class="modal-field-label">{label("projects.license.text")}</span>'
+                     f'<textarea id="license_text" name="license_text" rows="3">{text(data.get("license_text", ""))}</textarea></label>')
+        if selected not in {"CC0-1.0", "LicenseRef-Proprietary"}:
+            body += field("attribution", "projects.license.attribution")
     elif kind == "rename":
         body += field("name", "projects.property.display_name")
     elif kind == "repair":
@@ -84,6 +102,6 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
     if data.get("message"):
         body += f'<div class="modal-note warning-text">{text(data["message"])}</div>'
     if kind != "save_history" and not busy:
-        buttons.insert(0, dict(label=confirm_label, style="warning" if kind == "reduce_size" else "primary", disabled=bool(data.get("blocked"))))
+        buttons.insert(0, dict(label=confirm_label, style="warning" if kind in {"reduce_size", "remove_content", "compact_content"} else "primary", disabled=bool(data.get("blocked"))))
     buttons.append(button("common.cancel"))
     return body + '</div>', buttons

@@ -8,6 +8,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "crc32c.hpp"
+#include "io/atomic_output.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
@@ -173,6 +174,7 @@ namespace lfs::io::project {
             }
             ProjectDocumentSaveOptions options;
             options.commit.kind = CommitKind::Explicit;
+            options.regenerate_dataset_preview = false;
             options.writer_lock_lease = *lease;
             options.preview_png = preview;
             auto saved = document->save(path, options);
@@ -281,6 +283,17 @@ namespace lfs::io::project {
                               static_cast<std::uint64_t>(row.block_crc_table->entries.size()) *
                                   sizeof(std::uint32_t)
                         : 0);
+        }
+
+        JsonChapterDom::Json pending_contents(const ProjectDocument& document) {
+            auto pending = document.project().dom().get_json("contents_removals");
+            const auto file_id = document.source_reader()->superblock().file_uuid.to_string();
+            if (!pending || !pending->is_object() ||
+                pending->value("file_uuid", std::string{}) != file_id ||
+                !pending->contains("rows") || !(*pending)["rows"].is_array()) {
+                return JsonChapterDom::Json{{"file_uuid", file_id}, {"rows", JsonChapterDom::Json::array()}};
+            }
+            return *pending;
         }
 
         lfs::Result<std::pair<std::int32_t, std::uint64_t>>
@@ -920,12 +933,16 @@ namespace lfs::io::project {
     lfs::Result<ProjectInspectorCard>
     restore_save(const std::filesystem::path& path,
                  const std::uint64_t generation,
-                 const std::filesystem::path& destination) {
-        if (path.empty() || destination.empty() || same_path(path, destination)) {
+                 const std::filesystem::path& requested_destination) {
+        const bool replace_source = same_path(path, requested_destination);
+        const auto destination = replace_source
+                                     ? path.parent_path() / (path.filename().string() + ".restore-" + lfs::core::generate_uuid_v4().to_string() + ".tmp")
+                                     : requested_destination;
+        if (path.empty() || requested_destination.empty()) {
             return fail<ProjectInspectorCard>(
                 lfs::ErrorCode::InvalidArgument, destination,
                 "The restore paths are invalid.",
-                "source and destination must be non-empty and different",
+                "source and destination must be non-empty",
                 "restore.path");
         }
         auto source_lock = acquire_operation_lock(path);
@@ -949,6 +966,23 @@ namespace lfs::io::project {
                 lfs::ErrorCode::FailedPrecondition, path,
                 "Autosave sidecars cannot be restored as projects.",
                 "restore_save requires a master container", "superblock.container_role");
+        }
+        if (const auto* row = reader->find(FOURCC_PROJ, reader->superblock().project_uuid)) {
+            auto bytes = reader->read_chunk(*row);
+            if (!bytes)
+                return std::move(bytes).error();
+            auto project = ProjectChapter::from_bytes(*bytes);
+            if (!project)
+                return std::move(project).error();
+            auto pending = project->dom().get_json("contents_removals");
+            if (pending && pending->is_object() && pending->value("file_uuid", std::string{}) == reader->superblock().file_uuid.to_string() &&
+                pending->contains("rows") && (*pending)["rows"].is_array()) {
+                for (const auto& removed : (*pending)["rows"]) {
+                    if (removed.is_object() && removed.value("id", std::string{}) == "save:" + std::to_string(generation))
+                        return fail<ProjectInspectorCard>(lfs::ErrorCode::FailedPrecondition, path,
+                                                          "This save has been removed.", "the removal is pending compaction", "restore.save");
+                }
+            }
         }
         const auto lineage = reader->lineage();
         auto all_lineage_rows = reader->lineage_chunks();
@@ -1128,6 +1162,17 @@ namespace lfs::io::project {
         if (auto verified = restored->verify_all(); !verified) {
             return std::move(verified).error();
         }
+        if (replace_source) {
+            const auto recovery = path.parent_path() / (path.filename().string() + ".before-restore-" + reader->commit().commit_uuid.to_string() + ".bak");
+            std::error_code error;
+            if (!std::filesystem::copy_file(path, recovery, std::filesystem::copy_options::none, error))
+                return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, recovery,
+                                                  "The recovery copy could not be created.", error.message(), "restore.recovery");
+            if (auto replaced = lfs::io::replace_atomic_output_file(destination, path, lfs::io::AtomicOutputDurability::Durable); !replaced)
+                return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, path,
+                                                  "The restored save could not replace the project.", replaced.error().message, "restore.replace");
+            return inspect_after_save(path);
+        }
         return inspect_after_save(destination);
     }
 
@@ -1162,21 +1207,6 @@ namespace lfs::io::project {
                 "The retained checkpoint was not found.",
                 checkpoint_instance_uuid.to_string(), "checkpoint.instance_uuid");
         }
-        const auto recovery = path.parent_path() /
-                              (path.filename().string() + ".before-rebind.licht");
-        std::error_code copy_error;
-        if (!std::filesystem::copy_file(path, recovery,
-                                        std::filesystem::copy_options::none,
-                                        copy_error)) {
-            return fail<ProjectInspectorCard>(
-                copy_error == std::errc::file_exists
-                    ? lfs::ErrorCode::AlreadyExists
-                    : lfs::ErrorCode::PermissionDenied,
-                recovery,
-                "The recovery copy could not be created.",
-                copy_error ? copy_error.message() : "copy_file returned false",
-                "recovery_copy");
-        }
         auto training = document->scene_graph().training_model_uuid();
         if (!training) {
             return std::move(training).error();
@@ -1203,8 +1233,24 @@ namespace lfs::io::project {
             !updated) {
             return std::move(updated).error();
         }
+        const auto recovery = path.parent_path() /
+                              (path.filename().string() + ".before-rebind-" + document->source_reader()->commit().commit_uuid.to_string() + ".bak");
+        std::error_code copy_error;
+        if (!std::filesystem::copy_file(path, recovery,
+                                        std::filesystem::copy_options::none,
+                                        copy_error)) {
+            return fail<ProjectInspectorCard>(
+                copy_error == std::errc::file_exists
+                    ? lfs::ErrorCode::AlreadyExists
+                    : lfs::ErrorCode::PermissionDenied,
+                recovery,
+                "The recovery copy could not be created.",
+                copy_error ? copy_error.message() : "copy_file returned false",
+                "recovery_copy");
+        }
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
+        options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         auto saved = document->save(path, options);
         if (!saved) {
@@ -1254,7 +1300,8 @@ namespace lfs::io::project {
                 const bool drop_unbound_checkpoints,
                 const bool drop_embedded_dataset,
                 ProjectOperationProgress progress,
-                ProjectOperationCancel cancel) {
+                ProjectOperationCancel cancel,
+                const ProjectReduceSelection& selection) {
         auto plan = make_reduce_plan(path);
         if (!plan) {
             return std::move(plan).error();
@@ -1290,19 +1337,8 @@ namespace lfs::io::project {
             }
         }
         const auto recovery = path.parent_path() /
-                              (path.filename().string() + ".before-reduce.licht");
-        std::error_code copy_error;
-        if (!std::filesystem::copy_file(path, recovery,
-                                        std::filesystem::copy_options::none,
-                                        copy_error)) {
-            return fail<ProjectReduceResult>(
-                copy_error == std::errc::file_exists ? lfs::ErrorCode::AlreadyExists
-                                                     : lfs::ErrorCode::PermissionDenied,
-                recovery,
-                "The reduction recovery copy could not be created.",
-                copy_error ? copy_error.message() : "copy_file returned false",
-                "recovery_copy");
-        }
+                              (path.filename().string() + ".before-reduce-" +
+                               plan->input_commit_uuid.to_string() + ".bak");
         if (progress) {
             progress(0.05F, "Preparing project reduction");
         }
@@ -1316,6 +1352,124 @@ namespace lfs::io::project {
         }
         ProjectReduceResult result;
         result.recovery_copy = recovery;
+        auto pending = pending_contents(*document);
+        auto remember = [&](const std::string& id, const std::string& kind, const std::uint64_t bytes,
+                            JsonChapterDom::Json extra = JsonChapterDom::Json::object()) {
+            extra["id"] = id;
+            extra["kind"] = kind;
+            extra["bytes"] = bytes;
+            pending["rows"].push_back(std::move(extra));
+        };
+        if (selection.save_generation) {
+            const auto& lineage = document->source_reader()->lineage();
+            if (selection.save_generation >= lineage.size()) {
+                return fail<ProjectReduceResult>(lfs::ErrorCode::InvalidArgument, path,
+                                                 "The current save cannot be removed.", "only older saves can be removed", "reduce.save");
+            }
+            for (const auto& row : pending["rows"]) {
+                if (row.value("id", std::string{}) == "save:" + std::to_string(selection.save_generation)) {
+                    return fail<ProjectReduceResult>(lfs::ErrorCode::InvalidArgument, path,
+                                                     "This save was already removed.", "the removal is pending compaction", "reduce.save");
+                }
+            }
+            auto history = document->source_reader()->lineage_chunks();
+            if (!history)
+                return std::move(history).error();
+            std::uint64_t bytes = 0;
+            // Only count old payload bytes that are no longer part of the current save.
+            for (const auto& row : (*history)[selection.save_generation - 1]) {
+                const auto* live = document->source_reader()->find(row.key);
+                if (row.is_live() && (!live || live->header_offset != row.header_offset))
+                    bytes += row_occupied_bytes(row);
+            }
+            const auto& saved = lineage[selection.save_generation - 1];
+            remember("save:" + std::to_string(selection.save_generation), "save", bytes,
+                     {{"generation", selection.save_generation}, {"date", saved.wallclock_unix_ns}});
+        }
+        if (selection.checkpoint) {
+            const auto checkpoint = std::ranges::find(plan->retained_checkpoints, *selection.checkpoint,
+                                                      &ProjectReduceCheckpoint::instance_uuid);
+            if (checkpoint == plan->retained_checkpoints.end()) {
+                return fail<ProjectReduceResult>(lfs::ErrorCode::NotFound, path,
+                                                 "The checkpoint was not found.", "checkpoint is no longer retained", "reduce.checkpoint");
+            }
+            if (*bound && **bound == *selection.checkpoint) {
+#ifdef LFS_FORMAT_TEST_TARGET
+                return fail<ProjectReduceResult>(lfs::ErrorCode::Unsupported, path,
+                                                 "Removing this checkpoint requires the full application.", "model conversion is unavailable", "reduce.checkpoint");
+#else
+                auto training = document->scene_graph().training_model_uuid();
+                if (!training)
+                    return std::move(training).error();
+                auto node = document->scene_graph().find(**training);
+                if (!node)
+                    return std::move(node).error();
+                auto model = load_export_payload(*document, **node, *(*node)->payload, cancel);
+                if (!model)
+                    return std::move(model).error();
+                auto splat = SplatChapterPayload::capture(**model, SplatSourceKind::Generated, false);
+                if (!splat)
+                    return std::move(splat).error();
+                auto fingerprint = fingerprint_path(path);
+                if (!fingerprint)
+                    return std::move(fingerprint).error();
+                if (auto updated = document->edit_project().upsert_embed_decision(EmbedDecision{
+                        .uuid = lfs::core::generate_uuid_v4(),
+                        .node_uuid = (*node)->uuid,
+                        .payload_fourcc = "SPLT",
+                        .decision = "embedded",
+                        .reference_uuid = std::nullopt,
+                        .reason = "Visible model preserved when removing its training checkpoint"});
+                    !updated)
+                    return std::move(updated).error();
+                if (auto updated = document->edit_project().upsert_embedded_payload_provenance(EmbeddedPayloadProvenance{
+                        .uuid = lfs::core::generate_uuid_v4(),
+                        .node_uuid = (*node)->uuid,
+                        .fourcc = "SPLT",
+                        .import_locator = ReferenceLocator{.preferred = recovery.filename().string(), .base = LocatorBase::Project, .absolute_fallback = std::nullopt},
+                        .import_fingerprint = *fingerprint,
+                        .content_xxh3_128 = xxh3_128(splat->bytes())});
+                    !updated)
+                    return std::move(updated).error();
+                (*node)->payload = PayloadBinding{"SPLT", (*node)->uuid, std::nullopt, "generated"};
+                if (auto updated = document->edit_scene_graph().set_training_model_uuid(std::nullopt); !updated)
+                    return std::move(updated).error();
+                if (auto updated = document->edit_scene_graph().upsert_node(**node); !updated)
+                    return std::move(updated).error();
+                if (auto updated = document->set_splat((*node)->uuid, std::move(*splat)); !updated)
+                    return std::move(updated).error();
+#endif
+            }
+            if (document->remove_checkpoint(*selection.checkpoint))
+                ++result.checkpoints_removed;
+            remember("checkpoint:" + selection.checkpoint->to_string(), "checkpoint", checkpoint->bytes,
+                     {{"iteration", checkpoint->iteration}});
+        }
+        if (selection.metrics) {
+            std::uint64_t bytes = 0;
+            for (const auto& row : document->source_reader()->chunks())
+                if (row.is_live() && row.key.fourcc == FOURCC_METR)
+                    bytes += row_occupied_bytes(row);
+            const auto& metrics = document->metrics();
+            const auto samples = metrics.loss_history.size() + metrics.psnr_history.size();
+            document->edit_metrics() = MetricsChapter{};
+            remember("metrics", "metrics", bytes, {{"samples", samples}});
+        }
+        if (selection.thumbnail) {
+            std::uint64_t bytes = 0;
+            for (const auto& row : document->source_reader()->chunks())
+                if (row.is_live() && row.key.fourcc == FOURCC_THMB)
+                    bytes += row_occupied_bytes(row);
+            remember("thumbnail", "thumbnail", bytes);
+        }
+        if (drop_embedded_dataset) {
+            const auto images = std::ranges::count(plan->embedded_dataset, "image", &ProjectReduceDatasetPayload::kind);
+            remember("dataset:embedded", "dataset", plan->drop_embedded_dataset.reclaimable_bytes, {{"images", images}});
+        }
+        if (!selection.compact) {
+            if (auto updated = document->edit_project().dom().set_json("contents_removals", pending); !updated)
+                return std::move(updated).error();
+        }
         if (drop_unbound_checkpoints) {
             for (const auto& uuid : document->checkpoint_uuids()) {
                 if (*bound && **bound == uuid) {
@@ -1326,10 +1480,24 @@ namespace lfs::io::project {
                 }
             }
         }
+        std::error_code copy_error;
+        if (!std::filesystem::copy_file(path, recovery,
+                                        std::filesystem::copy_options::none,
+                                        copy_error)) {
+            return fail<ProjectReduceResult>(
+                copy_error == std::errc::file_exists ? lfs::ErrorCode::AlreadyExists
+                                                     : lfs::ErrorCode::PermissionDenied,
+                recovery,
+                "The reduction recovery copy could not be created.",
+                copy_error ? copy_error.message() : "copy_file returned false",
+                "recovery_copy");
+        }
         ProjectDocumentSaveOptions save_options;
         save_options.commit.kind = CommitKind::Explicit;
+        save_options.regenerate_dataset_preview = false;
         save_options.writer_lock_lease = *lease;
-        if (result.checkpoints_removed != 0) {
+        save_options.remove_preview = selection.thumbnail;
+        if (result.checkpoints_removed != 0 || !selection.compact) {
             auto saved = document->save(path, save_options);
             if (!saved) {
                 return std::move(saved).error();
@@ -1386,10 +1554,30 @@ namespace lfs::io::project {
                     return std::move(updated).error();
                 }
             }
+            document->edit_parameters().clear_embedded_dataset();
             auto saved = document->save(path, save_options);
             if (!saved) {
                 return std::move(saved).error();
             }
+        }
+        if (!selection.compact) {
+            auto details = inspect_project_details(path);
+            if (!details)
+                return std::move(details).error();
+            result.card = details->card;
+            for (const auto& payload : plan->embedded_dataset) {
+                if (!drop_embedded_dataset)
+                    break;
+                if (payload.kind == "image")
+                    ++result.dataset_images_removed;
+                if (payload.kind == "normal")
+                    ++result.dataset_normals_removed;
+                if (payload.kind == "sparse")
+                    ++result.dataset_sparse_removed;
+            }
+            if (progress)
+                progress(1.0F, "Removal saved; compact to free space");
+            return result;
         }
         save_options.writer_lock_lease.reset();
         lease->release();
@@ -1561,6 +1749,7 @@ namespace lfs::io::project {
         }
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
+        options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         options.disk_reserve_bytes = 64ull * 1024 * 1024;
         auto saved = document->embed_dataset_batch(manifest, sources, options);
@@ -1675,6 +1864,7 @@ namespace lfs::io::project {
         }
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
+        options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         auto saved = document->save(path, options);
         if (!saved) {
@@ -2034,6 +2224,7 @@ namespace lfs::io::project {
         }
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
+        options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         options.preview_png = *png;
         auto saved = document->save(path, options);
@@ -2090,6 +2281,7 @@ namespace lfs::io::project {
         }
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
+        options.regenerate_dataset_preview = false;
         options.writer_lock_lease = *lease;
         options.preview_png = *png;
         auto saved = document->save(path, options);
@@ -2110,7 +2302,16 @@ namespace lfs::io::project {
 
     lfs::Result<ProjectInspectorCard>
     clear_project_license(const std::filesystem::path& path) {
-        return mutate_document(path, [](ProjectDocument& document) {
+        return mutate_document(path, [](ProjectDocument& document) -> lfs::Result<void> {
+            auto license = document.project().license();
+            if (!license)
+                return lfs::Result<void>::failure(std::move(license).error());
+            if (*license) {
+                auto pending = pending_contents(document);
+                pending["rows"].push_back({{"id", "license"}, {"kind", "license"}, {"bytes", (*license)->identifier.size() + (*license)->notice.size()}, {"identifier", (*license)->identifier}});
+                if (auto updated = document.edit_project().dom().set_json("contents_removals", pending); !updated)
+                    return updated;
+            }
             return document.clear_license();
         });
     }

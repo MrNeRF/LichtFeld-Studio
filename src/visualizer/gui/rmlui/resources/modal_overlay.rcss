@@ -171,3 +171,16 @@ body {
 .modal-history-1 { flex: 1; min-width: 144dp; }
 .modal-history-2 { width: 80dp; flex-shrink: 0; text-align: right; }
 .modal-history-3 { width: 96dp; flex-shrink: 0; text-align: right; }
+
+.project-form .modal-field { min-height: 28dp; }
+.project-form .modal-field input, .project-form .modal-field select { height: 28dp; min-height: 28dp; max-height: 28dp; }
+.modal-field--stacked { flex-direction: column; align-items: stretch; }
+.modal-field--stacked .modal-field-label { width: auto; }
+.modal-field textarea { box-sizing: border-box; width: 100%; min-height: 84dp; padding: 4dp 8dp; }
+
+.license-choice selectbox { min-width: 480dp; max-height: 440dp; }
+.license-choice option { display: block; padding: 4dp 8dp; white-space: normal; }
+.license-option-name { display: block; line-height: 20dp; }
+.license-option-meaning { display: block; line-height: 18dp; font-size: 12dp; white-space: normal; }
+.license-choice selectvalue .license-option-meaning { display: none; }
+.project-form .modal-field-label { width: 200dp; white-space: normal; }

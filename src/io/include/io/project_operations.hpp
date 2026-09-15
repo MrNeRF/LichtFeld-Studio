@@ -77,6 +77,15 @@ namespace lfs::io::project {
         std::filesystem::path recovery_copy;
     };
 
+    // Explicit Contents actions append removals. Legacy reduction still compacts.
+    struct ProjectReduceSelection {
+        bool compact = true;
+        std::optional<lfs::core::Uuid> checkpoint;
+        std::uint64_t save_generation = 0;
+        bool thumbnail = false;
+        bool metrics = false;
+    };
+
     struct LFS_IO_API DatasetEmbedResult {
         ProjectInspectorCard card;
         std::uint64_t images_embedded = 0;
@@ -132,7 +141,8 @@ namespace lfs::io::project {
                 bool drop_unbound_checkpoints,
                 bool drop_embedded_dataset,
                 ProjectOperationProgress progress = {},
-                ProjectOperationCancel cancel = {});
+                ProjectOperationCancel cancel = {},
+                const ProjectReduceSelection& selection = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<DatasetEmbedResult>
     embed_dataset_file(const std::filesystem::path& path,

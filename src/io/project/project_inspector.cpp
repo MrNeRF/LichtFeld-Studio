@@ -655,6 +655,11 @@ namespace lfs::io::project {
                 return std::move(license).error();
             }
             result.license = std::move(*license);
+            const auto removals = parsed->dom().get_json("contents_removals");
+            if (removals && removals->is_object() &&
+                removals->value("file_uuid", std::string{}) == reader.superblock().file_uuid.to_string()) {
+                result.manifest["contents_removals"] = removals->dump();
+            }
         }
 
         if (auto status = read_current_json(reader, FOURCC_SCNG, bytes); !status) {
@@ -697,6 +702,7 @@ namespace lfs::io::project {
             }
         }
 
+        std::filesystem::path parameter_dataset_path;
         if (auto status = read_current_json(reader, FOURCC_PRMS, bytes); !status) {
             return std::move(status).error();
         } else if (!bytes.empty()) {
@@ -709,6 +715,7 @@ namespace lfs::io::project {
                 return std::move(snapshot).error();
             }
             result.parameters.active_strategy = snapshot->active_strategy;
+            parameter_dataset_path = snapshot->dataset.data_path;
             auto embedded = parsed->embedded_dataset();
             if (!embedded) {
                 return std::move(embedded).error();
@@ -753,6 +760,15 @@ namespace lfs::io::project {
                     .reachable = reachable,
                 });
             }
+        }
+
+        if (!parameter_dataset_path.empty() &&
+            !std::ranges::any_of(result.references, [](const auto& ref) { return ref.kind == "dataset"; })) {
+            if (parameter_dataset_path.is_relative())
+                parameter_dataset_path = reader.path().parent_path() / parameter_dataset_path;
+            std::error_code error;
+            const bool reachable = std::filesystem::is_directory(parameter_dataset_path, error) && !error;
+            result.references.push_back({"training_parameters", "dataset", parameter_dataset_path, reachable});
         }
 
         if (auto status = read_current_json(reader, FOURCC_METR, bytes); !status) {
