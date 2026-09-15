@@ -115,6 +115,85 @@ def test_reconciliation_refuses_an_alias_redirected_after_observation(monkeypatc
     assert "path changed" in index.last_error and index.library_path.read_bytes() == before
 
 
+@pytest.mark.parametrize("operation", ["verify", "verify_batch", "reconcile_all", "scan_batch"])
+def test_library_keeps_path_identity_from_before_inspection(monkeypatch, tmp_path, operation):
+    from lfs_plugins import asset_watch
+
+    path, other, alias = (tmp_path / name for name in ("a.licht", "b.licht", "别名.licht"))
+    path.write_bytes(b"project")
+    shutil.copyfile(path, other)
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda *args: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(alias))
+    before = index.library_path.read_bytes()
+    swapped = False
+
+    def inspect(*args):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            alias.unlink()
+            alias.symlink_to(other)
+        return inspection
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    if operation == "verify":
+        index.verify_asset(project.id)
+    elif operation == "verify_batch":
+        index.verify_projects_batch([project.id])
+    elif operation == "reconcile_all":
+        index.reconcile_all()
+    else:
+        monkeypatch.setattr(asset_watch, "_known_path_is_unchanged", lambda *args: False)
+        asset_watch._commit_registration_batch(index, [(str(alias), "default")], None)
+        assert not index.save()
+    assert swapped and "identity or path changed" in index.last_error
+    assert index.library_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify_batch", "reconcile_all", "reconcile_observations"])
+@pytest.mark.parametrize("health", ["missing", "unreadable"])
+def test_library_health_write_refuses_a_replaced_project(monkeypatch, tmp_path, operation, health):
+    from lfs_plugins import asset_index
+
+    path = tmp_path / "项目.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda *args: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path))
+    before = index.library_path.read_bytes()
+    rows = index.assets.copy()
+    if health == "missing":
+        path.unlink()
+    else:
+        def unreadable(*args):
+            raise ValueError("Damaged project")
+        monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(unreadable))
+    observation = asset_index.AssetObservation(str(path), "default", error="Could not read the project")
+    original_fsync = asset_index.os.fsync
+
+    def replace(fd):
+        original_fsync(fd)
+        path.write_bytes(b"a replacement project")
+
+    monkeypatch.setattr(asset_index.os, "fsync", replace)
+    if operation == "verify":
+        index.verify_asset(project.id)
+    elif operation == "verify_batch":
+        index.verify_projects_batch([project.id])
+    elif operation == "reconcile_all":
+        index.reconcile_all()
+    else:
+        index.reconcile_observations([observation])
+    assert "identity or path changed" in index.last_error
+    assert index.library_path.read_bytes() == before and index.assets == rows
+
+
 def test_library_writes_preserve_unicode_symlinks(monkeypatch, tmp_path):
     path = tmp_path / "项目-é.licht"
     path.write_bytes(b"project")

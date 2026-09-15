@@ -20,6 +20,7 @@ from .asset_index import (
     is_supported_asset_path,
     resolve_asset_manager_storage_path,
 )
+from .project_identity import ProjectPathIdentity
 
 SCAN_BATCH_SIZE = 25
 SCAN_BATCH_INTERVAL_S = 0.25
@@ -742,7 +743,7 @@ def _commit_registration_batch(
     if not callable(inspect):
         return _commit_batch_with_snapshot(index, batch, cancel_event)
 
-    prepared: list[tuple[str, str, Any]] = []
+    prepared: list[tuple[str, str, Any, ProjectPathIdentity]] = []
     already_cataloged = 0
     repair_only = 0
     failed = 0
@@ -752,6 +753,7 @@ def _commit_registration_batch(
             return 0, 0, 0, True
         existing = None
         try:
+            path_identity = ProjectPathIdentity.capture(path)
             if callable(find_by_path):
                 existing = find_by_path(path)
                 if existing is not None and _known_path_is_unchanged(index, existing, path):
@@ -774,10 +776,11 @@ def _commit_registration_batch(
                                     has_preview=getattr(existing, "has_preview", False),
                                     iteration=getattr(existing, "iteration", None),
                                 ),
+                                path_identity,
                             )
                         )
                     continue
-            prepared.append((path, folder_id, inspect(path)))
+            prepared.append((path, folder_id, inspect(path), path_identity))
         except Exception:
             verify = getattr(index, "verify_asset", None)
             if existing is not None and callable(verify):
@@ -806,8 +809,9 @@ def _commit_registration_batch(
                     key: int(value)
                     for key, value in (getattr(index, "_path_identity", lambda _p: {}) (path) or {}).items()
                 },
+                path_identity=path_identity,
             )
-            for path, folder_id, inspection in prepared
+            for path, folder_id, inspection, path_identity in prepared
         ]
         result = reconcile(
             observations,
@@ -826,8 +830,9 @@ def _commit_registration_batch(
 
     def commit_prepared() -> None:
         nonlocal added, already_cataloged, failed
-        for path, folder_id, inspection in prepared:
+        for path, folder_id, inspection, path_identity in prepared:
             try:
+                path_identity.validate()
                 project, created = index.register_licht_asset(
                     path,
                     folder_id=folder_id,

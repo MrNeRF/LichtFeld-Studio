@@ -851,9 +851,12 @@ class AssetIndex:
             project.open_state = kind
 
     def _refresh_project(self, project: Project) -> None:
+        identity = ProjectPathIdentity.capture(project.path)
         kind, payload = self._read_project_runtime(
             project.path, project.project_uuid, resolve_fallback=True
         )
+        if self._projects.get(project.project_uuid) is project:
+            self._write_checks[project.path] = (identity, project.project_uuid if kind == "AVAILABLE" else None)
         self._apply_runtime_result(project, kind, payload)
 
     def _mutation_preflight(self, project: Project) -> bool:
@@ -952,12 +955,12 @@ class AssetIndex:
             observed_by_uuid: Dict[str, List[AssetObservation]] = {}
             observed_paths: Dict[str, AssetObservation] = {}
             for item in normalized:
+                self._write_checks[item.path] = (item.path_identity, item.project_uuid or None)
                 if not item.inspection or not self._inspection_is_master(item.inspection):
                     continue
                 project_uuid = item.project_uuid
                 if not project_uuid:
                     continue
-                self._write_checks[item.path] = (item.path_identity, project_uuid)
                 observed_by_uuid.setdefault(project_uuid, []).append(item)
                 observed_paths[self._path_key(item.path)] = item
 
@@ -1059,6 +1062,7 @@ class AssetIndex:
                 if project.project_uuid in observed_by_uuid:
                     continue
                 if _stat_identity(project.path) is None:
+                    self._remember_identity(project.path, None)
                     project.status = "MISSING"
                     project.exists = False
                     project.available = False
@@ -1654,11 +1658,11 @@ class AssetIndex:
         previous_state = self._snapshot_state(
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
-        del self._folders[folder_id]
         removed_ids = [project.project_uuid for project in self._projects.values() if project.folder_id == folder_id]
         for identifier in removed_ids:
             project = self._projects[identifier]
             self._remember_identity(project.path, identifier, allow_missing=True)
+        del self._folders[folder_id]
         self._projects = {
             project_uuid: project
             for project_uuid, project in self._projects.items()
@@ -1703,6 +1707,8 @@ class AssetIndex:
         previous_state = self._snapshot_state(
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
+        for project in self._projects.values():
+            self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         previous_default_path = self._default_folder_path
         old_path = folder.path if folder is not None else ""
         new_path_key = self._path_key(normalized)
@@ -1733,7 +1739,6 @@ class AssetIndex:
             if resolved_folder is None:
                 resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
             project.folder_id = resolved_folder
-            self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         if self.save():
             return True
         self._default_folder_path = previous_default_path
@@ -1782,12 +1787,15 @@ class AssetIndex:
     @_synchronized
     def delete_assets(self, asset_ids: List[str]) -> int:
         previous_state = self._snapshot_state()
+        for asset_id in dict.fromkeys(asset_ids):
+            project = self._projects.get(asset_id)
+            if project is not None:
+                self._remember_identity(project.path, asset_id, allow_missing=True)
         removed: Dict[str, Project] = {}
         for asset_id in dict.fromkeys(asset_ids):
             project = self._projects.pop(asset_id, None)
             if project is None:
                 continue
-            self._remember_identity(project.path, asset_id, allow_missing=True)
             self._project_by_path.pop(self._path_key(project.path), None)
             removed[asset_id] = project
         if not removed:
@@ -1899,6 +1907,7 @@ class AssetIndex:
                 return None
             path = project.path
             expected_uuid = project.project_uuid
+        path_identity = ProjectPathIdentity.capture(path)
         kind, payload = self._read_project_runtime(
             path, expected_uuid, resolve_fallback=True
         )
@@ -1913,6 +1922,7 @@ class AssetIndex:
                 project.inspection_restored = False
             else:
                 previous_state = self._snapshot_state(project_ids=[asset_id])
+                self._write_checks[path] = (path_identity, expected_uuid if kind == "AVAILABLE" else None)
                 self._apply_runtime_result(project, kind, payload)
                 if not self.save():
                     self._restore_state(previous_state)
@@ -1964,20 +1974,19 @@ class AssetIndex:
                             asset_id,
                             project.path,
                             project.project_uuid,
-                            (
-                                None
-                            ),
+                            ProjectPathIdentity.capture(project.path),
                         )
                     )
         results = []
-        for asset_id, path, expected_uuid, metadata in work:
+        for asset_id, path, expected_uuid, path_identity in work:
             results.append(
                 (
                     asset_id,
                     path,
                     expected_uuid,
+                    path_identity,
                     self._read_project_runtime(
-                        path, expected_uuid, known_metadata=metadata
+                        path, expected_uuid
                     ),
                 )
             )
@@ -1985,7 +1994,7 @@ class AssetIndex:
             previous_state = self._snapshot_state(project_ids=list(self._projects))
             verified = 0
             changed = False
-            for asset_id, path, expected_uuid, (kind, payload) in results:
+            for asset_id, path, expected_uuid, path_identity, (kind, payload) in results:
                 project = self._projects.get(asset_id)
                 if (
                     project is None
@@ -1997,6 +2006,7 @@ class AssetIndex:
                     project.inspection_verified = True
                     project.inspection_restored = False
                 else:
+                    self._write_checks[path] = (path_identity, expected_uuid if kind == "AVAILABLE" else None)
                     self._apply_runtime_result(project, kind, payload)
                     changed = True
                 verified += 1
@@ -2026,6 +2036,7 @@ class AssetIndex:
         for done, project in enumerate(projects):
             if cancel_event is not None and cancel_event.is_set():
                 return {"cancelled": 1, "processed": done, "total": total}
+            path_identity = ProjectPathIdentity.capture(project.path)
             kind, payload = self._read_project_runtime(
                 project.path, project.project_uuid, resolve_fallback=True
             )
@@ -2040,6 +2051,7 @@ class AssetIndex:
                     inspection=inspection,
                     error=str(payload or "") if inspection is None else "",
                     stat_identity=_stat_identity(project.path) or project.stat_identity,
+                    path_identity=path_identity,
                 )
             )
             if progress is not None:
