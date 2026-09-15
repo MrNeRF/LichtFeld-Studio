@@ -135,6 +135,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._bottom_panel_height = 220.0
         self._info_preferred_height = 220.0
         self._navigator_width = 200.0
+        self._navigator_widths = {"medium": 160.0, "wide": 200.0}
         self._inspector_width = 280.0
         self._inspector_preferred_height = 200.0
         self._tray_height = 120.0
@@ -241,6 +242,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "sidebar_height": self._sidebar_height,
             "bottom_panel_height": self._info_preferred_height,
             "navigator_width": self._navigator_width,
+            "navigator_widths": dict(self._navigator_widths),
             "inspector_width": self._inspector_width,
             "inspector_height": self._inspector_preferred_height,
             "tray_height": self._tray_height,
@@ -255,6 +257,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def apply_chrome(self, payload: Any) -> None:
         if isinstance(payload, dict):
+            widths = payload.get("navigator_widths")
+            if not isinstance(widths, dict):
+                legacy_width = payload.get("navigator_width")
+                widths = {layout: legacy_width for layout in ("medium", "wide")} if (
+                    isinstance(legacy_width, (int, float)) and math.isfinite(legacy_width) and legacy_width > 0
+                ) else {}
+            for layout, default in (("medium", 160.0), ("wide", 200.0)):
+                value = widths.get(layout, default)
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    self._navigator_widths[layout] = min(240.0, max(160.0 if layout == "wide" else 120.0, float(value)))
             if payload.get("sort_mode") in self.SORT_MODES:
                 self._sort_mode = payload["sort_mode"]
                 self._sort_descending = bool(payload.get("sort_descending", self._sort_mode != "name"))
@@ -3189,10 +3201,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if layout_changed:
                 self._layout_class = layout_metrics["breakpoint"]
                 self._content_width = width
-                self._navigator_width = min(
-                    layout_metrics["navigator_max"],
-                    max(layout_metrics["navigator_min"], self._navigator_width),
-                ) if layout_metrics["navigator_mode"] == "column" else 0.0
+                if layout_metrics["navigator_mode"] == "column":
+                    self._navigator_width = self._navigator_widths[self._layout_class]
                 if self._layout_class == "wide":
                     self._inspector_width = min(420.0, max(240.0, self._inspector_width))
                 self._dirty_layout_fields()
@@ -3806,7 +3816,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         defaults = breakpoint_metrics(self._content_width or 1100.0)
         if region == "navigator":
             self._navigator_width = defaults["navigator_default"]
-            self._dirty_fields("navigator_width")
+            self._navigator_widths[self._layout_class] = self._navigator_width
+            self._dirty_fields("navigator_width", "navigator_style_width")
         elif region == "inspector":
             self._inspector_width = defaults["inspector_default"]
             self._dirty_layout_fields()
@@ -3834,8 +3845,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         delta_x = (float(event.get_parameter("mouse_x", "0")) - self._resize_start_x) / self._ui_scale()
         delta_y = (mouse_y - self._resize_start_y) / self._ui_scale()
         if region == "navigator":
-            self._navigator_width = min(240.0, max(120.0, self._resize_start_navigator + delta_x))
-            self._dirty_fields("navigator_width")
+            metrics = breakpoint_metrics(self._content_width or 1100.0)
+            self._navigator_width = min(metrics["navigator_max"], max(
+                metrics["navigator_min"], self._resize_start_navigator + delta_x))
+            self._navigator_widths[self._layout_class] = self._navigator_width
+            self._dirty_fields("navigator_width", "navigator_style_width")
         elif region == "inspector":
             self._inspector_width = min(420.0, max(240.0, self._resize_start_inspector - delta_x))
             self._dirty_layout_fields()

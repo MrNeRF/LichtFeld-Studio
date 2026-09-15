@@ -1294,7 +1294,7 @@
 .project-dialog-table-row { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 28dp; gap: 8dp; padding: 4dp 8dp; text-align: left; }
 .project-dialog-message { white-space: pre-wrap; }
 
-.asset-tray { position: relative; display: flex; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
+.asset-tray { position: relative; box-sizing: border-box; display: flex; flex: 0 0 auto; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
 .asset-tray-label, .asset-tray-detail, .asset-tray-title, .asset-tray-phase, .asset-tray-bytes { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-tray { flex-direction: column; align-items: stretch; gap: 4dp; padding: 6dp 12dp; }
 .asset-tray-heading, .asset-tray-row, .asset-tray-actions { display: flex; align-items: center; gap: 8dp; min-width: 0; }
@@ -1315,16 +1315,16 @@
 .asset-shell.is-wide #asset-main-row { flex-direction: row; }
 .asset-shell.is-wide .asset-results-stack { flex-direction: row; }
 .asset-shell.is-floating #asset-popup { min-width: 480dp; min-height: 360dp; }
-.asset-shell.is-wide .asset-navigator { flex: 0 0 200dp; flex-basis: 200dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
+.asset-shell.is-wide .asset-navigator { flex: 0 0 auto; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-wide .inspector-resize-handle { display: block; }
 .asset-shell.is-wide .asset-inspector { flex: 0 0 auto; min-width: 240dp; max-width: 420dp; }
 .asset-shell.is-wide .asset-info-asset-layout,
 .asset-shell.is-narrow .asset-info-asset-layout,
 .asset-shell.is-compact .asset-info-asset-layout { flex-direction: column; }
-.asset-shell.is-wide .asset-resize-handle--horizontal { display: none; }
+.asset-shell.is-wide .asset-inspector > .asset-resize-handle--horizontal { display: none; }
 .asset-shell.is-medium #asset-main-row { flex-direction: row; }
 .asset-shell.is-medium .asset-results-stack { flex-direction: column; }
-.asset-shell.is-medium .asset-navigator { flex: 0 0 160dp; flex-basis: 160dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
+.asset-shell.is-medium .asset-navigator { flex: 0 0 auto; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-medium .asset-inspector { position: absolute; left: 0; right: 0; bottom: 0; width: auto; flex: 0 0 auto; overflow: visible; }
 .asset-shell.is-medium .asset-info-asset-layout { padding: 8dp 16dp; align-items: flex-start; }
 .asset-shell.is-medium .asset-info-details { flex: 1 1 0dp; width: auto; }
