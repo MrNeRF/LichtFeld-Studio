@@ -402,10 +402,14 @@ class GalleryAssetMixin:
         try:
             if identifier and identifier.startswith("handoff:") and action == "resume":
                 job = next((job for job in self._gallery_state.get("jobs", []) if job["id"] == identifier), {})
-                self._gallery_command("replace_review", [job.get("project", "")])
+                if not self._select_asset_id(job.get("project", "")):
+                    raise ValueError(tr("error.link"))
+                self._gallery_command("replace_review")
                 return
             if identifier and identifier.startswith("preparation:") and action == "resume":
-                self._gallery_command("retry", [identifier.removeprefix("preparation:")])
+                if not self._select_asset_id(identifier.removeprefix("preparation:")):
+                    raise ValueError(tr("error.link"))
+                self._gallery_command("retry")
                 return
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")

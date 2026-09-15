@@ -676,6 +676,21 @@ def test_gallery_transfers_stay_in_the_footer_tray(panel_module):
     assert panel_module.transfer_rows(panel._gallery_state)[0]["title"] == "Finished project"
     assert "transfer_rows" in (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
 
+
+@pytest.mark.parametrize("job_id,verb", [("preparation:project", "retry"), ("handoff:intent", "replace_review")])
+def test_tray_review_selects_its_own_project(panel_module, monkeypatch, job_id, verb):
+    panel = panel_module.AssetManagerPanel()
+    panel._gallery_state["jobs"] = [dict(id=job_id, project="project")]
+    calls = []
+    monkeypatch.setattr(panel, "_select_asset_id", lambda identifier: calls.append(("select", identifier)) or True)
+    monkeypatch.setattr(panel, "_gallery_command", lambda action: calls.append(("review", action)))
+    panel._transfer_command("resume", [job_id])
+    assert calls == [("select", "project"), ("review", verb)]
+    monkeypatch.setattr(panel, "_select_asset_id", lambda identifier: False)
+    calls.clear()
+    panel._transfer_command("resume", [job_id])
+    assert not calls and panel._gallery_notice
+
 def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
