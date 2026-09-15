@@ -96,6 +96,8 @@ namespace lfs::vis {
             None = 0,
             Apply,
             Clear,
+            TogglePreview,
+            RefreshPreview,
         };
 
         void setAlignPickedPoints(std::vector<glm::vec3> points) {
@@ -129,6 +131,12 @@ namespace lfs::vis {
 
         void setAlignEdgeToAxisEnabled(const bool enabled) { align_edge_to_axis_enabled_ = enabled; }
         [[nodiscard]] bool getAlignEdgeToAxisEnabled() const { return align_edge_to_axis_enabled_; }
+
+        void setAlignCameraPosition(const glm::vec3& position) { align_camera_position_ = position; }
+        [[nodiscard]] const glm::vec3& getAlignCameraPosition() const { return align_camera_position_; }
+
+        void setAlignPreviewEnabled(bool enabled) { align_preview_enabled_ = enabled; }
+        [[nodiscard]] bool getAlignPreviewEnabled() const { return align_preview_enabled_; }
 
         void requestAlignUiAction(const AlignUiAction action) { align_ui_action_ = action; }
         [[nodiscard]] AlignUiAction takeAlignUiAction() {
@@ -173,6 +181,7 @@ namespace lfs::vis {
             align_picked_points_.clear();
             align_selected_point_.reset();
             align_ui_action_ = AlignUiAction::None;
+            align_preview_enabled_ = false;
             clearAlignStatusMessage();
         }
 
@@ -195,6 +204,8 @@ namespace lfs::vis {
         std::optional<int> align_selected_point_;
         bool align_axis_snap_enabled_ = true;
         bool align_edge_to_axis_enabled_ = false;
+        bool align_preview_enabled_ = false;
+        glm::vec3 align_camera_position_{};
         AlignUiAction align_ui_action_ = AlignUiAction::None;
         std::string align_status_message_;
         std::chrono::steady_clock::time_point align_status_until_{};

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/scene.hpp"
 #include "operator/operator.hpp"
 #include "rendering/rendering_types.hpp"
 #include <glm/glm.hpp>
@@ -23,6 +24,19 @@ namespace lfs::vis::op {
         void cancel(OperatorContext& ctx) override;
 
     private:
+        friend class AlignPreviewTest;
+
+        struct PreviewTarget {
+            core::NodeId id;
+            core::Uuid uuid;
+            glm::mat4 local;
+            glm::mat4 world;
+        };
+        std::vector<PreviewTarget> preview_targets_;
+        std::optional<glm::mat4> preview_snap_world_;
+        glm::vec3 preview_camera_{};
+        void restorePreview(OperatorContext& ctx);
+        [[nodiscard]] bool updatePreview(OperatorContext& ctx);
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
         bool press_active_ = false;
@@ -30,21 +44,18 @@ namespace lfs::vis::op {
         glm::dvec2 press_pos_{0.0, 0.0};
         std::optional<int> press_point_index_;
         bool drag_active_ = false;
-        int drag_point_index_ = -1;
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
-        mutable bool logged_masked_depth_fallback_ = false;
 
-        [[nodiscard]] glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
-                                                     SplitViewPanelId* out_panel = nullptr,
-                                                     bool precise = true) const;
+        [[nodiscard]] glm::vec3 unprojectScreenPoint(double x, double y,
+                                                     SplitViewPanelId* out_panel = nullptr) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
         void syncPickedPointsToServices();
         void removeLastPoint();
         void removeSelectedPoint();
         void clearAllPoints();
-        [[nodiscard]] bool tryPlacePoint(OperatorContext& ctx, double x, double y);
+        [[nodiscard]] bool tryPlacePoint(double x, double y);
         [[nodiscard]] bool applyAlignment(OperatorContext& ctx);
         [[nodiscard]] OperatorResult handlePendingUiAction(OperatorContext& ctx);
         void setStatus(const char* locale_key, double duration_seconds = 1.5) const;

@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "没有名为 '{}' 的 splat 节点"
   },
   "align": {
+    "preview": "预览对齐",
+    "hint_preview": "预览：切换对齐选项以比较效果。关闭预览后可编辑点。应用：保留结果。Esc：恢复原始状态。",
     "click_1st": "点击第 1 个点",
     "click_2nd": "点击第 2 个点",
     "click_3rd": "点击第 3 个点",

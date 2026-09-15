@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'"
   },
   "align": {
+    "preview": "Uitlijning vooraf bekijken",
+    "hint_preview": "Voorbeeld: wissel de uitlijningsopties om te vergelijken. Schakel het voorbeeld uit om punten te bewerken. Toepassen: resultaat behouden. Esc: origineel herstellen.",
     "click_1st": "Klik 1e punt",
     "click_2nd": "Klik 2e punt",
     "click_3rd": "Klik 3e punt",

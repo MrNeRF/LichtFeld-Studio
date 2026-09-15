@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "Nessun nodo splat denominato '{}'"
   },
   "align": {
+    "preview": "Anteprima allineamento",
+    "hint_preview": "Anteprima: cambia le opzioni per confrontare. Disattiva l’anteprima per modificare i punti. Applica: mantieni il risultato. Esc: ripristina l’originale.",
     "click_1st": "Clicca il 1° punto",
     "click_2nd": "Clicca il 2° punto",
     "click_3rd": "Clicca il 3° punto",

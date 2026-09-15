@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "Aucun nœud splat nommé '{}'"
   },
   "align": {
+    "preview": "Aperçu de l’alignement",
+    "hint_preview": "Aperçu : changez les options pour comparer. Désactivez l’aperçu pour modifier les points. Appliquer : conserver le résultat. Échap : restaurer l’original.",
     "click_1st": "Cliquez le 1er point",
     "click_2nd": "Cliquez le 2e point",
     "click_3rd": "Cliquez le 3e point",

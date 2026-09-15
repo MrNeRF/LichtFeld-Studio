@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
   },
   "align": {
+    "preview": "Podgląd wyrównania",
+    "hint_preview": "Podgląd: przełączaj opcje wyrównania, aby porównać wyniki. Wyłącz podgląd, aby edytować punkty. Zastosuj: zachowaj wynik. Esc: przywróć oryginał.",
     "click_1st": "Kliknij 1. punkt",
     "click_2nd": "Kliknij 2. punkt",
     "click_3rd": "Kliknij 3. punkt",

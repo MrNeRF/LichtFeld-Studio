@@ -23,6 +23,7 @@
 #include "io/splat_path.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -1424,6 +1425,11 @@ namespace lfs::vis {
                     return false;
                 }
             }
+        }
+
+        if (services().sceneOrNull() == this &&
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
         }
 
         selection_.clearNodeSelection();
@@ -3384,6 +3390,11 @@ namespace lfs::vis {
 
         if (trainer && !prepareSplatDataForEditMode(*model_node->model)) {
             return;
+        }
+
+        if (services().sceneOrNull() == this &&
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
         }
 
         core::Scene::Transaction txn(scene_);

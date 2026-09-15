@@ -766,29 +766,15 @@ class _GizmoToolbarController:
         import lichtfeld as lf
 
         active = active_tool_id == self._ALIGN_TOOL_ID
-        can_apply = False
-        snap_on = True
-        edge_to_axis_on = False
-        if active:
-            can_apply_fn = getattr(lf.ui, "can_apply_align", None)
-            if callable(can_apply_fn):
-                try:
-                    can_apply = bool(can_apply_fn())
-                except Exception:
-                    can_apply = False
-            snap_fn = getattr(lf.ui, "get_align_axis_snap", None)
-            if callable(snap_fn):
-                try:
-                    snap_on = bool(snap_fn())
-                except Exception:
-                    snap_on = True
-            edge_fn = getattr(lf.ui, "get_align_edge_to_axis", None)
-            if callable(edge_fn):
-                try:
-                    edge_to_axis_on = bool(edge_fn())
-                except Exception:
-                    edge_to_axis_on = False
+        can_apply = active and lf.ui.can_apply_align()
+        snap_on = lf.ui.get_align_axis_snap()
+        edge_to_axis_on = lf.ui.get_align_edge_to_axis()
         return [
+            _button_record(
+                "align-preview", "align_toggle_preview", "", _icon_src("scene/visible"),
+                tooltip_key="align.preview", tooltip_text="Preview alignment",
+                selected=lf.ui.get_align_preview(), enabled=active and can_apply,
+            ),
             _button_record(
                 "align-apply",
                 "align_apply",
@@ -1138,36 +1124,24 @@ class _GizmoToolbarController:
                 apply_crop_tool()
             return
 
+        if action == "align_toggle_preview":
+            lf.ui.toggle_align_preview()
+            return
+
         if action == "align_apply":
-            apply_align = getattr(lf.ui, "apply_align", None)
-            if callable(apply_align):
-                apply_align()
+            lf.ui.apply_align()
             return
 
         if action == "align_clear":
-            clear_align = getattr(lf.ui, "clear_align_points", None)
-            if callable(clear_align):
-                clear_align()
+            lf.ui.clear_align_points()
             return
 
         if action == "align_toggle_snap":
-            get_snap = getattr(lf.ui, "get_align_axis_snap", None)
-            set_snap = getattr(lf.ui, "set_align_axis_snap", None)
-            if callable(get_snap) and callable(set_snap):
-                try:
-                    set_snap(not bool(get_snap()))
-                except Exception:
-                    pass
+            lf.ui.set_align_axis_snap(not lf.ui.get_align_axis_snap())
             return
 
         if action == "align_toggle_edge_to_axis":
-            get_edge = getattr(lf.ui, "get_align_edge_to_axis", None)
-            set_edge = getattr(lf.ui, "set_align_edge_to_axis", None)
-            if callable(get_edge) and callable(set_edge):
-                try:
-                    set_edge(not bool(get_edge()))
-                except Exception:
-                    pass
+            lf.ui.set_align_edge_to_axis(not lf.ui.get_align_edge_to_axis())
             return
 
         if action == "crop_delete":
@@ -1916,11 +1890,13 @@ class _ViewportToolbarController:
         if active_tool == "builtin.align":
             align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
-            align_edge_to_axis = bool(call(False, getattr(lf.ui, "get_align_edge_to_axis", None)))
+            align_edge_to_axis = lf.ui.get_align_edge_to_axis()
+            align_preview = lf.ui.get_align_preview()
         else:
             align_can_apply = False
             align_axis_snap = True
             align_edge_to_axis = False
+            align_preview = False
         return (
             language_generation,
             trainer_state,
@@ -1951,6 +1927,7 @@ class _ViewportToolbarController:
             asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
+            align_preview,
             align_can_apply,
             align_axis_snap,
             align_edge_to_axis,
@@ -1994,6 +1971,7 @@ class _ViewportToolbarController:
             "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",
+            "align_toggle_preview",
             "align_apply",
             "align_clear",
             "align_toggle_snap",

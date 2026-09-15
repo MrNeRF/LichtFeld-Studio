@@ -2425,6 +2425,8 @@
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
   },
   "align": {
+    "preview": "Ausrichtung vorschauen",
+    "hint_preview": "Vorschau: Ausrichtungsoptionen zum Vergleichen umschalten. Vorschau ausschalten, um Punkte zu bearbeiten. Anwenden: Ergebnis behalten. Esc: Original wiederherstellen.",
     "click_1st": "1. Punkt klicken",
     "click_2nd": "2. Punkt klicken",
     "click_3rd": "3. Punkt klicken",

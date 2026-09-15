@@ -7,6 +7,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/viewport.hpp"
+#include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
@@ -32,6 +33,9 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::shutdown() {
+        if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
+        }
         restoreGridIfNeeded();
         tool_context_ = nullptr;
         services().clearAlignPickedPoints();
@@ -108,6 +112,40 @@ namespace lfs::vis::tools {
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
             return rm ? rm->getScreenOverlayRenderer() : nullptr;
+        }
+
+        void drawLabel(lfs::rendering::ScreenOverlayRenderer& overlay, const glm::vec2& pos,
+                       const char* text, const lfs::rendering::OverlayColor& color, float size) {
+            const auto extent = overlay.measureText(text, size);
+            const glm::vec2 padding(4.0f, 3.0f);
+            overlay.addRectFilled(pos - padding, pos + extent + padding,
+                                  toOverlay(theme().overlay.background, 0.96f));
+            overlay.addText(pos, text, color, size);
+        }
+
+        std::vector<std::string> wrapHint(lfs::rendering::ScreenOverlayRenderer& overlay,
+                                          std::string_view text, float size, float width) {
+            std::vector<std::string> lines;
+            while (!text.empty()) {
+                size_t end = 0, last_space = 0;
+                while (end < text.size()) {
+                    size_t next = end + 1;
+                    while (next < text.size() && (static_cast<unsigned char>(text[next]) & 0xc0) == 0x80)
+                        ++next;
+                    if (end > 0 && overlay.measureText(text.substr(0, next), size).x > width)
+                        break;
+                    if (text[end] == ' ')
+                        last_space = end;
+                    end = next;
+                }
+                if (end < text.size() && last_space > 0)
+                    end = last_space;
+                lines.emplace_back(text.substr(0, end));
+                text.remove_prefix(end);
+                while (!text.empty() && text.front() == ' ')
+                    text.remove_prefix(1);
+            }
+            return lines;
         }
 
         struct PanelProjection {
@@ -200,7 +238,6 @@ namespace lfs::vis::tools {
                                   const PanelProjection& panel_proj,
                                   const std::vector<glm::vec3>& points,
                                   const lfs::rendering::OverlayColor& text_color,
-                                  const lfs::rendering::OverlayColor& shadow_color,
                                   const float label_size) {
             if (points.size() < 2) {
                 return;
@@ -246,7 +283,7 @@ namespace lfs::vis::tools {
                 const float len = glm::length(points[j] - points[i]);
                 char buf[32];
                 std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(len));
-                overlay.addTextWithShadow(label_pos, buf, text_color, shadow_color, label_size);
+                drawLabel(overlay, label_pos, buf, text_color, label_size);
             }
         }
 
@@ -269,7 +306,12 @@ namespace lfs::vis::tools {
 
             glm::vec3 normal = cross_v / cross_len;
             const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-            op::faceNormalTowardCamera(normal, center, camera_pos);
+            if (services().getAlignPreviewEnabled()) {
+                if (normal.y < 0.0f)
+                    normal = -normal;
+            } else {
+                op::faceNormalTowardCamera(normal, center, camera_pos);
+            }
 
             bool snapped = false;
             if (services().getAlignAxisSnapEnabled() && snap_target_world) {
@@ -279,6 +321,12 @@ namespace lfs::vis::tools {
             const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
             const glm::vec3 normal_end = center + normal * line_length;
 
+            if (!projectToScreenChecked(panel_proj, p0).valid ||
+                !projectToScreenChecked(panel_proj, p1).valid ||
+                !projectToScreenChecked(panel_proj, p2).valid ||
+                !projectToScreenChecked(panel_proj, normal_end).valid) {
+                return;
+            }
             const glm::vec2 center_screen = projectToScreen(panel_proj, center);
             const glm::vec2 normal_screen = projectToScreen(panel_proj, normal_end);
             const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
@@ -299,11 +347,11 @@ namespace lfs::vis::tools {
 
             overlay.addLine(center_screen, normal_screen, up_color, 4.0f);
             overlay.addCircleFilled(normal_screen, 10.0f, up_color);
-            overlay.addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
-                            LOC(lichtfeld::Strings::Align::UP), up_color, label_size);
+            drawLabel(overlay, {normal_screen.x + 12.0f, normal_screen.y - 8.0f},
+                      LOC(lichtfeld::Strings::Align::UP), up_color, label_size);
             if (snapped) {
-                overlay.addText({normal_screen.x + 12.0f, normal_screen.y + label_size + 2.0f},
-                                LOC(lichtfeld::Strings::Align::SNAPPED), up_color, label_size);
+                drawLabel(overlay, {normal_screen.x + 12.0f, normal_screen.y + label_size + 2.0f},
+                          LOC(lichtfeld::Strings::Align::SNAPPED), up_color, label_size);
             }
 
             if (services().getAlignEdgeToAxisEnabled()) {
@@ -314,16 +362,15 @@ namespace lfs::vis::tools {
                 constexpr lfs::rendering::OverlayColor X_COLOR{1.0f, 0.35f, 0.35f, 1.0f};
                 overlay.addLine(center_screen, x_screen, X_COLOR, 3.0f);
                 overlay.addCircleFilled(x_screen, 7.0f, X_COLOR);
-                overlay.addText({x_screen.x + 10.0f, x_screen.y - 6.0f}, "X", X_COLOR, label_size);
+                drawLabel(overlay, {x_screen.x + 10.0f, x_screen.y - 6.0f}, "X", X_COLOR, label_size);
             }
 
             overlay.addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
             overlay.addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
             overlay.addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
 
-            constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
             drawEdgeLengthLabels(overlay, panel_proj, {p0, p1, p2},
-                                 toOverlay(t.overlay.text), kShadow, label_size);
+                                 toOverlay(t.overlay.text), label_size);
         }
     } // namespace
 
@@ -401,21 +448,21 @@ namespace lfs::vis::tools {
             {bounds.x, bounds.y},
             {bounds.x + bounds.width, bounds.y + bounds.height});
 
-        constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
         const auto& t = theme();
         const float ui_scale = t.fonts.base_size / 13.0f;
-        const float info_x = bounds.x + 56.0f * ui_scale;
+        const float info_x = panel_proj.info.x + 56.0f * ui_scale;
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const auto SPHERE_OUTLINE = toOverlay(t.overlay.text);
         const auto SELECTED_OUTLINE = toOverlay(t.palette.primary);
         const auto PREVIEW_COLOR = toOverlay(t.palette.error, 0.6f);
         const auto CROSSHAIR_COLOR = toOverlay(t.palette.error, 0.8f);
-        const float label_size = t.fonts.base_size;
+        const float label_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
 
         const auto& picked_points = services().getAlignPickedPoints();
         const auto selected_point = services().getAlignSelectedPoint();
         const bool in_review = picked_points.size() == 3;
-        const glm::vec3 camera_pos = panel_proj.viewport.camera.t;
+        const glm::vec3 camera_pos = in_review ? services().getAlignCameraPosition()
+                                               : panel_proj.viewport.camera.t;
         auto* const sm = tool_context_->getSceneManager();
         const auto snap_target_world =
             sm ? op::resolveAlignSnapTargetWorld(*sm) : std::optional<glm::mat4>{};
@@ -441,12 +488,46 @@ namespace lfs::vis::tools {
                                 camera_pos, label_size, true, snap_target_world);
         }
 
+        const float hud_size = std::max(t.fonts.base_size, 14.0f * ui_scale);
+        const float padding = 10.0f * ui_scale;
+        const glm::vec2 hud_pos(info_x, panel_proj.info.y + 48.0f * ui_scale);
+        const float max_width = std::max(80.0f, panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding);
+        const char* hint_key = services().getAlignPreviewEnabled() ? "align.hint_preview"
+                               : in_review                         ? lichtfeld::Strings::Align::HINT_REVIEW
+                                                                   : lichtfeld::Strings::Align::HINT_PICKING;
+        const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, picked_points.size());
+        const auto* status = services().getAlignStatusMessage();
+        float width = overlay->measureText(count_text, t.fonts.large_size).x;
+        for (const auto& line : lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
+        const auto status_lines = status ? wrapHint(*overlay, *status, hud_size, max_width)
+                                         : std::vector<std::string>{};
+        for (const auto& line : status_lines)
+            width = std::max(width, overlay->measureText(line, hud_size).x);
+        const float line_height = hud_size + 5.0f * ui_scale;
+        const float height = t.fonts.large_size + 8.0f * ui_scale +
+                             (lines.size() + status_lines.size()) * line_height;
+        overlay->addRectFilled(hud_pos - glm::vec2(padding),
+                               hud_pos + glm::vec2(width + padding, height + padding),
+                               toOverlay(t.overlay.background, 0.96f));
+        overlay->addText(hud_pos, count_text.c_str(), toOverlay(t.overlay.text), t.fonts.large_size);
+        glm::vec2 text_pos(hud_pos.x, hud_pos.y + t.fonts.large_size + 8.0f * ui_scale);
+        for (const auto& line : lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.overlay.text), hud_size);
+            text_pos.y += line_height;
+        }
+        for (const auto& line : status_lines) {
+            overlay->addText(text_pos, line.c_str(), toOverlay(t.palette.warning), hud_size);
+            text_pos.y += line_height;
+        }
+
         if (over_gui)
             return;
 
         overlay->addCircle(mouse_pos, 5.0f, CROSSHAIR_COLOR, 16, 2.0f);
 
-        // Single depth sample per frame for hover preview + live triangle (B7).
+        // Share one depth sample between the hover marker and triangle.
         std::optional<float> hover_depth;
         if (!in_review && rendering_manager) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
@@ -494,7 +575,7 @@ namespace lfs::vis::tools {
         if (!in_review && !drew_live_triangle && picked_points.size() == 2) {
             drawEdgeLengthLabels(*overlay, panel_proj,
                                  {picked_points[0], picked_points[1]},
-                                 toOverlay(t.overlay.text), kShadow, label_size);
+                                 toOverlay(t.overlay.text), label_size);
         }
 
         const char* instruction_key = nullptr;
@@ -505,26 +586,8 @@ namespace lfs::vis::tools {
         default: break;
         }
         if (instruction_key) {
-            overlay->addTextWithShadow({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
-                                       LOC(instruction_key), toOverlay(t.overlay.text), kShadow, label_size);
-        }
-
-        const std::size_t point_count = picked_points.size();
-        const std::string count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, point_count);
-        overlay->addTextWithShadow({info_x, bounds.y + 40.0f},
-                                   count_text.c_str(), toOverlay(t.overlay.text), kShadow,
-                                   t.fonts.large_size);
-
-        const char* const hint_key = in_review ? lichtfeld::Strings::Align::HINT_REVIEW
-                                               : lichtfeld::Strings::Align::HINT_PICKING;
-        overlay->addTextWithShadow({info_x, bounds.y + 40.0f + t.fonts.large_size + 6.0f},
-                                   LOC(hint_key), toOverlay(t.overlay.text, 0.85f), kShadow,
-                                   t.fonts.base_size);
-
-        if (const std::string* const status = services().getAlignStatusMessage()) {
-            overlay->addTextWithShadow({info_x, bounds.y + 40.0f + 2.0f * t.fonts.large_size + 12.0f},
-                                       status->c_str(), toOverlay(t.palette.warning, 0.95f), kShadow,
-                                       t.fonts.base_size);
+            drawLabel(*overlay, {mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
+                      LOC(instruction_key), toOverlay(t.overlay.text), label_size);
         }
     }
 
@@ -532,6 +595,9 @@ namespace lfs::vis::tools {
         if (enabled) {
             forceGridOn();
         } else {
+            if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+                op::operators().cancelModalOperator();
+            }
             restoreGridIfNeeded();
             services().clearAlignPickedPoints();
         }

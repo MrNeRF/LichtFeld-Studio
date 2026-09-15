@@ -2,11 +2,17 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bus.hpp"
+#include "core/services.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "scene/scene_manager.hpp"
 
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 
 namespace {
 
@@ -176,4 +182,117 @@ namespace {
         EXPECT_FALSE(lfs::vis::op::computeAlignTransform(in).has_value());
     }
 
+    TEST(AlignTransform, NearlyVerticalNormalsStillLevelThePlane) {
+        for (const float slope : {0.0001f, 0.001f, -0.0001f, -0.001f}) {
+            for (const float camera_y : {-5.0f, 5.0f}) {
+                lfs::vis::op::AlignTransformInputs in;
+                in.p0 = {0.0f, 1.0f, 0.0f};
+                in.p1 = {1.0f, 1.0f + slope, 0.0f};
+                in.p2 = {0.0f, 1.0f, 1.0f};
+                in.camera_pos = {0.0f, camera_y, 0.0f};
+                const auto transform = lfs::vis::op::computeAlignTransform(in);
+                ASSERT_TRUE(transform);
+                for (const auto point : {in.p0, in.p1, in.p2}) {
+                    EXPECT_NEAR((*transform * glm::vec4(point, 1.0f)).y, 0.0f, 1e-6f)
+                        << "slope=" << slope << " camera_y=" << camera_y;
+                }
+            }
+        }
+    }
+
+    TEST(AlignTransform, NonFinitePointsCannotProduceATransform) {
+        for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity()}) {
+            lfs::vis::op::AlignTransformInputs in;
+            in.p0 = {invalid, 0.0f, 0.0f};
+            in.p1 = {1.0f, 0.0f, 0.0f};
+            in.p2 = {0.0f, 0.0f, 1.0f};
+            EXPECT_FALSE(lfs::vis::op::computeAlignTransform(in));
+            EXPECT_FALSE(lfs::vis::op::pointsAreNonDegenerate({in.p0, in.p1, in.p2}));
+        }
+    }
+
 } // namespace
+
+namespace lfs::vis::op {
+
+    class AlignPreviewTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            services().clear();
+            undoHistory().clear();
+            manager_ = std::make_unique<SceneManager>();
+            services().set(manager_.get());
+            manager_->getScene().addGroup("target");
+            manager_->selectNode("target");
+            context_ = std::make_unique<OperatorContext>(*manager_);
+            operation_.picked_points_ = {{0, 2, 0}, {1, 2, 1}, {0, 3, 1}};
+            operation_.syncPickedPointsToServices();
+            services().setAlignCameraPosition({0, 5, 5});
+            services().setAlignAxisSnapEnabled(false);
+            services().setAlignEdgeToAxisEnabled(false);
+        }
+
+        void TearDown() override {
+            operation_.cancel(*context_);
+            undoHistory().clear();
+            services().clear();
+            context_.reset();
+            manager_.reset();
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+        }
+
+        OperatorResult action(Services::AlignUiAction action) {
+            services().requestAlignUiAction(action);
+            OperatorProperties properties;
+            return operation_.modal(*context_, properties);
+        }
+
+        glm::mat4 transform() const { return manager_->getScene().getNode("target")->transform(); }
+
+        std::unique_ptr<SceneManager> manager_;
+        std::unique_ptr<OperatorContext> context_;
+        AlignPickPointOperator operation_;
+    };
+
+    TEST_F(AlignPreviewTest, CancelRestoresOriginalTransformAfterTargetIsLocked) {
+        const auto original = transform();
+        action(Services::AlignUiAction::TogglePreview);
+        ASSERT_NE(transform(), original);
+        manager_->getScene().setNodeLocked("target", true);
+        operation_.cancel(*context_);
+        EXPECT_EQ(transform(), original);
+        EXPECT_TRUE(static_cast<bool>(manager_->getScene().getNode("target")->locked));
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
+    }
+
+    TEST_F(AlignPreviewTest, OptionTogglesUseOriginalTransformWithoutDrift) {
+        const auto original = transform();
+        action(Services::AlignUiAction::TogglePreview);
+        const auto without_axis = transform();
+        services().setAlignEdgeToAxisEnabled(true);
+        action(Services::AlignUiAction::RefreshPreview);
+        EXPECT_NE(transform(), without_axis);
+        services().setAlignEdgeToAxisEnabled(false);
+        action(Services::AlignUiAction::RefreshPreview);
+        EXPECT_EQ(transform(), without_axis);
+        action(Services::AlignUiAction::TogglePreview);
+        EXPECT_EQ(transform(), original);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(AlignPreviewTest, ApplyCommitsOneUndoStepMatchingThePreview) {
+        const auto original = transform();
+        action(Services::AlignUiAction::TogglePreview);
+        const auto preview = transform();
+        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(transform(), preview);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
+        EXPECT_TRUE(undoHistory().undo().success);
+        EXPECT_EQ(transform(), original);
+        EXPECT_TRUE(undoHistory().redo().success);
+        EXPECT_EQ(transform(), preview);
+    }
+
+} // namespace lfs::vis::op

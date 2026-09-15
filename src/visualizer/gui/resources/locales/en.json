@@ -2424,13 +2424,16 @@
     "no_splat_node_named": "No splat node named '{}'"
   },
   "align": {
+    "preview": "Preview alignment",
+    "hint_preview": "Preview: toggle the alignment options to compare. Turn Preview off to edit points. Apply: keep result. Esc: restore original.",
     "click_1st": "Click 1st point",
     "click_2nd": "Click 2nd point",
     "click_3rd": "Click 3rd point",
     "points_count": "Points: {}/3",
     "up": "UP",
     "hint_picking": "Click: place/select. Drag marker: move. Del: remove selected. Backspace: remove last. Esc: cancel.",
-    "hint_review": "Enter/Apply: align. Drag markers to adjust. Del: remove selected. Backspace: remove last point. Esc: cancel.",
+    "hint_review": "Preview (eye): compare options. Enter/Apply: align. Drag markers to adjust. Del: remove selected. Backspace: remove last point. Esc: cancel.",
+    "status_targets_changed": "Selection changed. Pick the alignment points again.",
     "status_colinear": "Points are nearly in a line. Move a point.",
     "status_no_surface": "No surface under the cursor.",
     "status_no_target": "No transformable target to align.",
@@ -2438,7 +2441,7 @@
     "apply": "Apply",
     "clear": "Clear",
     "snap": "Axis snap",
-    "edge_to_axis": "Align edge to axis"
+    "edge_to_axis": "Turn edge 1 → 2 toward +X"
   },
   "toast": {
     "trainer_not_restored": {

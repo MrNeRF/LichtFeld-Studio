@@ -2285,6 +2285,8 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     lf_stub.ui.can_apply_align = lambda: can_apply["value"]
     lf_stub.ui.get_align_axis_snap = lambda: True
     lf_stub.ui.get_align_edge_to_axis = lambda: False
+    preview = {"value": False}
+    lf_stub.ui.get_align_preview = lambda: preview["value"]
 
     signature_disabled = controller._toolbar_signature(None)
     can_apply["value"] = True
@@ -2292,6 +2294,9 @@ def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
     assert signature_disabled != signature_enabled
     assert signature_disabled[-4:-1] == (False, True, False)
     assert signature_enabled[-4:-1] == (True, True, False)
+
+    preview["value"] = True
+    assert controller._toolbar_signature(None) != signature_enabled
 
     lf_stub.ui.get_active_tool = lambda: "builtin.select"
     signature_other_tool = controller._toolbar_signature(None)
@@ -2308,11 +2313,46 @@ def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):
     lf_stub.ui.get_align_axis_snap = lambda: True
     lf_stub.ui.set_align_axis_snap = lambda enabled: calls.append(("snap", enabled))
     lf_stub.ui.get_align_edge_to_axis = lambda: False
+    lf_stub.ui.get_align_preview = lambda: False
     lf_stub.ui.set_align_edge_to_axis = lambda enabled: calls.append(("edge", enabled))
+    lf_stub.ui.toggle_align_preview = lambda: calls.append(("preview", None))
     lf_stub.ui.apply_align = lambda: calls.append(("apply", None))
     lf_stub.ui.clear_align_points = lambda: calls.append(("clear", None))
 
-    for action in ("align_toggle_snap", "align_toggle_edge_to_axis", "align_apply", "align_clear"):
+    for action in ("align_toggle_preview", "align_toggle_snap", "align_toggle_edge_to_axis", "align_apply", "align_clear"):
         controller._on_toolbar_action(None, None, [action, ""])
 
-    assert calls == [("snap", False), ("edge", True), ("apply", None), ("clear", None)]
+    assert calls == [("preview", None), ("snap", False), ("edge", True), ("apply", None), ("clear", None)]
+
+
+def test_align_toolbar_buttons_follow_native_state(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    ready = {"value": False}
+    lf_stub.ui.can_apply_align = lambda: ready["value"]
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+    lf_stub.ui.get_align_preview = lambda: False
+    controller = module._GizmoToolbarController()
+
+    buttons = controller._build_align_action_records("builtin.align")
+    assert [button["action"] for button in buttons] == [
+        "align_toggle_preview", "align_apply", "align_clear", "align_toggle_snap", "align_toggle_edge_to_axis"
+    ]
+    assert buttons[0]["enabled"] is False
+    assert buttons[0]["selected"] is False
+    assert buttons[1]["enabled"] is False
+    assert buttons[2]["enabled"] is True
+    assert buttons[3]["selected"] is True
+    assert buttons[4]["selected"] is False
+
+    ready["value"] = True
+    lf_stub.ui.get_align_axis_snap = lambda: False
+    lf_stub.ui.get_align_edge_to_axis = lambda: True
+    lf_stub.ui.get_align_preview = lambda: True
+    buttons = controller._build_align_action_records("builtin.align")
+    assert buttons[0]["enabled"] is True
+    assert buttons[0]["selected"] is True
+    assert buttons[1]["enabled"] is True
+    assert buttons[3]["selected"] is False
+    assert buttons[4]["selected"] is True

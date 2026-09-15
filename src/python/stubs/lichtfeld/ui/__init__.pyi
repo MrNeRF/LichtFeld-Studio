@@ -2273,6 +2273,12 @@ def apply_align() -> bool:
 def clear_align_points() -> None:
     """Request the running align modal to clear all picked points"""
 
+def get_align_preview() -> bool:
+    """Whether the alignment result is being previewed"""
+
+def toggle_align_preview() -> None:
+    """Switch between the original scene and the alignment preview"""
+
 def get_align_axis_snap() -> bool:
     """Whether align plane-normal axis snap is enabled"""
 

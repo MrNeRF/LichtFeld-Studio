@@ -4341,14 +4341,18 @@ namespace lfs::python {
         m.def(
             "can_apply_align",
             []() -> bool {
-                return lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints());
+                const auto* scene = lfs::vis::services().sceneOrNull();
+                return scene &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
             },
             "True when the align tool has 3 non-degenerate points ready to apply");
 
         m.def(
             "apply_align",
             []() -> bool {
-                if (!lfs::vis::op::operators().hasModalOperator()) {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
                     return false;
                 }
                 lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
@@ -4362,7 +4366,8 @@ namespace lfs::python {
         m.def(
             "clear_align_points",
             []() {
-                if (!lfs::vis::op::operators().hasModalOperator()) {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
                     return;
                 }
                 lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
@@ -4371,6 +4376,16 @@ namespace lfs::python {
                 lfs::vis::op::operators().dispatchModalEvent(evt);
             },
             "Request the running align modal to clear all picked points");
+
+        m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
+        m.def("toggle_align_preview", [] {
+            if (lfs::vis::op::operators().activeModalId() !=
+                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                return;
+            }
+            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
+            lfs::vis::op::ModalEvent event{};
+            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
 
         m.def(
             "get_align_axis_snap",
@@ -4381,6 +4396,11 @@ namespace lfs::python {
             "set_align_axis_snap",
             [](const bool enabled) {
                 lfs::vis::services().setAlignAxisSnapEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
                     rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
                 }
@@ -4397,6 +4417,11 @@ namespace lfs::python {
             "set_align_edge_to_axis",
             [](const bool enabled) {
                 lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
                 if (auto* const rm = lfs::vis::services().renderingOrNull()) {
                     rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
                 }

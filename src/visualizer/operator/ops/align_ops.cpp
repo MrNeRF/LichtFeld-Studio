@@ -30,12 +30,6 @@ namespace lfs::vis::op {
     namespace {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
-        constexpr float kDepthAgreeTolerance = 0.05f;
-
-        struct AlignmentTargetMask {
-            std::vector<bool> mask;
-            bool excludes_visible_nodes = false;
-        };
 
         [[nodiscard]] bool isAlignTransformTarget(const core::SceneNode& node) {
             return cap::isAlignTransformTargetType(node.type);
@@ -85,29 +79,13 @@ namespace lfs::vis::op {
             std::vector<core::NodeId> target_ids;
             std::unordered_set<core::NodeId> seen;
 
-            if (!selected_names.empty()) {
-                for (const auto& name : selected_names) {
-                    const auto* const node = scene.getNode(name);
-                    if (!node) {
-                        continue;
-                    }
-
-                    const core::NodeId target_id = resolveAlignTargetId(scene, *node);
-                    if (target_id != core::NULL_NODE && seen.insert(target_id).second) {
-                        target_ids.push_back(target_id);
-                    }
-                }
-            } else {
-                for (const auto node_id : scene.getRootNodes()) {
-                    const auto* const node = scene.getNodeById(node_id);
-                    if (!node) {
-                        continue;
-                    }
-                    const core::NodeId target_id = resolveAlignTargetId(scene, *node);
-                    if (target_id != core::NULL_NODE && seen.insert(target_id).second) {
-                        target_ids.push_back(target_id);
-                    }
-                }
+            for (const auto& name : selected_names) {
+                const auto* node = scene.getNode(name);
+                if (!node)
+                    continue;
+                const auto target_id = resolveAlignTargetId(scene, *node);
+                if (target_id != core::NULL_NODE && seen.insert(target_id).second)
+                    target_ids.push_back(target_id);
             }
 
             std::vector<core::NodeId> top_level_targets;
@@ -120,62 +98,6 @@ namespace lfs::vis::op {
             return top_level_targets;
         }
 
-        [[nodiscard]] bool isTargetOrDescendant(const core::Scene& scene,
-                                                const core::NodeId node_id,
-                                                const std::unordered_set<core::NodeId>& target_ids) {
-            const auto* node = scene.getNodeById(node_id);
-            while (node) {
-                if (target_ids.contains(node->id)) {
-                    return true;
-                }
-                node = node->parent_id != core::NULL_NODE ? scene.getNodeById(node->parent_id) : nullptr;
-            }
-            return false;
-        }
-
-        [[nodiscard]] AlignmentTargetMask buildAlignmentTargetNodeMask(const core::Scene& scene,
-                                                                       const std::vector<core::NodeId>& target_ids) {
-            AlignmentTargetMask result;
-            if (target_ids.empty()) {
-                return result;
-            }
-
-            const std::unordered_set<core::NodeId> target_set(target_ids.begin(), target_ids.end());
-
-            // Prefer renderer-order sizing from the scene visibility mask (consolidated slots).
-            // Indices must match transform_indices / model_transforms for VkSplat node culling.
-            const auto scene_mask = scene.getNodeVisibilityMask();
-            if (!scene_mask.empty()) {
-                result.mask.assign(scene_mask.size(), false);
-                for (const auto* const node : scene.getNodes()) {
-                    if (!node || !node->model) {
-                        continue;
-                    }
-                    const bool in_target = isTargetOrDescendant(scene, node->id, target_set);
-                    const int index = scene.getVisibleNodeIndex(node->id);
-                    if (index < 0 || static_cast<size_t>(index) >= result.mask.size()) {
-                        continue;
-                    }
-                    if (in_target) {
-                        result.mask[static_cast<size_t>(index)] = true;
-                    } else {
-                        result.excludes_visible_nodes = true;
-                    }
-                }
-                return result;
-            }
-
-            for (const auto* const node : scene.getNodes()) {
-                if (node && node->model && scene.isNodeEffectivelyVisible(node->id)) {
-                    const bool in_target = isTargetOrDescendant(scene, node->id, target_set);
-                    result.mask.push_back(in_target);
-                    if (!in_target) {
-                        result.excludes_visible_nodes = true;
-                    }
-                }
-            }
-            return result;
-        }
     } // namespace
 
     const OperatorDescriptor AlignPickPointOperator::DESCRIPTOR = {
@@ -185,7 +107,7 @@ namespace lfs::vis::op {
         .description = "Pick 3 points to define ground plane",
         .icon = "align",
         .shortcut = "",
-        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
+        .flags = OperatorFlags::REGISTER,
         .source = OperatorSource::CPP,
         .poll_deps = PollDependency::SCENE,
     };
@@ -201,8 +123,6 @@ namespace lfs::vis::op {
         press_button_ = -1;
         press_point_index_.reset();
         drag_active_ = false;
-        drag_point_index_ = -1;
-        logged_masked_depth_fallback_ = false;
         (void)services().takeAlignUiAction();
         pick_button_ = props.get_or<int>("button", static_cast<int>(lfs::vis::input::AppMouseButton::LEFT));
 
@@ -233,7 +153,20 @@ namespace lfs::vis::op {
                 return OperatorResult::FINISHED;
             }
             return OperatorResult::RUNNING_MODAL;
+        case Services::AlignUiAction::TogglePreview:
+            if (services().getAlignPreviewEnabled()) {
+                restorePreview(ctx);
+            } else {
+                (void)updatePreview(ctx);
+            }
+            return OperatorResult::RUNNING_MODAL;
+        case Services::AlignUiAction::RefreshPreview:
+            if (services().getAlignPreviewEnabled()) {
+                (void)updatePreview(ctx);
+            }
+            return OperatorResult::RUNNING_MODAL;
         case Services::AlignUiAction::Clear:
+            restorePreview(ctx);
             clearAllPoints();
             return OperatorResult::RUNNING_MODAL;
         case Services::AlignUiAction::None:
@@ -243,6 +176,22 @@ namespace lfs::vis::op {
     }
 
     OperatorResult AlignPickPointOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
+        if (!preview_targets_.empty()) {
+            const auto targets = resolveAlignmentTargets(ctx);
+            if (targets.size() != preview_targets_.size() ||
+                std::any_of(preview_targets_.begin(), preview_targets_.end(), [&](const auto& saved) {
+                    const auto* node = ctx.scene().getScene().getNodeById(saved.id);
+                    return !node || node->uuid != saved.uuid ||
+                           std::find(targets.begin(), targets.end(), saved.id) == targets.end();
+                })) {
+                restorePreview(ctx);
+                clearAllPoints();
+                (void)services().takeAlignUiAction();
+                setStatus("align.status_targets_changed", 2.0);
+                return OperatorResult::PASS_THROUGH;
+            }
+        }
+
         OperatorResult ui_result = OperatorResult::RUNNING_MODAL;
         if (services().hasAlignUiAction()) {
             ui_result = handlePendingUiAction(ctx);
@@ -260,6 +209,13 @@ namespace lfs::vis::op {
             return ui_result;
         }
 
+        // Navigation remains available while previewing; point editing uses the original scene.
+        if (services().getAlignPreviewEnabled() &&
+            (event->type == ModalEvent::Type::MOUSE_MOVE ||
+             event->type == ModalEvent::Type::MOUSE_BUTTON)) {
+            return OperatorResult::PASS_THROUGH;
+        }
+
         if (event->type == ModalEvent::Type::MOUSE_MOVE) {
             const auto* mm = event->as<MouseMoveEvent>();
             if (!mm) {
@@ -275,22 +231,22 @@ namespace lfs::vis::op {
                 press_button_ == pick_button_) {
                 if (glm::length(mm->position - press_pos_) > kClickDragThresholdPx) {
                     drag_active_ = true;
-                    drag_point_index_ = *press_point_index_;
                     selected_point_ = press_point_index_;
                     services().setAlignSelectedPoint(selected_point_);
                 }
             }
 
-            if (drag_active_ && drag_point_index_ >= 0 &&
-                static_cast<size_t>(drag_point_index_) < picked_points_.size()) {
+            if (drag_active_ && press_point_index_ &&
+                static_cast<size_t>(*press_point_index_) < picked_points_.size()) {
                 SplitViewPanelId panel = SplitViewPanelId::Left;
                 const glm::vec3 world_pos =
-                    unprojectScreenPoint(ctx, mm->position.x, mm->position.y, &panel, false);
+                    unprojectScreenPoint(mm->position.x, mm->position.y, &panel);
                 if (Viewport::isValidWorldPosition(world_pos)) {
-                    picked_points_[static_cast<size_t>(drag_point_index_)] = world_pos;
+                    picked_points_[static_cast<size_t>(*press_point_index_)] = world_pos;
                     if (!pick_panel_) {
                         pick_panel_ = panel;
                     }
+                    services().setAlignCameraPosition(resolvePickPanelCameraPosition());
                     syncPickedPointsToServices();
                 }
                 return OperatorResult::RUNNING_MODAL;
@@ -320,7 +276,6 @@ namespace lfs::vis::op {
                     press_pos_ = mb->position;
                     press_point_index_.reset();
                     drag_active_ = false;
-                    drag_point_index_ = -1;
 
                     press_point_index_ = hitTestPoint(mb->position.x, mb->position.y);
                     if (press_point_index_) {
@@ -339,50 +294,28 @@ namespace lfs::vis::op {
                 return OperatorResult::PASS_THROUGH;
             }
 
-            if (drag_active_ && is_pick_button) {
-                const int idx = drag_point_index_;
-                drag_active_ = false;
-                drag_point_index_ = -1;
-                press_active_ = false;
-                press_point_index_.reset();
-                if (idx >= 0 && static_cast<size_t>(idx) < picked_points_.size()) {
-                    SplitViewPanelId panel = SplitViewPanelId::Left;
-                    const glm::vec3 world_pos =
-                        unprojectScreenPoint(ctx, mb->position.x, mb->position.y, &panel, true);
-                    if (Viewport::isValidWorldPosition(world_pos)) {
-                        picked_points_[static_cast<size_t>(idx)] = world_pos;
-                        if (!pick_panel_) {
-                            pick_panel_ = panel;
-                        }
-                        syncPickedPointsToServices();
-                    }
-                }
-                return OperatorResult::RUNNING_MODAL;
-            }
-
             if (!press_active_ || press_button_ != mb->button) {
                 return OperatorResult::PASS_THROUGH;
             }
 
             press_active_ = false;
             const double move_dist = glm::length(mb->position - press_pos_);
+            const bool was_dragging = drag_active_;
+            drag_active_ = false;
 
-            // Drag re-pick: press started on a marker and moved beyond threshold.
-            if (is_pick_button && press_point_index_ && move_dist > kClickDragThresholdPx) {
-                // Drag already handled via MOUSE_MOVE once drag_active_ set; if we never
-                // entered drag (no moves), enter and apply final position once.
-                drag_active_ = false;
-                drag_point_index_ = -1;
+            if (is_pick_button && press_point_index_ &&
+                (was_dragging || move_dist > kClickDragThresholdPx)) {
                 const int idx = *press_point_index_;
                 if (idx >= 0 && static_cast<size_t>(idx) < picked_points_.size()) {
                     SplitViewPanelId panel = SplitViewPanelId::Left;
                     const glm::vec3 world_pos =
-                        unprojectScreenPoint(ctx, mb->position.x, mb->position.y, &panel);
+                        unprojectScreenPoint(mb->position.x, mb->position.y, &panel);
                     if (Viewport::isValidWorldPosition(world_pos)) {
                         picked_points_[static_cast<size_t>(idx)] = world_pos;
                         if (!pick_panel_) {
                             pick_panel_ = panel;
                         }
+                        services().setAlignCameraPosition(resolvePickPanelCameraPosition());
                         syncPickedPointsToServices();
                     }
                 }
@@ -420,7 +353,7 @@ namespace lfs::vis::op {
                 if (picked_points_.size() >= 3) {
                     return OperatorResult::RUNNING_MODAL;
                 }
-                (void)tryPlacePoint(ctx, press_pos_.x, press_pos_.y);
+                (void)tryPlacePoint(press_pos_.x, press_pos_.y);
                 return OperatorResult::RUNNING_MODAL;
             }
 
@@ -438,11 +371,13 @@ namespace lfs::vis::op {
             }
 
             if (ke->key == lfs::vis::input::KEY_BACKSPACE) {
+                restorePreview(ctx);
                 removeLastPoint();
                 return OperatorResult::RUNNING_MODAL;
             }
 
             if (ke->key == lfs::vis::input::KEY_DELETE) {
+                restorePreview(ctx);
                 removeSelectedPoint();
                 return OperatorResult::RUNNING_MODAL;
             }
@@ -465,11 +400,11 @@ namespace lfs::vis::op {
         return OperatorResult::PASS_THROUGH;
     }
 
-    void AlignPickPointOperator::cancel(OperatorContext& /*ctx*/) {
+    void AlignPickPointOperator::cancel(OperatorContext& ctx) {
+        restorePreview(ctx);
         clearAllPoints();
         press_active_ = false;
         drag_active_ = false;
-        logged_masked_depth_fallback_ = false;
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
         }
@@ -491,12 +426,12 @@ namespace lfs::vis::op {
     }
 
     void AlignPickPointOperator::clearAllPoints() {
+        press_active_ = false;
         picked_points_.clear();
         selected_point_.reset();
         pick_panel_.reset();
         press_point_index_.reset();
         drag_active_ = false;
-        drag_point_index_ = -1;
         services().clearAlignPickedPoints();
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
@@ -504,13 +439,14 @@ namespace lfs::vis::op {
     }
 
     void AlignPickPointOperator::removeLastPoint() {
+        press_active_ = false;
+        press_point_index_.reset();
+        drag_active_ = false;
         if (picked_points_.empty()) {
             return;
         }
         const int last = static_cast<int>(picked_points_.size()) - 1;
-        if (selected_point_ && *selected_point_ == last) {
-            selected_point_.reset();
-        } else if (selected_point_ && *selected_point_ > last) {
+        if (selected_point_ && *selected_point_ >= last) {
             selected_point_.reset();
         }
         picked_points_.pop_back();
@@ -522,6 +458,9 @@ namespace lfs::vis::op {
     }
 
     void AlignPickPointOperator::removeSelectedPoint() {
+        press_active_ = false;
+        press_point_index_.reset();
+        drag_active_ = false;
         if (!selected_point_) {
             return;
         }
@@ -539,7 +478,7 @@ namespace lfs::vis::op {
         syncPickedPointsToServices();
     }
 
-    bool AlignPickPointOperator::tryPlacePoint(OperatorContext& ctx, const double x, const double y) {
+    bool AlignPickPointOperator::tryPlacePoint(const double x, const double y) {
         if (picked_points_.size() >= 3) {
             return false;
         }
@@ -549,7 +488,7 @@ namespace lfs::vis::op {
         }
 
         SplitViewPanelId panel = SplitViewPanelId::Left;
-        const glm::vec3 world_pos = unprojectScreenPoint(ctx, x, y, &panel);
+        const glm::vec3 world_pos = unprojectScreenPoint(x, y, &panel);
         if (!Viewport::isValidWorldPosition(world_pos)) {
             setStatus(lichtfeld::Strings::Align::STATUS_NO_SURFACE);
             return false;
@@ -559,6 +498,7 @@ namespace lfs::vis::op {
             pick_panel_ = panel;
         }
 
+        services().setAlignCameraPosition(resolvePickPanelCameraPosition());
         picked_points_.push_back(world_pos);
         selected_point_ = static_cast<int>(picked_points_.size()) - 1;
         syncPickedPointsToServices();
@@ -654,11 +594,9 @@ namespace lfs::vis::op {
         return panel_info->viewport->camera.t;
     }
 
-    glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const OperatorContext& ctx,
-                                                           const double x,
+    glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const double x,
                                                            const double y,
-                                                           SplitViewPanelId* out_panel,
-                                                           const bool precise) const {
+                                                           SplitViewPanelId* out_panel) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
@@ -693,49 +631,10 @@ namespace lfs::vis::op {
         const int depth_x = static_cast<int>(render_x);
         const int depth_y = static_cast<int>(render_y);
 
-        // Interactive first-hit is the pick source of truth. Trust masked T=0.5 only when
-        // an unselected visible model exists and full-scene capture agrees within 5%.
-        const float interactive = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
-        if (interactive <= 0.0f) {
+        // Hover, placement and marker dragging all follow the displayed surface.
+        const float depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
+        if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1e9f) {
             return glm::vec3(Viewport::INVALID_WORLD_POS);
-        }
-
-        float depth = interactive;
-        if (precise) {
-            AlignmentTargetMask target_mask;
-            if (ctx.hasSelection()) {
-                const auto target_ids = resolveAlignmentTargets(ctx);
-                target_mask = buildAlignmentTargetNodeMask(ctx.scene().getScene(), target_ids);
-            }
-            const bool needs_mask = !target_mask.mask.empty() && target_mask.excludes_visible_nodes;
-            if (needs_mask) {
-                const float masked = rm->renderDepthAtPixelForNodeMask(
-                    &ctx.scene(),
-                    projection_viewport,
-                    {panel_info->render_width, panel_info->render_height},
-                    depth_x,
-                    depth_y,
-                    target_mask.mask);
-                if (masked <= 0.0f) {
-                    if (!logged_masked_depth_fallback_) {
-                        LOG_INFO(
-                            "Align pick: masked node depth failed; falling back to interactive depth for this session");
-                        logged_masked_depth_fallback_ = true;
-                    }
-                } else {
-                    const float full = rm->renderMedianDepthAtPixel(
-                        &ctx.scene(),
-                        projection_viewport,
-                        {panel_info->render_width, panel_info->render_height},
-                        depth_x,
-                        depth_y,
-                        panel_info->panel);
-                    if (full > 0.0f &&
-                        std::abs(full - interactive) <= kDepthAgreeTolerance * interactive) {
-                        depth = masked;
-                    }
-                }
-            }
         }
 
         return projection_viewport.unprojectPixel(
@@ -747,9 +646,110 @@ namespace lfs::vis::op {
             render_settings.ortho_scale);
     }
 
+    void AlignPickPointOperator::restorePreview(OperatorContext& ctx) {
+        auto& scene = ctx.scene().getScene();
+        for (const auto& saved : preview_targets_) {
+            if (auto* node = scene.getNodeById(saved.id); node && node->uuid == saved.uuid) {
+                // Rollback must also restore a target that was locked during preview.
+                node->local_transform.set(saved.local, false);
+            }
+        }
+        scene.invalidateTransformCache();
+        preview_targets_.clear();
+        preview_snap_world_.reset();
+        services().setAlignPreviewEnabled(false);
+        syncPickedPointsToServices();
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+        }
+    }
+
+    bool AlignPickPointOperator::updatePreview(OperatorContext& ctx) {
+        if (!pointsAreNonDegenerate(picked_points_)) {
+            return false;
+        }
+        auto& scene = ctx.scene().getScene();
+        if (preview_targets_.empty()) {
+            for (const auto id : resolveAlignmentTargets(ctx)) {
+                const auto* node = scene.getNodeById(id);
+                preview_targets_.push_back({id, node->uuid, node->transform(),
+                                            vis::scene_coords::nodeVisualizerWorldTransform(scene, id)});
+            }
+            if (preview_targets_.empty()) {
+                setStatus(lichtfeld::Strings::Align::STATUS_NO_TARGET, 2.0);
+                return false;
+            }
+            preview_snap_world_ = resolveAlignSnapTargetWorld(ctx.scene());
+            preview_camera_ = services().getAlignCameraPosition();
+        }
+        AlignTransformInputs inputs{picked_points_[0], picked_points_[1], picked_points_[2], preview_camera_, std::nullopt, false};
+        if (services().getAlignAxisSnapEnabled()) {
+            inputs.snap_node_world = preview_snap_world_;
+        }
+        inputs.edge_to_world_x = services().getAlignEdgeToAxisEnabled();
+        const auto transform = computeAlignTransform(inputs);
+        if (!transform) {
+            restorePreview(ctx);
+            return false;
+        }
+        for (const auto& saved : preview_targets_) {
+            const auto* node = scene.getNodeById(saved.id);
+            if (!node || node->uuid != saved.uuid) {
+                restorePreview(ctx);
+                return false;
+            }
+            const auto local = vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
+                scene, saved.id, *transform * saved.world);
+            if (!local) {
+                restorePreview(ctx);
+                return false;
+            }
+            ctx.scene().setNodeTransform(node->name, *local);
+        }
+        auto displayed_points = picked_points_;
+        for (auto& point : displayed_points) {
+            point = glm::vec3(*transform * glm::vec4(point, 1.0f));
+        }
+        services().setAlignPickedPoints(std::move(displayed_points));
+        services().setAlignPreviewEnabled(true);
+        press_active_ = false;
+        press_point_index_.reset();
+        drag_active_ = false;
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+        }
+        return true;
+    }
+
     bool AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {
         if (picked_points_.size() != 3) {
             return false;
+        }
+
+        if (services().getAlignPreviewEnabled()) {
+            auto& scene = ctx.scene().getScene();
+            std::vector<glm::mat4> originals;
+            std::vector<std::string> names;
+            for (const auto& saved : preview_targets_) {
+                const auto* node = scene.getNodeById(saved.id);
+                if (!node || node->uuid != saved.uuid || node->locked) {
+                    restorePreview(ctx);
+                    return false;
+                }
+                names.push_back(node->name);
+                originals.push_back(saved.local);
+            }
+            auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
+            if (!entry->captureTransformsBefore(names, originals)) {
+                restorePreview(ctx);
+                return false;
+            }
+            entry->captureAfter();
+            pushSceneSnapshotIfChanged(std::move(entry));
+            preview_targets_.clear();
+            preview_snap_world_.reset();
+            services().setAlignPreviewEnabled(false);
+            return true;
         }
 
         const auto target_ids = resolveAlignmentTargets(ctx);
@@ -776,7 +776,7 @@ namespace lfs::vis::op {
         inputs.p0 = picked_points_[0];
         inputs.p1 = picked_points_[1];
         inputs.p2 = picked_points_[2];
-        inputs.camera_pos = resolvePickPanelCameraPosition();
+        inputs.camera_pos = services().getAlignCameraPosition();
         if (services().getAlignAxisSnapEnabled()) {
             inputs.snap_node_world = resolveAlignSnapTargetWorld(ctx.scene());
         }
@@ -825,7 +825,8 @@ namespace lfs::vis::op {
             return false;
         }
         const glm::vec3 cross_v = glm::cross(points[1] - points[0], points[2] - points[0]);
-        return glm::length(cross_v) > 1e-6f;
+        const float cross_len = glm::length(cross_v);
+        return std::isfinite(cross_len) && cross_len > 1e-6f;
     }
 
     bool snapAlignNormalToNodeAxes(glm::vec3& normal,
@@ -867,7 +868,7 @@ namespace lfs::vis::op {
         const glm::vec3 v02 = in.p2 - in.p0;
         const glm::vec3 cross_v = glm::cross(v01, v02);
         const float cross_len = glm::length(cross_v);
-        if (cross_len <= 1e-6f) {
+        if (!std::isfinite(cross_len) || cross_len <= 1e-6f) {
             return std::nullopt;
         }
 
@@ -882,15 +883,13 @@ namespace lfs::vis::op {
         constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
         glm::mat4 rotation(1.0f);
         const float up_dot = glm::dot(normal, kTargetUp);
-        if (up_dot < -1.0f + 1e-6f) {
+        const glm::vec3 axis = glm::cross(normal, kTargetUp);
+        const float axis_len = glm::length(axis);
+        if (axis_len > 1e-6f) {
+            const float angle = std::atan2(axis_len, up_dot);
+            rotation = glm::rotate(glm::mat4(1.0f), angle, axis / axis_len);
+        } else if (up_dot < 0.0f) {
             rotation = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-        } else {
-            const glm::vec3 axis = glm::cross(normal, kTargetUp);
-            const float axis_len = glm::length(axis);
-            if (axis_len > 1e-6f) {
-                const float angle = std::acos(glm::clamp(up_dot, -1.0f, 1.0f));
-                rotation = glm::rotate(glm::mat4(1.0f), angle, axis / axis_len);
-            }
         }
 
         if (in.edge_to_world_x) {
