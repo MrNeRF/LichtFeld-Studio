@@ -177,6 +177,9 @@ class GallerySync:
         self._storage_hosts = None
         self._quota_bytes = None
         self._used_bytes = None
+        self._reserved_bytes = None
+        self._hdr_backgrounds = None
+        self._change_sequence = None
         self._completion = None
         self._unsupported_identity = None
         self._revision_domains = 0
@@ -338,6 +341,10 @@ class GallerySync:
                 "owner": self._owner if same else None,
                 "quotaBytes": self._quota_bytes if same else None,
                 "usedBytes": self._used_bytes if same else None,
+                "reservedBytes": self._reserved_bytes if same else None,
+                "hdrBackgrounds": self._hdr_backgrounds if same else None,
+                "changeSequence": self._change_sequence if same else None,
+                "established": bool(same and self._owner),
                 "completion": self._completion if same else None,
                 "revisionDomains": self._revision_domains if same else 0,
                 "checkedAt": self._checked_at if same else 0,
@@ -415,6 +422,8 @@ class GallerySync:
         self._launch(checked, operation="metadata")
 
     def refresh(self):
+        if self.busy and self._operation == "refresh":
+            return
         if self._unsupported_identity == self.identity():
             return
         self._unsupported_identity = None
@@ -443,7 +452,46 @@ class GallerySync:
                 self._check_poster_account(snap)
                 same = self._session == session and self._origin == origin and self._owner == capabilities["id"]
                 etag = self._list_etag if same else None
-            scenes = client.list_scenes(etag=etag) if etag else client.list_scenes()
+                self._session, self._owner, self._origin = session, capabilities["id"], origin
+                bucket = self._bucket()
+                cache_key = hashlib.sha256(json.dumps([origin, self._owner]).encode()).hexdigest()
+                cache_file = FileBackend(self.root / ("listing-" + cache_key + ".json"))
+                cache = {}
+                if not same:
+                    try:
+                        raw = cache_file.read()
+                        cache = json.loads(raw) if raw and len(raw) <= MAX_JOURNAL_BYTES else {}
+                        if (not isinstance(cache, dict) or cache.get("owner") != self._owner
+                                or cache.get("origin") != origin or not isinstance(cache.get("scenes"), list)):
+                            cache = {}
+                    except (OSError, ValueError):
+                        cache = {}
+                    self._quota_bytes = self._used_bytes = self._reserved_bytes = None
+                    self._source_formats = []
+                cached = self.scenes if same else copy.deepcopy(cache.get("scenes", []))
+                sequence = self._change_sequence if same else cache.get("changeSequence")
+                if not same:
+                    self.scenes = cached
+                    self._checked_at = cache.get("checkedAt", 0)
+                self.version += 1
+            scenes = None
+            if type(sequence) is int:
+                try:
+                    events = client.changes_since(sequence)
+                    by_id = {scene["id"]: scene for scene in cached}
+                    for event in events:
+                        if event["type"] == "delete":
+                            by_id.pop(event["sceneId"], None)
+                        else:
+                            by_id[event["sceneId"]] = event["scene"]
+                    scenes = list(by_id.values())
+                except PortalHTTPError as exc:
+                    if not (exc.status in (404, 405) or exc.status == 409 and exc.error == "resync_required"):
+                        raise
+            if scenes is None:
+                # This also handles an old portal whose first-page ETag does
+                # not describe the later pages.
+                scenes = client.list_scenes()
             with self._lock:
                 current = self.account.snapshot()
                 if not current.signed_in or (current.email, current.connected_since) != session or self.account.base_url != origin:
@@ -456,6 +504,9 @@ class GallerySync:
                 self._storage_hosts = copy.deepcopy(capabilities.get("storageHosts"))
                 self._quota_bytes = capabilities.get("quotaBytes")
                 self._used_bytes = capabilities.get("usedBytes")
+                self._reserved_bytes = capabilities.get("reservedBytes")
+                self._hdr_backgrounds = capabilities.get("hdrBackgrounds")
+                self._change_sequence = getattr(client, "change_sequence", None)
                 version = capabilities.get("revisionDomains", 0)
                 self._revision_domains = version if type(version) is int else 0
                 self._list_etag = getattr(client, "list_etag", None) or (etag if scenes is None else None)
@@ -468,6 +519,9 @@ class GallerySync:
                 self._relink_identity = None
                 self._unsupported_identity = None
                 self.message = "Gallery is up to date."
+                cache = dict(scenes=copy.deepcopy(self.scenes), checkedAt=self._checked_at,
+                             changeSequence=self._change_sequence, origin=origin, owner=self._owner)
+            cache_file.write(json.dumps(cache, allow_nan=False).encode())
             self._cache_posters(client, self.scenes, (origin, *session, True))
             # Recovered jobs are persisted by the next actual mutation.
         self._launch(action, reload_journal=True, operation="refresh")

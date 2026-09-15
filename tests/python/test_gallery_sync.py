@@ -778,7 +778,7 @@ def test_domain_exchange_tokens_survive_journal_reload(tmp_path, monkeypatch):
     assert {key: link[key] for key in ("contentRevision", "metadataRevision")} == {
         "contentRevision": "content", "metadataRevision": "metadata"}
 
-def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
+def test_old_portal_walk_keeps_exchange_baseline(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     scene = {"contentRevision": "legacy", "metadataRevision": "legacy", "id": "scene", "revision": "legacy", "title": "Title"}
     link = gallery_sync.exchange_link(scene, "commit")
@@ -787,9 +787,9 @@ def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
     old = link["checkedAt"]
     service._list_etag = 'W/"cached"'
     def listing(self, etag=None):
-        assert etag == 'W/"cached"'
-        self.list_etag = etag
-        return None
+        assert etag is None
+        self.list_etag = 'W/"fresh"'
+        return [scene]
     monkeypatch.setattr(Client, "list_scenes", listing)
     monkeypatch.setattr(Client, "_request", lambda self, *args: {"storageHosts": ["portal.example"], "id": "one", "gallerySyncVersion": 1, "revisionDomains": 1})
     service.refresh()
@@ -800,7 +800,7 @@ def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
     assert snap["links"]["project"]["checkedAt"] >= old
     assert snap["links"]["project"]["exchangedAt"] == link["exchangedAt"]
     assert snap["checkedAt"] >= old
-    assert service._list_etag == 'W/"cached"'
+    assert service._list_etag == 'W/"fresh"'
 
 def _poster_scene():
     import uuid
@@ -885,3 +885,24 @@ def test_reviewed_domain_guards_are_used_without_cached_lookup(tmp_path, monkeyp
     finish(service)
     assert calls == [reviewed]
     assert "revision tokens" in service.message
+
+
+def test_incremental_check_and_expired_feed_full_walk(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    service._change_sequence = 10
+    service.scenes = [dict(id="scene", title="Before")]
+    def changes(self, since):
+        assert since == 10
+        self.change_sequence = 11
+        return [dict(type="upsert", sceneId="scene", scene=dict(id="scene", title="After"))]
+    monkeypatch.setattr(Client, "changes_since", changes, raising=False)
+    service.refresh(); finish(service)
+    assert service.snapshot()["scenes"][0]["title"] == "After"
+    assert service.snapshot()["changeSequence"] == 11
+    def expired(*_):
+        raise gallery_sync.PortalHTTPError(409, "resync_required")
+    monkeypatch.setattr(Client, "changes_since", expired)
+    monkeypatch.setattr(Client, "list_scenes", lambda *_: [dict(id="full", title="Fresh")])
+    service.refresh(); finish(service)
+    assert service.snapshot()["scenes"][0]["id"] == "full"
+    assert service.snapshot()["refresh_ok"]
