@@ -1013,6 +1013,20 @@ def test_eligibility_uses_only_checks_for_the_saved_commit(gallery):
     assert gallery_eligibility(dict(asset, commit_uuid="changed"), facts)["status"] == "not_checked"
 
 
+@pytest.mark.parametrize("reason,resumable", [
+    ("gallery_project_no_splats: No visible geometry", False),
+    ("gallery_project_payload_unavailable: Missing payload", False),
+    ("Could not write the prepared copy", True),
+])
+def test_preparation_retry_in_tray_uses_the_failed_commit(gallery, reason, resumable):
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
+    failure = dict(id="preparation:project", project="project", commitUuid="saved", nativePreparation=True,
+                   status="error", failureReason=reason, message=reason)
+    row = transfer_rows(dict(signed_in=True, preparationFailure=failure))[0]
+    assert row["project"] == "project"
+    assert row["can_resume"] is resumable
+
+
 def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
     from lfs_plugins.gallery_controller import conflict_groups
     base = dict(title="Original", description="First", visibility="private", viewerSettings={})

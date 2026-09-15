@@ -137,7 +137,8 @@ def transfer_rows(snapshot, history_limit=30):
             "can_pause": False, "can_resume": False, "can_cancel": snapshot["phase"] != "applying"})
     failure = snapshot.get("preparationFailure")
     if failure:
-        actions = gallery_actions({}, dict(snapshot, job=failure, activity="error"))
+        entry = dict(id=failure.get("project", ""), commit_uuid=failure.get("commitUuid", ""))
+        actions = gallery_actions(entry, dict(snapshot, job=failure, activity="error"))
         retry = next((action for action in actions if action["id"] == "retry"), {})
         pending.insert(0, {"id": failure["id"], "title": failure.get("metadata", {}).get("title", "Gallery upload"),
             "direction": "↑", "status": "error", "bytes": "", "phase": tr("phase.error"),
