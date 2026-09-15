@@ -5,9 +5,9 @@
     <div class="gallery-file-fields" data-if="is_publish">
       <span class="gallery-explanation">@tr:projects.gallery.review.prepared_copy</span>
       <label for="gallery-file-title">{{g_review_title}}</label>
-      <input id="gallery-file-title" type="text" maxlength="120" data-value="title"/>
+      <input id="gallery-file-title" type="text" maxlength="120" data-value="title" data-attr-title="title"/>
       <label for="gallery-file-description">{{g_review_description}}</label>
-      <textarea id="gallery-file-description" rows="3" maxlength="5000" data-value="description"/>
+      <textarea id="gallery-file-description" rows="3" maxlength="5000" data-value="description" data-attr-title="description"/>
       <div class="setting-row"><span>{{g_review_visibility}}</span><select data-value="visibility"><option value="private">{{g_review_private}}</option><option value="public">{{g_review_public}}</option></select></div>
       <div class="gallery-file-fields" data-if="show_format">
         <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
@@ -20,8 +20,8 @@
     </div>
     <div class="gallery-file-fields" data-if="is_pull">
       <span class="gallery-explanation">@tr:projects.gallery.review.viewing_copy</span>
-      <label>{{g_info_folder}}</label><input type="text" data-value="pull_folder"/>
-      <label>{{g_info_filename}}</label><input type="text" data-value="pull_name"/>
+      <label>{{g_info_folder}}</label><input type="text" data-value="pull_folder" data-attr-title="pull_folder"/>
+      <label>{{g_info_filename}}</label><input type="text" data-value="pull_name" data-attr-title="pull_name"/>
     </div>
     <div class="gallery-conflict" data-if="is_conflict">
       <span class="text-muted">@tr:projects.gallery.conflict.choose_parts</span>
