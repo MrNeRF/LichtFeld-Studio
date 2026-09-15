@@ -1072,6 +1072,8 @@
 .asset-view-button img { width: 16dp; height: 16dp; }
 
 #asset-main-row {
+    position: relative;
+    box-sizing: border-box;
     display: flex;
     flex: 1 1 0dp;
     overflow: hidden;
@@ -1202,7 +1204,7 @@
 .inspector-section { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
 .inspector-section-title { height: 24dp; line-height: 24dp; font-weight: 600; }
 .parameter-row { display: flex; align-items: baseline; gap: 8dp; min-height: 20dp; min-width: 0; }
-.parameter-label { flex: 0 0 88dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.parameter-label { flex: 0 0 88dp; width: 88dp; min-width: 88dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .parameter-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: "JetBrains Mono"; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
 .inspector-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
@@ -1248,12 +1250,27 @@
 .asset-shell.is-wide .asset-navigator { flex: 0 0 200dp; flex-basis: 200dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-wide .inspector-resize-handle { display: block; }
 .asset-shell.is-wide .asset-inspector { flex-basis: 280dp; }
+.asset-shell.is-wide .asset-info-asset-layout,
+.asset-shell.is-narrow .asset-info-asset-layout,
+.asset-shell.is-compact .asset-info-asset-layout { flex-direction: column; }
+.asset-shell.is-wide #asset-info-thumbnail,
+.asset-shell.is-narrow #asset-info-thumbnail,
+.asset-shell.is-compact #asset-info-thumbnail { flex: 0 0 100dp; margin: 8dp 12dp 0; }
+.asset-info-details { flex: 0 0 auto; min-width: 0; }
+.inspector-facts { display: flex; flex-direction: column; min-width: 0; }
+.inspector-facts > .inspector-section { flex-shrink: 0; }
 .asset-shell.is-wide .asset-resize-handle--horizontal { display: none; }
 .asset-shell.is-medium #asset-main-row { flex-direction: row; }
 .asset-shell.is-medium .asset-results-stack { flex-direction: column; }
 .asset-shell.is-medium .asset-navigator { flex: 0 0 160dp; flex-basis: 160dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
-.asset-shell.is-medium .asset-inspector { width: auto; height: 200dp; flex: 0 0 200dp; }
-.asset-shell.is-medium .inspector-resize-handle { display: block; width: auto; height: 8dp; }
+.asset-shell.is-medium .asset-inspector { position: absolute; left: 0; right: 0; bottom: 0; width: auto; flex: 0 0 auto; overflow: visible; }
+.asset-shell.is-medium .asset-info-asset-layout { box-sizing: border-box; padding: 8dp 12dp; }
+.asset-shell.is-medium .asset-info-details { flex: 1 1 0dp; width: auto; }
+.asset-shell.is-medium .inspector-header { flex-direction: column; align-items: flex-start; margin: 0; }
+.asset-shell.is-medium .inspector-facts { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.asset-shell.is-medium .inspector-facts > .inspector-section { box-sizing: border-box; flex: 0 0 50%; width: 50%; }
+.asset-shell.is-medium .inspector-resize-handle { display: none; }
+.asset-shell.is-medium .asset-inspector > .asset-resize-handle { position: absolute; left: 0; right: 0; top: -8dp; height: 12dp; margin: 0; }
 .asset-shell.is-medium .inspector-strip { display: none; }
 .asset-shell.is-narrow #asset-main-row, .asset-shell.is-compact #asset-main-row { flex-direction: column; }
 .asset-shell.is-narrow .asset-results-stack, .asset-shell.is-compact .asset-results-stack { flex-direction: column; }

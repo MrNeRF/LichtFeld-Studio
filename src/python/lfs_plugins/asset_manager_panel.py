@@ -432,6 +432,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_style_width", self.get_inspector_style_width)
         model.bind_func("inspector_height", lambda: f"{self._inspector_preferred_height:.1f}dp")
         model.bind_func("inspector_style_height", self.get_inspector_style_height)
+        model.bind_func("inspector_reserved_height", lambda: (
+            f"{self._inspector_band_height() + 8.0:.1f}dp" if self._layout_class == "medium" else "0dp"
+        ))
         model.bind_func("tray_height", lambda: f"{self._tray_height:.1f}dp")
         model.bind_func("sidebar_height", lambda: f"{self._sidebar_height:.1f}dp")
         model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")
@@ -757,14 +760,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_inspector_style_height(self) -> str:
         if self._layout_class == "wide":
             return "auto"
-        return f"{self._inspector_preferred_height:.1f}dp"
+        if self._layout_class in ("compact", "narrow"):
+            return "32dp"
+        return f"{self._inspector_band_height():.1f}dp"
+
+    def _inspector_band_height(self) -> float:
+        height = self._host_geometry[1] if self._host_geometry else 700.0
+        return min(self._inspector_preferred_height, max(120.0, height / 2.0))
 
     def _dirty_layout_fields(self) -> None:
         self._dirty_fields(
             "is_compact", "is_narrow", "is_medium", "is_wide",
             "is_floating", "navigator_width", "navigator_style_width",
             "inspector_width", "inspector_style_width", "inspector_height",
-            "inspector_style_height", "thumbnail_size", "asset_card_slot_width",
+            "inspector_style_height", "inspector_reserved_height", "thumbnail_size", "asset_card_slot_width",
             "asset_card_thumbnail_height", "tray_height", "bottom_panel_height",
             "sidebar_height", "main_min_height",
         )
@@ -3087,14 +3096,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     layout_metrics["navigator_max"],
                     max(layout_metrics["navigator_min"], self._navigator_width),
                 ) if layout_metrics["navigator_mode"] == "column" else 0.0
-                self._inspector_width = min(
-                    layout_metrics["inspector_max"],
-                    max(layout_metrics["inspector_min"], self._inspector_width),
-                )
-                self._inspector_preferred_height = min(
-                    layout_metrics["inspector_max"],
-                    max(layout_metrics["inspector_min"], self._inspector_preferred_height),
-                )
+                if self._layout_class == "wide":
+                    self._inspector_width = min(420.0, max(240.0, self._inspector_width))
                 self._dirty_layout_fields()
             elif abs(width - self._content_width) > 0.5:
                 self._content_width = width
@@ -3124,6 +3127,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         # not force the browser and Inspector beyond the native host bounds.
         self._main_min_height = 0.0
         self._dirty_fields("sidebar_height", "bottom_panel_height", "main_min_height")
+        self._dirty_fields("inspector_style_height", "inspector_reserved_height")
         if scale_changed:
             self._dirty_layout_fields()
         return True

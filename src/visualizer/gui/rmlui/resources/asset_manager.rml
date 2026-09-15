@@ -81,7 +81,7 @@
         </div>
       </div>
 
-      <div id="asset-main-row" data-style-min-height="main_min_height">
+      <div id="asset-main-row" data-style-min-height="main_min_height" data-style-padding-bottom="inspector_reserved_height">
         <nav id="asset-sidebar" class="asset-navigator" data-style-width="navigator_style_width">
           <div class="asset-navigator-scope">
             <select id="asset-scope-select" data-value="selected_folder_id" aria-label="{{panel_label}}">
@@ -303,6 +303,7 @@
                       <button class="btn btn--success" data-if="inspector_can_resume" data-event-click="on_load_asset">{{resume_button_label}}</button>
                     </div>
                   </div>
+                  <div class="inspector-facts">
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
                     <div class="inspector-section-title">{{problem_title}}</div>
                     <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value">{{selected_fix_label}}</span></div>
@@ -343,6 +344,7 @@
                               data-attr-data-project-operation="operation.action"
                               data-event-click="open_project_operation(operation.action)">{{operation.label}}</button>
                     </div>
+                  </div>
                   </div>
                 </div>
               </div>
