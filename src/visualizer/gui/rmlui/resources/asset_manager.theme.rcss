@@ -77,13 +77,17 @@
 
 .asset-refresh-button img,
 .asset-folder-menu img,
-.asset-card-menu img {
+.asset-card-menu img,
+.inspector-more img,
+.inspector-disclosure,
+.asset-list-header-gallery-icon {
     image-color: @{alpha(text,0.90)};
 }
 
 .asset-refresh-button:hover img,
 .asset-folder-menu:hover img,
-.asset-card-menu:hover img {
+.asset-card-menu:hover img,
+.inspector-more:hover img {
     image-color: @{text};
 }
 

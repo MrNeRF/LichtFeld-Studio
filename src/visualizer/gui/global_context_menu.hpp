@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
         bool is_label = false;
         bool is_submenu_item = false;
         bool is_active = false;
+        std::string icon = {};
     };
 
     class LFS_VIS_API GlobalContextMenu {

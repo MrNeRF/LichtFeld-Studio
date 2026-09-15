@@ -1873,6 +1873,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             {"label": tr("projects.action.check_gallery"), "action": "check_gallery", "separator_before": True},
             {"label": tr("projects.action.rescan_folders"), "action": "rescan_folders"},
         ]
+        icons = {
+            "filter:all": "archive", "filter:attention": "gallery-cloud-bang",
+            "filter:not_published": "gallery-cloud-dotted", "filter:published": "gallery-cloud-check",
+            "filter:missing": "gallery-cloud-strike", "filter:checkpoint": "gpu",
+            "filter:dataset": "scene/dataset", "filter:gallery": "gallery-cloud",
+            "gallery": "layout-grid", "list": "layout-list", "thumbnail": "arrows-maximize",
+            "check_gallery": "gallery-cloud", "rescan_folders": "sequencer/rotate-cw",
+        }
+        for item in items:
+            item["icon"] = "../icon/" + icons.get(item["action"], "adjustments") + ".png"
         def choose(action: str) -> None:
             if action.startswith("filter:"):
                 self._set_filter(action.partition(":")[2])
