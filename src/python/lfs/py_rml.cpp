@@ -1303,6 +1303,14 @@ namespace lfs::python {
             return nb::cast(PyRmlDocument(doc));
         });
 
+        set_rml_doc_pending_callback([](void* document, bool consume) {
+            auto* doc = static_cast<Rml::ElementDocument*>(document);
+            if (!consume)
+                return is_document_dirty(doc) || is_document_update_requested(doc);
+            const bool dirty = consume_document_dirty(doc);
+            const bool update = consume_document_update_request(doc);
+            return dirty || update;
+        });
         set_rml_doc_registry_callbacks(
             [](const char* name, void* doc) {
                 with_gil_if_ready([&] {

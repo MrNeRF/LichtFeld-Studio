@@ -125,7 +125,7 @@ class GalleryAssetMixin:
                 self._select_asset_id(identifier)
                 self._begin_gallery_publish(self._get_selected_asset(), action)
         if self._handle:
-            self._handle.update_record_list("transfer_rows", transfer_rows(snapshot))
+            self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
             self._handle.dirty_all()
         self._request_model_update()
 
@@ -360,13 +360,15 @@ class GalleryAssetMixin:
 
     def _transfer_command(self, action, args=()):
         identifier = args[0] if args else None
-        if not identifier:
+        if not identifier and action not in ("resume_all", "clear_finished"):
             return
-        command = "pause" if action == "pause" else action
+        command = "pause" if identifier == "native" else action
         try:
-            self._controller().command(command, identifier)
+            self._controller().command(command, None if identifier == "native" else identifier)
         except Exception as exc:
-            self._gallery_notice = str(exc)
+            self._gallery_notice = (tr("account.connect_menu_bar")
+                                    if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required")
+                                    else str(exc))
             self._request_model_update()
 
     def _gallery_context_items(self, asset):

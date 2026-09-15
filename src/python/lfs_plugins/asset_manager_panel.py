@@ -140,6 +140,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_width = 280.0
         self._inspector_preferred_height = 200.0
         self._tray_height = 120.0
+        self._tray_expanded = False
+        self._tray_show_all = False
+        self._transfer_history_limit = 30
         self._inspector_expanded = False
         self._quick_look_visible = False
         self._thumbnail_menu_visible = False
@@ -497,7 +500,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_reserved_height", lambda: (
             f"{self._inspector_band_height() + 8.0:.1f}dp" if self._layout_class == "medium" else "0dp"
         ))
-        model.bind_func("tray_height", lambda: f"{self._tray_height:.1f}dp")
+        model.bind_func("tray_height", lambda: f"{self._tray_height if self._tray_expanded else 32.0:.1f}dp")
+        model.bind_func("tray_expanded", lambda: self._tray_expanded)
+        model.bind_func("tray_toggle_icon", lambda: "−" if self._tray_expanded else "+")
+        model.bind_func("tray_toggle_label", lambda: tr("gallery.transfer.action.collapse" if self._tray_expanded else "gallery.transfer.action.expand"))
+        model.bind_func("tray_all_label", lambda: tr("gallery.transfer.action.details"))
+        model.bind_func("tray_empty", lambda: not self._all_transfer_rows())
+        model.bind_func("tray_empty_label", lambda: tr("gallery.transfer.action.empty"))
+        model.bind_func("tray_menu_label", lambda: tr("common.more"))
         model.bind_func("sidebar_height", lambda: f"{self._sidebar_height:.1f}dp")
         model.bind_func("main_min_height", lambda: f"{self._main_min_height:.1f}dp")
         model.bind_func(
@@ -538,7 +548,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func(
             "has_gallery_transfers",
-            lambda: bool(self._all_transfer_rows()),
+            lambda: self._tray_show_all or any(row["status"] not in ("completed", "canceled") for row in self._all_transfer_rows()),
         )
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
@@ -757,6 +767,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_record_list("dialog_rows")
         for event, handler in (
             ("open_gallery", self.on_open_gallery),
+            ("toggle_transfer_tray", self.toggle_transfer_tray),
+            ("transfer_menu", self.open_transfer_menu),
+            ("transfer_project", self.select_transfer_project),
             ("toggle_folders_collapsed", self.toggle_folders_collapsed),
             ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
@@ -1193,12 +1206,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._show_asset_context_menu(asset_id)
 
     def _all_transfer_rows(self) -> List[Dict[str, Any]]:
-        rows = list(transfer_rows(self._gallery_state))
+        rows = list(transfer_rows(self._gallery_state, self._transfer_history_limit))
+        projects_by_job = {job["id"]: job.get("project", "") for job in self._gallery_state.get("jobs", ())}
+        for row in rows:
+            row["project"] = projects_by_job.get(row["id"], "")
+        account_reason = tr("projects.gallery.account.connect_menu_bar") if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required") else ""
+        if account_reason:
+            for row in rows:
+                if row["reason"]:
+                    row["reason"] = account_reason
         for operation in self._project_operations.values():
             progress = float(operation.get("progress", 0.0) or 0.0)
             status = str(operation.get("status", "running"))
             rows.append({
                 "id": operation["id"],
+                "project": operation.get("asset_id", ""),
                 "title": operation.get("title", "Project operation"),
                 "direction": "→",
                 "status": status,
@@ -1213,6 +1235,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "can_resume": False,
                 "can_cancel": False,
             })
+        projects = self._asset_index_assets()
+        for row in rows:
+            row["can_select"] = row["project"] in projects
         return rows
 
     def _refresh_transfer_rows(self) -> None:
@@ -1220,6 +1245,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.update_record_list("transfer_rows", self._all_transfer_rows())
             self._handle.dirty("transfer_rows")
             self._handle.dirty("has_gallery_transfers")
+            self._handle.dirty("tray_empty")
         self._request_model_update()
 
     def _schedule_ui(self, callback: Callable[[], None]) -> None:
@@ -2605,9 +2631,46 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return True
 
     def on_open_gallery(self, _handle=None, _event=None, _args=None):
-        # Transfers live in the footer tray; keep this legacy callback as a
-        # harmless focus hook for saved layouts and older menu commands.
-        self._request_model_update()
+        self._tray_show_all = self._tray_expanded = True
+        self._tray_height = max(240.0, self._tray_height)
+        self._dirty_fields("tray_height", "tray_expanded", "tray_toggle_icon", "tray_toggle_label")
+        self._refresh_transfer_rows()
+
+    def toggle_transfer_tray(self, _handle=None, _event=None, _args=None):
+        self._tray_expanded = not self._tray_expanded
+        if not self._tray_expanded:
+            self._tray_show_all = False
+        self._dirty_fields("tray_height", "tray_expanded", "tray_toggle_icon", "tray_toggle_label", "has_gallery_transfers")
+
+    def select_transfer_project(self, _handle=None, _event=None, args=None):
+        project_id = str(args[0]) if args else ""
+        if project_id in self._asset_index_assets():
+            self._select_folder_id(SCOPE_ALL)
+            self._set_filter("all")
+            self.set_search_query("")
+            self._select_asset_id(project_id)
+
+    def open_transfer_menu(self, _handle=None, _event=None, _args=None):
+        rows = self._all_transfer_rows()
+        self._show_shared_context_menu([
+            {"label": tr("gallery.transfer.action.details"), "action": "show_all"},
+            {"label": tr("gallery.transfer.action.show_older"), "action": "show_older"},
+            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] for row in rows), "separator_before": True},
+            {"label": tr("gallery.transfer.action.clear_finished"), "action": "clear_finished", "enabled": any(row["status"] in ("completed", "canceled") for row in rows)},
+        ], self._transfer_tray_command)
+
+    def _transfer_tray_command(self, action):
+        if action in ("show_all", "show_older"):
+            if action == "show_older":
+                self._transfer_history_limit += 30
+            self.on_open_gallery()
+        else:
+            if action == "clear_finished":
+                self._project_operations = {key: row for key, row in self._project_operations.items() if row.get("status") not in ("completed", "canceled")}
+                self._refresh_transfer_rows()
+                if not any(row["status"] in ("completed", "canceled") for row in transfer_rows(self._gallery_state, self._transfer_history_limit)):
+                    return
+            self._transfer_command(action)
 
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:
@@ -4156,6 +4219,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        RuntimeState.projects_panel_visible.value = True
         self._panel_mounted = True
         self._mount_generation += 1
         self._doc = doc
@@ -4198,6 +4262,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return changed
 
     def on_unmount(self, doc):
+        RuntimeState.projects_panel_visible.value = False
         self._thumbnail_menu_visible = False
         if self._gallery_toast_timer:
             self._gallery_toast_timer.cancel()

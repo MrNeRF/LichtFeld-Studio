@@ -422,3 +422,7 @@
 
 .asset-list-sort { color: @{text_dim}; }
 .asset-list-sort:hover, .asset-list-sort:focus { background-color: @{surface_bright}; color: @{text}; }
+
+.asset-tray { background-color: @{surface}; }
+.asset-tray-progress { background-color: @{statusbar.progress_bg}; }
+.asset-tray-progress span { background-color: @{primary}; }

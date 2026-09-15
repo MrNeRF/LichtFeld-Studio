@@ -1305,22 +1305,26 @@
 .project-dialog-table-row { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 28dp; gap: 8dp; padding: 4dp 8dp; text-align: left; }
 .project-dialog-message { white-space: pre-wrap; }
 
-.asset-tray { position: relative; box-sizing: border-box; display: flex; flex: 0 0 auto; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
-.asset-tray-label, .asset-tray-detail, .asset-tray-title, .asset-tray-phase, .asset-tray-bytes { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.asset-tray { flex-direction: column; align-items: stretch; gap: 4dp; padding: 6dp 12dp; }
-.asset-tray-heading, .asset-tray-row, .asset-tray-actions { display: flex; align-items: center; gap: 8dp; min-width: 0; }
-.asset-tray-heading { min-height: 20dp; }
-.asset-tray-heading .asset-tray-detail { margin-left: auto; font-size: 10dp; }
+.asset-tray { position: relative; box-sizing: border-box; display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; gap: 8dp; height: 32dp; min-height: 32dp; padding: 4dp 8dp; overflow: visible; }
+.asset-tray-heading, .asset-tray-title-row, .asset-tray-status-row, .asset-tray-actions { display: flex; align-items: center; gap: 8dp; min-width: 0; height: 24dp; min-height: 24dp; flex-shrink: 0; }
+.asset-tray-heading-button { display: flex; align-items: center; gap: 8dp; }
+.asset-tray-heading .asset-tray-detail { flex: 1 1 auto; font-size: 10dp; }
+.asset-tray-title, .asset-tray-phase, .asset-tray-bytes, .asset-tray-detail { min-width: 0; height: 24dp; line-height: 24dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-tray-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; }
-.asset-tray-row { min-height: 28dp; }
-.asset-tray-direction { flex: 0 0 16dp; text-align: center; }
-.asset-tray-title { flex: 1 1 160dp; }
-.asset-tray-phase { flex: 0 1 140dp; font-size: 10dp; }
-.asset-tray-bytes { flex: 0 1 110dp; font-family: "JetBrains Mono"; font-size: 10dp; text-align: right; }
-.asset-tray-progress { width: 120dp; height: 4dp; flex: 0 0 120dp; overflow: hidden; border-radius: 2dp; }
+.asset-tray-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; min-width: 0; }
+.asset-tray-direction { flex: 0 0 16dp; height: 24dp; line-height: 24dp; text-align: center; }
+.asset-tray-title { flex: 1 1 auto; }
+.asset-tray-bytes { flex: 0 1 auto; font-family: "JetBrains Mono"; font-size: 10dp; text-align: right; }
+.asset-tray-phase { flex: 1 1 auto; font-size: 10dp; }
+.asset-tray-progress { height: 8dp; min-height: 8dp; width: 100%; overflow: hidden; border-radius: 2dp; }
 .asset-tray-progress span { display: block; height: 100%; }
 .asset-tray-actions { flex: 0 0 auto; }
-.asset-tray-actions .btn { height: 24dp; min-height: 24dp; padding: 0 8dp; font-size: 10dp; }
+.asset-tray .btn, .asset-tray .asset-button { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; font-size: 11dp; line-height: 22dp; flex-shrink: 0; }
+.asset-tray .asset-button--small-icon { width: 24dp; min-width: 24dp; padding: 0; }
+.asset-tray-reason { white-space: normal; }
+.asset-tray .asset-tray-project { flex: 1 1 0dp; min-width: 0; padding: 0; text-align: left; }
+.asset-tray-project span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-tray .hidden { display: none; }
 #asset-tray-resize-handle { position: absolute; left: 0; right: 0; top: -6dp; width: auto; height: 12dp; min-height: 12dp; margin: 0; }
 
 .asset-shell.is-wide #asset-main-row { flex-direction: row; }
@@ -1377,7 +1381,7 @@
 .asset-shell.is-narrow .gallery-account-row, .asset-shell.is-compact .gallery-account-row { display: none; }
 .asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; row-gap: 16dp; }
 .asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
-.asset-shell.is-compact .asset-tray, .asset-shell.is-narrow .asset-tray { min-height: 120dp; }
+
 .asset-shell.is-narrow #asset-popup-toolbar,
 .asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
 .asset-shell.is-compact .asset-check-gallery { display: inline-flex; }

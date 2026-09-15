@@ -1459,7 +1459,8 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
-        const bool builtin_document_sync_due = document_sync_dirty_;
+        const bool builtin_document_sync_due = document_sync_dirty_ ||
+                                                lfs::python::has_pending_rml_document_updates(document_);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);
@@ -1524,8 +1525,10 @@ namespace lfs::vis::gui {
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
         updateViewportContentOffset();
+        const bool python_document_dirty = lfs::python::consume_pending_rml_document_updates(document_);
         const bool document_force = theme_changed || size_changed || toolbar_changed;
         bool document_dirty = syncBuiltinDocument(document_force);
+        document_dirty |= python_document_dirty;
         const bool run_prepend_document_hooks = shouldRunDocumentHooks(document_force, true);
         const bool run_append_document_hooks = shouldRunDocumentHooks(document_force, false);
         if (run_prepend_document_hooks || run_append_document_hooks) {

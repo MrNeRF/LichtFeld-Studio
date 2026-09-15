@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import lichtfeld as lf
 
-from .gallery_transfer_ui import tr
+from .gallery_transfer_ui import show_transfer_tray, tr
 from .ui import RuntimeState
 
 
@@ -17,15 +17,20 @@ class GalleryTransferOverlay:
         self._collapsed = False
         self._last_signature = None
         self._message = ""
+        self._projects_open = False
+        self._unsubscribers = []
 
     def reset(self):
+        for unsubscribe in self._unsubscribers:
+            unsubscribe()
+        self._unsubscribers = []
         self._handle = None
         self._last_signature = None
 
     def bind_model(self, model):
         model.bind_record_list("gallery_transfer_rows")
         bindings = {
-            "visible": lambda: self._visible,
+            "visible": lambda: self._visible and not self._projects_open,
             "expanded": lambda: not self._collapsed,
             "empty": lambda: not self._state.get("rows"),
             "header": self._header,
@@ -42,6 +47,19 @@ class GalleryTransferOverlay:
         model.bind_event("gallery_transfer_action", self._action)
         self._handle = model.get_handle()
         self._last_signature = None
+        if not self._unsubscribers:
+            self._unsubscribers = [signal.subscribe(self._changed) for signal in
+                                  (RuntimeState.gallery_transfers, RuntimeState.projects_panel_visible)]
+
+    def _changed(self, _state):
+        # A queued transfer can change while the viewport reuses its idle frame.
+        # Wake its document from the completion notification itself.
+        lf.ui.schedule_on_ui_thread(self._refresh)
+
+    def _refresh(self):
+        if self.update() and self._handle:
+            self._handle.dirty_all()
+            lf.ui.request_redraw()
 
     def _header(self):
         rows = self._state.get("rows", ())
@@ -50,7 +68,8 @@ class GalleryTransferOverlay:
 
     def update(self):
         state = RuntimeState.gallery_transfers.value
-        signature = (state, RuntimeState.language_generation.value)
+        projects_open = lf.ui.is_panel_enabled("lfs.asset_manager")
+        signature = (state, RuntimeState.language_generation.value, projects_open)
         if not self._handle or signature == self._last_signature:
             return False
         if state.get("identity") != self._state.get("identity"):
@@ -62,11 +81,19 @@ class GalleryTransferOverlay:
             self._visible = True
             self._collapsed = False
         self._state = state
+        self._projects_open = projects_open
         self._last_signature = signature
-        self._handle.update_record_list("gallery_transfer_rows", state.get("rows", []))
+        rows = state.get("rows", [])
+        account = RuntimeState.gallery_state.value
+        if not account.get("signed_in") or account.get("relink_required"):
+            rows = [dict(row, reason=lf.ui.tr("projects.gallery.account.connect_menu_bar")) if row.get("reason") else row for row in rows]
+        self._handle.update_record_list("gallery_transfer_rows", rows)
         return True
 
     def show(self):
+        if lf.ui.is_panel_enabled("lfs.asset_manager"):
+            show_transfer_tray()
+            return
         self._visible = True
         self._collapsed = False
         if self._handle:
@@ -82,7 +109,7 @@ class GalleryTransferOverlay:
         elif action == "close":
             self._visible = False
         elif action == "details":
-            lf.ui.set_panel_enabled("lfs.gallery_transfer", True)
+            show_transfer_tray()
         else:
             from .gallery_controller import get_gallery_controller
             from .gallery_messages import localize_message
@@ -92,7 +119,10 @@ class GalleryTransferOverlay:
                                                  None if identifier == "native" else identifier)
                 self._message = ""
             except Exception as exc:
-                self._message = localize_message(str(exc))
+                account = RuntimeState.gallery_state.value
+                self._message = (lf.ui.tr("projects.gallery.account.connect_menu_bar")
+                                 if not account.get("signed_in") or account.get("relink_required")
+                                 else localize_message(str(exc)))
         if self._handle:
             self._handle.dirty_all()
         lf.ui.request_redraw()

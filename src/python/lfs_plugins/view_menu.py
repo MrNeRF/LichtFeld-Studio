@@ -33,6 +33,7 @@ class ViewMenu:
     )
 
     def menu_items(self):
+        from .gallery_transfer_ui import show_transfer_tray
         tr = lf.ui.tr
         theme_catalog = sorted(
             lf.ui.themes(),
@@ -152,6 +153,7 @@ class ViewMenu:
             ),
             menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
+            menu_action(tr("gallery.transfer.action.details"), show_transfer_tray),
         ]
 
 

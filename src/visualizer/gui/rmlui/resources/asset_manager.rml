@@ -419,22 +419,35 @@
       </div>
 
       <div class="asset-tray" data-if="has_gallery_transfers" data-style-height="tray_height">
-        <div class="asset-tray-heading"><span class="asset-tray-label">{{g_sidebar_transfers}}</span><span class="asset-tray-detail">{{gallery_tooltip}}</span></div>
-        <div class="asset-tray-list">
+        <div class="asset-tray-heading">
+          <button class="asset-tray-heading-button asset-button asset-button--text" data-event-click="toggle_transfer_tray" data-attr-title="tray_toggle_label"><span>{{tray_toggle_icon}}</span><span>{{g_sidebar_transfers}}</span></button>
+          <span class="asset-tray-detail" data-attr-title="gallery_tooltip">{{gallery_overlay}}</span>
+          <button class="asset-button asset-button--text asset-tray-all" data-event-click="open_gallery"><span class="asset-button-text">{{tray_all_label}}</span></button>
+          <button class="asset-button asset-button--small-icon" data-event-click="transfer_menu" data-attr-title="tray_menu_label"><span class="asset-button-glyph">&#8943;</span></button>
+        </div>
+        <div class="asset-tray-list" data-if="tray_expanded">
+          <span class="text-muted" data-if="tray_empty">{{tray_empty_label}}</span>
           <div class="asset-tray-row" data-for="transfer : transfer_rows">
-            <span class="asset-tray-direction">{{transfer.direction}}</span>
-            <span class="asset-tray-title" data-attr-title="transfer.title">{{transfer.title}}</span>
-            <span class="asset-tray-phase">{{transfer.phase}}</span>
-            <span class="asset-tray-bytes">{{transfer.bytes}}</span>
-            <div class="asset-tray-progress"><span data-style-width="transfer.progress_width"></span></div>
-            <div class="asset-tray-actions">
-              <button class="btn btn--secondary" data-if="transfer.can_pause" data-event-click="transfer_pause(transfer.id)">{{g_action_pause}}</button>
-              <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)">{{g_action_resume}}</button>
-              <button class="btn btn--secondary" data-if="transfer.can_cancel" data-event-click="transfer_cancel(transfer.id)">{{g_action_cancel}}</button>
+            <div class="asset-tray-title-row">
+              <span class="asset-tray-direction">{{transfer.direction}}</span>
+              <span class="asset-tray-title" data-class-hidden="transfer.can_select" data-attr-title="transfer.title">{{transfer.title}}</span>
+              <button class="asset-button asset-button--text asset-tray-title asset-tray-project" data-class-hidden="!transfer.can_select" data-event-click="transfer_project(transfer.project)" data-attr-title="transfer.title"><span>{{transfer.title}}</span></button>
+              <span class="asset-tray-bytes">{{transfer.bytes}}</span>
             </div>
+            <div class="asset-tray-status-row">
+              <span class="asset-tray-phase" data-attr-title="transfer.phase">{{transfer.phase}}</span>
+              <div class="asset-tray-actions">
+                <button class="btn btn--secondary" data-if="transfer.can_pause" data-event-click="transfer_pause(transfer.id)">{{g_action_pause}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)">{{g_action_resume}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_cancel" data-event-click="transfer_cancel(transfer.id)">{{g_action_cancel}}</button>
+              </div>
+            </div>
+            <div class="asset-tray-progress"><span data-style-width="transfer.progress_width"></span></div>
+            <span class="asset-tray-reason status-error" data-class-hidden="transfer.reason == ''">{{transfer.reason}}</span>
+            <span class="asset-tray-reason text-muted" data-class-hidden="transfer.detail == ''">{{transfer.detail}}</span>
           </div>
         </div>
-        <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
+        <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-if="tray_expanded" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
       </div>
     </div>
   </div>
