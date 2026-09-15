@@ -654,11 +654,20 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     ]
     assert panel.get_selected_asset_id() == asset["id"]
 
-def test_gallery_toolbar_opens_transfers_without_opening_project(panel_module):
+def test_gallery_transfers_stay_in_the_footer_tray(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel.on_open_gallery()
     assert panel_module.lf._test_state.opened == []
-    assert ("lfs.gallery_transfer", True) in panel_module.lf._test_state.enabled
+    assert panel_module.lf._test_state.enabled == []
+
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    panel._gallery_state["jobs"] = [{
+        "id": "finished", "status": "completed", "completed": 10, "total": 10,
+        "metadata": {"title": "Finished project"},
+    }]
+    assert panel_module.transfer_rows(panel._gallery_state)[0]["title"] == "Finished project"
+    assert "transfer_rows" in (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
 
 def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     panel = panel_module.AssetManagerPanel()

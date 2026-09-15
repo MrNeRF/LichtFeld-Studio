@@ -94,7 +94,19 @@ class GalleryFilePanel(Panel):
             return tr("action.pull_open" if self._review["open_after"] else "action.pull")
         if self._review and self._review["action"] == "update":
             return tr("action.update")
-        return tr("review.publish_public" if self._fields.get("visibility") == "public" else "review.publish_private")
+        return tr("action.publish").rstrip("…")
+
+    def on_sign_in(self, _handle=None, _event=None, _args=None):
+        review = self._review
+        controller = review.get("controller") if review else None
+        account = getattr(controller, "service", None)
+        account = getattr(account, "account", None)
+        if account is None:
+            from .portal_account import get_portal_account_service
+            account = get_portal_account_service()
+        state = account.snapshot()
+        if not state.linking:
+            account.start_device_flow(reauthorize=bool(state.signed_in))
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("gallery_file")
@@ -103,7 +115,7 @@ class GalleryFilePanel(Panel):
         for name in ("title", "description", "visibility", "upload_format", "pull_folder", "pull_name"):
             model.bind(name, lambda n=name: self._fields.get(n, ""), lambda v, n=name: self._set(n, v))
         values = {
-            "panel_label": lambda: tr("dialog.download" if self._is_pull() else "dialog.upload"),
+            "panel_label": lambda: tr("dialog.download" if self._is_pull() else "action.publish"),
             "file_name": lambda: (self._review or {}).get("asset", {}).get("name", ""),
             "is_pull": self._is_pull,
             "show_format": lambda: not self._is_pull(),
@@ -125,6 +137,7 @@ class GalleryFilePanel(Panel):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         model.bind_event("submit", lambda _h, _e, _args: self._submit())
         model.bind_event("cancel", lambda _h, _e, _args: self._close(False))
+        model.bind_event("sign_in", self.on_sign_in)
         self._handle = model.get_handle()
 
     def _submit(self):

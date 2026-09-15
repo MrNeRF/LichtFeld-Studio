@@ -13,6 +13,7 @@ from .gallery_messages import tr
 
 from .gallery_controller import asset_sync_state, get_gallery_controller
 from .asset_index import display_name, last_known_gallery_label, previous_scene_for
+from .gallery_transfer_ui import transfer_rows
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
@@ -64,6 +65,14 @@ class GalleryAssetMixin:
             self._gallery_controller = get_gallery_controller()
             self._gallery_upload_format = self._gallery_controller.upload_format
         return self._gallery_controller
+
+    def _start_gallery_sign_in(self, _handle=None, _event=None, _args=None):
+        account = getattr(self._controller().service, "account", None)
+        if account is None:
+            return
+        state = account.snapshot()
+        if not state.linking:
+            account.start_device_flow(reauthorize=bool(state.signed_in))
 
     def _subscribe_gallery(self):
         if self._gallery_unsubscribe is None:
@@ -124,6 +133,7 @@ class GalleryAssetMixin:
                 self._select_asset_id(identifier)
                 self._begin_gallery_publish(self._get_selected_asset(), action)
         if self._handle:
+            self._handle.update_record_list("transfer_rows", transfer_rows(snapshot))
             self._handle.dirty_all()
         self._request_model_update()
 
@@ -212,7 +222,7 @@ class GalleryAssetMixin:
         gallery_action = facts["action"]
         if facts["relationship"] == "local_file_problem":
             gallery_action = "locate" if asset.get("status") == "MISSING" else ""
-        action_label = tr("projects.action.locate_file") if gallery_action == "locate" else tr("action." + gallery_action) if gallery_action else ""
+        action_label = lf.ui.tr("projects.action.locate") if gallery_action == "locate" else tr("action." + gallery_action) if gallery_action else ""
         return {"gallery_state": facts["state"], "gallery_label": label,
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
@@ -319,14 +329,32 @@ class GalleryAssetMixin:
         }
         for name, getter in values.items():
             model.bind_func(name, getter)
-        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers", "sidebar.sign_in_hint",
-                    "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel",
+        model.bind_record_list("transfer_rows")
+        for key in ("sidebar.title", "sidebar.published", "sidebar.attention", "sidebar.transfers", "sidebar.sign_in_hint", "sidebar.sign_in",
+                    "review.visibility", "action.open", "action.copy", "action.undo", "action.cancel", "action.resume",
                     "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         model.bind_func("g_action_pause", lambda: tr("action.pause", prefix="gallery.transfer."))
         for action in ("toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "undo",
                        "publish_many", "update_many", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
+        model.bind_event("gallery_sign_in", self._start_gallery_sign_in)
+        for action in ("pause", "resume", "cancel"):
+            model.bind_event(
+                "transfer_" + action,
+                lambda _h, _e, args, a=action: self._transfer_command(a, args),
+            )
+
+    def _transfer_command(self, action, args=()):
+        identifier = args[0] if args else None
+        if not identifier:
+            return
+        command = "pause" if action == "pause" else action
+        try:
+            self._controller().command(command, identifier)
+        except Exception as exc:
+            self._gallery_notice = str(exc)
+            self._request_model_update()
 
     def _gallery_context_items(self, asset):
         facts = self._gallery_facts(asset)

@@ -30,6 +30,7 @@ from .asset_layout import (
     list_columns,
 )
 from .asset_format import format_size
+from .gallery_transfer_ui import transfer_rows
 from .asset_watch import (
     AssetFolderScanProgress,
     scan_all_asset_folders,
@@ -125,7 +126,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._navigator_width = 200.0
         self._inspector_width = 280.0
         self._inspector_preferred_height = 200.0
-        self._tray_height = 32.0
+        self._tray_height = 120.0
         self._inspector_expanded = False
         self._thumbnail_sizes = {
             "compact": 112.0,
@@ -414,10 +415,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_expanded", lambda: self._inspector_expanded)
         model.bind_func(
             "has_gallery_transfers",
-            lambda: any(
-                job.get("status") not in ("completed", "canceled")
-                for job in self._gallery_state.get("jobs", [])
-            ),
+            lambda: bool(transfer_rows(self._gallery_state)),
         )
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
@@ -556,6 +554,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         ):
             model.bind_event(event, handler)
         self._handle = model.get_handle()
+        self._handle.update_record_list("transfer_rows", transfer_rows(self._gallery_state))
 
     def get_search_query(self) -> str:
         return self._search_query
@@ -1212,7 +1211,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             {"label": tr("projects.gallery.action.list"), "action": "list"},
             {"label": tr("projects.toolbar.sort_by_name"), "action": "sort_name", "separator_before": True},
             {"label": tr("projects.toolbar.sort_by_size"), "action": "sort_size"},
+            {"label": f"{tr('projects.toolbar.thumbnail_size')} 112", "action": "thumbnail:112", "separator_before": True},
+            {"label": f"{tr('projects.toolbar.thumbnail_size')} 208", "action": "thumbnail:208"},
+            {"label": f"{tr('projects.toolbar.thumbnail_size')} 320", "action": "thumbnail:320"},
+            {"label": tr("projects.action.check_gallery"), "action": "check_gallery", "separator_before": True},
         ]
+        if not self._gallery_state.get("signed_in"):
+            items.append({"label": tr("projects.gallery.sidebar.sign_in"), "action": "sign_in"})
 
         def choose(action: str) -> None:
             if action in ("gallery", "list"):
@@ -1222,6 +1227,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._reset_scroll()
                 self._refresh_records(assets=True)
                 self._dirty_fields("sort_label")
+            elif action.startswith("thumbnail:"):
+                self.set_thumbnail_size(action.partition(":")[2])
+            elif action == "check_gallery":
+                self._gallery_command("refresh")
+            elif action == "sign_in":
+                self._start_gallery_sign_in()
 
         self._show_shared_context_menu(items, choose)
 
@@ -1431,8 +1442,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._load_asset(self._resolve_event_value(args, _ev, "data-asset-id"))
 
     def on_open_gallery(self, _handle=None, _event=None, _args=None):
-        enabled = getattr(lf.ui, "is_panel_enabled", lambda _: False)("lfs.gallery_transfer")
-        lf.ui.set_panel_enabled("lfs.gallery_transfer", not enabled)
+        # Transfers live in the footer tray; keep this legacy callback as a
+        # harmless focus hook for saved layouts and older menu commands.
+        self._request_model_update()
 
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:
@@ -1487,7 +1499,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         if self._project_available(asset):
-            items.append({"label": tr("projects.gallery.action.open_app"), "action": "load"})
+            items.append({"label": tr("projects.action.open"), "action": "load"})
         items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
             return items

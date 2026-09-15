@@ -125,9 +125,14 @@
             <div class="asset-sidebar-section asset-sidebar-gallery" id="asset-sidebar-gallery">
               <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-title="gallery_quota">
                 <span>{{g_sidebar_title}}</span>
-                <span class="text-muted gallery-account-label" data-if="gallery_signed_in">{{gallery_account}}</span>
                 <button class="asset-button asset-button--small-icon gallery-refresh" data-event-click="gallery_refresh"
                         data-tooltip="projects.gallery.sidebar.refresh" aria-label="{{check_gallery_label}}">&#x21BB;</button>
+              </div>
+              <div class="gallery-account-row">
+                <span class="text-muted gallery-account-label" data-if="gallery_signed_in">{{gallery_account}}</span>
+                <span class="text-muted gallery-account-label" data-if="!gallery_signed_in">{{g_sidebar_sign_in_hint}}</span>
+                <button class="asset-button asset-button--text gallery-sign-in" data-if="!gallery_signed_in"
+                        data-event-click="gallery_sign_in">{{g_sidebar_sign_in}}</button>
               </div>
               <div class="text-muted gallery-checked">{{gallery_checked}}</div>
               <div class="asset-filter-row" tabindex="0" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
@@ -135,9 +140,6 @@
               </div>
               <div class="asset-filter-row" tabindex="0" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__">
                 <span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
-              </div>
-              <div class="asset-filter-row" tabindex="0" data-folder-id="__gallery_transfers__">
-                <span class="asset-row-label">{{g_sidebar_transfers}}</span><span class="asset-row-count">{{gallery_transfer_count}}</span>
               </div>
               <div class="asset-account-chip" data-if="!gallery_signed_in">{{g_sidebar_sign_in_hint}}</div>
             </div>
@@ -160,7 +162,7 @@
                 <button class="asset-button asset-button--icon asset-view-button asset-refresh-button"
                         data-class-is-stop="scan_active" data-event-click="refresh_catalog"
                         data-attr-data-tooltip="refresh_action_tooltip" aria-label="{{refresh_action_tooltip}}">
-                  <img data-if="!scan_active" src="../icon/sequencer/rotate-cw.png"/>
+                  <span class="asset-refresh-glyph" data-if="!scan_active">&#x21BB;</span>
                   <span class="asset-button-text" data-if="scan_active">{{stop_scan_label}}</span>
                 </button>
               </div>
@@ -178,12 +180,15 @@
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
             <div class="gallery-empty" data-if="gallery_local_empty"><button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:projects.action.add_folder</button></div>
           </div>
-          <div class="asset-list-header" data-if="is_list_view">
+          <div class="asset-list-header" data-if="is_list_view"
+               data-class-is-wide="asset_list_wide"
+               data-class-show-folder="asset_list_show_folder"
+               data-class-gallery-compact="asset_list_gallery_compact">
             <span class="asset-col asset-col-name">{{col_name_label}}</span>
-            <span class="asset-col asset-col-folder">{{col_folder_label}}</span>
+            <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width">{{col_gallery_label}}</span>
             <span class="asset-col asset-col-size">{{col_size_label}}</span>
             <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
-            <span class="asset-col asset-col-gallery">{{col_gallery_label}}</span>
+            <span class="asset-col asset-col-folder">{{col_folder_label}}</span>
           </div>
 
           <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
@@ -203,10 +208,10 @@
                       <div class="asset-card-body">
                         <div class="asset-card-title-row"><span class="asset-card-title" data-attr-title="asset.display_name">{{asset.display_name}}</span></div>
                         <div class="asset-card-meta">
-                          <span data-if="!asset.has_problem">{{asset.gallery_label}}</span>
-                          <span data-if="asset.has_problem">{{asset.health_label}}</span>
                           <span data-if="asset.gallery_has_bytes" data-attr-title="asset.gallery_bytes">{{asset.gallery_detail}}</span>
                           <span data-if="!asset.gallery_has_bytes">{{asset.size_label}}</span>
+                          <span data-if="!asset.has_problem">{{asset.gallery_label}}</span>
+                          <span data-if="asset.has_problem">{{asset.health_label}}</span>
                         </div>
                         <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-title="asset.gallery_tooltip">
                           <div class="gallery-progress"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
@@ -222,7 +227,10 @@
                 <div class="asset-virtual-spacer asset-card-bottom-spacer" data-style-height="asset_gallery_bottom_spacer_height"></div>
               </div>
             </div>
-            <div class="asset-scroll-shell asset-scroll-shell-list" data-if="is_list_view">
+            <div class="asset-scroll-shell asset-scroll-shell-list" data-if="is_list_view"
+                 data-class-is-wide="asset_list_wide"
+                 data-class-show-folder="asset_list_show_folder"
+                 data-class-gallery-compact="asset_list_gallery_compact">
               <div id="asset-list-view" class="asset-list-view">
                 <div class="asset-virtual-spacer asset-list-top-spacer" data-style-height="asset_list_top_spacer_height"></div>
                 <div class="asset-list-window">
@@ -236,14 +244,14 @@
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
                         <span class="asset-list-secondary text-muted" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span>
                       </span>
-                      <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
-                      <span class="asset-col asset-col-size">{{asset.size_label}}</span>
-                      <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
-                      <span class="asset-col asset-col-gallery" data-attr-title="asset.gallery_tooltip">
+                      <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
                         <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon"
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
                         <span data-if="!asset.has_problem">{{asset.gallery_label}}</span><span data-if="asset.has_problem">{{asset.health_label}}</span>
                       </span>
+                      <span class="asset-col asset-col-size">{{asset.size_label}}</span>
+                      <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
+                      <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active">
                         <div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div>
                       </div>
@@ -316,10 +324,22 @@
         </div>
       </div>
 
-        <div class="asset-tray" data-if="has_gallery_transfers" data-style-height="tray_height">
-        <span class="asset-tray-label">{{gallery_overlay}}</span><span class="asset-tray-progress"><span></span></span>
-        <span class="asset-tray-detail">{{gallery_tooltip}}</span><span class="asset-tray-spacer"></span>
-        <button class="btn btn--secondary">{{g_action_pause}}</button><button class="btn btn--secondary" data-event-click="open_gallery">{{g_action_open}}</button>
+      <div class="asset-tray" data-if="has_gallery_transfers" data-style-height="tray_height">
+        <div class="asset-tray-heading"><span class="asset-tray-label">{{g_sidebar_transfers}}</span><span class="asset-tray-detail">{{gallery_tooltip}}</span></div>
+        <div class="asset-tray-list">
+          <div class="asset-tray-row" data-for="transfer : transfer_rows">
+            <span class="asset-tray-direction">{{transfer.direction}}</span>
+            <span class="asset-tray-title" data-attr-title="transfer.title">{{transfer.title}}</span>
+            <span class="asset-tray-phase">{{transfer.phase}}</span>
+            <span class="asset-tray-bytes">{{transfer.bytes}}</span>
+            <div class="asset-tray-progress"><span data-style-width="transfer.progress_width"></span></div>
+            <div class="asset-tray-actions">
+              <button class="btn btn--secondary" data-if="transfer.can_pause" data-event-click="transfer_pause(transfer.id)">{{g_action_pause}}</button>
+              <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)">{{g_action_resume}}</button>
+              <button class="btn btn--secondary" data-if="transfer.can_cancel" data-event-click="transfer_cancel(transfer.id)">{{g_action_cancel}}</button>
+            </div>
+          </div>
+        </div>
         <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
       </div>
     </div>
