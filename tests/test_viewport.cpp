@@ -123,13 +123,6 @@ TEST(ViewportTest, SplitViewPixelCentersDoNotStretchWithPanelWidth) {
     }
 }
 
-TEST(ViewportTest, PlyComparisonKeepsVkSplatOnOneCombinedModel) {
-    using lfs::rendering::GaussianRasterBackend;
-
-    EXPECT_FALSE(lfs::vis::plyComparisonUsesOwnedNodeModels(GaussianRasterBackend::ThreeDgs));
-    EXPECT_FALSE(lfs::vis::plyComparisonUsesOwnedNodeModels(GaussianRasterBackend::ThreeDgut));
-}
-
 TEST(ViewportTest, PlyComparisonClippedRequestKeepsFullViewportCamera) {
     constexpr glm::ivec2 full_size{1000, 600};
     constexpr float split_position = 0.5f;

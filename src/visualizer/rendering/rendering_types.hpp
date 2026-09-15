@@ -72,17 +72,6 @@ namespace lfs::vis {
         return mode == SplitViewMode::PLYComparison;
     }
 
-    // VkSplat owns one mutable model-input binding set per renderer. A PLY
-    // comparison submits both panels through that renderer in the same frame,
-    // so switching it from one owned node model to another would invalidate the
-    // first panel's in-flight bindings. Keep VkSplat on the combined model and
-    // isolate panels with the node mask; independent rasterizers may render the
-    // node models directly without building that aggregate.
-    [[nodiscard]] inline bool plyComparisonUsesOwnedNodeModels(
-        const lfs::rendering::GaussianRasterBackend backend) {
-        return !lfs::rendering::isVkSplatBackend(backend);
-    }
-
     // Ordered pair of visible splat-node indices for a PLY-comparison offset.
     // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
     [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>

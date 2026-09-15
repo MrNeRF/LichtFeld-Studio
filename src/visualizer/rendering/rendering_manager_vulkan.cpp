@@ -1928,8 +1928,7 @@ namespace lfs::vis {
                 return;
             }
             LOG_TIMER("renderVulkanFrame.buildRenderState");
-            if (splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
-                plyComparisonUsesOwnedNodeModels(frame_settings.raster_backend)) {
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 // Comparison draws owned node models. Do not concatenate them
                 // into a hidden combined copy just to fill FrameContext.model.
                 scene_manager->getScene().discardUnconsolidatedModelCache();
@@ -3415,9 +3414,7 @@ namespace lfs::vis {
                         ? right_node.node->model.get()
                         : nullptr;
                 const auto* const prepared_combined = scene.peekCombinedModel();
-                const bool render_owned_nodes =
-                    plyComparisonUsesOwnedNodeModels(frame_settings.raster_backend) &&
-                    left_owned && right_owned;
+                const bool render_owned_nodes = left_owned && right_owned;
                 const size_t slot_count = std::max(frame_ctx.scene_state.model_transforms.size(),
                                                    frame_ctx.scene_state.node_visibility_mask.size());
                 if (!left_node.node || !right_node.node) {
