@@ -332,11 +332,12 @@ class PortalGalleryClient:
             choices = options["representations"]
             if not isinstance(choices, list):
                 raise PortalProtocolError("Invalid gallery download options")
-            choice = next((item for item in choices if item.get("format") == "licht"), None)
-            if not choice or choice.get("status") != "ready":
-                raise GalleryTransferCanceled("The viewing copy is being prepared. Resume to check again.")
-            return self._download_representation(scene_id, choice, destination, cancel,
-                checkpoint, on_checkpoint, on_progress, on_message, final_destination)
+            choice = next((item for item in choices if isinstance(item, dict) and item.get("format") == "licht"), None)
+            if choice:
+                if choice.get("status") != "ready":
+                    raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
+                return self._download_representation(scene_id, choice, destination, cancel,
+                    checkpoint, on_checkpoint, on_progress, on_message, final_destination)
         payload = self._request("GET", f"/splats/{_identifier(scene_id)}/download")
         scene = payload["scene"]
         total = scene["contentLength"]

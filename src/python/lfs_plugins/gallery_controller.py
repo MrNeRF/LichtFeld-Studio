@@ -1315,6 +1315,7 @@ class GalleryController:
             project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
             if project is None:
                 raise ValueError(tr("error.storage"))
+            self._mark_viewing_copy(index, project)
             pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
                 operation=self._link_saved_download(job["id"], path))
             return
@@ -1366,6 +1367,7 @@ class GalleryController:
             if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
             project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"])
             if project is None: raise ValueError("The project opened but could not be added to Asset Manager.")
+            self._mark_viewing_copy(index, project)
             restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
             operation = self._link_saved_download(job["id"], expected["path"])
             job.pop("_native_project")
@@ -1391,7 +1393,9 @@ class GalleryController:
             if stage.get("id") != opening["stage_id"] or stage.get("state") != "ready":
                 raise ValueError(stage.get("message") or "The downloaded scene could not be prepared.")
             from .portable_project import ProjectFile
-            with open(stage["projectPath"], "rb") as source:
+            # The downloaded subset has the validated portable index. The
+            # fresh local identity may use native index compression.
+            with open(job["path"], "rb") as source:
                 prepared = ProjectFile(source)
                 count = sum(node["count"] for node in prepared.manifest["nodes"])
             lf.project_open(stage["projectPath"], keep_asset_manager_open=True)
@@ -1623,6 +1627,14 @@ class GalleryController:
         scene.rename_node(incoming.name, title)
         if not lf.project_save(wait=False):
             raise ValueError("The updated project could not be saved. Your recovery copy is available in the recovery folder.")
+
+
+    @staticmethod
+    def _mark_viewing_copy(index, project):
+        project.extra["viewing_copy"] = True
+        if not index.save():
+            raise ValueError(tr("error.storage"))
+
 
 
 _controller = None
