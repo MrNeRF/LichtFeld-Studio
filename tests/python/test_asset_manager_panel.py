@@ -335,12 +335,18 @@ def _scan_result(**overrides):
         setattr(value, key, item)
     return value
 
-def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
+def test_panel_contract_polls_preference_and_remains_left_dock(panel_module, monkeypatch):
     panel_type = panel_module.AssetManagerPanel
-    assert panel_type.update_policy == "interval"
-    assert panel_type.update_interval_ms == 100
+    assert panel_type.update_policy == "dirty"
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
+    panel = panel_type()
+    updates = []
+    monkeypatch.setattr(panel, "_request_model_update", lambda: updates.append(True))
+    panel.on_host_geometry_changed(1140, 900, 1.5)
+    assert panel._host_geometry == (760, 600)
+    assert panel._layout_signature is None
+    assert updates == [True]
 
 def test_rml_and_panel_use_only_cached_project_thumbnail_model():
     root = Path(__file__).resolve().parents[2]
@@ -1008,18 +1014,29 @@ def test_pull_undo_stays_in_history_and_clears_on_next_gallery_action(panel_modu
     assert panel._gallery_undo is None
 
 def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatch):
-    from lfs_plugins.asset_layout import list_columns
-    assert list_columns(320)["gallery"] == 150
-    assert list_columns(280)["gallery"] < 140
-    assert list_columns(420)["gallery"] == 172
-    assert list_columns(600)["gallery"] == 200
+    import xml.etree.ElementTree as ET
+    from lfs_plugins.asset_layout import list_columns, list_column_widths
     panel = panel_module.AssetManagerPanel()
     model = _BindingModel()
-    panel._asset_window_client_width = 280
     panel.on_bind_model(_BindingContext(model))
-    assert model.func_bindings["asset_list_gallery_compact"]() is True
-    rcss = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
-    assert "min-width: 96dp; max-width: 200dp" in rcss
+    for width in (260, 359, 360, 479, 480, 559, 560, 699, 700, 1100):
+        columns = list_columns(width)
+        assert columns["gallery"] == (24 if width < 480 else 128)
+        assert columns["size"] == (width >= 360)
+        assert columns["modified"] == (width >= 560)
+        assert columns["folder"] == (width >= 700)
+        panel._asset_window_client_width = width
+        assert model.func_bindings["asset_list_gallery_compact"]() == (width < 480)
+        expected = list_column_widths(width)
+        for name, value in expected.items():
+            assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    root = ET.fromstring((resources / "asset_manager.rml").read_text())
+    row = root.find('.//div[@class="asset-list-row"]')
+    gallery = row.find('./span[@class="asset-col asset-col-gallery"]')
+    assert gallery.get("data-style-width") == "asset_list_gallery_width"
+    assert gallery.find("img") is not None
+    assert gallery.findall(".//button") == []
 
 def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2061,10 +2078,17 @@ def test_gallery_relative_time_shared_boundaries(panel_module, monkeypatch, elap
 
 def test_signed_out_gallery_never_claims_offline_or_checked(panel_module):
     panel = panel_module.AssetManagerPanel()
-    panel._gallery_state = {'signed_in': False, 'offline': True, 'checkedAt': 123}
-    assert panel._gallery_checked_label().endswith('sidebar.sign_in_hint')
+    panel._gallery_state = {'signed_in': False, 'offline': True, 'checkedAt': 123,
+                            'message': 'Sign in and refresh to connect your gallery.'}
+    assert panel._gallery_checked_label().endswith('sidebar.not_checked')
+    assert panel._gallery_notice_text() == ''
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert not {'gallery_account', 'gallery_account_reason', 'gallery_has_account_reason'} & model.func_bindings.keys()
     panel._gallery_state['signed_in'] = True
     assert panel._gallery_checked_label().endswith('sidebar.offline')
+    panel._gallery_state['relink_required'] = True
+    assert panel._gallery_checked_label().endswith('sidebar.not_checked')
 
 def test_sidebar_restores_old_heights_with_room_for_gallery(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2259,70 +2283,97 @@ def test_A4_adaptive_sizes_match_tray_cards_and_info(panel_module, monkeypatch, 
     job = dict(id='job', status='running', completed=size, total=size)
     assert transfer_rows({'jobs':[job]})[0]['bytes'] == f'{expected} / {expected}'
 
-@pytest.mark.parametrize('width,modified', [(320, False), (380, True), (420, True)])
+@pytest.mark.parametrize('width,modified', [(320, False), (560, True), (700, True)])
 @pytest.mark.parametrize('scale', [1.0, 1.5])
 def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, width, modified, scale):
-    from lfs_plugins.asset_layout import list_columns
+    import xml.etree.ElementTree as ET
+    from lfs_plugins.asset_layout import list_columns, list_column_widths
     panel = panel_module.AssetManagerPanel()
-    panel._asset_window_client_width = width * scale
+    # Native geometry has already converted the browser width to logical dp.
+    panel._asset_window_client_width = width
     monkeypatch.setattr(panel_module.lf.ui, 'get_ui_scale', lambda: scale, raising=False)
     model = _BindingModel()
     panel.on_bind_model(_BindingContext(model))
     assert model.func_bindings['asset_list_wide']() == modified
-    assert not model.func_bindings['asset_list_show_folder']()
+    assert model.func_bindings['asset_list_show_size']() == (width >= 360)
+    assert model.func_bindings['asset_list_show_folder']() == (width >= 700)
+    assert model.func_bindings['asset_list_gallery_compact']() == (width < 480)
     assert model.func_bindings['col_gallery_label']().endswith('gallery.sidebar.title')
-    columns = list_columns(width)
-    assert columns['name'] >= 64 and 96 <= columns['gallery'] <= 200
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
-    assert '.asset-col-gallery { width: 200dp; min-width: 96dp; max-width: 200dp; flex: 0 1 200dp; }' in (resources / 'asset_manager.rcss').read_text()
+    root = ET.fromstring((resources / 'asset_manager.rml').read_text())
+    header = root.find('.//*[@class="asset-list-header"]')
+    row = root.find('.//div[@class="asset-list-row"]')
+    for overrides in ({}, {'name': 350, 'gallery': 200, 'size': 100, 'modified': 110, 'folder': 120}):
+        panel._list_column_overrides = overrides
+        widths = list_column_widths(width, overrides)
+        for column, value in widths.items():
+            binding = f'asset_list_{column}_width'
+            cell = f'./span[@class="asset-col asset-col-{column}"]'
+            assert header.find(cell).get('data-style-width') == binding
+            assert row.find(cell).get('data-style-width') == binding
+            assert model.func_bindings[binding]() == f'{value:.1f}dp'
+        columns = list_columns(width)
+        visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
+        assert sum(widths.values()) + 24 + 32 + 8 * visible <= width + 0.1
+        assert widths['name'] >= (80 if width < 420 else 120)
 
 
 def test_P12_projects_panel_visual_contract_is_explicit(panel_module):
     import xml.etree.ElementTree as ET
+    from lfs_plugins.asset_layout import INSPECTOR_COLUMN_MIN, breakpoint_metrics
 
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
-    root = ET.fromstring((resources / 'asset_manager.rml').read_text())
+    rml = (resources / 'asset_manager.rml').read_text()
+    root = ET.fromstring(rml)
     header = root.find('.//*[@class="asset-list-header"]')
-    assert header is not None
     assert header.find('./span[@class="asset-list-thumb asset-list-header-spacer"]') is not None
-    labels = header.findall('./span/span[@class="asset-list-header-label"]')
-    assert len(labels) == 5
+    labels = header.findall('./span/button/span[@class="asset-list-header-label"]')
     assert [label.text for label in labels] == [
         '{{col_name_label}}', '{{col_gallery_label}}', '{{col_size_label}}',
         '{{col_modified_label}}', '{{col_folder_label}}',
     ]
+    for column in ('name', 'gallery', 'size', 'modified', 'folder'):
+        button = header.find(f'./span[@class="asset-col asset-col-{column}"]/button')
+        assert button.get('data-event-click') == f"sort_list_column('{column}')"
 
     inspector = root.find('.//*[@id="asset-inspector-content"]')
-    assert inspector is not None
     assert inspector.get('class') == 'asset-inspector-content'
+    assert INSPECTOR_COLUMN_MIN == 320
+    assert breakpoint_metrics(1100)['inspector_min'] == INSPECTOR_COLUMN_MIN
     strip = root.find('.//*[@class="inspector-strip"]')
-    assert strip is not None
-    strip_meta = strip.findall('./span[@class="inspector-strip-meta"]')
-    assert len(strip_meta) == 2
-    assert strip.find('./button[@class="btn btn--primary inspector-strip-open"]') is not None
+    assert len(strip.findall('./span[@class="inspector-strip-meta"]')) == 2
+    strip_open = next(e for e in strip.findall('button') if 'inspector-strip-open' in e.get('class', '').split())
+    assert 'asset-button--toolbar24' in strip_open.get('class').split()
+    assert strip_open.get('data-event-click') == 'on_load_asset'
     operations = root.find('.//div[@class="inspector-operations"]')
-    assert operations is not None
-    history = operations.find('./span[@class="inspector-history-empty text-muted"]')
-    assert history is not None
-    assert history.get('data-tooltip') == 'projects.action.save_history'
-
-    account_button = root.find('.//button[@class="asset-button asset-button--text gallery-sign-in"]')
-    assert account_button is not None
-    assert account_button.find('./span[@class="asset-button-text"]') is not None
+    action = operations.find('button')
+    assert action.get('data-for') == 'operation : inspector_operation_rows'
+    assert action.get('data-event-click') == 'open_project_operation(operation.action)'
+    assert action.get('data-attr-data-project-operation') == 'operation.action'
+    assert action.get('data-attr-title') == 'operation.label'
+    assert operations.findall('span') == []
+    for name in ('asset_manager.rml', 'gallery_file_panel.rml', 'viewport_overlay.rml'):
+        content = (resources / name).read_text()
+        for obsolete in ('sign_in', 'sign-in', 'sign in', 'account.connect_menu_bar', 'gallery_account_reason'):
+            assert obsolete not in content.lower()
 
     check_gallery = root.find('.//button[@class="asset-button asset-button--text asset-check-gallery"]')
-    assert check_gallery is not None
     assert check_gallery.get('data-attr-title') == 'check_gallery_tooltip'
+    assert check_gallery.find('./span[@class="asset-button-text"]').text == '{{check_gallery_label}}'
     assert check_gallery.find('./span[@class="asset-check-gallery-icon"]') is not None
+    assert root.find('.//button[@data-event-click="open_view_menu"]') is not None
+    for path in root.findall('.//span[@class="inspector-path"]'):
+        assert path.get('data-attr-title') in ('selected_asset_path', 'selected_folder_path')
 
     rcss = (resources / 'asset_manager.rcss').read_text()
     assert 'color: inherit' not in rcss
     assert '.asset-inspector-content { display: flex; flex-direction: column;' in rcss
-    assert '.asset-shell.is-narrow .asset-list-header,' in rcss
-    assert '.asset-shell.is-narrow .asset-check-gallery-icon,' in rcss
-    assert '.inspector-actions .btn { box-sizing: border-box;' in rcss
-    assert '.inspector-strip-meta' in rcss
-    assert '.inspector-strip-open' in rcss
+    assert '.parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp;' in rcss
+    assert '.inspector-actions .btn { display: inline-flex;' in rcss
+    assert '.inspector-actions .btn span { flex: 0 0 auto; }' in rcss
+    assert '.asset-list-header .asset-col { position: relative; display: flex;' in rcss
+    assert '.asset-list-header .asset-col.hidden, .asset-list-row .asset-col.hidden { display: none; }' in rcss
+    assert '.inspector-strip-meta' in rcss and '.inspector-strip-open' in rcss
 
     gui_manager = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/gui_manager.cpp'
     cpp = gui_manager.read_text()
