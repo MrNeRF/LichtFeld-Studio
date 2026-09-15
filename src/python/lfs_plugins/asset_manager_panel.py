@@ -1270,7 +1270,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if kind == "remove":
             text = tr("projects.contents.removed_part" if status == "completed" else "projects.contents.removing").format(part=subject)
         elif kind:
-            text = tr("projects.contents.operation." + kind + ("_done" if status == "completed" else ""))
+            suffix = "_done" if status == "completed" else ""
+            text = tr(f"projects.contents.operation.{kind}{suffix}")
         else:
             text = operation.get("title", "")
         if status == "running":
