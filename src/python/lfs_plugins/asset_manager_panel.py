@@ -2680,26 +2680,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
 
     @staticmethod
-    def _capture_viewport_preview(path: str) -> Any:
-        import os
-        import tempfile
-        fd, target_name = tempfile.mkstemp(prefix="lfs-project-preview-", suffix=".png")
-        os.close(fd)
-        target = Path(target_name)
-        try:
+    def _capture_viewport_preview(path: str, project_id: str) -> Any:
+        from .asset_storage import preview_capture
+
+        with preview_capture(project_id) as target:
             exporter = getattr(lf, "export_viewport_image", None)
             if not callable(exporter):
                 raise RuntimeError("The current viewport has no captured image")
             exporter(str(target), "png")
             return AssetManagerPanel._native_io_call("set_project_preview", path, target.read_bytes())
-        finally:
-            target.unlink(missing_ok=True)
 
     def _start_project_operation(
         self,

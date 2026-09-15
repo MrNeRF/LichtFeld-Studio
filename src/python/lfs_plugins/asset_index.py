@@ -19,6 +19,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
+from .asset_storage import prune_previews
 from .environment import flag as environment_flag, value as environment_value
 
 _log = logging.getLogger(__name__)
@@ -285,49 +286,6 @@ def _legacy_storage_paths(native_storage: Optional[Path] = None) -> List[Path]:
     return _dedupe_paths(paths)
 
 
-def _path_accepts_writes(path: Path) -> bool:
-    probe_path: Optional[Path] = None
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            prefix=".lfs-write-test-", dir=path, delete=False
-        ) as probe:
-            probe.write(b"ok")
-            probe_path = Path(probe.name)
-        probe_path.unlink(missing_ok=True)
-        return True
-    except OSError as exc:
-        _log.debug("Asset Manager storage path is not writable: %s (%s)", path, exc)
-        if probe_path is not None:
-            try:
-                probe_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        return False
-
-
-def _copy_existing_catalog(source: Path, target: Path) -> None:
-    source_library = source / "library.json"
-    target_library = target / "library.json"
-    if source == target or not source_library.is_file() or target_library.exists():
-        return
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_library, target_library)
-        _log.info(
-            "Copied Asset Manager catalog from %s to writable storage %s",
-            source_library,
-            target_library,
-        )
-    except OSError as exc:
-        _log.warning(
-            "Could not copy Asset Manager catalog from %s to %s: %s",
-            source_library,
-            target_library,
-            exc,
-        )
-
-
 def resolve_asset_manager_storage_path() -> Path:
     override = environment_value("LFS_ASSET_MANAGER_DIR")
     if override:
@@ -340,29 +298,6 @@ def resolve_asset_manager_storage_path() -> Path:
         import lichtfeld as lf
 
         native_storage = Path(lf.io.asset_library_dir())
-
-    if environment_flag("LFS_SAFE_MODE", False):
-        return native_storage
-
-    candidates = [native_storage]
-    appdata = environment_value("APPDATA")
-    if appdata:
-        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
-    local_appdata = environment_value("LOCALAPPDATA")
-    if local_appdata:
-        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
-    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
-
-    for candidate in _dedupe_paths(candidates):
-        if _path_accepts_writes(candidate):
-            if candidate != native_storage:
-                _copy_existing_catalog(native_storage, candidate)
-                _log.warning(
-                    "Asset Manager catalog path %s is not writable; using %s",
-                    native_storage,
-                    candidate,
-                )
-            return candidate
 
     return native_storage
 
@@ -384,10 +319,11 @@ def resolve_default_asset_directory() -> Path:
             resolved = str(getter() or "").strip()
             if resolved:
                 return Path(resolved).expanduser()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("Could not read the default project folder: %s", exc)
 
-    return Path.home() / ".lichtfeld" / "projects"
+    from .asset_storage import lichtfeld_home
+    return lichtfeld_home() / "projects"
 
 
 def is_supported_asset_path(path: str) -> bool:
@@ -1705,9 +1641,7 @@ class AssetIndex:
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
         del self._folders[folder_id]
-        removed_count = sum(
-            1 for project in self._projects.values() if project.folder_id == folder_id
-        )
+        removed_ids = [project.project_uuid for project in self._projects.values() if project.folder_id == folder_id]
         self._projects = {
             project_uuid: project
             for project_uuid, project in self._projects.items()
@@ -1715,7 +1649,8 @@ class AssetIndex:
         }
         self._rebuild_path_lookup()
         if self.save():
-            return removed_count
+            prune_previews(removed_ids)
+            return len(removed_ids)
         self._restore_state(previous_state)
         return 0
 
@@ -1839,6 +1774,7 @@ class AssetIndex:
             self._rebuild_path_lookup()
             return 0
         self._touch_catalog()
+        prune_previews(removed)
         return len(removed)
 
     @_synchronized

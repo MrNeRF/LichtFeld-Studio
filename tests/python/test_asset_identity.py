@@ -1009,46 +1009,60 @@ def test_folder_scan_duplicate_does_not_adopt_when_locator_is_offline(
     ][project.id]
 
 
-def test_storage_resolution_falls_back_from_unwritable_native_path(
-    monkeypatch, tmp_path: Path
-):
-    from lfs_plugins import asset_index as asset_index_module
+def test_storage_resolution_keeps_unwritable_native_path(monkeypatch, tmp_path):
+    from lfs_plugins import asset_index
 
-    native = tmp_path / "unwritable" / "asset_library"
-    native.mkdir(parents=True)
-    (native / "library.json").write_text('{"schema_version": 2}', encoding="utf-8")
-    appdata = tmp_path / "appdata"
-    fallback = appdata / "LichtFeldStudio" / "asset_manager"
+    native = tmp_path / "blocked"
+    native.write_text("not a directory")
     monkeypatch.delenv("LFS_ASSET_MANAGER_DIR", raising=False)
     monkeypatch.setenv("LFS_RESOLVED_ASSET_LIBRARY_DIR", str(native))
-    monkeypatch.setenv("APPDATA", str(appdata))
-    monkeypatch.delenv("LFS_SAFE_MODE", raising=False)
-    monkeypatch.setattr(
-        asset_index_module,
-        "_path_accepts_writes",
-        lambda path: path == fallback,
-    )
-
-    assert asset_index_module.resolve_asset_manager_storage_path() == fallback
-    assert (fallback / "library.json").read_text(encoding="utf-8") == (
-        '{"schema_version": 2}'
-    )
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    assert asset_index.resolve_asset_manager_storage_path() == native
+    with pytest.raises(OSError):
+        AssetIndex(library_path=native / "library.json")
+    assert not (tmp_path / "appdata").exists()
 
 
-def test_safe_mode_storage_resolution_does_not_probe(monkeypatch, tmp_path: Path):
-    from lfs_plugins import asset_index as asset_index_module
+def test_safe_mode_storage_resolution_does_not_write(monkeypatch, tmp_path):
+    from lfs_plugins import asset_index
 
     native = tmp_path / "native" / "asset_library"
     monkeypatch.delenv("LFS_ASSET_MANAGER_DIR", raising=False)
     monkeypatch.setenv("LFS_RESOLVED_ASSET_LIBRARY_DIR", str(native))
     monkeypatch.setenv("LFS_SAFE_MODE", "1")
-    monkeypatch.setattr(
-        asset_index_module,
-        "_path_accepts_writes",
-        lambda _path: pytest.fail("safe mode must not probe storage"),
-    )
+    assert asset_index.resolve_asset_manager_storage_path() == native
+    assert not native.exists()
 
-    assert asset_index_module.resolve_asset_manager_storage_path() == native
+
+def test_preview_capture_stays_home_and_cleans_failure(monkeypatch, tmp_path):
+    from lfs_plugins import asset_storage
+
+    monkeypatch.setenv("LFS_HOME", str(tmp_path / "Lichtfeld 日本語"))
+    with pytest.raises(RuntimeError, match="capture failed"):
+        with asset_storage.preview_capture("project") as target:
+            assert target.parent == asset_storage.lichtfeld_home() / "cache" / "previews"
+            target.write_bytes(b"png")
+            raise RuntimeError("capture failed")
+    assert not target.exists()
+
+
+def test_preview_cache_evicts_oldest_and_removed_project(monkeypatch, tmp_path):
+    import os
+    from lfs_plugins import asset_storage
+
+    monkeypatch.setenv("LFS_HOME", str(tmp_path))
+    monkeypatch.setattr(asset_storage, "PREVIEW_CACHE_BYTES", 8)
+    directory = tmp_path / "cache" / "previews"
+    directory.mkdir(parents=True)
+    paths = [directory / (asset_storage._preview_prefix(key) + "old.png") for key in ("old", "keep", "removed")]
+    for index, path in enumerate(paths):
+        path.write_bytes(b"1234")
+        os.utime(path, ns=(index + 1, index + 1))
+    asset_storage.prune_previews()
+    assert not paths[0].exists()
+    assert paths[1].exists() and paths[2].exists()
+    asset_storage.prune_previews(["removed"])
+    assert paths[1].exists() and not paths[2].exists()
 
 
 def test_safe_mode_does_not_create_default_asset_directory(monkeypatch, tmp_path: Path):
