@@ -158,6 +158,15 @@
 .asset-quick-look-heading { justify-content: space-between; margin-bottom: 8dp; }
 .asset-quick-look-thumb { height: 180dp; margin-bottom: 8dp; }
 .asset-quick-look-facts { flex-direction: column; align-items: flex-start; }
+.asset-quick-look-facts > span {
+    display: block;
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
 
 #asset-viewport-edge {
     position: absolute;
@@ -933,6 +942,7 @@
 }
 
 .asset-info-empty-text {
+    display: block;
     font-size: 12dp;
 }
 

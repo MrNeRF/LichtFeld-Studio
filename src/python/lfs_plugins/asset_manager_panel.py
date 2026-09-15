@@ -736,6 +736,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_load_asset", self.on_load_asset),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
+            ("close_quick_look", self.close_quick_look),
             ("open_view_menu", self.open_view_menu),
             ("open_filter_menu", self.open_filter_menu),
             ("toggle_inspector", self.toggle_inspector),

@@ -134,7 +134,7 @@
               <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-title="gallery_quota">
                 <span>{{g_sidebar_title}}</span>
                 <button class="asset-button asset-button--small-icon gallery-refresh" data-event-click="gallery_refresh"
-                        data-tooltip="projects.gallery.sidebar.refresh" aria-label="{{check_gallery_label}}">&#x21BB;</button>
+                        data-attr-title="check_gallery_tooltip" aria-label="{{check_gallery_label}}"><span class="asset-refresh-glyph">&#x21BB;</span></button>
               </div>
               <div class="gallery-account-row">
                 <span class="text-muted gallery-account-label" data-attr-title="gallery_account">{{gallery_account}}</span>
@@ -157,7 +157,7 @@
               <div class="asset-gallery-header-copy">
                 <span class="asset-gallery-subtitle">{{asset_results_summary}}</span>
                 <span class="asset-gallery-empty-search" data-if="asset_search_empty">
-                  {{no_search_results_label}} <button class="btn btn--secondary" data-event-click="clear_search">{{clear_search_label}}</button>
+                  <span>{{no_search_results_label}}</span><button class="btn btn--secondary" data-event-click="clear_search"><span>{{clear_search_label}}</span></button>
                 </span>
               </div>
               <div class="asset-gallery-header-actions">
@@ -281,7 +281,7 @@
           <div class="asset-resize-handle asset-resize-handle--horizontal" data-resize="inspector-height"
                tabindex="0" aria-label="{{resize_inspector_height_label}}"></div>
           <div id="asset-inspector-content" class="asset-inspector-content">
-            <div class="asset-info-empty" data-if="show_selection_none">{{select_item_hint}}</div>
+            <div class="asset-info-empty" data-if="show_selection_none"><span class="asset-info-empty-text">{{select_item_hint}}</span></div>
             <div class="asset-info-empty inspector-multi" data-if="show_selection_multiple">
               {{gallery_multi_summary}}
               <button class="btn btn--primary" data-if="gallery_can_publish_many" data-event-click="gallery_publish_many">{{gallery_publish_many}}</button>
@@ -392,7 +392,7 @@
           <div class="asset-quick-look-heading">
             <span class="inspector-title">{{selected_asset_name}}</span>
             <button class="asset-button asset-button--small-icon" data-event-click="close_quick_look"
-                    data-tooltip="common.close" aria-label="{{close_label}}">&#215;</button>
+                    data-tooltip="common.close" aria-label="{{close_label}}"><span class="asset-button-glyph">&#215;</span></button>
           </div>
           <div class="asset-quick-look-thumb asset-thumb-project"
                data-style-decorator="quick_look_thumbnail">
