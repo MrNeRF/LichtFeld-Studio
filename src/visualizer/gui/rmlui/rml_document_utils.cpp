@@ -27,7 +27,7 @@ namespace lfs::vis::gui::rml_documents {
 
         std::string preserveTranslationDirectives(std::string document_rml) {
             static const std::regex kTranslatedAttributePattern(
-                R"((\s)(title|placeholder)\s*=\s*(["'])@tr:([A-Za-z0-9_.-]+)\3)",
+                R"((\s)(title|placeholder|aria-label)\s*=\s*(["'])@tr:([A-Za-z0-9_.-]+)\3)",
                 std::regex_constants::icase);
             static const std::regex kTranslatedTextPattern(
                 R"((<[A-Za-z][^>]*)(>)([ \t\r\n]*)@tr:([A-Za-z0-9_.-]+)([ \t\r\n]*)(</[A-Za-z][^>]*>))");
@@ -317,7 +317,7 @@ namespace lfs::vis::gui::rml_documents {
             }
         }
 
-        for (const std::string_view attribute : {"title", "placeholder"}) {
+        for (const std::string_view attribute : {"title", "placeholder", "aria-label"}) {
             const std::string metadata_name = std::format("data-lfs-i18n-{}", attribute);
             const auto key = root->GetAttribute<Rml::String>(metadata_name, "");
             if (key.empty())

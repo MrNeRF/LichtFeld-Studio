@@ -6,6 +6,7 @@
 #include "indirect_layout.h"
 #include "perf_timer.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -211,6 +212,16 @@ public:
         size_t raw_count = 0;
         bool count_overflow = false;
     };
+    // Host identity attached when a selector readback copy is queued. Opaque
+    // to this renderer: kind/view_id are the viewport's ViewOutputKey payload.
+    struct LodSelectionReadbackIdentity {
+        std::uint8_t kind = 0;
+        std::uint64_t view_id = 0;
+        std::uint64_t model_generation = 0;
+        std::uint64_t tree_generation = 0;
+
+        [[nodiscard]] bool valid() const noexcept { return kind != 0 && view_id != 0; }
+    };
     struct LodSelectionStats {
         float threshold_scale = 1.0f;
         size_t candidate_count = 0;
@@ -223,6 +234,8 @@ public:
         std::vector<std::pair<uint32_t, uint32_t>> miss_candidates;
         uint32_t protected_overflow = 0;
         uint32_t miss_overflow = 0;
+        LodSelectionReadbackIdentity identity{};
+        std::uint64_t submission_value = 0;
     };
 
     VulkanGSRenderer();
@@ -242,7 +255,9 @@ public:
     void cleanup();
 
     void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);
-    void tagDeferredLodSelectionReadback(VkSemaphore semaphore, std::uint64_t value);
+    void tagDeferredLodSelectionReadback(VkSemaphore semaphore,
+                                         std::uint64_t value,
+                                         LodSelectionReadbackIdentity identity = {0, 0, 0, 0});
     void tagDeferredInstanceCountReadback(VkSemaphore semaphore, std::uint64_t value);
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] std::optional<LodSelectionStats> pollDeferredLodSelectionStats();
@@ -553,14 +568,20 @@ protected:
     uint32_t* instance_gate_readback_mapped_ = nullptr;
     bool instance_gate_readback_initialized_ = false;
 
-    _VulkanBuffer lod_selection_readback_buffer_{};
-    uint32_t* lod_selection_readback_mapped_ = nullptr;
-    bool lod_selection_readback_initialized_ = false;
-    bool lod_selection_readback_pending_ = false;
-    VkSemaphore lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    std::uint64_t lod_selection_readback_value_ = 0;
-    size_t lod_selection_readback_capacity_ = 0;
+    static constexpr std::size_t kLodSelectionReadbackRingSize = 8;
+    struct LodSelectionReadbackSlot {
+        _VulkanBuffer buffer{};
+        uint32_t* mapped = nullptr;
+        bool initialized = false;
+        bool pending = false;
+        VkSemaphore signal = VK_NULL_HANDLE;
+        std::uint64_t value = 0;
+        size_t capacity = 0;
+        LodSelectionReadbackIdentity identity{};
+    };
+    std::array<LodSelectionReadbackSlot, kLodSelectionReadbackRingSize> lod_selection_readback_slots_{};
     size_t lod_selection_readback_chunk_capacity_ = 0;
+    size_t lod_selection_readback_record_slot_ = 0;
 
     void ensureVisibleCountReadback();
     void destroyVisibleCountReadback();
@@ -571,7 +592,10 @@ protected:
     void ensureInstanceGateReadback();
     void destroyInstanceGateReadback();
     void ensureLodSelectionReadback(size_t chunk_capacity);
+    void ensureLodSelectionReadbackSlot(size_t slot_index, size_t chunk_capacity);
     void destroyLodSelectionReadback();
+    void destroyLodSelectionReadbackSlot(size_t slot_index);
+    [[nodiscard]] std::optional<size_t> acquireLodSelectionReadbackSlot();
     void recordLodSelectionReadback(VulkanGSPipelineBuffers& buffers,
                                     size_t rendered_capacity);
 

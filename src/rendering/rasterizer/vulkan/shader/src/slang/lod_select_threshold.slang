@@ -86,7 +86,9 @@ float node_pixel_scale(uint32_t physical, Uniforms uniforms) {
     const float3 view_center = view_position_for_center(center, uniforms);
     const float distance = max(length(view_center), 1.0e-6f);
     const float forward_dot = -view_center.z;
-    float distance_for_scale = distance;
+    // Orthographic projection has no perspective depth term. Keep CPU and GPU
+    // LOD cuts in world units, compared against 1 / ortho_scale.
+    float distance_for_scale = uniforms.orthographic != 0u ? 1.0f : distance;
 
     const float behind_camera_penalty =
         uniforms.viewport_foveation != 0u

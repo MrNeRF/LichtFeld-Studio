@@ -14,6 +14,7 @@
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/area_editor_host.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "preferences.hpp"
@@ -30,6 +31,7 @@
 #include "gui/native_panels.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/panels/console_area_panel.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -67,9 +69,11 @@
 #include "python/ui_hooks.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/passes/shared_viewport_gpu_assets.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rendering/workspace_render_request.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "theme/theme.hpp"
@@ -381,6 +385,7 @@ namespace lfs::vis::gui {
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
             glm::ivec2 render_size{0};
+            std::optional<ViewId> workspace_view_id;
 
             [[nodiscard]] bool valid() const {
                 return viewport != nullptr && size.x > 0.0f && size.y > 0.0f &&
@@ -1025,13 +1030,15 @@ namespace lfs::vis::gui {
             }
         }
 
-        void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
-                                                lfs::rendering::ScreenOverlayRenderer* overlay) {
-            if (!overlay) {
-                return;
-            }
-            const auto commands = overlay->consumeCommands();
+        void appendScreenOverlayCommands(VulkanViewportPassParams& params,
+                                         std::span<const lfs::rendering::OverlayCommand> commands) {
             for (const auto& command : commands) {
+                if (command.clip &&
+                    (command.clip->max.x <= params.viewport_pos.x ||
+                     command.clip->max.y <= params.viewport_pos.y ||
+                     command.clip->min.x >= params.viewport_pos.x + params.viewport_size.x ||
+                     command.clip->min.y >= params.viewport_pos.y + params.viewport_size.y))
+                    continue;
                 switch (command.type) {
                 case lfs::rendering::OverlayCommandType::Line:
                     appendScreenOverlayLine(
@@ -1060,6 +1067,49 @@ namespace lfs::vis::gui {
                         command.color_premul, command.clip);
                     break;
                 }
+            }
+        }
+
+        void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
+                                                lfs::rendering::ScreenOverlayRenderer* overlay) {
+            if (overlay)
+                appendScreenOverlayCommands(params, overlay->consumeCommands());
+        }
+
+        void appendWorkspaceLineCommands(VulkanViewportPassParams& params,
+                                         std::span<const LineRendererCommand> commands,
+                                         const bool active) {
+            for (const auto& line : commands) {
+                if (!line.clip_rect && !active)
+                    continue;
+                lfs::rendering::OverlayCommand command;
+                command.p0 = line.p0;
+                command.p1 = line.p1;
+                command.p2 = line.p2;
+                command.color_premul = glm::vec4(glm::vec3(line.color) * line.color.a, line.color.a);
+                command.thickness = line.thickness;
+                command.radius = line.type == LineRendererCommandType::Circle ? line.thickness : line.radius;
+                if (line.clip_rect) {
+                    const auto& clip = *line.clip_rect;
+                    command.clip = lfs::rendering::OverlayClipRect{
+                        {clip.x, clip.y},
+                        {clip.x + clip.width, clip.y + clip.height}};
+                }
+                switch (line.type) {
+                case LineRendererCommandType::Line:
+                    command.type = lfs::rendering::OverlayCommandType::Line;
+                    break;
+                case LineRendererCommandType::Triangle:
+                    command.type = lfs::rendering::OverlayCommandType::Triangle;
+                    break;
+                case LineRendererCommandType::Circle:
+                    command.type = lfs::rendering::OverlayCommandType::CircleFilled;
+                    break;
+                case LineRendererCommandType::CircleOutline:
+                    command.type = lfs::rendering::OverlayCommandType::CircleOutline;
+                    break;
+                }
+                appendScreenOverlayCommands(params, std::span(&command, 1));
             }
         }
 
@@ -1486,15 +1536,13 @@ namespace lfs::vis::gui {
 
         void appendVulkanViewportGizmoOverlay(VulkanViewportPassParams& params,
                                               VisualizerImpl& viewer,
-                                              const ViewportLayout& viewport_layout,
-                                              RenderingManager& rendering_manager,
+                                              const std::vector<VulkanGuidePanelTarget>& panels,
                                               const float ui_scale,
                                               const bool dragging) {
             if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
             if (panels.empty()) {
                 return;
             }
@@ -2888,6 +2936,15 @@ namespace lfs::vis::gui {
 
             const size_t camera_count = cache.cameras.size();
             const size_t panel_count = panels.size();
+            // Retained presentations can still reference the previous pane's
+            // block. Copy on write before changing projected data for this one.
+            if (!cache.data.unique()) {
+                const auto generation = cache.data->generation;
+                cache.data = geometry_changed
+                                 ? std::make_shared<VulkanViewportFrustumOverlayData>()
+                                 : std::make_shared<VulkanViewportFrustumOverlayData>(*cache.data);
+                cache.data->generation = generation;
+            }
             if (geometry_changed) {
                 cache.data->overlay_triangles.clear();
                 cache.data->textured_overlays.clear();
@@ -3270,7 +3327,9 @@ namespace lfs::vis::gui {
                         depth_window_offset_x,
                         depth_window_offset_y);
                     const auto& overlay_state = op::depthWindowOverlayState();
-                    if (overlay_state.visible) {
+                    if (overlay_state.visible &&
+                        (!panel.workspace_view_id ||
+                         overlay_state.workspace_view_id == panel.workspace_view_id)) {
                         const auto geometry = op::depthWindowHandleGeometry(screen_rect);
                         const auto append_square = [&](const glm::vec2 center,
                                                        const float radius,
@@ -3478,8 +3537,7 @@ namespace lfs::vis::gui {
         }
 
         void appendVulkanSceneGuideOverlays(VulkanViewportPassParams& params,
-                                            const VisualizerImpl& viewer,
-                                            const ViewportLayout& viewport_layout,
+                                            const std::vector<VulkanGuidePanelTarget>& panels,
                                             const RenderSettings& settings,
                                             RenderingManager& rendering_manager,
                                             const RenderingManager::DepthWindowOverlaySnapshot& depth_window_snapshot,
@@ -3490,7 +3548,6 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
             if (panels.empty()) {
                 return;
             }
@@ -4508,7 +4565,8 @@ namespace lfs::vis::gui {
 
     void GuiManager::initMenuBar() {
         menu_bar_->setOnShowPythonConsole([this]() {
-            window_states_["python_console"] = !window_states_["python_console"];
+            showWindow("python_console", usesAreaWorkspace() ? !isPanelAreaOpen("native.python_console")
+                                                             : !window_states_["python_console"]);
         });
     }
 
@@ -4731,6 +4789,7 @@ namespace lfs::vis::gui {
             hideBottomDockPanel(id);
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
+        rml_workspace_chrome_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode,
                              viewer_->options_.mcp_status_provider);
@@ -5092,6 +5151,9 @@ namespace lfs::vis::gui {
         rml_right_panel_.reloadResources();
         rml_bottom_dock_.reloadResources();
         rml_viewport_overlay_.reloadResources();
+        for (auto& [id, overlay] : viewport_overlays_)
+            overlay->reloadResources();
+        rml_workspace_chrome_.reloadResources();
         rml_menu_bar_.reloadResources();
         rml_status_bar_.reloadResources();
         sequencer_ui_.reloadRmlResources();
@@ -5201,6 +5263,23 @@ namespace lfs::vis::gui {
         if (need_gil)
             lfs::python::acquire_gil_main_thread();
 
+        // Area editors own Python objects and Rml contexts. Retire them while
+        // the interpreter, Rml manager, and renderer are all still alive.
+        if (area_editor_host_) {
+            area_editor_host_->releaseRendererResources();
+            area_editor_host_.reset();
+        }
+        for (auto& [id, overlay] : viewport_overlays_)
+            overlay->shutdown();
+        for (auto& overlay : retired_viewport_overlays_)
+            overlay->shutdown();
+        visible_viewport_overlays_.clear();
+        viewport_overlays_.clear();
+        retired_viewport_overlays_.clear();
+        // Sequencer panels own RML contexts and must die while the RML
+        // manager is still valid. Their member is declared before the RML
+        // manager, so relying on C++ member destruction order is unsafe.
+        sequencer_ui_.shutdown();
         lfs::python::shutdown_python_ui_resources();
         lfs::python::invoke_python_cleanup();
         lfs::python::set_modal_enqueue_callback({});
@@ -5214,11 +5293,11 @@ namespace lfs::vis::gui {
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
+        rml_workspace_chrome_.shutdown();
         rml_right_panel_.shutdown();
         rml_bottom_dock_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
-        sequencer_ui_.destroyGraphicsResources();
         for (const auto& panel : native_panel_storage_) {
             if (panel)
                 panel->releaseRendererResources();
@@ -5254,7 +5333,38 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::shutdownVulkanViewportPass() {
+        clearWorkspacePresentation();
         vulkan_viewport_pass_.reset();
+        viewport_gpu_assets_.reset();
+    }
+
+    void GuiManager::setWorkspacePresentation(
+        std::vector<WorkspacePanePresentation> panes,
+        const std::vector<ViewId>& live_views,
+        const std::optional<ViewId> focused_view) {
+        const std::unordered_set<ViewId> live(live_views.begin(), live_views.end());
+        std::unordered_set<ViewId> assigned;
+        for (const auto& pane : panes) {
+            if (pane.view == kInvalidViewId || !live.contains(pane.view) ||
+                !assigned.insert(pane.view).second) {
+                throw std::invalid_argument("Workspace presentation requires unique live view identities");
+            }
+        }
+        // Pass destruction waits for submitted GUI frames. Closing a view is
+        // an explicit lifecycle event; retained/hidden passes are not rebuilt.
+        std::erase_if(workspace_viewport_passes_, [&](const auto& entry) {
+            return !live.contains(entry.first);
+        });
+        workspace_presentations_ = std::move(panes);
+        workspace_focused_view_ = focused_view;
+        workspace_presentation_active_ = true;
+    }
+
+    void GuiManager::clearWorkspacePresentation() {
+        workspace_presentations_.clear();
+        workspace_viewport_passes_.clear();
+        workspace_focused_view_.reset();
+        workspace_presentation_active_ = false;
     }
 
     void GuiManager::hideBottomDockPanel(const std::string& id) {
@@ -5308,6 +5418,11 @@ namespace lfs::vis::gui {
             reg_panel("lfs.scene", "Scene", panel, PanelSpace::SceneHeader, 0);
         }
 
+        reg_panel("native.python_console", "Python Console",
+                  std::make_shared<PythonConsoleAreaPanel>(&rmlui_manager_),
+                  PanelSpace::MainPanelTab, 600,
+                  static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED));
+
         reg_panel("native.video_extractor", "Video Extractor",
                   make_panel(VideoExtractorPanel(video_widget_.get())),
                   PanelSpace::Floating, 11,
@@ -5358,122 +5473,11 @@ namespace lfs::vis::gui {
                   PanelSpace::ViewportOverlay, 0);
     }
 
-    VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
-                                                                   const std::size_t frame_slot) const {
-        const bool has_viewport_layout =
-            viewport_layout_.size.x > 0.0f && viewport_layout_.size.y > 0.0f;
-        const bool export_locked = isViewportExportLocked();
-
-        VulkanViewportPassParams params{};
-        params.frame_slot = frame_slot;
-        params.viewport_pos = has_viewport_layout ? viewport_layout_.pos : glm::vec2(0.0f, 0.0f);
-        params.viewport_size = has_viewport_layout
-                                   ? viewport_layout_.size
-                                   : glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
-        params.framebuffer_scale = {1.0f, 1.0f};
-
-        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            const auto settings = rendering_manager->getSettings();
-            const auto depth_window_snapshot = rendering_manager->getDepthWindowOverlaySnapshot();
-            params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
-                                        .value_or(SceneUpscalerBackend::Native);
-            params.background_color = settings.background_color;
-            params.grid_enabled =
-                settings.show_grid &&
-                !splitViewUsesComparisonPanels(settings.split_view_mode) &&
-                !settings.equirectangular &&
-                settings.grid_opacity > 0.0f;
-            params.grid_plane = std::clamp(settings.grid_plane, 0, 2);
-            params.grid_opacity = std::clamp(settings.grid_opacity, 0.0f, 1.0f);
-
-            if (params.grid_enabled && viewer_) {
-                const auto panels = collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager);
-                params.grid_overlays.reserve(panels.size());
-                for (const auto& panel : panels) {
-                    if (!panel.valid()) {
-                        continue;
-                    }
-                    const glm::mat4 view =
-                        lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(),
-                                                       panel.viewport->getTranslation());
-                    const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
-                        panel.render_size,
-                        settings.focal_length_mm,
-                        settings.orthographic,
-                        settings.ortho_scale,
-                        lfs::rendering::DEFAULT_NEAR_PLANE,
-                        settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
-                    VulkanViewportGridOverlay grid{};
-                    grid.viewport_pos = panel.pos;
-                    grid.viewport_size = panel.size;
-                    grid.render_size = panel.render_size;
-                    grid.view = view;
-                    grid.projection = proj;
-                    grid.view_projection = proj * view;
-                    grid.view_position = panel.viewport->getTranslation();
-                    grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
-                    grid.opacity = params.grid_opacity;
-                    grid.orthographic = settings.orthographic;
-                    params.grid_overlays.push_back(grid);
-                }
-                if (!params.grid_overlays.empty()) {
-                    const auto& first_grid = params.grid_overlays.front();
-                    params.grid_plane = first_grid.plane;
-                    params.grid_view = first_grid.view;
-                    params.grid_projection = first_grid.projection;
-                    params.grid_view_projection = first_grid.view_projection;
-                    params.grid_view_position = first_grid.view_position;
-                    params.grid_orthographic = first_grid.orthographic;
-                }
-            }
-
-            if (viewer_) {
-                SceneManager* const scene_manager = viewer_->getSceneManager();
-                std::optional<SceneRenderState> overlay_scene_state;
-                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
-                    overlay_scene_state =
-                        scene_manager->buildRenderState({.metadata_only = true});
-                }
-                const GizmoState gizmo_state = rendering_manager->getGizmoState();
-                appendVulkanSceneGuideOverlays(params,
-                                               *viewer_,
-                                               viewport_layout_,
-                                               settings,
-                                               *rendering_manager,
-                                               depth_window_snapshot,
-                                               scene_manager,
-                                               overlay_scene_state ? &*overlay_scene_state : nullptr,
-                                               gizmo_state);
-                appendVulkanViewportGizmoOverlay(params,
-                                                 *viewer_,
-                                                 viewport_layout_,
-                                                 *rendering_manager,
-                                                 current_ui_scale_,
-                                                 gizmo_manager_.isViewportGizmoDragging());
-            }
-        }
-
-        appendLineRendererCommandOverlays(params);
-
-        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
-
-            // Pull GPU mesh / environment frame populated by renderVulkanFrame.
-            // vulkan_viewport_pass rasterizes these on the GPU.
-            auto mesh_frame = rendering_manager->getVulkanMeshFrame();
-            auto temporal_frame = std::move(mesh_frame.temporal);
-            params.mesh_view_projection = mesh_frame.view_projection;
-            params.mesh_camera_position = mesh_frame.camera_position;
-            params.mesh_items = std::move(mesh_frame.items);
-            params.mesh_panels = std::move(mesh_frame.panels);
-            params.environment = std::move(mesh_frame.environment);
-            params.depth_blit = std::move(mesh_frame.depth_blit);
-            params.split_view = std::move(mesh_frame.split_view);
-            // Late bind: interop-owned scene / depth-blit / split-view fields. Must
-            // run after params.split_view is populated (split stitching is gated on
-            // params.split_view.enabled).
-            rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
-
+    namespace {
+        void bindViewportTemporalInput(
+            VulkanViewportPassParams& params,
+            const std::optional<RenderingManager::VulkanMeshFrame::TemporalFrame>& temporal_frame,
+            const std::size_t frame_slot) {
             const glm::ivec2 output_extent = temporal_frame
                                                  ? temporal_frame->input.output_extent
                                                  : glm::ivec2(0);
@@ -5572,6 +5576,289 @@ namespace lfs::vis::gui {
                         params.dlss = dlss_request;
                 }
             }
+        }
+    } // namespace
+
+    void GuiManager::captureAreaEditorState() const {
+        if (area_editor_host_)
+            area_editor_host_->captureChrome();
+    }
+
+    void GuiManager::resetAreaEditors() {
+        visible_viewport_overlays_.clear();
+        for (auto& [id, overlay] : viewport_overlays_)
+            retired_viewport_overlays_.push_back(std::move(overlay));
+        viewport_overlays_.clear();
+        if (area_editor_host_)
+            area_editor_host_->retireAll();
+        area_pointer_owner_.reset();
+    }
+
+    bool GuiManager::usesAreaWorkspace() const {
+        const auto* rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        return viewer_ && (!rendering || !splitViewUsesComparisonPanels(rendering->getSplitViewMode()));
+    }
+
+    int GuiManager::workspaceHeaderHeight() const {
+        return usesAreaWorkspace() && !ui_hidden_
+                   ? static_cast<int>(std::lround(26.0f * current_ui_scale_))
+                   : 0;
+    }
+
+    WorkspaceFrameSnapshot GuiManager::workspaceSnapshot() const {
+        if (!viewer_)
+            return {};
+        const auto pos = getViewportPos();
+        const auto size = getViewportSize();
+        if (auto* wm = viewer_->getWindowManager()) {
+            const auto logical = wm->getWindowSize();
+            const auto framebuffer = wm->getFramebufferSize();
+            const glm::vec2 scale{
+                logical.x > 0 ? static_cast<float>(framebuffer.x) / logical.x : 1.0f,
+                logical.y > 0 ? static_cast<float>(framebuffer.y) / logical.y : 1.0f};
+            return viewer_->getViewportWorkspace()->snapshot(
+                {static_cast<int>(std::lround(pos.x)), static_cast<int>(std::lround(pos.y)),
+                 static_cast<int>(std::lround(size.x)), static_cast<int>(std::lround(size.y))},
+                kDefaultMinPanePixels, kDefaultDividerPixels, scale, workspaceHeaderHeight());
+        }
+        return {};
+    }
+
+    void GuiManager::updateWorkspacePresentation(const WorkspaceFrameSnapshot& render_snapshot) {
+        auto* rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        if (!rendering)
+            return;
+        // Keep scene rectangles aligned with this frame's queued UI.
+        // Resolve image handles after import and UI callbacks.
+        const auto& snapshot = render_snapshot;
+        const auto settings = rendering->getSettings();
+        auto* scene_manager = viewer_->getSceneManager();
+        std::optional<SceneRenderState> overlay_scene_state;
+        if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid || settings.show_camera_frustums))
+            overlay_scene_state = scene_manager->buildRenderState({.metadata_only = true});
+        std::vector<WorkspacePanePresentation> panes;
+        panes.reserve(snapshot.panes.size());
+        for (const auto& pane : snapshot.panes) {
+            WorkspacePanePresentation presentation;
+            presentation.view = pane.id;
+            auto& params = presentation.params;
+            params.viewport_pos = {pane.rect.x, pane.rect.y};
+            params.viewport_size = {pane.rect.width, pane.rect.height};
+            params.framebuffer_scale = {
+                pane.window_size.x > 0 ? static_cast<float>(pane.framebuffer_size.x) / pane.window_size.x : 1.0f,
+                pane.window_size.y > 0 ? static_cast<float>(pane.framebuffer_size.y) / pane.window_size.y : 1.0f};
+            params.background_color = settings.background_color;
+            params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
+                                        .value_or(SceneUpscalerBackend::Native);
+            auto frame = rendering->getWorkspaceVulkanFrame(pane.id);
+            if (!frame && pane.framebuffer_size.x > 0 && pane.framebuffer_size.y > 0) {
+                // An empty scene still has a navigable view. Draw its grid and
+                // orientation guides from that pane's camera while no scene
+                // image has been published (including after scene clear).
+                RenderingManager::WorkspaceVulkanFrame empty;
+                empty.pane = pane;
+                empty.unjittered_view = makeWorkspaceFrameView(
+                    pane, pane.framebuffer_size, settings.background_color);
+                frame = std::move(empty);
+            }
+            if (frame) {
+                const auto& color = frame->color;
+                const auto& geometry = frame->geometry;
+                params.scene_image = color.image;
+                params.scene_image_size = color.size;
+                params.scene_image_alloc_size = color.alloc_size;
+                params.scene_image_flip_y = color.flip_y;
+                params.external_scene_image = color.external_image;
+                params.external_scene_image_view = color.external_image_view;
+                params.external_scene_image_layout = color.external_image_layout;
+                params.external_scene_image_generation = color.external_image_generation;
+                presentation.completion_semaphore = color.completion_semaphore;
+                presentation.completion_value = color.completion_value;
+                params.mesh_view_projection = geometry.view_projection;
+                params.mesh_camera_position = geometry.camera_position;
+                params.mesh_items = geometry.items;
+                params.environment = geometry.environment;
+                params.depth_blit = geometry.depth_blit;
+                bindViewportTemporalInput(params, geometry.temporal, 0);
+
+                const auto& view = frame->unjittered_view;
+                params.grid_enabled = settings.show_grid && !pane.projection.equirectangular;
+                params.grid_plane = pane.grid_plane;
+                params.grid_opacity = settings.grid_opacity;
+                params.grid_view = view.getViewMatrix();
+                params.grid_projection = lfs::rendering::createProjectionMatrixFromFocal(
+                    view.size, view.focal_length_mm, view.orthographic, view.ortho_scale,
+                    view.near_plane, view.far_plane);
+                params.grid_view_projection = params.grid_projection * params.grid_view;
+                params.grid_view_position = view.translation;
+                params.grid_orthographic = view.orthographic;
+
+                // Guides use the unjittered camera of the retained image. They
+                // cannot borrow the focused camera when drawing another pane.
+                Viewport guide_camera(view.size.x, view.size.y);
+                if (const auto* camera = viewer_->getViewportWorkspace()->findCamera(pane.id)) {
+                    clonePersistentViewport(*camera, guide_camera);
+                    guide_camera.camera.pivot_set_time = camera->camera.pivot_set_time;
+                }
+                guide_camera.setViewMatrix(view.rotation, view.translation);
+                guide_camera.ortho_scale_override = view.ortho_scale;
+                const std::vector<VulkanGuidePanelTarget> guides{{
+                    .viewport = &guide_camera,
+                    .pos = params.viewport_pos,
+                    .size = params.viewport_size,
+                    .render_size = view.size,
+                    .workspace_view_id = pane.id,
+                }};
+                auto pane_settings = workspaceRenderSettings(settings, frame->pane);
+                appendVulkanSceneGuideOverlays(params, guides, pane_settings, *rendering,
+                                               {}, scene_manager,
+                                               overlay_scene_state ? &*overlay_scene_state : nullptr,
+                                               rendering->getGizmoState());
+                appendVulkanViewportGizmoOverlay(params, *viewer_, guides, current_ui_scale_,
+                                                 pane.focused && gizmo_manager_.isViewportGizmoDragging());
+            }
+            if (snapshot.panes.size() > 1) {
+                const auto& palette = theme().palette;
+                const auto& tint = pane.focused ? palette.primary : palette.border;
+                const glm::vec4 color(tint.x, tint.y, tint.z, 1.0f);
+                const glm::vec2 lo = params.viewport_pos + glm::vec2(1.0f);
+                const glm::vec2 hi = params.viewport_pos + params.viewport_size - glm::vec2(1.0f);
+                for (const auto& edge : std::array<std::pair<glm::vec2, glm::vec2>, 4>{
+                         std::pair{lo, glm::vec2(hi.x, lo.y)},
+                         std::pair{glm::vec2(hi.x, lo.y), hi},
+                         std::pair{hi, glm::vec2(lo.x, hi.y)},
+                         std::pair{glm::vec2(lo.x, hi.y), lo}}) {
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                           edge.first, edge.second, color, pane.focused ? 2.0f : 1.0f);
+                }
+            }
+            panes.push_back(std::move(presentation));
+        }
+        auto focused_view = snapshot.active_viewport;
+        if (!focused_view || std::ranges::none_of(snapshot.panes, [&](const PaneSnapshot& pane) {
+                return pane.id == *focused_view;
+            })) {
+            focused_view = snapshot.panes.empty() ? std::optional<ViewId>{}
+                                                  : std::optional<ViewId>{snapshot.panes.front().id};
+        }
+        setWorkspacePresentation(std::move(panes), snapshot.live_viewport_ids, focused_view);
+    }
+
+    VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
+                                                                   const std::size_t frame_slot) const {
+        const bool has_viewport_layout =
+            viewport_layout_.size.x > 0.0f && viewport_layout_.size.y > 0.0f;
+        const bool export_locked = isViewportExportLocked();
+
+        VulkanViewportPassParams params{};
+        params.frame_slot = frame_slot;
+        params.viewport_pos = has_viewport_layout ? viewport_layout_.pos : glm::vec2(0.0f, 0.0f);
+        params.viewport_size = has_viewport_layout
+                                   ? viewport_layout_.size
+                                   : glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
+        params.framebuffer_scale = {1.0f, 1.0f};
+
+        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            const auto settings = rendering_manager->getSettings();
+            const auto depth_window_snapshot = rendering_manager->getDepthWindowOverlaySnapshot();
+            params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
+                                        .value_or(SceneUpscalerBackend::Native);
+            params.background_color = settings.background_color;
+            params.grid_enabled =
+                settings.show_grid &&
+                !splitViewUsesComparisonPanels(settings.split_view_mode) &&
+                !settings.equirectangular &&
+                settings.grid_opacity > 0.0f;
+            params.grid_plane = std::clamp(settings.grid_plane, 0, 2);
+            params.grid_opacity = std::clamp(settings.grid_opacity, 0.0f, 1.0f);
+
+            if (params.grid_enabled && viewer_) {
+                const auto panels = collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager);
+                params.grid_overlays.reserve(panels.size());
+                for (const auto& panel : panels) {
+                    if (!panel.valid()) {
+                        continue;
+                    }
+                    const glm::mat4 view =
+                        lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(),
+                                                       panel.viewport->getTranslation());
+                    const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
+                        panel.render_size,
+                        settings.focal_length_mm,
+                        settings.orthographic,
+                        settings.ortho_scale,
+                        lfs::rendering::DEFAULT_NEAR_PLANE,
+                        settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
+                    VulkanViewportGridOverlay grid{};
+                    grid.viewport_pos = panel.pos;
+                    grid.viewport_size = panel.size;
+                    grid.render_size = panel.render_size;
+                    grid.view = view;
+                    grid.projection = proj;
+                    grid.view_projection = proj * view;
+                    grid.view_position = panel.viewport->getTranslation();
+                    grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
+                    grid.opacity = params.grid_opacity;
+                    grid.orthographic = settings.orthographic;
+                    params.grid_overlays.push_back(grid);
+                }
+                if (!params.grid_overlays.empty()) {
+                    const auto& first_grid = params.grid_overlays.front();
+                    params.grid_plane = first_grid.plane;
+                    params.grid_view = first_grid.view;
+                    params.grid_projection = first_grid.projection;
+                    params.grid_view_projection = first_grid.view_projection;
+                    params.grid_view_position = first_grid.view_position;
+                    params.grid_orthographic = first_grid.orthographic;
+                }
+            }
+
+            if (viewer_) {
+                SceneManager* const scene_manager = viewer_->getSceneManager();
+                std::optional<SceneRenderState> overlay_scene_state;
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
+                    overlay_scene_state =
+                        scene_manager->buildRenderState({.metadata_only = true});
+                }
+                const GizmoState gizmo_state = rendering_manager->getGizmoState();
+                appendVulkanSceneGuideOverlays(params,
+                                               collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager),
+                                               settings,
+                                               *rendering_manager,
+                                               depth_window_snapshot,
+                                               scene_manager,
+                                               overlay_scene_state ? &*overlay_scene_state : nullptr,
+                                               gizmo_state);
+                appendVulkanViewportGizmoOverlay(params,
+                                                 *viewer_,
+                                                 collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager),
+                                                 current_ui_scale_,
+                                                 gizmo_manager_.isViewportGizmoDragging());
+            }
+        }
+
+        appendLineRendererCommandOverlays(params);
+
+        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
+
+            // Pull GPU mesh / environment frame populated by renderVulkanFrame.
+            // vulkan_viewport_pass rasterizes these on the GPU.
+            auto mesh_frame = rendering_manager->getVulkanMeshFrame();
+            auto temporal_frame = std::move(mesh_frame.temporal);
+            params.mesh_view_projection = mesh_frame.view_projection;
+            params.mesh_camera_position = mesh_frame.camera_position;
+            params.mesh_items = std::move(mesh_frame.items);
+            params.mesh_panels = std::move(mesh_frame.panels);
+            params.environment = std::move(mesh_frame.environment);
+            params.depth_blit = std::move(mesh_frame.depth_blit);
+            params.split_view = std::move(mesh_frame.split_view);
+            // Late bind: interop-owned scene / depth-blit / split-view fields. Must
+            // run after params.split_view is populated (split stitching is gated on
+            // params.split_view.enabled).
+            rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
+
+            bindViewportTemporalInput(params, temporal_frame, frame_slot);
 
             if (params.split_view.enabled) {
                 const auto make_split_temporal_request =
@@ -5813,16 +6100,6 @@ namespace lfs::vis::gui {
         return params;
     }
 
-    void GuiManager::recordVulkanViewport(VkCommandBuffer command_buffer,
-                                          VkExtent2D extent,
-                                          const VulkanViewportPassParams& params) {
-        if (!vulkan_viewport_pass_ || command_buffer == VK_NULL_HANDLE ||
-            extent.width == 0 || extent.height == 0) {
-            return;
-        }
-        vulkan_viewport_pass_->record(command_buffer, extent, params);
-    }
-
     bool GuiManager::drainVulkanFramesForInteractiveTransition(
         WindowManager& window_manager,
         const char* const transition_name) {
@@ -5969,7 +6246,7 @@ namespace lfs::vis::gui {
                 panel_layout_.enforceWidthConstraints(
                     show_main_panel_, ui_visibility_target_hidden_, transition_screen);
                 ui_visibility_target_layout_ = panel_layout_.computeViewportLayout(
-                    show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
+                    show_main_panel_ && !usesAreaWorkspace(), ui_visibility_target_hidden_, window_states_["python_console"],
                     transition_screen);
                 ui_visibility_target_ready_ =
                     ui_visibility_target_layout_.size.x > 0.0f &&
@@ -6476,6 +6753,8 @@ namespace lfs::vis::gui {
             sdl_input.window_event || hasPointerActivity(sdl_input) || hasKeyboardActivity(sdl_input);
 
         auto& reg = PanelRegistry::instance();
+        const bool area_workspace = usesAreaWorkspace();
+        const bool legacy_panels_visible = show_main_panel_ && !area_workspace;
         const bool has_side_panel_plugins = reg.has_panels(PanelSpace::SidePanel);
         const bool has_floating_panels = reg.has_panels(PanelSpace::Floating);
         const bool has_status_bar_panels = reg.has_panels(PanelSpace::StatusBar);
@@ -6498,7 +6777,7 @@ namespace lfs::vis::gui {
             const float menu_h = rml_menu_bar_.barHeight();
             const float panel_y = menu_h;
             const float panel_h = std::max(0.0f, screen_h - menu_h - status_bar_h);
-            panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_,
+            panel_layout_.enforceWidthConstraints(legacy_panels_visible, ui_hidden_,
                                                   {
                                                       .work_pos = {0.0f, panel_y},
                                                       .work_size = {screen_w, panel_h},
@@ -6509,7 +6788,7 @@ namespace lfs::vis::gui {
             shell_regions.screen = {0.0f, 0.0f, screen_w, screen_h};
             shell_regions.menu = {0.0f, 0.0f, screen_w, menu_h};
 
-            if (show_main_panel_) {
+            if (legacy_panels_visible) {
                 const float rpw = panel_layout_.getRightPanelWidth();
                 shell_regions.right_panel = {
                     screen_w - rpw,
@@ -6636,9 +6915,9 @@ namespace lfs::vis::gui {
             };
             screen.any_item_active = rmlui_manager_.anyItemActive();
         }
-        panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_, screen);
+        panel_layout_.enforceWidthConstraints(legacy_panels_visible, ui_hidden_, screen);
         viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
+            legacy_panels_visible, ui_hidden_, window_states_["python_console"], screen);
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
@@ -6652,12 +6931,12 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getPythonConsoleWidth() - last_ui_layout_python_console_w_) > 0.5f ||
             std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
             std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
-            show_main_panel_ != last_ui_layout_show_main_panel_ ||
+            legacy_panels_visible != last_ui_layout_show_main_panel_ ||
             panel_layout_.isShowSequencer() != last_ui_layout_show_sequencer_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
-            panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
+            (legacy_panels_visible && panel_layout_.isBottomDockVisible()) != last_ui_layout_bottom_dock_visible_ ||
+            (legacy_panels_visible && panel_layout_.isLeftDockVisible()) != last_ui_layout_left_dock_visible_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6678,12 +6957,12 @@ namespace lfs::vis::gui {
             last_ui_layout_python_console_w_ = panel_layout_.getPythonConsoleWidth();
             last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
             last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
-            last_ui_layout_show_main_panel_ = show_main_panel_;
+            last_ui_layout_show_main_panel_ = legacy_panels_visible;
             last_ui_layout_show_sequencer_ = panel_layout_.isShowSequencer();
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
-            last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
+            last_ui_layout_bottom_dock_visible_ = (legacy_panels_visible && panel_layout_.isBottomDockVisible());
+            last_ui_layout_left_dock_visible_ = (legacy_panels_visible && panel_layout_.isLeftDockVisible());
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
@@ -6703,7 +6982,7 @@ namespace lfs::vis::gui {
         bool right_panel_active_tab_live = false;
         bool right_panel_pointer_over_scene_header = false;
         bool right_panel_pointer_over_active_tab = false;
-        if (show_main_panel_ && !ui_hidden_) {
+        if (legacy_panels_visible && !ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
@@ -6859,10 +7138,10 @@ namespace lfs::vis::gui {
             right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
         }
         if (block_underlay_input || !right_panel_requires_live_layout) {
-            panel_layout_.renderRightPanelCached(ctx, draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderRightPanelCached(ctx, draw_ctx, legacy_panels_visible, ui_hidden_,
                                                  window_states_, focus_panel_name_, panel_input, screen);
         } else {
-            panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderRightPanel(ctx, draw_ctx, legacy_panels_visible, ui_hidden_,
                                            window_states_, focus_panel_name_, panel_input, screen,
                                            {
                                                .scene_header_live = right_panel_scene_header_live,
@@ -6872,7 +7151,7 @@ namespace lfs::vis::gui {
 
         const float bottom_dock_h = std::max(panel_layout_.getBottomDockHeight(), 0.0f);
         const auto bottom_dock_layout = panel_layout_.computeBottomDockHorizontalLayout(
-            show_main_panel_, ui_hidden_, screen);
+            legacy_panels_visible, ui_hidden_, screen);
         const float bottom_dock_x = bottom_dock_layout.x;
         const float bottom_dock_w = bottom_dock_layout.width;
         const float bottom_dock_y =
@@ -6882,12 +7161,12 @@ namespace lfs::vis::gui {
                      8.0f * current_ui_scale_);
         const float bottom_dock_grip_h = PanelLayoutManager::DOCK_GRIP_H * current_ui_scale_;
         const bool pointer_over_bottom_dock =
-            panel_layout_.isBottomDockVisible() &&
+            (legacy_panels_visible && panel_layout_.isBottomDockVisible()) &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                         glm::vec2{bottom_dock_x, bottom_dock_y},
                         glm::vec2{bottom_dock_w, bottom_dock_h});
         const bool pointer_over_bottom_dock_edge =
-            panel_layout_.isBottomDockVisible() &&
+            (legacy_panels_visible && panel_layout_.isBottomDockVisible()) &&
             panel_input.mouse_x >= bottom_dock_x &&
             panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
             panel_input.mouse_y >= bottom_dock_y - bottom_dock_edge_grab_h &&
@@ -6907,8 +7186,8 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_activity ||
             hasKeyboardActivity(sdl_input);
         const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
-        if (panel_layout_.isBottomDockVisible()) {
+        rml_bottom_dock_.setVisible((legacy_panels_visible && panel_layout_.isBottomDockVisible()));
+        if ((legacy_panels_visible && panel_layout_.isBottomDockVisible())) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
@@ -6929,13 +7208,13 @@ namespace lfs::vis::gui {
             bottom_dock_input_activity || rml_bottom_dock_.needsAnimationFrame() ||
             bottom_dock_active_tab_changed;
         if (block_underlay_input || !bottom_dock_requires_live_layout) {
-            panel_layout_.renderBottomDockCached(draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderBottomDockCached(draw_ctx, legacy_panels_visible, ui_hidden_,
                                                  panel_input, screen);
         } else {
-            panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderBottomDock(draw_ctx, legacy_panels_visible, ui_hidden_,
                                            panel_input, screen);
         }
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
+        rml_bottom_dock_.setVisible((legacy_panels_visible && panel_layout_.isBottomDockVisible()));
         std::vector<TabSnapshot> bottom_dock_tab_snaps;
         const auto& bottom_dock_tabs = panel_layout_.bottomDockTabs();
         bottom_dock_tab_snaps.reserve(bottom_dock_tabs.size());
@@ -6947,7 +7226,7 @@ namespace lfs::vis::gui {
                 .closeable = true,
             });
         }
-        if (panel_layout_.isBottomDockVisible()) {
+        if ((legacy_panels_visible && panel_layout_.isBottomDockVisible())) {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
@@ -6970,19 +7249,19 @@ namespace lfs::vis::gui {
         constexpr float ICON_BAR_WIDTH = 40.0f;
         const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
         const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
-        const float left_dock_h = show_main_panel_ && !ui_hidden_
+        const float left_dock_h = legacy_panels_visible && !ui_hidden_
                                       ? screen.work_size.y
                                       : screen.work_size.y;
         const float left_dock_x = screen.work_pos.x + icon_bar_w;
         const bool pointer_over_left_dock =
-            panel_layout_.isLeftDockVisible() &&
+            (legacy_panels_visible && panel_layout_.isLeftDockVisible()) &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                         glm::vec2{left_dock_x, screen.work_pos.y},
                         glm::vec2{left_dock_panel_w, left_dock_h});
         // Use the same strip rectangle as the render-time hover and press hit tests,
         // including its inclusive bottom edge.
         const bool pointer_over_left_dock_edge =
-            panel_layout_.isLeftDockVisible() &&
+            (legacy_panels_visible && panel_layout_.isLeftDockVisible()) &&
             PanelLayoutManager::leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
                                                    left_dock_h, current_ui_scale_,
                                                    left_dock_panel_w)
@@ -7005,10 +7284,10 @@ namespace lfs::vis::gui {
             panel_animation_demand.left_dock ||
             left_dock_input_activity;
         if (block_underlay_input || !left_dock_requires_live_layout) {
-            panel_layout_.renderLeftDockCached(draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderLeftDockCached(draw_ctx, legacy_panels_visible, ui_hidden_,
                                                panel_input, screen);
         } else {
-            panel_layout_.renderLeftDock(draw_ctx, show_main_panel_, ui_hidden_,
+            panel_layout_.renderLeftDock(draw_ctx, legacy_panels_visible, ui_hidden_,
                                          panel_input, screen);
         }
         if (!hasMouseButtonDown(sdl_input))
@@ -7081,14 +7360,14 @@ namespace lfs::vis::gui {
             }
         };
         viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
+            legacy_panels_visible, ui_hidden_, window_states_["python_console"], screen);
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
 
         // The render-mode toolbar anchors to the right panel's edge, so the docked
         // editor console must not drag it left when it shrinks the viewport.
         const ViewportLayout toolbar_layout = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, false, screen);
+            legacy_panels_visible, ui_hidden_, false, screen);
         menu_toolbar_right_edge_ = toolbar_layout.pos.x + toolbar_layout.size.x;
 
         {
@@ -7097,9 +7376,100 @@ namespace lfs::vis::gui {
             gizmo_manager_.updateCropFlash();
         }
 
-        const float viewport_content_offset = viewport_layout_.pos.x - screen.work_pos.x;
+        viewport_ui_snapshot_ = workspaceSnapshot();
+        if (area_workspace && !startup_plugin_preload_blocking_python) {
+            auto& workspace = *viewer_->getViewportWorkspace();
+            if (!area_editor_host_)
+                area_editor_host_ = std::make_unique<AreaEditorHost>(reg, workspace, &rmlui_manager_);
+            auto snapshot = *viewport_ui_snapshot_;
+            const auto area_at = [&snapshot](float x, float y) -> std::optional<ViewId> {
+                if (CornerSplitInteraction::handleHit(snapshot, {x, y}, kWorkspaceCornerHandlePixels))
+                    return {};
+                for (const auto& area : snapshot.areas) {
+                    if (x >= area.rect.x && x < area.rect.right() &&
+                        y >= area.rect.y && y < area.rect.bottom())
+                        return area.id;
+                }
+                return {};
+            };
+            for (const auto& event : panel_input.mouse_button_events) {
+                if (!event.down)
+                    continue;
+                if (!area_pointer_owner_)
+                    area_pointer_owner_ = area_at(event.x, event.y).value_or(kInvalidViewId);
+                if (area_pointer_owner_ && isValidViewId(*area_pointer_owner_))
+                    static_cast<void>(workspace.focus(*area_pointer_owner_));
+            }
+            auto pointer_owner = area_pointer_owner_ ? area_pointer_owner_ : area_at(panel_input.mouse_x, panel_input.mouse_y);
+            snapshot = workspaceSnapshot();
+            viewport_ui_snapshot_ = snapshot;
+            area_editor_host_->render(snapshot, draw_ctx, panel_input,
+                                      workspaceHeaderHeight(),
+                                      pointer_owner.value_or(kInvalidViewId),
+                                      workspace.layout().focused());
+            sequencer_ui_.processAreaOverlay(toSequencerPanelInput(panel_input));
+            area_editor_host_->captureChrome();
+            if (!panel_input.mouse_down[0] && !panel_input.mouse_down[1] && !panel_input.mouse_down[2])
+                area_pointer_owner_.reset();
+            if (const auto after = workspaceSnapshot();
+                after.layout_generation != snapshot.layout_generation ||
+                after.registry_generation != snapshot.registry_generation) {
+                if (auto* rendering = viewer_->getRenderingManager())
+                    rendering->markDirty(DirtyFlag::ALL);
+            }
+        } else {
+            area_pointer_owner_.reset();
+        }
+
+        // Each 3D area owns its document, hit regions and cached texture.
+        // All documents bind to the same tool/scene services.
+        visible_viewport_overlays_.clear();
+        const auto& overlay_snapshot = *viewport_ui_snapshot_;
+        if (area_workspace) {
+            for (auto it = viewport_overlays_.begin(); it != viewport_overlays_.end();) {
+                if (std::ranges::find(overlay_snapshot.live_viewport_ids, it->first) ==
+                    overlay_snapshot.live_viewport_ids.end()) {
+                    retired_viewport_overlays_.push_back(std::move(it->second));
+                    it = viewport_overlays_.erase(it);
+                } else {
+                    if (std::ranges::none_of(overlay_snapshot.panes, [&](const auto& pane) {
+                            return pane.id == it->first;
+                        })) {
+                        it->second->setActiveDocument(false);
+                        it->second->setViewportBounds({}, {}, {panel_input.screen_x, panel_input.screen_y});
+                    }
+                    ++it;
+                }
+            }
+            for (const auto& pane : overlay_snapshot.panes) {
+                auto& overlay = viewport_overlays_[pane.id];
+                if (!overlay) {
+                    overlay = std::make_unique<RmlViewportOverlay>();
+                    overlay->init(&rmlui_manager_, std::format("viewport_overlay.{}.{}", pane.id,
+                                                               ++viewport_overlay_generation_));
+                }
+                overlay->setViewportBounds({pane.rect.x, pane.rect.y},
+                                           {pane.rect.width, pane.rect.height},
+                                           {panel_input.screen_x, panel_input.screen_y});
+                overlay->setActiveDocument(overlay_snapshot.active_viewport == pane.id);
+                overlay->setViewportContentOffset(0.0f);
+                overlay->setToolbarPanels(0.0f, pane.rect.width);
+                overlay->setSplitDividerOverlay({});
+                if (auto* rendering = viewer_->getRenderingManager())
+                    overlay->setLodStatsOverlay(makeLodStatsOverlayState(rendering->getLodStats()));
+                visible_viewport_overlays_.push_back(overlay.get());
+            }
+        } else {
+            for (auto& [id, overlay] : viewport_overlays_)
+                overlay->setActiveDocument(false);
+            rml_viewport_overlay_.setActiveDocument();
+            visible_viewport_overlays_.push_back(&rml_viewport_overlay_);
+        }
+        const glm::vec2 tools_pos = viewport_layout_.pos;
+        const glm::vec2 tools_size = area_workspace ? glm::vec2{} : viewport_layout_.size;
+        const float viewport_content_offset = area_workspace ? 0.0f : viewport_layout_.pos.x - screen.work_pos.x;
         float primary_toolbar_x = viewport_content_offset;
-        float primary_toolbar_width = viewport_layout_.size.x;
+        float primary_toolbar_width = tools_size.x;
         bool show_secondary_toolbar = false;
         float secondary_toolbar_x = 0.0f;
         float secondary_toolbar_width = 0.0f;
@@ -7126,9 +7496,9 @@ namespace lfs::vis::gui {
                                                secondary_toolbar_x,
                                                secondary_toolbar_width);
         const float left_dock_w =
-            ui_hidden_ ? 0.0f : icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
-        const glm::vec2 overlay_pos = {screen.work_pos.x, viewport_layout_.pos.y};
-        const glm::vec2 overlay_size = {viewport_layout_.size.x + left_dock_w, viewport_layout_.size.y};
+            (ui_hidden_ || area_workspace) ? 0.0f : icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
+        const glm::vec2 overlay_pos = area_workspace ? tools_pos : glm::vec2{screen.work_pos.x, viewport_layout_.pos.y};
+        const glm::vec2 overlay_size = {tools_size.x + left_dock_w, tools_size.y};
         rml_viewport_overlay_.setViewportBounds(
             overlay_pos, overlay_size,
             {panel_input.screen_x, panel_input.screen_y});
@@ -7296,7 +7666,8 @@ namespace lfs::vis::gui {
 
             if (payload && payload->released) {
                 const auto released = rmlui_manager_.takeReleasedDragPayload();
-                rml_viewport_overlay_.setProjectDragOverlay({});
+                for (auto* overlay : visible_viewport_overlays_)
+                    overlay->setProjectDragOverlay({});
                 if (released && can_drop) {
                     if (released->type == kGalleryPayloadType) {
                         const auto panel = PanelRegistry::instance().get_panel_instance("lfs.asset_manager");
@@ -7315,11 +7686,12 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            rml_viewport_overlay_.setProjectDragOverlay({
-                .visible = can_drop,
-                .gallery_scene = can_drop && payload->type == kGalleryPayloadType,
-                .label = can_drop ? payload->label : std::string{},
-            });
+            for (auto* overlay : visible_viewport_overlays_)
+                overlay->setProjectDragOverlay({
+                    .visible = can_drop,
+                    .gallery_scene = can_drop && payload->type == kGalleryPayloadType,
+                    .label = can_drop ? payload->label : std::string{},
+                });
         };
         resolve_project_asset_drag();
         // Other underlay consumers use masked copies. The overlay must retain
@@ -7327,16 +7699,33 @@ namespace lfs::vis::gui {
         const PanelInputState viewport_overlay_input = buildPanelInputFromSDL(sdl_input);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
-            rml_viewport_overlay_.processInput(viewport_overlay_input, {
-                                                                           .startup = startup_overlay_blocking,
-                                                                           .progress = progress_overlay_visible,
-                                                                           .modal = modal_overlay_open,
-                                                                           .pending_modal = modal_overlay_pending,
-                                                                           .context_menu = context_menu_open,
-                                                                           .menu_pointer = menu_blocks_underlay_pointer,
-                                                                           .floating_panel = has_floating_panels &&
-                                                                                             reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
-                                                                       });
+            const auto external_focus = guiFocusState();
+            auto combined_focus = external_focus;
+            const ViewportOverlayInputBlockers blockers{
+                .startup = startup_overlay_blocking,
+                .progress = progress_overlay_visible,
+                .modal = modal_overlay_open,
+                .pending_modal = modal_overlay_pending,
+                .context_menu = context_menu_open,
+                .menu_pointer = menu_blocks_underlay_pointer,
+                .floating_panel = has_floating_panels &&
+                                  reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
+            };
+            const auto process_overlay = [&](RmlViewportOverlay& overlay, bool keyboard_enabled) {
+                guiFocusState() = external_focus;
+                overlay.processInput(viewport_overlay_input, blockers, keyboard_enabled);
+                combined_focus.want_capture_mouse |= guiFocusState().want_capture_mouse;
+                combined_focus.want_capture_keyboard |= guiFocusState().want_capture_keyboard;
+                combined_focus.want_text_input |= guiFocusState().want_text_input;
+                combined_focus.any_item_active |= guiFocusState().any_item_active;
+            };
+            if (area_workspace) {
+                for (auto& [id, overlay] : viewport_overlays_)
+                    process_overlay(*overlay, id == viewer_->getViewportWorkspace()->layout().focused());
+            } else {
+                process_overlay(rml_viewport_overlay_, true);
+            }
+            guiFocusState() = combined_focus;
         }
         // Apply overlayPressMayFocusPanel (rml_viewport_overlay.hpp) after processInput,
         // so text blur and its commit handler run before focus moves.
@@ -7352,7 +7741,7 @@ namespace lfs::vis::gui {
         const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
         std::size_t overlay_press_index = 0;
         for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
-            if (!overlay_event.down || overlay_event.button != 0)
+            if (area_workspace || !overlay_event.down || overlay_event.button != 0)
                 continue;
             if (overlay_press_index >= overlay_left_presses.size())
                 break;
@@ -7407,8 +7796,25 @@ namespace lfs::vis::gui {
         const auto draw_screen_overlay_content = [&]() {
             if (has_python_overlay_hooks) {
                 LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
-                lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
-                lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
+                const auto draw_hooks = [&]() {
+                    lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
+                    lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
+                };
+                if (area_workspace) {
+                    for (const auto& pane : overlay_snapshot.panes) {
+                        python::set_viewport_bounds(pane.rect.x, pane.rect.y,
+                                                    pane.rect.width, pane.rect.height);
+                        std::optional<lfs::rendering::ScreenOverlayRenderer::ScopedClipRect> clip;
+                        if (overlay_renderer)
+                            clip.emplace(*overlay_renderer, glm::vec2{pane.rect.x, pane.rect.y},
+                                         glm::vec2{pane.rect.right(), pane.rect.bottom()});
+                        draw_hooks();
+                    }
+                    python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
+                                                viewport_layout_.size.x, viewport_layout_.size.y);
+                } else {
+                    draw_hooks();
+                }
             }
 
             if (has_viewport_overlay_panels) {
@@ -7437,7 +7843,8 @@ namespace lfs::vis::gui {
         publish_vram_hud_overlay_if_due();
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render", 0.10);
-            rml_viewport_overlay_.renderCached();
+            for (auto* overlay : visible_viewport_overlays_)
+                overlay->renderCached();
         }
 
         PanelInputState floating_input = panel_input;
@@ -7769,21 +8176,64 @@ namespace lfs::vis::gui {
                 // Mark the due refresh consumed before buildVulkanViewportParams
                 // can re-arm the timer for a partial upload batch.
                 static_cast<void>(consumeCameraThumbnailRefresh());
-                VulkanViewportPassParams viewport_params{};
-                {
-                    LOG_TIMER_THRESHOLD("gui_render.buildVulkanViewportParams", 0.25);
-                    viewport_params = buildVulkanViewportParams(frame.extent, frame.frame_slot);
+                struct PreparedViewport {
+                    ViewId view = kInvalidViewId;
+                    VulkanViewportPass* pass = nullptr;
+                    VulkanViewportPassParams params;
+                    VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+                    std::uint64_t completion_value = 0;
+                };
+                std::vector<PreparedViewport> prepared_views;
+                if (!viewport_gpu_assets_)
+                    viewport_gpu_assets_ = std::make_shared<SharedViewportGpuAssets>();
+                // Resolve presentation once, after import completion and UI
+                // callbacks can replace the scene. Snapshotting image handles
+                // before those callbacks can submit retired images/semaphores.
+                const bool workspace_mode = rendering && viewer_->getViewportWorkspace() &&
+                                            !splitViewUsesComparisonPanels(rendering->getSplitViewMode());
+                if (workspace_mode)
+                    updateWorkspacePresentation(overlay_snapshot);
+                else if (workspace_presentation_active_)
+                    clearWorkspacePresentation();
+                if (workspace_presentation_active_) {
+                    prepared_views.reserve(workspace_presentations_.size());
+                    const auto line_commands = consumeLineRendererCommands();
+                    const auto screen_commands = rendering->getScreenOverlayRenderer()
+                                                     ? rendering->getScreenOverlayRenderer()->consumeCommands()
+                                                     : std::vector<lfs::rendering::OverlayCommand>{};
+                    for (const auto& pane : workspace_presentations_) {
+                        auto& pass = workspace_viewport_passes_[pane.view];
+                        if (!pass)
+                            pass = std::make_unique<VulkanViewportPass>(viewport_gpu_assets_);
+                        if (!pass->init(*vulkan_context))
+                            continue;
+                        auto params = pane.params;
+                        appendWorkspaceLineCommands(params, line_commands, workspace_focused_view_ == pane.view);
+                        appendScreenOverlayCommands(params, screen_commands);
+                        params.frame_slot = frame.frame_slot;
+                        if (params.temporal)
+                            params.temporal->frame_slot = frame.frame_slot;
+                        if (params.dlss)
+                            params.dlss->temporal.frame_slot = frame.frame_slot;
+                        pass->prepare(*vulkan_context, params);
+                        prepared_views.push_back({pane.view, pass.get(), std::move(params),
+                                                  pane.completion_semaphore, pane.completion_value});
+                    }
+                } else {
+                    auto params = buildVulkanViewportParams(frame.extent, frame.frame_slot);
+                    if (!vulkan_viewport_pass_)
+                        vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>(viewport_gpu_assets_);
+                    if (vulkan_viewport_pass_->init(*vulkan_context)) {
+                        vulkan_viewport_pass_->prepare(*vulkan_context, params);
+                        prepared_views.push_back({kInvalidViewId, vulkan_viewport_pass_.get(),
+                                                  std::move(params)});
+                    }
                 }
-                bool viewport_pass_ready = false;
-                if (!vulkan_viewport_pass_) {
-                    vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
-                }
-                viewport_pass_ready = vulkan_viewport_pass_->init(*vulkan_context);
-                if (viewport_pass_ready) {
-                    LOG_TIMER_THRESHOLD("gui_render.viewport_pass_prepare_record", 0.25);
-                    vulkan_viewport_pass_->prepare(*vulkan_context, viewport_params);
-                    const bool temporal_pre_render =
-                        vulkan_viewport_pass_->hasPreRenderWork(viewport_params);
+                if (!prepared_views.empty()) {
+                    const bool temporal_pre_render = std::ranges::any_of(
+                        prepared_views, [](const auto& view) {
+                            return view.pass->hasPreRenderWork(view.params);
+                        });
                     const bool requires_pre_render_scope = rendering || temporal_pre_render;
                     bool render_scope_ready = true;
                     bool render_scope_closed = false;
@@ -7796,32 +8246,37 @@ namespace lfs::vis::gui {
                                       vulkan_context->lastError());
                         }
                     }
-                    if (render_scope_ready && rendering) {
-                        // #1575: interop barriers and temporal compute must be recorded
-                        // outside dynamic rendering. Native/Spatial remain fragment-only;
-                        // Temporal waits at its first compute and fragment consumers.
+                    const VkPipelineStageFlags wait_stage =
+                        temporal_pre_render
+                            ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                            : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                    if (render_scope_ready && rendering && !workspace_presentation_active_) {
                         rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
                                                                          *vulkan_context);
                         const auto completion = rendering->viewportInterop().frameCompletion();
-                        if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
-                            LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
-                            const VkPipelineStageFlags wait_stage =
-                                temporal_pre_render
-                                    ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-                            if (!vulkan_context->addFrameTimelineWait(completion.semaphore,
-                                                                      completion.value,
-                                                                      wait_stage)) {
-                                LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
-                                          vulkan_context->lastError());
-                                render_scope_ready = false;
-                            }
+                        if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0 &&
+                            !vulkan_context->addFrameTimelineWait(completion.semaphore,
+                                                                  completion.value, wait_stage)) {
+                            LOG_ERROR("Unable to wait on VkSplat frame completion timeline: {}",
+                                      vulkan_context->lastError());
+                            render_scope_ready = false;
+                        }
+                    }
+                    for (const auto& view : prepared_views) {
+                        if (view.completion_semaphore != VK_NULL_HANDLE && view.completion_value != 0 &&
+                            !vulkan_context->addFrameTimelineWait(view.completion_semaphore,
+                                                                  view.completion_value, wait_stage)) {
+                            LOG_ERROR("Unable to wait on workspace view {} completion: {}",
+                                      view.view, vulkan_context->lastError());
+                            render_scope_ready = false;
                         }
                     }
                     if (render_scope_ready && temporal_pre_render) {
-                        static_cast<void>(vulkan_viewport_pass_->recordPreRenderWork(
-                            frame.command_buffer, viewport_params));
+                        for (const auto& view : prepared_views) {
+                            if (view.pass->hasPreRenderWork(view.params))
+                                static_cast<void>(view.pass->recordPreRenderWork(frame.command_buffer,
+                                                                                 view.params));
+                        }
                     }
                     if (render_scope_closed) {
                         const bool restarted =
@@ -7832,12 +8287,16 @@ namespace lfs::vis::gui {
                                       vulkan_context->lastError());
                         }
                     }
-                    if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-                        rendering_manager->reportSceneUpscalerRuntimeSelection(
-                            vulkan_viewport_pass_->sceneUpscalerSelection());
-                    }
-                    if (render_scope_ready) {
-                        recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                    for (const auto& view : prepared_views) {
+                        if (rendering && workspace_presentation_active_)
+                            rendering->reportWorkspaceSceneUpscalerRuntimeSelection(
+                                view.view, view.pass->sceneUpscalerSelection());
+                        if (rendering &&
+                            (!workspace_presentation_active_ || workspace_focused_view_ == view.view)) {
+                            rendering->reportSceneUpscalerRuntimeSelection(view.pass->sceneUpscalerSelection());
+                        }
+                        if (render_scope_ready)
+                            view.pass->record(frame.command_buffer, frame.extent, view.params);
                     }
                 }
                 {
@@ -7848,7 +8307,8 @@ namespace lfs::vis::gui {
                                                         frame.swapchain_image_view,
                                                         frame.depth_stencil_image_view,
                                                         frame.frame_slot)) {
-                        rml_viewport_overlay_.renderFrostedGlass();
+                        for (auto* overlay : visible_viewport_overlays_)
+                            overlay->renderFrostedGlass();
                         {
                             LOG_TIMER_THRESHOLD("gui_render.rmlui_record.background", 0.25);
                             rmlui_manager_.renderQueuedVulkanContexts(false);
@@ -7864,7 +8324,10 @@ namespace lfs::vis::gui {
                     }
                 }
                 if (viewer_) {
-                    viewer_->processRenderWorkQueue();
+                    // Only work explicitly requiring the active frame may run
+                    // before submit. Scene/project mutations drain below,
+                    // after endFrame has made all recorded resource use live.
+                    viewer_->processRenderWorkQueue(true);
                 }
                 // Synchronous full-window capture explicitly submits and consumes
                 // the active frame before returning its readback.
@@ -7874,6 +8337,21 @@ namespace lfs::vis::gui {
                     if (!presented) {
                         LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
                     }
+                }
+                if (((area_editor_host_ && area_editor_host_->retiredAreaCount() > 0) ||
+                     !retired_viewport_overlays_.empty()) &&
+                    vulkan_context->waitForSubmittedFrames()) {
+                    std::optional<lfs::python::GilAcquire> gil;
+                    if (lfs::python::can_acquire_gil())
+                        gil.emplace();
+                    if (area_editor_host_)
+                        area_editor_host_->collectRetired();
+                    for (auto& overlay : retired_viewport_overlays_)
+                        overlay->shutdown();
+                    retired_viewport_overlays_.clear();
+                }
+                if (viewer_) {
+                    viewer_->processRenderWorkQueue();
                 }
             } else if (vulkan_context) {
                 rmlui_manager_.clearVulkanQueue();
@@ -7934,12 +8412,23 @@ namespace lfs::vis::gui {
                     const glm::vec2 e = ic->getNodeRectEnd();
                     const glm::vec2 tl{std::min(s.x, e.x), std::min(s.y, e.y)};
                     const glm::vec2 br{std::max(s.x, e.x), std::max(s.y, e.y)};
-                    if (br.x - tl.x > 0.5f && br.y - tl.y > 0.5f) {
+                    glm::vec2 clipped_tl = tl;
+                    glm::vec2 clipped_br = br;
+                    if (const auto clip_rect = ic->workspaceNodeSelectionClipRect()) {
+                        const glm::vec2 pane_min{static_cast<float>(clip_rect->x),
+                                                 static_cast<float>(clip_rect->y)};
+                        const glm::vec2 pane_max{static_cast<float>(clip_rect->right()),
+                                                 static_cast<float>(clip_rect->bottom())};
+                        clipped_tl = glm::max(clipped_tl, pane_min);
+                        clipped_br = glm::min(clipped_br, pane_max);
+                    }
+                    if (clipped_br.x - clipped_tl.x > 0.5f &&
+                        clipped_br.y - clipped_tl.y > 0.5f) {
                         const auto& warn = theme().palette.warning;
                         const lfs::rendering::OverlayColor fill{warn.x, warn.y, warn.z, warn.w * 0.15f};
                         const lfs::rendering::OverlayColor stroke{warn.x, warn.y, warn.z, warn.w * 0.85f};
-                        overlay->addRectFilled(tl, br, fill);
-                        overlay->addRect(tl, br, stroke, 2.0f);
+                        overlay->addRectFilled(clipped_tl, clipped_br, fill);
+                        overlay->addRect(clipped_tl, clipped_br, stroke, 2.0f);
                     }
                 }
             }
@@ -8275,9 +8764,12 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::renderViewportDecorations() {
-        if (!ui_hidden_ && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
-            (void)theme();
-        }
+        if (!usesAreaWorkspace() || isViewportExportLocked())
+            return;
+        const auto* input = viewer_->getInputController();
+        rml_workspace_chrome_.render(viewport_ui_snapshot_ ? *viewport_ui_snapshot_ : workspaceSnapshot(),
+                                     input ? input->workspaceCornerSplitPreview() : std::nullopt,
+                                     ui_hidden_);
     }
 
     void GuiManager::updateInputOverrides(const PanelInputState& input,
@@ -8371,6 +8863,13 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isPositionInViewport(double x, double y) const {
+        if (usesAreaWorkspace()) {
+            const auto snapshot = workspaceSnapshot();
+            return std::ranges::any_of(snapshot.panes, [x, y](const PaneSnapshot& pane) {
+                return x >= pane.rect.x && x < pane.rect.right() &&
+                       y >= pane.rect.y && y < pane.rect.bottom();
+            });
+        }
         return (x >= viewport_layout_.pos.x &&
                 x < viewport_layout_.pos.x + viewport_layout_.size.x &&
                 y >= viewport_layout_.pos.y &&
@@ -8382,7 +8881,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isPositionOverRightPanelResizeEdge(const double x, const double y) const {
-        if (!show_main_panel_ || ui_hidden_ ||
+        if (usesAreaWorkspace() || !show_main_panel_ || ui_hidden_ ||
             last_ui_layout_work_size_.x <= 0.0f || last_ui_layout_work_size_.y <= 0.0f) {
             return false;
         }
@@ -8404,10 +8903,10 @@ namespace lfs::vis::gui {
         // The resize hover latch may lag a press in the same SDL batch as motion.
         // Hit-test the shared strip geometry so its viewport-overlapping half is
         // GUI-owned even before the next renderLeftDock().
-        if (panel_layout_.isPositionOverLeftDockResizeEdge(
-                static_cast<float>(x), static_cast<float>(y),
-                last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
-                last_ui_layout_work_size_.y))
+        if (!usesAreaWorkspace() && panel_layout_.isPositionOverLeftDockResizeEdge(
+                                        static_cast<float>(x), static_cast<float>(y),
+                                        last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
+                                        last_ui_layout_work_size_.y))
             return {.blocks_mouse_button = true};
         return hit;
     }
@@ -8435,8 +8934,27 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
-        if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
+        if (sequencer_ui_.blocksPointer(x, y) ||
+            std::ranges::any_of(visible_viewport_overlays_, [x, y](const auto* overlay) {
+                return overlay->blocksPointer(x, y);
+            })) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        if (usesAreaWorkspace()) {
+            const auto snapshot = workspaceSnapshot();
+            // Corner handles belong to the workspace gesture controller even
+            // when the area currently contains a UI editor.
+            if (CornerSplitInteraction::handleHit(snapshot, {x, y}, kWorkspaceCornerHandlePixels))
+                return {};
+            for (const auto& area : snapshot.areas) {
+                if (x < area.rect.x || x >= area.rect.right() ||
+                    y < area.rect.y || y >= area.rect.bottom())
+                    continue;
+                if (area.editor_id != "viewport" || y < area.content_rect.y)
+                    return {.blocks_pointer = true, .takes_keyboard_focus = true};
+            }
+            return {};
         }
 
         // Match the resize edge geometry used by the panel before routing a
@@ -8761,7 +9279,87 @@ namespace lfs::vis::gui {
         rmlui_manager_.activateTheme(currentThemeId());
     }
 
+    bool GuiManager::isPanelAreaOpen(const std::string& id) const {
+        const auto* workspace = viewer_ ? viewer_->getViewportWorkspace() : nullptr;
+        if (!usesAreaWorkspace() || !workspace)
+            return false;
+        for (const auto view : workspace->layout().leafIds()) {
+            const auto* record = workspace->findView(view);
+            if (record && record->editor_id == id)
+                return true;
+        }
+        return false;
+    }
+
+    bool GuiManager::showPanelInArea(const std::string& id, const bool show) {
+        auto* workspace = viewer_ ? viewer_->getViewportWorkspace() : nullptr;
+        const auto info = PanelRegistry::instance().get_panel(id);
+        const auto prototype = PanelRegistry::instance().get_panel_instance(id);
+        if (!usesAreaWorkspace() || !workspace || !info || !prototype ||
+            !prototype->supportsAreaInstances() || info->space == PanelSpace::Floating ||
+            info->space == PanelSpace::ViewportOverlay || info->space == PanelSpace::StatusBar ||
+            !info->parent_id.empty())
+            return false;
+
+        captureAreaEditorState();
+        const auto ids = workspace->layout().leafIds();
+        std::optional<ViewId> existing;
+        for (const auto view : ids) {
+            const auto* const record = workspace->findView(view);
+            if (!record || record->editor_id != id)
+                continue;
+            if (show) {
+                existing = view;
+                break;
+            }
+            if (workspace->layout().leafIds().size() > 1)
+                (void)workspace->close(view);
+            else
+                (void)workspace->setAreaEditor(view, "viewport");
+        }
+        if (show) {
+            (void)workspace->restoreMaximized();
+            if (!existing) {
+                const auto frame = workspaceSnapshot();
+                auto source = workspace->activeViewport().value_or(workspace->primaryView());
+                const AreaSnapshot* candidate = nullptr;
+                for (const auto& area : frame.areas) {
+                    if (area.rect.width < 2 * kDefaultMinPanePixels + kDefaultDividerPixels &&
+                        area.rect.height < 2 * kDefaultMinPanePixels + kDefaultDividerPixels)
+                        continue;
+                    if (!candidate || area.id == source ||
+                        (candidate->id != source &&
+                         static_cast<int64_t>(area.rect.width) * area.rect.height >
+                             static_cast<int64_t>(candidate->rect.width) * candidate->rect.height))
+                        candidate = &area;
+                }
+                if (candidate) {
+                    const bool vertical = (id == "native.python_console" ||
+                                           id == native_panels::SEQUENCER_PANEL_ID)
+                                              ? candidate->rect.height >= 2 * kDefaultMinPanePixels + kDefaultDividerPixels
+                                              : candidate->rect.width < 2 * kDefaultMinPanePixels + kDefaultDividerPixels;
+                    const auto added = workspace->split(candidate->id,
+                                                        vertical ? SplitAxis::Vertical : SplitAxis::Horizontal, 0.65f);
+                    if (added)
+                        existing = *added;
+                }
+                // A window too small to split can still switch its focused editor.
+                if (!existing)
+                    existing = workspace->layout().focused().value_or(workspace->primaryView());
+                (void)workspace->setAreaEditor(*existing, id);
+            }
+            (void)workspace->focus(*existing);
+        }
+        if (auto* rendering = viewer_->getRenderingManager())
+            rendering->markDirty(DirtyFlag::CAMERA | DirtyFlag::VIEWPORT);
+        if (auto* window = viewer_->getWindowManager())
+            window->wakeEventLoop();
+        return true;
+    }
+
     void GuiManager::showWindow(const std::string& name, bool show) {
+        if (name == "python_console" && showPanelInArea("native.python_console", show))
+            return;
         window_states_[name] = show;
     }
 
@@ -8805,15 +9403,13 @@ namespace lfs::vis::gui {
         }
 
         auto& reg = PanelRegistry::instance();
-        const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
-        if (main_tabs.empty()) {
-            return;
-        }
-
-        panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
-        const std::string& active_tab = panel_layout_.getActiveTab();
-        if (active_tab.empty()) {
-            return;
+        std::string active_tab;
+        if (!usesAreaWorkspace()) {
+            const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
+            panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
+            active_tab = panel_layout_.getActiveTab();
+            if (active_tab.empty())
+                return;
         }
 
         int window_w = 0;
@@ -8855,6 +9451,12 @@ namespace lfs::vis::gui {
             draw_ctx.has_selection = scene_manager->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
             draw_ctx.is_training = cc->snapshot().is_running;
+
+        if (usesAreaWorkspace()) {
+            if (area_editor_host_)
+                area_editor_host_->preloadVisiblePanels(workspaceSnapshot(), draw_ctx);
+            return;
+        }
 
         PanelInputState input;
         input.mouse_x = -1.0e9f;
@@ -8945,7 +9547,11 @@ namespace lfs::vis::gui {
             return true;
         if (isVramHudPublishDue(now))
             return true;
-        if (rml_viewport_overlay_.needsAnimationFrame())
+        if (area_editor_host_ && area_editor_host_->needsAnimationFrame())
+            return true;
+        if (std::ranges::any_of(visible_viewport_overlays_, [](const auto* overlay) {
+                return overlay->needsAnimationFrame();
+            }))
             return true;
         if (rml_menu_bar_.needsAnimationFrame())
             return true;
@@ -9002,7 +9608,10 @@ namespace lfs::vis::gui {
         add(video_widget_ && video_widget_->isVideoPlaying(), "video");
         add(ui_layout_settle_frames_ > 0, "layout_settle");
         add(isVramHudPublishDue(now), "vram_hud");
-        add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");
+        add(std::ranges::any_of(visible_viewport_overlays_, [](const auto* overlay) {
+                return overlay->needsAnimationFrame();
+            }),
+            "viewport_overlay");
         add(rml_menu_bar_.needsAnimationFrame(), "menu_bar");
         if (const auto right_panel_demand = rml_right_panel_.animationDemandDescription();
             !right_panel_demand.empty()) {
@@ -9043,9 +9652,9 @@ namespace lfs::vis::gui {
         return {
             .active_main_tab = panel_layout_.getActiveTab(),
             .ui_visible = !ui_hidden_,
-            .right_panel_visible = show_main_panel_ && !ui_hidden_,
-            .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
-            .left_dock_visible = panel_layout_.isLeftDockVisible(),
+            .right_panel_visible = !usesAreaWorkspace() && show_main_panel_ && !ui_hidden_,
+            .bottom_dock_visible = !usesAreaWorkspace() && panel_layout_.isBottomDockVisible(),
+            .left_dock_visible = !usesAreaWorkspace() && panel_layout_.isLeftDockVisible(),
         };
     }
 
@@ -9081,8 +9690,8 @@ namespace lfs::vis::gui {
                                "panels");
         }
 
-        result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay(),
-                           "viewport_overlay");
+        for (const auto* overlay : visible_viewport_overlays_)
+            result = min_delay(result, overlay->nextScheduledUpdateDelay(), "viewport_overlay");
         result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now),
                            "status_bar");
 
@@ -9153,6 +9762,15 @@ namespace lfs::vis::gui {
             return std::unexpected(lfs::format_for_developer(paths.error()));
         if (const auto backup = paths->resetLayout(); !backup)
             return std::unexpected(lfs::format_for_developer(backup.error()));
+
+        if (usesAreaWorkspace()) {
+            const auto reset = viewer_->getViewportWorkspace()->resetToDefaultThreeAreas();
+            if (!reset)
+                return std::unexpected(std::string(reset.error().user_message()));
+            resetAreaEditors();
+            if (auto* rendering = viewer_->getRenderingManager())
+                rendering->markDirty(DirtyFlag::ALL);
+        }
 
         panel_layout_.applyProjectState(PanelLayoutProjectState{});
         auto& registry = PanelRegistry::instance();

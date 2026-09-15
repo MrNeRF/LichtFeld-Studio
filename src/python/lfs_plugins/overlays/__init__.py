@@ -19,7 +19,8 @@ _HOOK_POSITION = "append"
 
 _MODEL_NAME = "viewport_overlay_status"
 _MODEL_MARKER = "data-viewport-overlay-status-bound"
-_document_controller = None
+_document_controllers = {}
+_document_controller = None  # compatibility alias for callers that use the active document
 _hook_registered = False
 
 _INSET = 30.0
@@ -76,20 +77,23 @@ def _get_import_state():
 
 
 class _OverlayDocumentController:
-    def __init__(self):
+    def __init__(self, document_key=None):
+        self._document_key = document_key
         self.gallery_transfers = GalleryTransferOverlay()
         self.reset()
 
     def reset(self):
         self._handle = None
         self.gallery_transfers.reset()
-        viewport_toolbar.reset_overlay_state()
+        viewport_toolbar.reset_overlay_state(self._document_key)
 
     def update(self, doc=None):
         if doc is None or not hasattr(doc, "get_element_by_id"):
             doc = lf.ui.rml.get_document(_HOOK_PANEL)
         if doc is None:
             return []
+
+        self._document_key = viewport_toolbar.overlay_document_key(doc)
 
         if not self._ensure_model(doc):
             return []
@@ -115,20 +119,40 @@ class _OverlayDocumentController:
         self._handle = None
         doc.remove_data_model(_MODEL_NAME)
         body.remove_attribute(_MODEL_MARKER)
-        viewport_toolbar.reset_overlay_state()
-
         model = doc.create_data_model(_MODEL_NAME)
         if model is None:
             return False
 
-        viewport_toolbar.bind_overlay_model(model)
+        viewport_toolbar.bind_overlay_model(model, doc)
         self.gallery_transfers.bind_model(model)
         self._handle = model.get_handle()
-        viewport_toolbar.attach_overlay_model_handle(self._handle)
+        viewport_toolbar.attach_overlay_model_handle(self._handle, doc)
         body.set_attribute("data-model", _MODEL_NAME)
         body.set_attribute(_MODEL_MARKER, "1")
         self._handle.dirty_all()
         return True
+
+
+def _draw_centered_text(layout, text, center_x, y, width, color, bottom):
+    """Wrap viewport hints instead of clipping them into neighbouring areas."""
+    line = ""
+    lines = []
+    for word in text.split():
+        candidate = (line + " " + word).strip()
+        if line and layout.calc_text_size(candidate)[0] > width:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    if line:
+        lines.append(line)
+    for line in lines:
+        if y + 20.0 > bottom:
+            break
+        text_width, _ = layout.calc_text_size(line)
+        layout.draw_window_text(center_x - text_width * 0.5, y, line, color)
+        y += 22.0
+    return y
 
 
 def _draw_empty_state_overlay(layout):
@@ -165,10 +189,12 @@ def _draw_empty_state_overlay(layout):
 
     center_x = vp_x + vp_w * 0.5
     center_y = vp_y + vp_h * 0.5
-    zone_min_x = vp_x + _ZONE_PADDING
-    zone_min_y = vp_y + _ZONE_PADDING
-    zone_max_x = vp_x + vp_w - _ZONE_PADDING
-    zone_max_y = vp_y + vp_h - _viewport_bottom_inset(layout, _ZONE_PADDING)
+    padding_x = min(_ZONE_PADDING, max(32.0, vp_w * 0.12))
+    padding_y = min(_ZONE_PADDING, max(24.0, vp_h * 0.12))
+    zone_min_x = vp_x + padding_x
+    zone_min_y = vp_y + padding_y
+    zone_max_x = vp_x + vp_w - padding_x
+    zone_max_y = vp_y + vp_h - padding_y
 
     now = lf.ui.get_time()
     mouse_pos = lf.ui.get_mouse_screen_pos()
@@ -245,13 +271,13 @@ def _draw_empty_state_overlay(layout):
     subtitle = lf.ui.tr("startup.drop_files_subtitle")
     hint = lf.ui.tr("startup.drop_files_hint")
 
-    title_w, _ = layout.calc_text_size(title)
-    subtitle_w, _ = layout.calc_text_size(subtitle)
-    hint_w, _ = layout.calc_text_size(hint)
-
-    layout.draw_window_text(center_x - title_w * 0.5, center_y + 10.0, title, title_color)
-    layout.draw_window_text(center_x - subtitle_w * 0.5, center_y + 40.0, subtitle, subtitle_color)
-    layout.draw_window_text(center_x - hint_w * 0.5, center_y + 70.0, hint, hint_color)
+    text_width = max(80.0, zone_max_x - zone_min_x - 24.0)
+    y = _draw_centered_text(layout, title, center_x, center_y + 10.0,
+                            text_width, title_color, zone_max_y)
+    y = _draw_centered_text(layout, subtitle, center_x, y + 8.0,
+                            text_width, subtitle_color, zone_max_y)
+    _draw_centered_text(layout, hint, center_x, y + 8.0,
+                        text_width, hint_color, zone_max_y)
 
     layout.end_window()
     if animating:
@@ -362,9 +388,17 @@ def _draw_drag_drop_overlay(layout):
 
 def _sync_viewport_overlay_document(doc=None):
     global _document_controller
-    if _document_controller is None:
-        _document_controller = _OverlayDocumentController()
-    dirty_sources = _document_controller.update(doc)
+    if doc is None:
+        doc = lf.ui.rml.get_document(_HOOK_PANEL)
+    if doc is None:
+        return False
+    key = viewport_toolbar.overlay_document_key(doc)
+    controller = _document_controllers.get(key)
+    if controller is None:
+        controller = _OverlayDocumentController(key)
+        _document_controllers[key] = controller
+    _document_controller = controller
+    dirty_sources = controller.update(doc)
     debug_log = getattr(getattr(lf, "log", None), "debug", None)
     if callable(debug_log):
         for source in dirty_sources or []:
@@ -381,7 +415,8 @@ def sync_document(doc=None):
 
 def show_gallery_transfers():
     _sync_viewport_overlay_document()
-    _document_controller.gallery_transfers.show()
+    if _document_controller is not None:
+        _document_controller.gallery_transfers.show()
 
 
 def _draw_viewport_overlay(layout):
@@ -400,19 +435,33 @@ def register():
     _sync_viewport_overlay_document()
 
 
-def on_document_unloaded():
+def on_document_unloaded(doc=None):
     """Drop Python overlay handles before RmlUi frees the native document."""
     global _document_controller
-    if _document_controller is not None:
-        _document_controller.reset()
+    if doc is None:
+        active = _document_controller
+        for controller in tuple(_document_controllers.values()):
+            controller.reset()
+        _document_controllers.clear()
+        # Keep the compatibility alias alive for older reload callers. Native
+        # unloads always provide a document and remove exactly one entry.
+        _document_controller = active
+        return
+    key = viewport_toolbar.overlay_document_key(doc)
+    controller = _document_controllers.pop(key, None)
+    if controller is not None:
+        controller.reset()
+    if _document_controller is controller:
+        _document_controller = next(iter(_document_controllers.values()), None)
 
 
 def unregister():
     """Unregister built-in viewport overlay controllers."""
-    global _hook_registered
+    global _hook_registered, _document_controller
     if not _hook_registered:
         return
 
     lf.ui.remove_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay)
     _hook_registered = False
     on_document_unloaded()
+    _document_controller = None

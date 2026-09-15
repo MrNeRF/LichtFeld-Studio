@@ -5,11 +5,13 @@
 #pragma once
 
 #include "rendering/rendering_types.hpp"
+#include "workspace/view_id.hpp"
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <optional>
 
 namespace lfs::vis::op {
 
@@ -76,6 +78,9 @@ namespace lfs::vis::op {
         bool hide_handles = false;
         SplitViewPanelId hovered_panel = SplitViewPanelId::Left;
         DepthWindowHandle hovered_handle = DepthWindowHandle::None;
+        // Legacy panel overlays leave this empty. Workspace overlays identify
+        // the pane whose captured/hovered depth window owns the handles.
+        std::optional<ViewId> workspace_view_id;
     };
 
     // KEEP IN SYNC: this screen->render mapping is formula-identical to the two

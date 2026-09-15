@@ -379,7 +379,8 @@ namespace lfs::vis {
                         return SDL_HITTEST_NORMAL;
                 } else {
                     const SDL_HitTestResult resize_result = resizeHitTestResult(edge_mask);
-                    if (resize_result != SDL_HITTEST_NORMAL)
+                    if (resize_result != SDL_HITTEST_NORMAL &&
+                        !self->workspaceCornerAt(area->x, area->y))
                         return resize_result;
                 }
             }
@@ -956,6 +957,8 @@ namespace lfs::vis {
 
         const int mouse_x = static_cast<int>(std::round(event.button.x));
         const int mouse_y = static_cast<int>(std::round(event.button.y));
+        if (workspaceCornerAt(mouse_x, mouse_y))
+            return false;
         return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::NoEdge;
     }
 
@@ -1074,7 +1077,8 @@ namespace lfs::vis {
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
-                    if (resize_edge != ResizeEdge::NoEdge) {
+                    if (resize_edge != ResizeEdge::NoEdge &&
+                        !workspaceCornerAt(mouse_x, mouse_y)) {
                         if constexpr (kUseManualBorderlessResize) {
                             beginManualResize(resize_edge);
                             break;
@@ -1336,6 +1340,17 @@ namespace lfs::vis {
             edge |= static_cast<unsigned>(ResizeEdge::Bottom);
 
         return static_cast<ResizeEdge>(edge);
+    }
+
+    bool WindowManager::workspaceCornerAt(const int x, const int y) const {
+        if (!input_controller_)
+            return false;
+        const auto* const snapshot = input_controller_->workspaceFrameSnapshot();
+        return snapshot != nullptr &&
+               CornerSplitInteraction::handleHit(*snapshot,
+                                                 {static_cast<float>(x), static_cast<float>(y)},
+                                                 kWorkspaceCornerHandlePixels)
+                   .has_value();
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {

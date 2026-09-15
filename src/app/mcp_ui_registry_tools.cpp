@@ -1207,14 +1207,18 @@ namespace lfs::app {
                         ? args["parent_id"].get<std::string>()
                         : std::string{};
 
-                return post_and_wait(viewer, [panel_id, has_enabled, enabled, has_label, label, has_order, order, has_space, space, has_parent_id, parent_id]() -> json {
+                return post_and_wait(viewer, [viewer, panel_id, has_enabled, enabled, has_label, label, has_order, order, has_space, space, has_parent_id, parent_id]() -> json {
                     auto& panels = vis::gui::PanelRegistry::instance();
                     if (!panels.get_panel(panel_id)) {
                         return json{{"error", "Panel is not registered: " + panel_id}};
                     }
 
-                    if (has_enabled) {
-                        panels.set_panel_enabled(panel_id, enabled);
+                    // Close before changing placement; open after the new placement is applied.
+                    if (has_enabled && !enabled) {
+                        panels.set_panel_enabled(panel_id, false);
+                        if (auto* impl = as_visualizer_impl(viewer))
+                            if (auto* gm = impl->getGuiManager())
+                                gm->showPanelInArea(panel_id, false);
                     }
                     if (has_label && !panels.set_panel_label(panel_id, label)) {
                         return json{{"error", "Failed to update panel label: " + panel_id}};
@@ -1227,6 +1231,13 @@ namespace lfs::app {
                     }
                     if (has_parent_id && !panels.set_panel_parent(panel_id, parent_id)) {
                         return json{{"error", "Failed to update panel parent: " + panel_id}};
+                    }
+
+                    if (has_enabled && enabled) {
+                        panels.set_panel_enabled(panel_id, true);
+                        if (auto* impl = as_visualizer_impl(viewer))
+                            if (auto* gm = impl->getGuiManager())
+                                gm->showPanelInArea(panel_id, true);
                     }
 
                     auto payload = describe_panel_payload(panel_id);

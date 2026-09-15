@@ -119,7 +119,8 @@ namespace lfs::vis {
     class RmlSequencerPanel {
     public:
         RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
-                          gui::RmlUIManager* rml_manager);
+                          gui::RmlUIManager* rml_manager,
+                          std::string context_name = "sequencer");
         ~RmlSequencerPanel();
 
         RmlSequencerPanel(const RmlSequencerPanel&) = delete;
@@ -133,6 +134,8 @@ namespace lfs::vis {
 
         void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }
         void setFloating(bool floating) { floating_ = floating; }
+        // Area-hosted instances cannot move or close the registry-owned panel.
+        void setAreaHosted(bool area_hosted) { area_hosted_ = area_hosted; }
         [[nodiscard]] bool isFloating() const { return floating_; }
 
         [[nodiscard]] bool consumeSavePathRequest();
@@ -258,6 +261,7 @@ namespace lfs::vis {
             int height = 0;
             int dp_milli = 1000;
             bool floating = false;
+            bool area_hosted = false;
             bool film_strip_attached = false;
             std::size_t theme_signature = 0;
             std::string language;
@@ -307,6 +311,7 @@ namespace lfs::vis {
         SequencerController& controller_;
         gui::panels::SequencerUIState& ui_state_;
         gui::RmlUIManager* rml_manager_;
+        std::string context_name_;
         TransportClickListener transport_listener_;
         QualityScrubListener quality_scrub_listener_;
         DurationEditListener duration_listener_;
@@ -451,6 +456,7 @@ namespace lfs::vis {
         bool last_film_strip_attached_ = false;
         bool floating_ = false;
         bool last_floating_ = false;
+        bool area_hosted_ = false;
 
         // Request flags consumed by SequencerUIManager
         bool save_path_requested_ = false;

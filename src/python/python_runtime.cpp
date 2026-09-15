@@ -1565,9 +1565,9 @@ namespace lfs::python {
                g_sync_viewport_overlay_document_cb(document);
     }
 
-    void notify_viewport_overlay_document_unloaded() {
+    void notify_viewport_overlay_document_unloaded(void* document) {
         if (g_viewport_overlay_document_unload_cb)
-            g_viewport_overlay_document_unload_cb();
+            g_viewport_overlay_document_unload_cb(document);
     }
 
     void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,

@@ -670,6 +670,8 @@ namespace lfs::python {
             "set_panel_enabled", [](const std::string& panel_id, bool enabled) {
                 invoke_on_viewer([panel_id, enabled] {
                     gui::PanelRegistry::instance().set_panel_enabled(panel_id, enabled);
+                    if (auto* gm = get_gui_manager())
+                        gm->showPanelInArea(panel_id, enabled);
                 });
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");

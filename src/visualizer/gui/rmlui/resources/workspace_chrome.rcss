@@ -1,0 +1,55 @@
+body {
+    font-family: Inter;
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+#workspace-grips,
+#workspace-splitters,
+#workspace-preview {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.workspace-grip,
+.workspace-splitter,
+.workspace-preview-first,
+.workspace-preview-second,
+.workspace-preview-splitter {
+    position: absolute;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+.workspace-grip__line {
+    position: absolute;
+    width: 13px;
+    height: 2px;
+    right: 1px;
+    transform: rotate(-45deg);
+    transform-origin: right center;
+}
+
+.workspace-grip__line--1 { bottom: 5px; }
+.workspace-grip__line--2 { bottom: 10px; }
+.workspace-grip__line--3 { bottom: 15px; }
+
+.workspace-splitter {
+}
+
+.workspace-preview-first {
+}
+
+.workspace-preview-second {
+    border-width: 1px;
+}
+
+.workspace-preview-splitter {
+}

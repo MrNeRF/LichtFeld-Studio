@@ -339,6 +339,14 @@ namespace lfs::vis::gui {
                 valid = valid &&
                         projectPoint(view_projection, config.viewport_pos, config.viewport_size, world[i], screen[i]);
             }
+            // Edge-on planes collapse to a line. A convex-polygon hit test
+            // cannot distinguish points along that line and would steal axis
+            // drags even beyond the visible plane handle.
+            if (valid) {
+                const glm::vec2 edge_a = screen[1] - screen[0];
+                const glm::vec2 edge_b = screen[3] - screen[0];
+                valid = std::abs(edge_a.x * edge_b.y - edge_a.y * edge_b.x) > 1.0f;
+            }
             return screen;
         }
 

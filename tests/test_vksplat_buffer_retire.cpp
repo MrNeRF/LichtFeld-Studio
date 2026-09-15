@@ -6,6 +6,7 @@
 
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
+#include "rendering/rendering.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_wait.hpp"
 
@@ -13,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -489,4 +491,145 @@ namespace lfs::vis {
 
 TEST(VksplatScratchReleaseTest, RetiresOwnersAndInvalidatesAliasesBeforeReuse) {
     lfs::vis::VksplatScratchReleaseTestAccess::checkAliasesAreCleared();
+}
+
+namespace lfs::vis {
+    struct VksplatGpuLodMultiviewTestAccess {
+        static void rejectReentrantRenderBeforeRegisteringKey() {
+            VksplatViewportRenderer renderer;
+            VksplatViewportRenderer::InFlightOutputGuard first(
+                renderer, kLegacyMainOutputKey, true, "render");
+            ASSERT_TRUE(first.ok()) << first.error;
+
+            const auto scene_key = sceneOutputKey(99);
+            VksplatViewportRenderer::InFlightOutputGuard second(
+                renderer, scene_key, true, "render");
+            EXPECT_FALSE(second.ok());
+            EXPECT_NE(second.error.find("overlapping or reentrant"), std::string::npos);
+            EXPECT_EQ(renderer.in_flight_output_key_, kLegacyMainOutputKey);
+            EXPECT_FALSE(renderer.ring_.findKey(scene_key).has_value());
+        }
+
+        static void armFakeResidentRasterBuffers(VksplatViewportRenderer& renderer) {
+            const auto fake = [](_VulkanBuffer& buffer, const std::uintptr_t handle) {
+                buffer.buffer = fakeVkHandle<VkBuffer>(handle);
+                buffer.allocation = VK_NULL_HANDLE;
+                buffer.size = buffer.capacity = buffer.allocSize = 4096;
+            };
+            renderer.buffers_.is_unsorted_1 = true;
+            renderer.buffers_.num_splats = 8;
+            fake(renderer.buffers_.depth_wave_dispatch.deviceBuffer, 0x5101);
+            fake(renderer.buffers_.wave_predicates.deviceBuffer, 0x5102);
+            fake(renderer.buffers_.sorted_gauss_idx().deviceBuffer, 0x5103);
+            fake(renderer.buffers_.tile_ranges.deviceBuffer, 0x5104);
+            fake(renderer.buffers_.xy_vs.deviceBuffer, 0x5105);
+            fake(renderer.buffers_.inv_cov_vs_opacity.deviceBuffer, 0x5106);
+            fake(renderer.buffers_.rgb.deviceBuffer, 0x5107);
+            fake(renderer.buffers_.depths.deviceBuffer, 0x5108);
+            fake(renderer.buffers_.overlay_flags.deviceBuffer, 0x5109);
+        }
+
+        static void disarmFakeResidentRasterBuffers(VksplatViewportRenderer& renderer) {
+            const auto clear = [](_VulkanBuffer& buffer) { buffer = {}; };
+            clear(renderer.buffers_.depth_wave_dispatch.deviceBuffer);
+            clear(renderer.buffers_.wave_predicates.deviceBuffer);
+            clear(renderer.buffers_.sorting_gauss_idx_1.deviceBuffer);
+            clear(renderer.buffers_.sorting_gauss_idx_2.deviceBuffer);
+            clear(renderer.buffers_.tile_ranges.deviceBuffer);
+            clear(renderer.buffers_.xy_vs.deviceBuffer);
+            clear(renderer.buffers_.inv_cov_vs_opacity.deviceBuffer);
+            clear(renderer.buffers_.rgb.deviceBuffer);
+            clear(renderer.buffers_.depths.deviceBuffer);
+            clear(renderer.buffers_.overlay_flags.deviceBuffer);
+            renderer.buffers_.num_splats = 0;
+            renderer.invalidateResidentRasterScratch();
+        }
+
+        static lfs::rendering::ViewportRenderRequest makeScratchRequest() {
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {64, 48};
+            request.frame_view.translation = {0.0f, 1.0f, 2.0f};
+            request.frame_view.focal_length_mm = 35.0f;
+            request.scaling_modifier = 1.0f;
+            return request;
+        }
+
+        static void expectUnavailable(const lfs::Status& result,
+                                      const std::string_view what) {
+            ASSERT_FALSE(result) << what << " unexpectedly succeeded";
+            EXPECT_NE(result.error().user_message().find("unavailable"), std::string::npos) << result.error().user_message();
+        }
+
+        static void rejectWrongKeyResidentScratchReuse() {
+            VksplatViewportRenderer renderer;
+            armFakeResidentRasterBuffers(renderer);
+            struct DisarmGuard {
+                VksplatViewportRenderer& renderer;
+                ~DisarmGuard() { disarmFakeResidentRasterBuffers(renderer); }
+            } disarm_guard{renderer};
+            const auto request = makeScratchRequest();
+            const auto scene_a = sceneOutputKey(7);
+            const auto scene_b = sceneOutputKey(8);
+            constexpr std::size_t kSplats = 8;
+
+            // Matching key can reuse only after a successful full-render publish.
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, request, kSplats),
+                "unpublished scratch");
+
+            renderer.publishResidentRasterScratch(scene_a, request, kSplats, 4, 8, false);
+            ASSERT_TRUE(renderer.requireReusableResidentRasterScratch(scene_a, request, kSplats));
+
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_b, request, kSplats),
+                "other scene key");
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(kLegacyPreviewOutputKey, request, kSplats),
+                "preview after scene");
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(kLegacyMainOutputKey, request, kSplats),
+                "legacy after scene");
+
+            auto moved = request;
+            moved.frame_view.translation.x = 3.0f;
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, moved, kSplats),
+                "same key different camera");
+
+            auto resized = request;
+            resized.frame_view.size = {80, 48};
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, resized, kSplats),
+                "same key different projection size");
+
+            renderer.invalidateResidentRasterScratch();
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, request, kSplats),
+                "after full-render invalidate");
+
+            renderer.publishResidentRasterScratch(
+                kLegacyPreviewOutputKey, request, kSplats, 4, 8, false);
+            ASSERT_TRUE(renderer.requireReusableResidentRasterScratch(
+                kLegacyPreviewOutputKey, request, kSplats));
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, request, kSplats),
+                "scene after preview publish");
+
+            renderer.publishResidentRasterScratch(scene_b, request, kSplats, 2, 8, true);
+            ASSERT_TRUE(renderer.requireReusableResidentRasterScratch(scene_b, request, kSplats));
+            expectUnavailable(
+                renderer.requireReusableResidentRasterScratch(scene_a, request, kSplats),
+                "key A after sequential key B overwrite");
+
+            disarmFakeResidentRasterBuffers(renderer);
+        }
+    };
+} // namespace lfs::vis
+
+TEST(VksplatInFlightOutputGuard, RejectsReentrantRenderBeforeRegisteringKey) {
+    lfs::vis::VksplatGpuLodMultiviewTestAccess::rejectReentrantRenderBeforeRegisteringKey();
+}
+
+TEST(VksplatResidentRasterScratch, RejectsWrongKeyReuse) {
+    lfs::vis::VksplatGpuLodMultiviewTestAccess::rejectWrongKeyResidentScratchReuse();
 }

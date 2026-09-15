@@ -201,6 +201,7 @@ nanobind_add_module(
     lfs/py_ui_panels.cpp
     lfs/py_uilist.cpp
     lfs/py_viewport.cpp
+    lfs/py_workspace.cpp
     viewport_overlay.cpp
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp

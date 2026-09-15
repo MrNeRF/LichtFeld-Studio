@@ -28,6 +28,7 @@ namespace lfs::core::param {
 namespace lfs::vis {
     class SceneManager;
     class RenderingManager;
+    class ViewportWorkspace;
 
     enum class GraphicsBackend {
         Vulkan,
@@ -176,6 +177,10 @@ namespace lfs::vis {
         struct WorkItem {
             std::function<void()> run;
             std::function<void()> cancel;
+            // GUI render work normally runs after the active Vulkan frame has
+            // been submitted.  Capture work that reads the composited window
+            // may opt into the pre-submit phase while that frame is active.
+            bool requires_active_frame = false;
         };
 
         static std::unique_ptr<Visualizer> create(const ViewerOptions& options = {});
@@ -191,6 +196,12 @@ namespace lfs::vis {
         virtual core::Scene& getScene() = 0;
         virtual SceneManager* getSceneManager() = 0;
         virtual RenderingManager* getRenderingManager() = 0;
+        [[nodiscard]] virtual ViewportWorkspace* getViewportWorkspace() {
+            return nullptr;
+        }
+        [[nodiscard]] virtual const ViewportWorkspace* getViewportWorkspace() const {
+            return nullptr;
+        }
 
         virtual bool postWork(WorkItem work) = 0;
         // Drain viewer-owned work while an explicit project operation waits

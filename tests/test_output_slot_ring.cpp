@@ -278,3 +278,121 @@ TEST(OutputSlotRing, OutOfRangeWaitIsNoOpSuccess) {
     EXPECT_TRUE(status);
     EXPECT_EQ(ring.ringCompletionValue(0), 5u);
 }
+
+TEST(OutputSlotRing, LegacyColumnsRemainTheDefaultRegistry) {
+    OutputSlotRing ring;
+
+    EXPECT_EQ(ring.logicalCount(), OutputSlotRing::kOutputSlotCount);
+    EXPECT_EQ(ring.activeLogicalCount(), OutputSlotRing::kOutputSlotCount);
+    EXPECT_EQ(ring.findKey(lfs::vis::kLegacyMainOutputKey), 0u);
+    EXPECT_EQ(ring.findKey(lfs::vis::kLegacyPreviewOutputKey), 3u);
+    EXPECT_EQ(ring.keyAt(0), lfs::vis::kLegacyMainOutputKey);
+    EXPECT_FALSE(ring.findKey(lfs::vis::kInvalidViewOutputKey));
+}
+
+TEST(OutputSlotRing, SparseSceneKeysOnlyAllocateRegisteredColumns) {
+    OutputSlotRing ring;
+    constexpr lfs::vis::ViewId view_id = 0x7fff'ffff'ffff'0000ull;
+
+    const auto first_view = ring.registerSceneView(1);
+    EXPECT_NE(ring.findKey(lfs::vis::sceneOutputKey(1)),
+              ring.findKey(lfs::vis::kLegacyMainOutputKey));
+    const auto logical = ring.registerSceneView(view_id);
+    EXPECT_EQ(first_view, OutputSlotRing::kOutputSlotCount);
+    EXPECT_EQ(logical, OutputSlotRing::kOutputSlotCount + 1);
+    EXPECT_EQ(ring.logicalCount(), OutputSlotRing::kOutputSlotCount + 2);
+    EXPECT_EQ(ring.activeLogicalCount(), OutputSlotRing::kOutputSlotCount + 2);
+    EXPECT_EQ(ring.findKey(lfs::vis::sceneOutputKey(view_id)), logical);
+    EXPECT_EQ(ring.registerSceneView(view_id), logical);
+}
+
+TEST(OutputSlotRing, SceneColumnsKeepIndependentLatestGenerationAndImages) {
+    OutputSlotRing ring;
+    const auto left = ring.registerSceneView(101);
+    const auto right = ring.registerSceneView(202);
+
+    ring.slotAt(left, 0) = makeSlot(0x10);
+    ring.slotAt(right, 2) = makeSlot(0x20);
+    ring.markLatest(left, 0);
+    ring.markLatest(right, 2);
+    EXPECT_EQ(ring.bumpGeneration(left), 1u);
+    EXPECT_EQ(ring.bumpGeneration(right), 1u);
+    EXPECT_EQ(ring.bumpGeneration(right), 2u);
+
+    EXPECT_EQ(ring.latestSlot(left).image.image, fakeImage(0x10));
+    EXPECT_EQ(ring.latestSlot(right).image.image, fakeImage(0x20));
+    EXPECT_EQ(ring.generation(left), 1u);
+    EXPECT_EQ(ring.generation(right), 2u);
+}
+
+TEST(OutputSlotRing, RetiringColumnDoesNotMoveOrAliasLiveNeighbor) {
+    OutputSlotRing ring;
+    const auto retired = ring.registerSceneView(303);
+    const auto live = ring.registerSceneView(404);
+    ring.slotAt(retired, 0) = makeSlot(0x30);
+    ring.slotAt(live, 1) = makeSlot(0x40);
+
+    std::size_t callback_count = 0;
+    EXPECT_TRUE(ring.unregisterKey(lfs::vis::sceneOutputKey(303), [&](OutputImageSlot& slot) {
+        ++callback_count;
+    }));
+    EXPECT_EQ(callback_count, OutputSlotRing::kFrameRingSize);
+    EXPECT_FALSE(ring.findKey(lfs::vis::sceneOutputKey(303)));
+    ASSERT_EQ(ring.findKey(lfs::vis::sceneOutputKey(404)), live);
+    EXPECT_EQ(ring.slotAt(live, 1).image.image, fakeImage(0x40));
+    EXPECT_EQ(ring.activeLogicalCount(), OutputSlotRing::kOutputSlotCount + 1);
+
+    const auto replacement = ring.registerSceneView(505);
+    EXPECT_EQ(replacement, retired);
+    EXPECT_NE(replacement, live);
+    EXPECT_EQ(ring.findKey(lfs::vis::sceneOutputKey(404)), live);
+    EXPECT_EQ(ring.slotAt(replacement, 0).image.image, VK_NULL_HANDLE);
+}
+
+TEST(OutputSlotRing, UnknownOrContractlessRetirementFailsWithoutClearing) {
+    OutputSlotRing ring;
+    const auto logical = ring.registerSceneView(606);
+    ring.slotAt(logical, 0) = makeSlot(0x60);
+
+    EXPECT_FALSE(ring.unregisterKey(lfs::vis::sceneOutputKey(999), [&](OutputImageSlot&) {}));
+    EXPECT_FALSE(ring.unregisterKey(lfs::vis::sceneOutputKey(606), {}));
+    EXPECT_TRUE(ring.findKey(lfs::vis::sceneOutputKey(606)));
+    EXPECT_EQ(ring.slotAt(logical, 0).image.image, fakeImage(0x60));
+    EXPECT_THROW((void)ring.registerKey(lfs::vis::kInvalidViewOutputKey), std::invalid_argument);
+    EXPECT_THROW((void)ring.registerSceneView(0), std::invalid_argument);
+
+    const lfs::vis::ViewOutputKey unknown_kind{
+        static_cast<lfs::vis::ViewOutputKey::Kind>(0xff), 1};
+    EXPECT_FALSE(unknown_kind.valid());
+    EXPECT_THROW((void)ring.registerKey(unknown_kind), std::invalid_argument);
+}
+
+TEST(OutputSlotRing, ReRegisterAndResetPreserveStableKeyState) {
+    OutputSlotRing ring;
+    const auto key = lfs::vis::sceneOutputKey(707);
+    const auto logical = ring.registerKey(key);
+    ring.slotAt(logical, 2) = makeSlot(0x70);
+    ring.markLatest(logical, 2);
+    EXPECT_EQ(ring.bumpGeneration(logical), 1u);
+
+    ring.reset();
+    EXPECT_EQ(ring.findKey(key), logical);
+    EXPECT_EQ(ring.registerKey(key), logical);
+    EXPECT_EQ(ring.latestRingSlot(logical), 0u);
+    EXPECT_EQ(ring.generation(logical), 0u);
+    EXPECT_EQ(ring.slotAt(logical, 2).image.image, VK_NULL_HANDLE);
+}
+
+TEST(OutputSlotRing, ThrowingRetirementCallbackKeepsKeyLive) {
+    OutputSlotRing ring;
+    const auto key = lfs::vis::sceneOutputKey(808);
+    const auto logical = ring.registerKey(key);
+    ring.slotAt(logical, 0) = makeSlot(0x80);
+
+    EXPECT_THROW(
+        (void)ring.retireKey(key, [](OutputImageSlot&) { throw std::runtime_error("retire failed"); }),
+        std::runtime_error);
+    EXPECT_EQ(ring.findKey(key), logical);
+    EXPECT_EQ(ring.activeLogicalCount(), ring.logicalCount());
+    EXPECT_EQ(ring.slotAt(logical, 0).image.image, fakeImage(0x80));
+}

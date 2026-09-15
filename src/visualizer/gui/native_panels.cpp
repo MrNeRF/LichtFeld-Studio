@@ -6,6 +6,7 @@
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/line_renderer.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
+#include <nlohmann/json.hpp>
 
 namespace lfs::vis::gui::native_panels {
 
@@ -168,9 +170,110 @@ namespace lfs::vis::gui::native_panels {
         (void)ctx;
     }
 
+    namespace {
+        // Area instances deliberately share only the sequencer controller. RML
+        // context, timeline view, input state, film-strip textures, and panel
+        // cache belong to this retained instance.
+        class SequencerAreaPanel final : public IPanel {
+        public:
+            SequencerAreaPanel(SequencerUIManager* manager, const std::string_view instance_id)
+                : manager_(manager),
+                  ui_state_(manager->uiState()),
+                  panel_(manager->controller(), ui_state_, manager->rmlManager(),
+                         std::string(instance_id) + ".sequencer") {
+                panel_.setAreaHosted(true);
+                owner_ = manager_->createAreaOverlayOwner(&panel_, &ui_state_);
+            }
+
+            ~SequencerAreaPanel() override {
+                if (manager_)
+                    manager_->releaseAreaOverlayOwner(owner_);
+            }
+
+            void draw(const PanelDrawContext& /*ctx*/) override {}
+
+            bool poll(const PanelDrawContext& ctx) override {
+                return !ctx.ui_hidden && manager_ != nullptr;
+            }
+
+            PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+
+            PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                                 const PanelDrawContext& /*ctx*/) override {
+                if (request.mode == PanelDirectRenderMode::Measure)
+                    return {.handled = true, .height = request.height};
+                if (request.mode == PanelDirectRenderMode::Cached)
+                    return {};
+                if (!manager_ || !request.input || request.width <= 0.0f || request.height <= 0.0f)
+                    return {.handled = true, .height = request.height};
+
+                panel_.setFloating(request.space == PanelSpace::Floating);
+                panel_.setFilmStripAttached(ui_state_.show_film_strip);
+                if (request.mode == PanelDirectRenderMode::Draw) {
+                    panel_.render(request.x, request.y, request.width, request.height,
+                                  toSequencerPanelInput(*request.input), manager_->viewer()->getRenderingManager(),
+                                  manager_->viewer()->getSceneManager(), film_strip_);
+                    manager_->processAreaPanelRequests(panel_, ui_state_, owner_,
+                                                       request.input->mouse_x,
+                                                       request.input->mouse_y);
+                }
+                return {.handled = true, .height = request.height};
+            }
+
+            bool needsAnimationFrame() const override {
+                return manager_ && (manager_->controller().isPlaying() ||
+                                    panel_.needsLocalizationFrame());
+            }
+
+            void reloadRmlResources() override { panel_.reloadResources(); }
+
+            void releaseRendererResources() override {
+                panel_.destroyGraphicsResources();
+                film_strip_.destroyGraphicsResources();
+            }
+
+            [[nodiscard]] std::string captureChromeJson() const override {
+                return nlohmann::json{
+                    {"timeline_zoom", panel_.zoomLevel()},
+                    {"timeline_pan", panel_.panOffset()},
+                    {"show_film_strip", ui_state_.show_film_strip},
+                }
+                    .dump();
+            }
+
+            void applyChromeJson(const std::string_view json) override {
+                if (json.empty())
+                    return;
+                try {
+                    const auto chrome = nlohmann::json::parse(json);
+                    panel_.setTimelineView(chrome.value("timeline_zoom", 1.0f),
+                                           chrome.value("timeline_pan", 0.0f));
+                    ui_state_.show_film_strip = chrome.value(
+                        "show_film_strip", ui_state_.show_film_strip);
+                } catch (const std::exception& error) {
+                    LOG_WARN("Ignoring invalid sequencer area state: {}", error.what());
+                }
+            }
+
+        private:
+            SequencerUIManager* manager_ = nullptr;
+            panels::SequencerUIState ui_state_;
+            RmlSequencerPanel panel_;
+            FilmStripRenderer film_strip_;
+            SequencerUIManager::AreaOverlayOwnerPtr owner_;
+        };
+    } // namespace
+
     SequencerPanel::SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout)
         : seq_(seq),
           layout_(layout) {}
+
+    std::shared_ptr<IPanel> SequencerPanel::createAreaInstance(
+        const std::string_view instance_id) const {
+        if (!seq_ || !seq_->rmlManager())
+            return nullptr;
+        return std::make_shared<SequencerAreaPanel>(seq_, instance_id);
+    }
 
     void SequencerPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
@@ -326,27 +429,40 @@ namespace lfs::vis::gui::native_panels {
         if (!ctx.ui || !ctx.ui->viewer || !ctx.viewport)
             return;
 
-        const auto& vp = ctx.ui->viewer->getViewport();
-        const auto view = vp.getViewMatrix();
         auto* rm = ctx.ui->viewer->getRenderingManager();
-        const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
-        const auto proj = vp.getProjectionMatrix(focal_mm);
-        const float vp_pos[] = {ctx.viewport->pos.x, ctx.viewport->pos.y};
-        const float vp_size[] = {ctx.viewport->size.x, ctx.viewport->size.y};
-        const float cam_pos[] = {vp.camera.t.x, vp.camera.t.y, vp.camera.t.z};
-        const glm::vec3 forward = lfs::rendering::cameraForward(vp.camera.R);
-        const float cam_fwd[] = {forward.x, forward.y, forward.z};
-
-        lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
-        if (rm) {
-            overlay = rm->getScreenOverlayRenderer();
+        auto* overlay = rm ? rm->getScreenOverlayRenderer() : nullptr;
+        const auto draw = [&](const glm::mat4& view, const glm::mat4& projection,
+                              glm::vec2 position, glm::vec2 size,
+                              glm::vec3 camera_position, glm::vec3 camera_forward) {
+            const float vp_pos[] = {position.x, position.y};
+            const float vp_size[] = {size.x, size.y};
+            NativeOverlayDrawList draw_list;
+            draw_list.PushClipRect(position, position + size);
+            python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(projection),
+                                            vp_pos, vp_size, glm::value_ptr(camera_position),
+                                            glm::value_ptr(camera_forward), overlay, &draw_list);
+        };
+        if (gui_ && gui_->usesAreaWorkspace()) {
+            for (const auto& pane : gui_->workspaceSnapshot().panes) {
+                const auto* vp = ctx.ui->viewer->getViewportWorkspace()->findCamera(pane.id);
+                if (!vp)
+                    continue;
+                const auto& projection = pane.projection;
+                draw(vp->getViewMatrix(),
+                     lfs::rendering::createProjectionMatrixFromFocal(
+                         pane.window_size, projection.focal_length_mm,
+                         projection.orthographic, projection.ortho_scale,
+                         projection.near_plane, projection.far_plane),
+                     {pane.rect.x, pane.rect.y}, {pane.rect.width, pane.rect.height},
+                     vp->camera.t, lfs::rendering::cameraForward(vp->camera.R));
+            }
+        } else {
+            const auto& vp = ctx.ui->viewer->getViewport();
+            const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+            draw(vp.getViewMatrix(), vp.getProjectionMatrix(focal_mm),
+                 ctx.viewport->pos, ctx.viewport->size,
+                 vp.camera.t, lfs::rendering::cameraForward(vp.camera.R));
         }
-
-        NativeOverlayDrawList draw_list;
-        python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
-                                        vp_pos, vp_size, cam_pos, cam_fwd,
-                                        overlay,
-                                        &draw_list);
     }
 
 } // namespace lfs::vis::gui::native_panels

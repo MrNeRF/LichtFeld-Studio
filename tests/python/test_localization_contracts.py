@@ -352,28 +352,34 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
                 match.group(2).lower() == "placeholder"
                 for match in attribute_directive.finditer(source_rml)
             ),
+            "aria-label": sum(
+                match.group(2).lower() == "aria-label"
+                for match in attribute_directive.finditer(source_rml)
+            ),
             "text": sum(1 for _ in text_directive.finditer(source_rml)),
         }
         stamp_counts = {
             "title": stamped_rml.count('data-lfs-i18n-title="'),
             "placeholder": stamped_rml.count('data-lfs-i18n-placeholder="'),
+            "aria-label": stamped_rml.count('data-lfs-i18n-aria-label="'),
             "text": stamped_rml.count('data-lfs-i18n="'),
         }
         assert stamp_counts == directive_counts, path
 
     mixed_directives = (
-        '<button title="@tr:video_extractor.set_start">'
+        '<button title="@tr:video_extractor.set_start" aria-label="@tr:video_extractor.set_start">'
         "@tr:video_extractor.set</button>"
     )
     stamped_mixed_directives = preserve_translation_directives(mixed_directives)
     assert 'data-lfs-i18n-title="video_extractor.set_start"' in stamped_mixed_directives
+    assert 'data-lfs-i18n-aria-label="video_extractor.set_start"' in stamped_mixed_directives
     assert 'data-lfs-i18n="video_extractor.set"' in stamped_mixed_directives
 
     translated_text = re.compile(
         r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
     )
     translated_attribute = re.compile(
-        r"(?:title|placeholder)\s*=\s*([\"'])@tr:[A-Za-z0-9_.-]+\1",
+        r"(?:title|placeholder|aria-label)\s*=\s*([\"'])@tr:[A-Za-z0-9_.-]+\1",
         re.IGNORECASE,
     )
     for path in RML_DIR.rglob("*.rml"):

@@ -365,12 +365,17 @@ namespace lfs::vis::gui {
 
     } // namespace
 
-    NativeScenePanel::NativeScenePanel(RmlUIManager* manager)
+    NativeScenePanel::NativeScenePanel(RmlUIManager* manager, std::string context_name)
         : manager_(manager),
-          host_(manager, "scene_panel_native", "rmlui/scene_tree.rml") {
+          host_(manager, std::move(context_name), "rmlui/scene_tree.rml") {
         listener_.owner = this;
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
         last_log_generation_ = std::numeric_limits<uint64_t>::max();
+    }
+
+    std::shared_ptr<IPanel> NativeScenePanel::createAreaInstance(
+        const std::string_view instance_id) const {
+        return std::make_shared<NativeScenePanel>(manager_, std::string(instance_id));
     }
 
     bool NativeScenePanel::needsAnimationFrame() const {

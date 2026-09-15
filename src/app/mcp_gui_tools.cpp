@@ -10,6 +10,7 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
+#include "app/mcp_workspace_tools.hpp"
 #include "app/view_info_json.hpp"
 
 #include "core/cuda/sh_layout.cuh"
@@ -280,7 +281,9 @@ namespace lfs::app {
         }
 
         template <typename F>
-        auto post_render_and_wait(vis::VisualizerImpl* viewer_impl, F&& fn) {
+        auto post_render_and_wait(vis::VisualizerImpl* viewer_impl,
+                                  F&& fn,
+                                  const bool requires_active_frame = false) {
             using R = std::invoke_result_t<F>;
 
             if (viewer_impl->isOnViewerThread()) {
@@ -289,11 +292,17 @@ namespace lfs::app {
                 if (!viewer_impl->isProcessingRenderWork())
                     return make_post_failure<R>(
                         "Composited capture must be requested from a non-viewer thread unless already running in render work");
+                if (viewer_impl->isProcessingActiveFrameWork() != requires_active_frame)
+                    return make_post_failure<R>(
+                        requires_active_frame
+                            ? "Composited capture has no active Vulkan frame"
+                            : "Render mutation cannot run while the active Vulkan frame is recording");
                 return std::invoke(std::forward<F>(fn));
             }
 
             return detail::post_and_wait_impl(
-                [viewer_impl](vis::Visualizer::WorkItem work) {
+                [viewer_impl, requires_active_frame](vis::Visualizer::WorkItem work) {
+                    work.requires_active_frame = requires_active_frame;
                     return viewer_impl->postRenderWork(std::move(work));
                 },
                 std::forward<F>(fn));
@@ -307,7 +316,7 @@ namespace lfs::app {
             if (!viewer_impl)
                 return make_post_failure<R>("Composited capture requires a GUI visualizer");
 
-            return post_render_and_wait(viewer_impl, std::forward<F>(fn));
+            return post_render_and_wait(viewer_impl, std::forward<F>(fn), true);
         }
 
         std::expected<std::string, std::string> capture_viewport_from_window(
@@ -2187,6 +2196,7 @@ namespace lfs::app {
         register_generic_gui_operator_tools(registry, viewer);
         register_generic_gui_runtime_tools(registry, viewer);
         register_generic_gui_ui_tools(registry, viewer);
+        register_gui_workspace_tools(registry, viewer);
 
         auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         assert(viewer_impl);
@@ -5494,6 +5504,7 @@ namespace lfs::app {
         register_generic_gui_operator_resources(registry, viewer);
         register_generic_gui_runtime_resources(registry, viewer);
         register_generic_gui_ui_resources(registry, viewer);
+        register_gui_workspace_resources(registry, viewer);
 
         registry.register_resource(
             McpResource{

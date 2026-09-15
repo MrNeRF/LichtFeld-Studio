@@ -41,11 +41,18 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/camera_interaction_service.cpp
         rendering/output_image_pool.cpp
         rendering/output_slot_ring.cpp
+        workspace/workspace_layout.cpp
+        workspace/view_registry.cpp
+        workspace/viewport_workspace.cpp
+        workspace/workspace_serialization.cpp
+        workspace/pane_interaction.cpp
+        workspace/corner_split_interaction.cpp
         rendering/readback_ticket_ring.cpp
         rendering/mesh_offscreen_renderer.cpp
         rendering/rendering_manager.cpp
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_vulkan.cpp
+        rendering/rendering_manager_workspace.cpp
         rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
         rendering/nvidia_dlss_plugin.cpp
@@ -64,9 +71,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/viewport_interop_service.cpp
         rendering/viewport_appearance_correction.cpp
         rendering/viewport_request_builder.cpp
+        rendering/workspace_render_request.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/passes/vulkan_mesh_pass.cpp
+        rendering/passes/shared_viewport_gpu_assets.cpp
         rendering/passes/vulkan_scene_motion_pass.cpp
         rendering/passes/vulkan_scene_dlss_depth_pass.cpp
         rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
@@ -85,6 +94,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         theme/theme.cpp
 
         # GUI system
+        gui/area_editor_host.cpp
+        gui/rml_workspace_chrome.cpp
         gui/gui_manager.cpp
         gui/vulkan_ui_texture.cpp
         gui/global_context_menu.cpp
@@ -131,6 +142,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/windows_console_utils.cpp
         gui/panels/tools_panel.cpp
         gui/panels/python_console_panel.cpp
+        gui/panels/console_area_panel.cpp
         gui/panels/python_scripts_panel.cpp
         gui/editor/python_lsp_client.cpp
         gui/editor/python_editor.cpp

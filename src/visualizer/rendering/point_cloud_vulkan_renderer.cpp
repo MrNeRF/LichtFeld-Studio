@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
+#include "viewport_error.hpp"
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_result.hpp"
+
+#include "view_output_key.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,9 +18,12 @@
 #include <cstring>
 #include <format>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <stop_token>
+#include <unordered_map>
 #include <utility>
 #include <vk_mem_alloc.h>
 
@@ -30,8 +36,54 @@ namespace lfs::vis {
 
         constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-        constexpr std::size_t kSlotCount = 3;
         constexpr std::size_t kPlaceholderSize = 16;
+
+        [[nodiscard]] lfs::Result<ViewOutputKey> legacyOutputKey(
+            const PointCloudVulkanRenderer::OutputSlot output_slot,
+            const std::string_view operation) {
+            switch (output_slot) {
+            case PointCloudVulkanRenderer::OutputSlot::Main:
+                return kLegacyMainOutputKey;
+            case PointCloudVulkanRenderer::OutputSlot::SplitLeft:
+                return kLegacySplitLeftOutputKey;
+            case PointCloudVulkanRenderer::OutputSlot::SplitRight:
+                return kLegacySplitRightOutputKey;
+            }
+            return viewportError(std::format(
+                                     "Point-cloud {} received an invalid legacy output-slot enum (observed_enum_value={})",
+                                     operation,
+                                     static_cast<std::size_t>(output_slot)),
+                                 lfs::ErrorCode::InvalidArgument);
+        }
+
+        [[nodiscard]] const char* reservedOutputKeyDiagnosticName(const ViewOutputKey key) {
+            if (key == kLegacyMainOutputKey) {
+                return "main";
+            }
+            if (key == kLegacySplitLeftOutputKey) {
+                return "split_left";
+            }
+            if (key == kLegacySplitRightOutputKey) {
+                return "split_right";
+            }
+            return nullptr;
+        }
+
+        [[nodiscard]] std::string outputKeyDiagnosticName(const ViewOutputKey key) {
+            if (const char* reserved = reservedOutputKeyDiagnosticName(key)) {
+                return reserved;
+            }
+            if (key.scene()) {
+                return std::format("scene:{}", key.view_id);
+            }
+            if (key.kind == ViewOutputKey::Kind::Legacy) {
+                return std::format("legacy:{}", key.view_id);
+            }
+            if (key.kind == ViewOutputKey::Kind::Preview) {
+                return std::format("preview:{}", key.view_id);
+            }
+            return "unknown";
+        }
         constexpr std::uint32_t kBindingModelTransforms = 0;
         constexpr std::uint32_t kBindingTransformIndices = 1;
         constexpr std::uint32_t kBindingVisibility = 2;
@@ -467,7 +519,8 @@ namespace lfs::vis {
         // One-time staging buffers, kept around so we don't reallocate per upload.
         std::vector<ManagedBuffer> pending_stagings;
 
-        // Output slots: each owns its own color + depth attachment.
+        // Output slots: each key owns its own color + depth attachment. Geometry
+        // buffers above stay shared across views.
         struct OutputSlotResources {
             VkImage color_image = VK_NULL_HANDLE;
             VmaAllocation color_alloc = VK_NULL_HANDLE;
@@ -478,6 +531,7 @@ namespace lfs::vis {
             VkImageView depth_view = VK_NULL_HANDLE;
             std::string color_vram_label;
             std::string depth_vram_label;
+            std::string key_name;
 
             glm::ivec2 size{0, 0};
             VkImageLayout color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -487,13 +541,15 @@ namespace lfs::vis {
             // Resource identity for VulkanImageBarrierTracker (#1478).
             std::uint64_t image_generation = 0;
         };
-        std::array<OutputSlotResources, kSlotCount> slots{};
+        std::unordered_map<ViewOutputKey, OutputSlotResources, ViewOutputKeyHash> slots;
+        std::optional<ViewOutputKey> in_flight_output_key_;
 
-        // Transient command pool / fence reused across frames.
+        // Transient command pool / fence reused across frames. Sequential
+        // submits share this fence: the next render waits it before recording.
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
-        std::mutex command_mutex;
+        mutable std::mutex command_mutex;
 
         // Phase 7C-P2: closed SubmissionState table for reset-before-submit.
         lfs::rendering::SubmissionState submission_state_{};
@@ -983,18 +1039,78 @@ namespace lfs::vis {
             return {};
         }
 
-        std::expected<void, std::string> ensureOutputImages(OutputSlotResources& slot,
-                                                            glm::ivec2 size) {
-            const std::size_t slot_index = static_cast<std::size_t>(&slot - slots.data());
-            if (slot_index >= slots.size() || size.x <= 0 || size.y <= 0) {
-                return std::unexpected<std::string>(std::format(
-                    "Point-cloud output image request requires an in-range slot and positive dimensions (slot_index={}, slot_count={}, observed_width={}, observed_height={}) ({}:{})",
-                    slot_index,
-                    slots.size(),
+        [[nodiscard]] lfs::Result<void> waitUntilCommandFenceReady(
+            const std::string_view fingerprint,
+            const std::string_view what) {
+            if (fence == VK_NULL_HANDLE || device == VK_NULL_HANDLE) {
+                return {};
+            }
+            auto wait_ctx = makeWaitContext(fingerprint);
+            auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                device,
+                fence,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                wait_ctx);
+            if (!wait_outcome.has_value() ||
+                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                return lfs::Status::failure(viewportError(
+                    formatFenceWaitUnexpected(what, wait_outcome)));
+            }
+            return {};
+        }
+
+        [[nodiscard]] lfs::Result<void> waitUntilOutputsIdle(
+            const std::string_view what) {
+            if (auto ready = waitUntilCommandFenceReady(
+                    std::format("point_cloud.{}.prewait", what),
+                    std::format("{} prewait", what));
+                !ready) {
+                return ready;
+            }
+            if (context != nullptr) {
+                if (!context->waitForSubmittedFrames()) {
+                    return lfs::Status::failure(viewportError(std::format(
+                        "waitForSubmittedFrames failed before {}: {}",
+                        what,
+                        context->lastError())));
+                }
+            }
+            return {};
+        }
+
+        [[nodiscard]] OutputSlotResources& ensureRegisteredSlot(const ViewOutputKey output_key) {
+            auto [it, inserted] = slots.try_emplace(output_key);
+            if (inserted) {
+                it->second.key_name = outputKeyDiagnosticName(output_key);
+            }
+            return it->second;
+        }
+
+        [[nodiscard]] bool canBindOutputKey(const ViewOutputKey output_key) const {
+            if (!output_key.valid()) {
+                return false;
+            }
+            if (output_key.scene()) {
+                return true;
+            }
+            return output_key == kLegacyMainOutputKey ||
+                   output_key == kLegacySplitLeftOutputKey ||
+                   output_key == kLegacySplitRightOutputKey;
+        }
+
+        lfs::Result<void> ensureOutputImages(OutputSlotResources& slot,
+                                             glm::ivec2 size,
+                                             const ViewOutputKey output_key) {
+            const std::string key_name = outputKeyDiagnosticName(output_key);
+            if (size.x <= 0 || size.y <= 0) {
+                return lfs::Status::failure(viewportError(std::format(
+                    "Point-cloud output image request requires positive dimensions (key={}, observed_width={}, observed_height={}) ({}:{})",
+                    key_name,
                     size.x,
                     size.y,
                     __FILE__,
-                    __LINE__));
+                    __LINE__)));
             }
             if (slot.color_image != VK_NULL_HANDLE && slot.depth_image != VK_NULL_HANDLE &&
                 slot.size == size) {
@@ -1026,22 +1142,23 @@ namespace lfs::vis {
             VkResult r = vmaCreateImage(allocator, &color_info, &ai, &slot.color_image,
                                         &slot.color_alloc, &color_allocation_info);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError(
+                return lfs::Status::failure(viewportError(vkError(
                     "vmaCreateImage(allocator, &color_info, &ai, &slot.color_image, &slot.color_alloc, &color_allocation_info)",
                     r,
-                    std::format("Point-cloud output color-image allocation failed (allocator={:#x}, slot_index={}, requested_extent={}x{}, format={}, usage={:#x})",
+                    std::format("Point-cloud output color-image allocation failed (allocator={:#x}, key={}, requested_extent={}x{}, format={}, usage={:#x})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
-                                slot_index,
+                                key_name,
                                 size.x,
                                 size.y,
                                 static_cast<int>(color_info.format),
-                                static_cast<std::uint32_t>(color_info.usage))));
+                                static_cast<std::uint32_t>(color_info.usage)))));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          slot.color_image,
                                          "point_cloud.output[{}].color",
-                                         slot_index);
-            slot.color_vram_label = std::format("color.slot{}:{}x{}", slot_index, size.x, size.y);
+                                         key_name);
+            slot.key_name = key_name;
+            slot.color_vram_label = std::format("color.{}:{}x{}", key_name, size.x, size.y);
             vmaSetAllocationName(allocator, slot.color_alloc, "Point-cloud color target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
@@ -1058,21 +1175,21 @@ namespace lfs::vis {
                 const std::string error = vkError(
                     "vkCreateImageView(device, &cv, nullptr, &slot.color_view)",
                     r,
-                    std::format("Point-cloud output color image-view creation failed (device={:#x}, slot_index={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
+                    std::format("Point-cloud output color image-view creation failed (device={:#x}, key={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
                                 vkHandleValue(device),
-                                slot_index,
+                                key_name,
                                 vkHandleValue(cv.image),
                                 size.x,
                                 size.y,
                                 static_cast<int>(cv.format),
                                 static_cast<std::uint32_t>(cv.subresourceRange.aspectMask)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(error);
+                return lfs::Status::failure(viewportError(error));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          slot.color_view,
                                          "point_cloud.output[{}].color.view",
-                                         slot_index);
+                                         key_name);
 
             // Depth: D32_SFLOAT, used as depth attachment + sampled by depth-blit.
             VkImageCreateInfo depth_info = color_info;
@@ -1086,21 +1203,21 @@ namespace lfs::vis {
                 const std::string error = vkError(
                     "vmaCreateImage(allocator, &depth_info, &ai, &slot.depth_image, &slot.depth_alloc, &depth_allocation_info)",
                     r,
-                    std::format("Point-cloud output depth-image allocation failed (allocator={:#x}, slot_index={}, requested_extent={}x{}, format={}, usage={:#x})",
+                    std::format("Point-cloud output depth-image allocation failed (allocator={:#x}, key={}, requested_extent={}x{}, format={}, usage={:#x})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
-                                slot_index,
+                                key_name,
                                 size.x,
                                 size.y,
                                 static_cast<int>(depth_info.format),
                                 static_cast<std::uint32_t>(depth_info.usage)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(error);
+                return lfs::Status::failure(viewportError(error));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          slot.depth_image,
                                          "point_cloud.output[{}].depth",
-                                         slot_index);
-            slot.depth_vram_label = std::format("depth.slot{}:{}x{}", slot_index, size.x, size.y);
+                                         key_name);
+            slot.depth_vram_label = std::format("depth.{}:{}x{}", key_name, size.x, size.y);
             vmaSetAllocationName(allocator, slot.depth_alloc, "Point-cloud depth target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
@@ -1117,21 +1234,21 @@ namespace lfs::vis {
                 const std::string error = vkError(
                     "vkCreateImageView(device, &dv, nullptr, &slot.depth_view)",
                     r,
-                    std::format("Point-cloud output depth image-view creation failed (device={:#x}, slot_index={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
+                    std::format("Point-cloud output depth image-view creation failed (device={:#x}, key={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
                                 vkHandleValue(device),
-                                slot_index,
+                                key_name,
                                 vkHandleValue(dv.image),
                                 size.x,
                                 size.y,
                                 static_cast<int>(dv.format),
                                 static_cast<std::uint32_t>(dv.subresourceRange.aspectMask)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(error);
+                return lfs::Status::failure(viewportError(error));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          slot.depth_view,
                                          "point_cloud.output[{}].depth.view",
-                                         slot_index);
+                                         key_name);
 
             ++slot.image_generation;
             context->imageBarriers().registerImage(slot.color_image,
@@ -1229,9 +1346,12 @@ namespace lfs::vis {
                 command_pool = VK_NULL_HANDLE;
                 command_buffer = VK_NULL_HANDLE;
             }
-            for (auto& s : slots) {
-                destroySlot(s);
+            for (auto& [unused_key, slot] : slots) {
+                (void)unused_key;
+                destroySlot(slot);
             }
+            slots.clear();
+            in_flight_output_key_.reset();
             destroyBuffer(allocator, cache.positions);
             destroyBuffer(allocator, cache.colors);
             destroyBuffer(allocator, cache.transforms);
@@ -1477,7 +1597,7 @@ namespace lfs::vis {
                                             host.data(), host.size() * sizeof(std::uint32_t),
                                             buffer, what);
                         !r) {
-                        return std::unexpected(r.error());
+                        return std::unexpected(viewportErrorText(r.error()));
                     }
                     cached_ptr = mask_ptr;
                     cached_id = mask_id;
@@ -1499,7 +1619,7 @@ namespace lfs::vis {
                 &cache.cached_selection_revision,
                 req.selection_revision);
             if (!selection_count) {
-                return std::unexpected(selection_count.error());
+                return std::unexpected(viewportErrorText(selection_count.error()));
             }
             auto deleted_count = upload_mask_if_changed(
                 req.deleted_mask,
@@ -1511,7 +1631,7 @@ namespace lfs::vis {
                 &cache.cached_deleted_mask_revision,
                 req.deleted_mask_revision);
             if (!deleted_count) {
-                return std::unexpected(deleted_count.error());
+                return std::unexpected(viewportErrorText(deleted_count.error()));
             }
             auto preview_count = upload_mask_if_changed(
                 req.preview_selection_mask,
@@ -1523,7 +1643,7 @@ namespace lfs::vis {
                 &cache.cached_preview_selection_revision,
                 req.preview_selection_revision);
             if (!preview_count) {
-                return std::unexpected(preview_count.error());
+                return std::unexpected(viewportErrorText(preview_count.error()));
             }
 
             const bool overlay_active = *selection_count > 0 || *preview_count > 0;
@@ -1605,48 +1725,40 @@ namespace lfs::vis {
                                    writes.data(), 0, nullptr);
         }
 
-        std::expected<RenderResult, std::string> doRender(const RenderRequest& req,
-                                                          OutputSlot output_slot) {
+        lfs::Result<RenderResult> doRender(const RenderRequest& req,
+                                           ViewOutputKey output_key) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
-            const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
-            if (slot_idx >= kSlotCount) {
-                return std::unexpected<std::string>(std::format(
-                    "Point-cloud render output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
-                    slot_idx,
-                    kSlotCount,
+            if (!canBindOutputKey(output_key)) {
+                return viewportError(std::format(
+                    "Point-cloud render output key is invalid or unsupported ({}) ({}:{})",
+                    outputKeyDiagnosticName(output_key),
                     __FILE__,
                     __LINE__));
             }
             if (req.size.x <= 0 || req.size.y <= 0) {
-                return std::unexpected<std::string>(std::format(
-                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, output_slot={}) ({}:{})",
+                return viewportError(std::format(
+                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, key={}) ({}:{})",
                     req.size.x,
                     req.size.y,
-                    slot_idx,
+                    outputKeyDiagnosticName(output_key),
                     __FILE__,
                     __LINE__));
             }
 
-            // Wait for the previous frame on this renderer to finish before
-            // touching slot resources — the cb is shared across slots and a
-            // size change would otherwise destroy images the in-flight submit
-            // is still sampling. (C4: bounded prewait.)
-            {
-                auto wait_ctx = makeWaitContext("point_cloud.render.prewait");
-                auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                    device,
-                    fence,
-                    std::stop_token{},
-                    lfs::rendering::VulkanWaitPolicy{},
-                    wait_ctx);
-                if (!wait_outcome.has_value() ||
-                    *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
-                    return std::unexpected<std::string>(
-                        formatFenceWaitUnexpected("render prewait", wait_outcome));
-                }
+            // The command buffer is shared across keys. Wait for its previous submission
+            // before recording another pane or replacing slot images.
+            if (auto ready = waitUntilCommandFenceReady(
+                    "point_cloud.render.prewait", "render prewait");
+                !ready) {
+                return viewportError(ready.error());
             }
 
-            auto& slot = slots[slot_idx];
+            auto& slot = ensureRegisteredSlot(output_key);
+            in_flight_output_key_ = output_key;
+            struct InFlightClear {
+                Impl* self;
+                ~InFlightClear() { self->in_flight_output_key_.reset(); }
+            } in_flight_clear{this};
             const bool will_recreate = slot.color_image == VK_NULL_HANDLE ||
                                        slot.depth_image == VK_NULL_HANDLE ||
                                        slot.size != req.size;
@@ -1654,13 +1766,13 @@ namespace lfs::vis {
                 // pcFence covers this renderer's CB only; the context's frame CB also
                 // samples slot.color_image and must finish before destroySlot frees it.
                 if (!context->waitForSubmittedFrames()) {
-                    return std::unexpected<std::string>(
+                    return viewportError(
                         std::format("waitForSubmittedFrames failed before slot recreate: {}",
                                     context->lastError()));
                 }
             }
-            if (auto ensure = ensureOutputImages(slot, req.size); !ensure) {
-                return std::unexpected<std::string>(ensure.error());
+            if (auto ensure = ensureOutputImages(slot, req.size, output_key); !ensure) {
+                return viewportError(ensure.error());
             }
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
@@ -1668,7 +1780,7 @@ namespace lfs::vis {
             pending_stagings.clear();
             VkResult r = vkResetCommandBuffer(command_buffer, 0);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkResetCommandBuffer", r));
+                return viewportError(vkError("vkResetCommandBuffer", r));
             }
 
             VkCommandBufferBeginInfo bi{};
@@ -1676,7 +1788,7 @@ namespace lfs::vis {
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             r = vkBeginCommandBuffer(command_buffer, &bi);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkBeginCommandBuffer", r));
+                return viewportError(vkError("vkBeginCommandBuffer", r));
             }
 
             if (auto u = uploadIfChanged(command_buffer, req); !u) {
@@ -1692,7 +1804,7 @@ namespace lfs::vis {
                                   __FILE__,
                                   __LINE__));
                 }
-                return std::unexpected<std::string>(u.error());
+                return viewportError(u.error());
             }
 
             // Make the just-uploaded data visible to the vertex stage.
@@ -1738,7 +1850,7 @@ namespace lfs::vis {
                                       std::format("Point-cloud invalid-draw cleanup could not end command-buffer recording (command_buffer={:#x})",
                                                   vkHandleValue(command_buffer))));
                 }
-                return std::unexpected<std::string>(error);
+                return viewportError(error);
             }
 
             // Transition output images for rendering.
@@ -1853,7 +1965,7 @@ namespace lfs::vis {
             r = vkEndCommandBuffer(command_buffer);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
-                return std::unexpected<std::string>(vkError("vkEndCommandBuffer", r));
+                return viewportError(vkError("vkEndCommandBuffer", r));
             }
 
             VkSubmitInfo si{};
@@ -1871,7 +1983,7 @@ namespace lfs::vis {
                     kPointCloudFencePolicy);
                 if (!begin) {
                     restore_tracked_layouts();
-                    return std::unexpected<std::string>(std::format(
+                    return viewportError(std::format(
                         "Point-cloud render SubmissionState T0 BeginLifecycle failed (detail={})",
                         begin.error().detail()));
                 }
@@ -1883,7 +1995,7 @@ namespace lfs::vis {
                 // (no transition; lifecycle restarts at T0 with the fresh fence).
                 restore_tracked_layouts();
                 (void)replaceFenceSignaled("vkResetFences", r);
-                return std::unexpected<std::string>(vkError("vkResetFences", r));
+                return viewportError(vkError("vkResetFences", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;
@@ -1899,7 +2011,7 @@ namespace lfs::vis {
                     // a signaled fence (same recovery shape as a poisoned fence).
                     (void)replaceFenceSignaled("SubmissionState T1 FenceReset",
                                                VK_ERROR_INITIALIZATION_FAILED);
-                    return std::unexpected<std::string>(std::format(
+                    return viewportError(std::format(
                         "Point-cloud render SubmissionState T1 FenceReset failed (detail={})",
                         fence_reset.error().detail()));
                 }
@@ -1923,13 +2035,13 @@ namespace lfs::vis {
                 restore_tracked_layouts();
                 rejectSubmissionAndMaybeReplace("point-cloud render submit integrity check",
                                                 VK_ERROR_INITIALIZATION_FAILED);
-                return std::unexpected<std::string>(error);
+                return viewportError(error);
             }
             r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
                 rejectSubmissionAndMaybeReplace("vkQueueSubmit", r);
-                return std::unexpected<std::string>(vkError("vkQueueSubmit", r));
+                return viewportError(vkError("vkQueueSubmit", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;
@@ -1961,37 +2073,46 @@ namespace lfs::vis {
             result.depth_image_layout = slot.depth_layout;
             result.depth_generation = slot.generation;
             result.size = slot.size;
+            result.alloc_size = slot.size;
             result.flip_y = false;
+            result.output_key = output_key;
             return result;
         }
 
-        std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+        lfs::Result<std::shared_ptr<lfs::core::Tensor>> readOutputImage(
             VulkanContext& ctx,
-            OutputSlot output_slot) {
+            ViewOutputKey output_key) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             if (!initialized || context == nullptr) {
-                return std::unexpected<std::string>("Point-cloud output readback requested before renderer initialization");
+                return viewportError("Point-cloud output readback requested before renderer initialization");
             }
             if (&ctx != context) {
-                return std::unexpected<std::string>("Point-cloud output readback received a different Vulkan context");
+                return viewportError("Point-cloud output readback received a different Vulkan context");
             }
 
-            const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
-            if (slot_idx >= kSlotCount) {
-                return std::unexpected<std::string>(std::format(
-                    "Point-cloud readback output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
-                    slot_idx,
-                    kSlotCount,
+            if (!canBindOutputKey(output_key)) {
+                return viewportError(std::format(
+                    "Point-cloud readback output key is invalid or unsupported ({}) ({}:{})",
+                    outputKeyDiagnosticName(output_key),
                     __FILE__,
                     __LINE__));
             }
-            auto& slot = slots[slot_idx];
+            const auto it = slots.find(output_key);
+            if (it == slots.end()) {
+                return viewportError(std::format(
+                    "Point-cloud output readback requested for an unregistered key ({})",
+                    outputKeyDiagnosticName(output_key)));
+            }
+            auto& slot = it->second;
+            const std::string key_name = outputKeyDiagnosticName(output_key);
             if (slot.color_image == VK_NULL_HANDLE || slot.size.x <= 0 || slot.size.y <= 0) {
-                return std::unexpected<std::string>("Point-cloud output readback requested for an empty output slot");
+                return viewportError(std::format(
+                    "Point-cloud output readback requested for an empty output slot ({})",
+                    outputKeyDiagnosticName(output_key)));
             }
 
             if (!ctx.waitForSubmittedFrames()) {
-                return std::unexpected<std::string>(ctx.lastError());
+                return viewportError(ctx.lastError());
             }
             // C5: bounded readback prewait.
             {
@@ -2004,7 +2125,7 @@ namespace lfs::vis {
                     wait_ctx);
                 if (!wait_outcome.has_value() ||
                     *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
-                    return std::unexpected<std::string>(
+                    return viewportError(
                         formatFenceWaitUnexpected("readback prewait", wait_outcome));
                 }
             }
@@ -2018,7 +2139,7 @@ namespace lfs::vis {
                 static_cast<VkDeviceSize>(slot.size.y) *
                 static_cast<VkDeviceSize>(4);
             if (byte_count == 0) {
-                return std::unexpected<std::string>("Point-cloud output readback has zero bytes");
+                return viewportError("Point-cloud output readback has zero bytes");
             }
 
             ScopedStagingBuffer staging{};
@@ -2041,12 +2162,12 @@ namespace lfs::vis {
                 &staging.allocation,
                 &staging.allocation_info);
             if (r != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
-                return std::unexpected<std::string>(vkError("vmaCreateBuffer(point-cloud readback)", r));
+                return viewportError(vkError("vmaCreateBuffer(point-cloud readback)", r));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                          staging.buffer,
                                          "point_cloud.output[{}].readback[{}]",
-                                         slot_idx,
+                                         key_name,
                                          byte_count);
             staging.vram_scope = "vulkan.point_cloud.readback_buffer";
             staging.vram_label = std::format("rgba:{}x{}", slot.size.x, slot.size.y);
@@ -2056,9 +2177,9 @@ namespace lfs::vis {
                 static_cast<std::size_t>(staging.allocation_info.size));
             if (staging.allocation_info.pMappedData == nullptr ||
                 staging.allocation_info.size < byte_count) {
-                return std::unexpected<std::string>(std::format(
-                    "Point-cloud readback staging allocation must be mapped and cover the copy (slot_index={}, buffer={:#x}, allocation={:#x}, mapped={:#x}, allocation_size={}, copy_size={}) ({}:{})",
-                    slot_idx,
+                return viewportError(std::format(
+                    "Point-cloud readback staging allocation must be mapped and cover the copy (key={}, buffer={:#x}, allocation={:#x}, mapped={:#x}, allocation_size={}, copy_size={}) ({}:{})",
+                    key_name,
                     vkHandleValue(staging.buffer),
                     reinterpret_cast<std::uintptr_t>(staging.allocation),
                     reinterpret_cast<std::uintptr_t>(staging.allocation_info.pMappedData),
@@ -2070,7 +2191,7 @@ namespace lfs::vis {
 
             r = vkResetCommandBuffer(command_buffer, 0);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkResetCommandBuffer(point-cloud readback)", r));
+                return viewportError(vkError("vkResetCommandBuffer(point-cloud readback)", r));
             }
 
             VkCommandBufferBeginInfo begin_info{};
@@ -2078,7 +2199,7 @@ namespace lfs::vis {
             begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             r = vkBeginCommandBuffer(command_buffer, &begin_info);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkBeginCommandBuffer(point-cloud readback)", r));
+                return viewportError(vkError("vkBeginCommandBuffer(point-cloud readback)", r));
             }
 
             const VkImageLayout restore_layout =
@@ -2114,7 +2235,7 @@ namespace lfs::vis {
 
             r = vkEndCommandBuffer(command_buffer);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkEndCommandBuffer(point-cloud readback)", r));
+                return viewportError(vkError("vkEndCommandBuffer(point-cloud readback)", r));
             }
 
             // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle (readback).
@@ -2126,7 +2247,7 @@ namespace lfs::vis {
                     SubmissionTransition::BeginLifecycle,
                     kPointCloudFencePolicy);
                 if (!begin) {
-                    return std::unexpected<std::string>(std::format(
+                    return viewportError(std::format(
                         "Point-cloud readback SubmissionState T0 BeginLifecycle failed (detail={})",
                         begin.error().detail()));
                 }
@@ -2136,7 +2257,7 @@ namespace lfs::vis {
             if (r != VK_SUCCESS) {
                 // Binding Ruling 1: reset-failure replace is OUTSIDE SubmissionState.
                 (void)replaceFenceSignaled("vkResetFences(point-cloud readback)", r);
-                return std::unexpected<std::string>(vkError("vkResetFences(point-cloud readback)", r));
+                return viewportError(vkError("vkResetFences(point-cloud readback)", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;
@@ -2148,7 +2269,7 @@ namespace lfs::vis {
                 if (!fence_reset) {
                     (void)replaceFenceSignaled("SubmissionState T1 FenceReset(point-cloud readback)",
                                                VK_ERROR_INITIALIZATION_FAILED);
-                    return std::unexpected<std::string>(std::format(
+                    return viewportError(std::format(
                         "Point-cloud readback SubmissionState T1 FenceReset failed (detail={})",
                         fence_reset.error().detail()));
                 }
@@ -2163,8 +2284,8 @@ namespace lfs::vis {
                 submit_info.pCommandBuffers == nullptr ||
                 submit_info.pCommandBuffers[0] != command_buffer) {
                 const std::string error = std::format(
-                    "Point-cloud readback submit requires a non-null queue, one expected command buffer, and a non-null fence (slot_index={}, queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x}, wait_semaphore_count={}, signal_semaphore_count={}) ({}:{})",
-                    slot_idx,
+                    "Point-cloud readback submit requires a non-null queue, one expected command buffer, and a non-null fence (key={}, queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x}, wait_semaphore_count={}, signal_semaphore_count={}) ({}:{})",
+                    key_name,
                     vkHandleValue(submit_queue),
                     vkHandleValue(command_buffer),
                     vkHandleValue(fence),
@@ -2179,12 +2300,12 @@ namespace lfs::vis {
                     __LINE__);
                 rejectSubmissionAndMaybeReplace("point-cloud readback submit integrity check",
                                                 VK_ERROR_INITIALIZATION_FAILED);
-                return std::unexpected<std::string>(error);
+                return viewportError(error);
             }
             r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
                 rejectSubmissionAndMaybeReplace("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r);
-                return std::unexpected<std::string>(vkError("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r));
+                return viewportError(vkError("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;
@@ -2211,14 +2332,14 @@ namespace lfs::vis {
                     wait_ctx);
                 if (!wait_outcome.has_value() ||
                     *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
-                    return std::unexpected<std::string>(
+                    return viewportError(
                         formatFenceWaitUnexpected("readback wait_fence", wait_outcome));
                 }
             }
 
             r = vmaInvalidateAllocation(allocator, staging.allocation, 0, byte_count);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vmaInvalidateAllocation(point-cloud readback)", r));
+                return viewportError(vkError("vmaInvalidateAllocation(point-cloud readback)", r));
             }
 
             const auto* const rgba = static_cast<const std::uint8_t*>(staging.allocation_info.pMappedData);
@@ -2241,6 +2362,72 @@ namespace lfs::vis {
                 lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
+
+        lfs::Result<ViewOutputKey> registerViewOutput(const ViewId view_id) {
+            std::lock_guard<std::mutex> command_lock(command_mutex);
+            if (view_id == 0) {
+                return viewportError(
+                    "Point-cloud registerViewOutput requires a non-zero scene ViewId", lfs::ErrorCode::InvalidArgument);
+            }
+            if (in_flight_output_key_) {
+                return viewportError(std::format(
+                                         "Point-cloud cannot register view output {} while a render is in flight ({})",
+                                         view_id,
+                                         outputKeyDiagnosticName(*in_flight_output_key_)),
+                                     lfs::ErrorCode::FailedPrecondition);
+            }
+            (void)ensureRegisteredSlot(sceneOutputKey(view_id));
+            return sceneOutputKey(view_id);
+        }
+
+        lfs::Result<void> releaseViewOutput(const ViewId view_id) {
+            std::lock_guard<std::mutex> command_lock(command_mutex);
+            if (view_id == 0) {
+                return lfs::Status::failure(viewportError(
+                    "Point-cloud releaseViewOutput requires a non-zero scene ViewId", lfs::ErrorCode::InvalidArgument));
+            }
+            const ViewOutputKey key = sceneOutputKey(view_id);
+            if (in_flight_output_key_ == key) {
+                return lfs::Status::failure(viewportError(std::format(
+                                                              "Point-cloud cannot retire view output {} while a render into that column is in flight",
+                                                              view_id),
+                                                          lfs::ErrorCode::FailedPrecondition));
+            }
+            const auto it = slots.find(key);
+            if (it == slots.end()) {
+                return lfs::Status::failure(viewportError(std::format(
+                                                              "Point-cloud view output {} is unknown or already retired",
+                                                              view_id),
+                                                          lfs::ErrorCode::NotFound));
+            }
+            const bool has_images = it->second.color_image != VK_NULL_HANDLE ||
+                                    it->second.depth_image != VK_NULL_HANDLE;
+            if (has_images) {
+                if (auto idle = waitUntilOutputsIdle("releaseViewOutput"); !idle) {
+                    return idle;
+                }
+            }
+            destroySlot(it->second);
+            slots.erase(it);
+            return {};
+        }
+
+        [[nodiscard]] bool nextOutputImagesNeedResize(
+            const glm::ivec2 size,
+            const ViewOutputKey output_key) const {
+            if (size.x <= 0 || size.y <= 0 || !canBindOutputKey(output_key)) {
+                return false;
+            }
+            std::lock_guard<std::mutex> command_lock(command_mutex);
+            const auto it = slots.find(output_key);
+            if (it == slots.end()) {
+                return false;
+            }
+            const auto& slot = it->second;
+            const bool replacing_existing_output =
+                slot.color_image != VK_NULL_HANDLE || slot.depth_image != VK_NULL_HANDLE;
+            return replacing_existing_output && slot.size != size;
+        }
     };
 
     PointCloudVulkanRenderer::PointCloudVulkanRenderer()
@@ -2248,22 +2435,150 @@ namespace lfs::vis {
 
     PointCloudVulkanRenderer::~PointCloudVulkanRenderer() = default;
 
+    lfs::Result<ViewOutputKey>
+    PointCloudVulkanRenderer::registerViewOutput(const ViewId view_id) {
+        return impl_->registerViewOutput(view_id);
+    }
+
+    lfs::Result<void>
+    PointCloudVulkanRenderer::releaseViewOutput(const ViewId view_id) {
+        return impl_->releaseViewOutput(view_id);
+    }
+
+    lfs::Result<PointCloudVulkanRenderer::RenderResult>
+    PointCloudVulkanRenderer::render(VulkanContext& context,
+                                     const RenderRequest& request,
+                                     const ViewOutputKey output_key) {
+        if (auto r = impl_->ensureInitialized(context); !r) {
+            return viewportError(r.error());
+        }
+        return impl_->doRender(request, output_key);
+    }
+
     std::expected<PointCloudVulkanRenderer::RenderResult, std::string>
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
                                      OutputSlot output_slot) {
-        if (auto r = impl_->ensureInitialized(context); !r) {
-            return std::unexpected<std::string>(r.error());
+        const auto key = legacyOutputKey(output_slot, "render");
+        if (!key) {
+            return std::unexpected(viewportErrorText(key.error()));
         }
-        return impl_->doRender(request, output_slot);
+        const auto result = render(context, request, *key);
+        if (!result)
+            return std::unexpected(viewportErrorText(result.error()));
+        return *result;
+    }
+
+    lfs::Result<std::shared_ptr<lfs::core::Tensor>>
+    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context,
+                                              const ViewOutputKey output_key) {
+        return impl_->readOutputImage(context, output_key);
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, OutputSlot output_slot) {
-        return impl_->readOutputImage(context, output_slot);
+        const auto key = legacyOutputKey(output_slot, "readOutputImage");
+        if (!key) {
+            return std::unexpected(viewportErrorText(key.error()));
+        }
+        const auto result = readOutputImage(context, *key);
+        if (!result)
+            return std::unexpected(viewportErrorText(result.error()));
+        return *result;
+    }
+
+    bool PointCloudVulkanRenderer::nextOutputImagesNeedResize(
+        const glm::ivec2 size,
+        const ViewOutputKey output_key) const {
+        return impl_->nextOutputImagesNeedResize(size, output_key);
+    }
+
+    bool PointCloudVulkanRenderer::nextOutputImagesNeedResize(
+        const glm::ivec2 size,
+        const OutputSlot output_slot) const {
+        const auto key = legacyOutputKey(output_slot, "nextOutputImagesNeedResize");
+        if (!key) {
+            return false;
+        }
+        return nextOutputImagesNeedResize(size, *key);
     }
 
     void PointCloudVulkanRenderer::reset() {
         impl_->destroy();
+    }
+
+    lfs::Result<ViewOutputKey> PointCloudOutputOwnershipTestAccess::legacyKey(
+        const PointCloudVulkanRenderer::OutputSlot output_slot) {
+        return legacyOutputKey(output_slot, "test");
+    }
+
+    std::vector<ViewOutputKey> PointCloudOutputOwnershipTestAccess::registeredKeys(
+        const PointCloudVulkanRenderer& renderer) {
+        std::lock_guard<std::mutex> command_lock(renderer.impl_->command_mutex);
+        std::vector<ViewOutputKey> keys;
+        keys.reserve(renderer.impl_->slots.size());
+        for (const auto& [key, unused_slot] : renderer.impl_->slots) {
+            (void)unused_slot;
+            keys.push_back(key);
+        }
+        return keys;
+    }
+
+    const void* PointCloudOutputOwnershipTestAccess::resourceIdentity(
+        const PointCloudVulkanRenderer& renderer,
+        const ViewOutputKey key) {
+        std::lock_guard<std::mutex> command_lock(renderer.impl_->command_mutex);
+        const auto it = renderer.impl_->slots.find(key);
+        if (it == renderer.impl_->slots.end()) {
+            return nullptr;
+        }
+        return static_cast<const void*>(&it->second);
+    }
+
+    VkImage PointCloudOutputOwnershipTestAccess::colorImage(
+        const PointCloudVulkanRenderer& renderer,
+        const ViewOutputKey key) {
+        std::lock_guard<std::mutex> command_lock(renderer.impl_->command_mutex);
+        const auto it = renderer.impl_->slots.find(key);
+        if (it == renderer.impl_->slots.end()) {
+            return VK_NULL_HANDLE;
+        }
+        return it->second.color_image;
+    }
+
+    VkImage PointCloudOutputOwnershipTestAccess::depthImage(
+        const PointCloudVulkanRenderer& renderer,
+        const ViewOutputKey key) {
+        std::lock_guard<std::mutex> command_lock(renderer.impl_->command_mutex);
+        const auto it = renderer.impl_->slots.find(key);
+        if (it == renderer.impl_->slots.end()) {
+            return VK_NULL_HANDLE;
+        }
+        return it->second.depth_image;
+    }
+
+    bool PointCloudOutputOwnershipTestAccess::outputsAlias(
+        const PointCloudVulkanRenderer& renderer,
+        const ViewOutputKey a,
+        const ViewOutputKey b) {
+        if (a == b) {
+            return true;
+        }
+        std::lock_guard<std::mutex> command_lock(renderer.impl_->command_mutex);
+        const auto ia = renderer.impl_->slots.find(a);
+        const auto ib = renderer.impl_->slots.find(b);
+        if (ia == renderer.impl_->slots.end() || ib == renderer.impl_->slots.end()) {
+            return false;
+        }
+        if (&ia->second == &ib->second) {
+            return true;
+        }
+        const bool color_alias =
+            ia->second.color_image != VK_NULL_HANDLE &&
+            ia->second.color_image == ib->second.color_image;
+        const bool depth_alias =
+            ia->second.depth_image != VK_NULL_HANDLE &&
+            ia->second.depth_image == ib->second.depth_image;
+        return color_alias || depth_alias;
     }
 
 } // namespace lfs::vis
