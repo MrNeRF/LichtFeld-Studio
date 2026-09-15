@@ -1018,3 +1018,16 @@ def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, mo
     assert actions == ["view", "save", "link"]
     assert panel._undo_pull["jobId"] == "settings"
     assert path.read_bytes() == b"saved project with training history"
+
+
+def test_gallery_review_survives_a_locale_document_reload(gallery, monkeypatch):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    monkeypatch.setattr(GalleryFilePanel.__bases__[0], 'on_unmount', lambda *_: None, raising=False)
+    panel = GalleryFilePanel()
+    closed = []
+    review = dict(mode='conflict', on_done=lambda submitted: closed.append(submitted))
+    panel._review = review
+    panel.on_unmount(None)
+    assert panel._review is review and not closed
+    panel._finish(False)
+    assert panel._review is None and closed == [False]

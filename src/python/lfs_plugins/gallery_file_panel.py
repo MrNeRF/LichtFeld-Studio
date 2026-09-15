@@ -272,6 +272,9 @@ class GalleryFilePanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        if self._review and not self._unsubscribe:
+            self._unsubscribe = self._review["controller"].subscribe(self._changed)
+        self._dirty()
         close_btn = doc.get_element_by_id("close-btn")
         if close_btn:
             close_btn.add_event_listener("click", lambda _event: self._close(False))
@@ -295,7 +298,6 @@ class GalleryFilePanel(Panel):
 
     def on_unmount(self, doc):
         self._doc = None
-        self._finish(False)
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None
