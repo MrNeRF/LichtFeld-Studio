@@ -133,8 +133,7 @@
             <div class="asset-sidebar-section asset-sidebar-gallery" id="asset-sidebar-gallery">
               <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-title="gallery_quota">
                 <span>{{g_sidebar_title}}</span>
-                <button class="asset-button asset-button--small-icon gallery-refresh" data-event-click="gallery_refresh"
-                        data-attr-title="check_gallery_tooltip" aria-label="{{check_gallery_label}}"><span class="asset-refresh-glyph">&#x21BB;</span></button>
+
               </div>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
                 <span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
@@ -175,6 +174,7 @@
             </div>
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
             <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}}</div>
+            <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
             <div class="gallery-empty" data-if="no_folders">{{no_folders_label}} <button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:projects.action.add_folder</button></div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
@@ -293,7 +293,7 @@
                     <div class="inspector-actions">
                       <button class="btn btn--primary asset-button--toolbar24" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
                       <button class="btn btn--success asset-button--toolbar24" data-if="inspector_can_resume" data-event-click="on_load_asset" data-attr-title="resume_button_label"><span>{{resume_button_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attr-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
                       <button class="asset-button asset-button--small-icon inspector-more" data-event-click="open_inspector_menu" data-tooltip="common.more" data-attr-aria-label="inspector_more_label"><img src="../icon/more-vertical.png"/></button>
                     </div>
                   </div>
@@ -356,6 +356,7 @@
                     </button>
                     <div class="inspector-section-body" data-if="inspector_gallery_expanded">
                       <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="gallery_selected_state">{{gallery_selected_state}}</span></div>
+                      <span class="inspector-gallery-reason text-muted" data-attr-title="gallery_selected_reason">{{gallery_selected_reason}}</span>
                       <span class="inspector-gallery-summary text-muted" data-if="gallery_linked" data-attr-title="gallery_exchange_summary">{{gallery_exchange_summary}}</span>
                     </div>
                   </div>
@@ -434,7 +435,10 @@
               <span class="asset-tray-phase" data-attr-title="transfer.phase">{{transfer.phase}}</span>
               <div class="asset-tray-actions">
                 <button class="btn btn--secondary" data-if="transfer.can_pause" data-event-click="transfer_pause(transfer.id)">{{g_action_pause}}</button>
-                <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)">{{g_action_resume}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_resume" data-event-click="transfer_resume(transfer.id)" data-attr-title="transfer.action_label">{{transfer.action_label}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_resolve" data-event-click="transfer_resolve(transfer.id)" data-attr-title="transfer.action_label">{{transfer.action_label}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_recover" data-event-click="transfer_open_recovery(transfer.id)" data-attr-title="g_action_open_recovery">{{g_action_open_recovery}}</button>
+                <button class="btn btn--secondary" data-if="transfer.can_undo" data-event-click="transfer_undo(transfer.id)">{{g_action_undo}}</button>
                 <button class="btn btn--secondary" data-if="transfer.can_cancel" data-event-click="transfer_cancel(transfer.id)">{{g_action_cancel}}</button>
               </div>
             </div>

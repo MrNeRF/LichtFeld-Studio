@@ -481,9 +481,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("inspector_gallery_action_label", lambda: (
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
+        model.bind_func("inspector_gallery_action_enabled", lambda: (
+            self._gallery_badge(self._get_selected_asset())["gallery_action_enabled"] if self._get_selected_asset() else False))
         model.bind_func("inspector_has_gallery_action", lambda: (
             not self.get_selected_asset_can_locate()
-            and not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+            and bool(self._selected_gallery_action())))
         model.bind_func("open_button_label", lambda: tr(
             "projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.open"))
         model.bind_func("inspector_gallery_action_tooltip", lambda: (
@@ -550,7 +552,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func(
             "has_gallery_transfers",
-            lambda: self._tray_show_all or any(row["status"] not in ("completed", "canceled") for row in self._all_transfer_rows()),
+            lambda: self._tray_show_all or any(row.get("can_undo") or row["status"] not in ("completed", "canceled") for row in self._all_transfer_rows()),
         )
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
@@ -1218,9 +1220,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _all_transfer_rows(self) -> List[Dict[str, Any]]:
         rows = list(transfer_rows(self._gallery_state, self._transfer_history_limit))
-        projects_by_job = {job["id"]: job.get("project", "") for job in self._gallery_state.get("jobs", ())}
+        projects_by_job = {job["id"]: job.get("project") or "remote:" + job.get("sceneId", "") for job in self._gallery_state.get("jobs", ())}
         for row in rows:
-            row["project"] = projects_by_job.get(row["id"], "")
+            row["project"] = row.get("project") or projects_by_job.get(row["id"], self._gallery_state.get("operationProject", ""))
         for operation in self._project_operations.values():
             progress = float(operation.get("progress", 0.0) or 0.0)
             status = str(operation.get("status", "running"))
@@ -1241,9 +1243,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "can_resume": False,
                 "can_cancel": False,
             })
-        projects = self._asset_index_assets()
+        projects = self._all_display_assets()
+        undo_history = self._gallery_controller.undo_records() if self._gallery_controller else {}
         for row in rows:
             row["can_select"] = row["project"] in projects
+            row["can_undo"] = row["id"] in undo_history
+            row.setdefault("can_resolve", False)
+            row.setdefault("can_recover", False)
+            row.setdefault("action_label", "")
         return rows
 
     def _refresh_transfer_rows(self) -> None:
@@ -2112,7 +2119,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_saves", "inspector_autosave_newer", "inspector_has_details",
             "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
             "inspector_operations_expanded",
-            "inspector_gallery_action_label", "inspector_has_gallery_action",
+            "inspector_gallery_action_label", "inspector_has_gallery_action", "inspector_gallery_action_enabled",
             "inspector_gallery_action_tooltip",
             "inspector_training_tooltip", "inspector_model_tooltip", "inspector_reclaimable_tooltip",
             "inspector_verify_result",
@@ -2229,6 +2236,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._show_project_form()
 
     def _project_form(self):
+        if self._dialog_kind == "update_thumbnail":
+            asset = self._get_selected_asset() or {}
+            self._dialog_data["gallery_cover_available"] = bool(asset.get("id") in self._gallery_state.get("links", {}) and self._gallery_scene(asset))
+            self._dialog_data["gallery_cover_blocked"] = not self._gallery_state.get("signed_in") or self._gallery_state.get("busy", False)
+            self._dialog_data["gallery_cover_reason"] = "projects.gallery.eligibility.busy" if self._gallery_state.get("signed_in") else "projects.gallery.eligibility.connect"
         if self._dialog_kind == "reduce_size" and self._dialog_plan is not None:
             plan = self._dialog_plan
             self._dialog_drop_checkpoints = self._dialog_drop_checkpoints and bool(self._dialog_data.get("drop_checkpoints_allowed"))
@@ -2268,6 +2280,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._dialog_data[key] = str(values[key])
         if "drop_checkpoints" in values:
             self._dialog_drop_checkpoints = bool(values["drop_checkpoints"])
+        if "use_gallery_cover" in values:
+            self._dialog_data["use_gallery_cover"] = bool(values["use_gallery_cover"])
         if "drop_dataset" in values:
             self._dialog_drop_dataset = bool(values["drop_dataset"])
 
@@ -2534,17 +2548,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> None:
         source = str(self._dialog_data.get("source") or "first_dataset")
+        after = self._gallery_thumbnail_callback(asset) if self._dialog_data.get("use_gallery_cover") else None
         path = str(asset["path"])
         if source == "image_file":
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
                 return
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()))
+            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._capture_viewport_preview(path))
+            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._capture_viewport_preview(path), after=after)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
-            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call(native_name, path))
+            self._start_project_operation(asset["id"], "Update thumbnail", lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
 
     @staticmethod
     def _capture_viewport_preview(path: str) -> Any:
@@ -2661,8 +2676,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def select_transfer_project(self, _handle=None, _event=None, args=None):
         project_id = str(args[0]) if args else ""
-        if project_id in self._asset_index_assets():
-            self._select_folder_id(SCOPE_ALL)
+        if project_id in self._all_display_assets():
+            self._select_folder_id(SCOPE_PUBLISHED if project_id.startswith("remote:") else SCOPE_ALL)
             self._set_filter("all")
             self.set_search_query("")
             self._select_asset_id(project_id)
@@ -2672,7 +2687,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._show_shared_context_menu([
             {"label": tr("gallery.transfer.action.details"), "action": "show_all"},
             {"label": tr("gallery.transfer.action.show_older"), "action": "show_older"},
-            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] for row in rows), "separator_before": True},
+            {"label": tr("gallery.transfer.action.resume_all"), "action": "resume_all", "enabled": any(row["can_resume"] and row.get("action") in ("resume", "retry", "keep_waiting") and not row["id"].startswith("preparation:") for row in rows), "separator_before": True},
             {"label": tr("gallery.transfer.action.clear_finished"), "action": "clear_finished", "enabled": any(row["status"] in ("completed", "canceled") for row in rows)},
         ], self._transfer_tray_command)
 

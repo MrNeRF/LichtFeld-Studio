@@ -1001,7 +1001,7 @@ def test_log_only_asset_manager_failures_show_catalog_notice(panel_module):
     panel._complete_folder_scan()
     assert panel.get_catalog_notice() == "projects.status.folder_unavailable"
 
-def test_pull_undo_stays_in_history_and_clears_on_next_gallery_action(panel_module, monkeypatch):
+def test_pull_undo_stays_in_history_across_gallery_checks(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     timers = []
     monkeypatch.setattr(panel_module.threading, "Timer", lambda delay, callback: timers.append((delay, callback)) or SimpleNamespace(start=lambda: None, cancel=lambda: None))
@@ -1011,7 +1011,7 @@ def test_pull_undo_stays_in_history_and_clears_on_next_gallery_action(panel_modu
     assert panel._gallery_undo is not None
     panel._gallery_controller = SimpleNamespace(refresh=lambda: None)
     panel._gallery_command("refresh")
-    assert panel._gallery_undo is None
+    assert panel._gallery_undo is not None
 
 def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatch):
     import xml.etree.ElementTree as ET
@@ -1873,7 +1873,7 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
             assert field in folders[0], expr
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
         elif scope == "transfer":
-            assert field in {"can_pause", "can_resume", "can_cancel"}, expr
+            assert field in {"can_pause", "can_resume", "can_cancel", "can_resolve", "can_recover", "can_undo"}, expr
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
 
@@ -2063,6 +2063,7 @@ def test_update_all_visibility_matches_visible_candidates(panel_module):
 
 def test_multi_selection_publish_and_update_are_disjoint(panel_module):
     panel,local,remote = _gallery_fixture(panel_module)
+    local["commit_uuid"] = "local-edit"
     ready=_project(id='ready',project_uuid='ready')
     missing=_project(id='missing',project_uuid='missing',exists=False,available=False)
     panel._asset_index.assets.update(ready=ready,missing=missing)
