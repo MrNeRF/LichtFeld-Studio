@@ -162,38 +162,36 @@ def panel_layout(height, *, folder_count=0, folders_collapsed=False, info_height
                 main_min_height=sidebar + 10.0 + results_header_height + RESULTS_MIN_HEIGHT)
 
 
-def list_columns(width):
-    """Columns that fit the browser width, after the other panel regions yield space."""
-    size, modified, folder = width >= 360, width >= 560, width >= 700
-    gallery = 24.0 if width < 480 else 128.0
-    gaps = 8.0 * (2 + int(size) + int(modified) + int(folder))
-    name = width - 24.0 - 32.0 - gaps - gallery - size * 72.0 - modified * 96.0 - folder * 100.0
-    return dict(size=size, modified=modified, folder=folder, name=name, gallery=gallery)
+def list_columns(width, measured=None, overrides=None):
+    """Hide whole columns when their measured content cannot fit."""
+    widths = list_column_widths(width, overrides, measured)
+    return dict(size=widths["size"] > 0, modified=widths["modified"] > 0,
+                folder=widths["folder"] > 0, name=widths["name"], gallery=widths["gallery"])
 
 
-def list_column_widths(width, overrides=None):
-    """Fit remembered column sizes to the current browser, in logical dp."""
-    columns = list_columns(width)
-    visible = ["name", "gallery"] + [key for key in ("size", "modified", "folder") if columns[key]]
-    available = max(0.0, width - 24.0 - 32.0 - 8.0 * len(visible))
-    minimum = dict(name=80.0 if width < 420 else 120.0,
-                   gallery=24.0 if width < 480 else 96.0,
-                   size=64.0, modified=64.0, folder=64.0)
-    preferred = dict(name=minimum["name"], gallery=columns["gallery"],
-                     size=72.0, modified=96.0, folder=100.0)
-    preferred.update(overrides or {})
-    if width < 480:
-        preferred["gallery"] = 24.0
-    widths = {key: max(minimum[key], float(preferred[key])) for key in visible}
-    if "name" not in (overrides or {}):
-        widths["name"] = max(minimum["name"], available - sum(widths[key] for key in visible if key != "name"))
-    elif "gallery" not in (overrides or {}) and width >= 480:
-        widths["gallery"] = max(minimum["gallery"], available - sum(widths[key] for key in visible if key != "gallery"))
-    if sum(widths.values()) > available:
-        floor = sum(minimum[key] for key in visible)
-        extra = sum(widths[key] - minimum[key] for key in visible)
-        fraction = max(0.0, min(1.0, (available - floor) / extra)) if extra else 0.0
-        widths = {key: minimum[key] + (widths[key] - minimum[key]) * fraction for key in visible}
-    # Never round a final column over the right edge at fractional UI scales.
+def list_column_widths(width, overrides=None, measured=None):
+    """Content widths include 8 dp on each side; only Name can shrink."""
+    # Used before a document mounts. Mounted panels always supply font measurements.
+    metrics = measured or {key: len(sample) * 6.0 + 16.0 for key, sample in (
+        ("gallery", "Not published    "), ("size", "1023.9 MB"),
+        ("modified", "2000-12-30 23:59"), ("folder", "Projects"))}
+    compact = width < 480
+    widths = {key: max(float(metrics[key]), float((overrides or {}).get(key, 0)))
+              for key in ("gallery", "size", "modified", "folder")}
+    if compact:
+        widths["gallery"] = 32.0
+    for key, threshold in (("size", 360), ("modified", 560), ("folder", 700)):
+        if width < threshold:
+            widths[key] = 0.0
+    # 24 dp shell inset, 16 dp row inset, thumbnail 32 dp, and its 8 dp gap.
+    available = max(0.0, float(width) - 24.0 - 16.0 - 32.0 - 8.0)
+    name_minimum = min(max(80.0, float((overrides or {}).get("name", 80.0))), max(80.0, available - 32.0))
+    for key in ("folder", "modified", "size"):
+        if sum(widths.values()) + name_minimum > available:
+            widths[key] = 0.0
+    if sum(widths.values()) + name_minimum > available:
+        widths["gallery"] = 32.0
+    widths["name"] = max(0.0, available - sum(widths.values()))
+    # A Name drag consumes spare space only. Measured columns never shrink.
     return {key: math.floor(widths.get(key, 0.0) * 10.0) / 10.0
             for key in ("name", "gallery", "size", "modified", "folder")}

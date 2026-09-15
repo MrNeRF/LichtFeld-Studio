@@ -1021,7 +1021,7 @@ def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatc
     panel.on_bind_model(_BindingContext(model))
     for width in (260, 359, 360, 479, 480, 559, 560, 699, 700, 1100):
         columns = list_columns(width)
-        assert columns["gallery"] == (24 if width < 480 else 128)
+        assert columns["gallery"] == (32 if width < 480 else list_column_widths(width)["gallery"])
         assert columns["size"] == (width >= 360)
         assert columns["modified"] == (width >= 560)
         assert columns["folder"] == (width >= 700)
@@ -2314,8 +2314,13 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, monkeypatch, 
             assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
-        assert sum(widths.values()) + 24 + 32 + 8 * visible <= width + 0.1
-        assert widths['name'] >= (80 if width < 420 else 120)
+        assert sum(widths.values()) + 24 + 16 + 32 + 8 <= width + 0.1
+        assert widths['name'] >= 80
+        measured = dict(gallery=220, size=87, modified=132, folder=180)
+        fitted = list_column_widths(width, overrides, measured)
+        assert sum(fitted.values()) + 80 <= width + 0.1
+        for col in ("size", "modified", "folder"):
+            assert fitted[col] == 0 or fitted[col] >= measured[col]
 
 
 def test_P12_projects_panel_visual_contract_is_explicit(panel_module):

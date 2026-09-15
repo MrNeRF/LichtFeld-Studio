@@ -369,8 +369,8 @@ body {
 .viewport-selection-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
-    right: 52dp;
+    left: 12dp;
+    right: 12dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -380,8 +380,8 @@ body {
 .viewport-depth-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
-    right: 52dp;
+    left: 12dp;
+    right: 12dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -391,8 +391,8 @@ body {
 .viewport-transform-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
-    right: 52dp;
+    left: 12dp;
+    right: 12dp;
     display: flex;
     justify-content: center;
     pointer-events: none;

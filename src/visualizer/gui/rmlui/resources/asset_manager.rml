@@ -5,6 +5,7 @@
 </head>
 
 <body template="docked-panel" data-model="asset_manager">
+  <div id="asset-text-measure"><span id="asset-measure-prose">M</span><span id="asset-measure-mono">M</span></div>
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">
@@ -94,10 +95,10 @@
               <div id="asset-sidebar-local-content">
                 <div class="asset-sidebar-global">
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="all_assets_selected" data-folder-id="__all__">
-                    <span class="asset-row-label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
+                    <span class="asset-row-label" data-attr-title="scope_all_label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
                   </button>
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__recent__'" data-folder-id="__recent__">
-                    <span class="asset-row-label">{{scope_recent_label}}</span>
+                    <span class="asset-row-label" data-attr-title="scope_recent_label">{{scope_recent_label}}</span>
                   </button>
                 </div>
                 <div class="asset-sidebar-section">
@@ -137,10 +138,10 @@
                         data-attr-title="check_gallery_tooltip" aria-label="{{check_gallery_label}}"><span class="asset-refresh-glyph">&#x21BB;</span></button>
               </div>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
-                <span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
+                <span class="asset-row-label" data-attr-title="g_sidebar_published">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
               </button>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__">
-                <span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
+                <span class="asset-row-label" data-attr-title="g_sidebar_attention">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
               </button>
             </div>
           </div>
@@ -152,7 +153,7 @@
           <div id="asset-results-header" class="asset-gallery-header">
             <div class="asset-gallery-header-row">
               <div class="asset-gallery-header-copy">
-                <span class="asset-gallery-subtitle">{{asset_results_summary}}</span>
+                <span class="asset-gallery-subtitle" data-attr-title="asset_results_summary">{{asset_results_summary}}</span>
                 <span class="asset-gallery-empty-search" data-if="asset_search_empty">
                   <span>{{no_search_results_label}}</span><button class="btn btn--secondary" data-event-click="clear_search"><span>{{clear_search_label}}</span></button>
                 </span>
@@ -204,15 +205,15 @@
                            data-style-decorator="asset.thumbnail_decorator" data-style-height="asset_card_thumbnail_height">
                         <span class="gallery-badge" data-if="asset.gallery_has_badge" data-attr-class="'gallery-badge ' + asset.gallery_tone"
                               data-attr-title="asset.gallery_tooltip"><img data-attr-src="asset.gallery_icon"/></span>
-                        <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row"><span class="asset-card-title" data-attr-title="asset.display_name">{{asset.display_name}}</span></div>
                         <div class="asset-card-meta">
                           <span data-if="asset.gallery_has_bytes" data-attr-title="asset.gallery_bytes">{{asset.gallery_detail}}</span>
-                          <span data-if="!asset.gallery_has_bytes">{{asset.size_label}}</span>
-                          <span data-if="!asset.has_problem">{{asset.gallery_label}}</span>
-                          <span data-if="asset.has_problem">{{asset.health_label}}</span>
+                          <span data-if="!asset.gallery_has_bytes" data-attr-title="asset.size_label">{{asset.size_label}}</span>
+                          <span data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span>
+                          <span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                         </div>
                         <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-title="asset.gallery_tooltip">
                           <div class="gallery-progress"><div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div></div>
@@ -239,7 +240,7 @@
                     <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists"
                          data-class-is-draggable="asset.can_load || asset.remote_only" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-list-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
-                        <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <span class="asset-col asset-col-name" data-style-width="asset_list_name_width">
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
@@ -248,11 +249,11 @@
                       <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
                         <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon"
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
-                        <span data-if="!asset.has_problem">{{asset.gallery_label}}</span><span data-if="asset.has_problem">{{asset.health_label}}</span>
+                        <span data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span><span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                       </span>
-                      <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width">{{asset.size_label}}</span>
-                      <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width">{{asset.saved_label}}</span>
-                      <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width">{{asset.folder_name}}</span>
+                      <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width" data-attr-title="asset.size_label">{{asset.size_label}}</span>
+                      <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width" data-attr-title="asset.saved_label">{{asset.saved_label}}</span>
+                      <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width" data-attr-title="asset.folder_name">{{asset.folder_name}}</span>
                       <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active">
                         <div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div>
                       </div>
@@ -372,7 +373,7 @@
               </div>
             </div>
             <div data-if="show_selection_folder">
-              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
+              <div class="inspector-header"><span class="inspector-title" data-attr-title="selected_folder_name">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
               <div class="inspector-section"><div class="inspector-section-title"><span>{{folder_details_title}}</span></div>
                 <div class="parameter-row"><span class="parameter-label">{{prop_assets_label}}</span><span class="parameter-value" data-attr-title="selected_folder_asset_count">{{selected_folder_asset_count}}</span></div>
               </div>
@@ -399,13 +400,13 @@
       <div class="asset-quick-look" data-if="quick_look_visible">
         <div class="asset-quick-look-card">
           <div class="asset-quick-look-heading">
-            <span class="inspector-title">{{selected_asset_name}}</span>
+            <span class="inspector-title" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
             <button class="asset-button asset-button--small-icon" data-event-click="close_quick_look"
                     data-tooltip="common.close" aria-label="{{close_label}}"><span class="asset-button-glyph">&#215;</span></button>
           </div>
           <div class="asset-quick-look-thumb asset-thumb-project"
                data-style-decorator="quick_look_thumbnail">
-            <span class="asset-card-placeholder" data-if="!quick_look_has_thumbnail">{{quick_look_placeholder}}</span>
+            <span class="asset-card-placeholder" data-attr-title="quick_look_placeholder" data-if="!quick_look_has_thumbnail">{{quick_look_placeholder}}</span>
           </div>
           <div class="asset-quick-look-facts">
             <span>{{selected_asset_size}}</span><span>{{selected_asset_modified}}</span>
@@ -428,7 +429,7 @@
               <span class="asset-tray-direction">{{transfer.direction}}</span>
               <span class="asset-tray-title" data-class-hidden="transfer.can_select" data-attr-title="transfer.title">{{transfer.title}}</span>
               <button class="asset-button asset-button--text asset-tray-title asset-tray-project" data-class-hidden="!transfer.can_select" data-event-click="transfer_project(transfer.project)" data-attr-title="transfer.title"><span>{{transfer.title}}</span></button>
-              <span class="asset-tray-bytes">{{transfer.bytes}}</span>
+              <span class="asset-tray-bytes" data-attr-title="transfer.bytes">{{transfer.bytes}}</span>
             </div>
             <div class="asset-tray-status-row">
               <span class="asset-tray-phase" data-attr-title="transfer.phase">{{transfer.phase}}</span>

@@ -139,6 +139,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._info_preferred_height = 220.0
         self._navigator_width = 200.0
         self._navigator_widths = {"medium": 160.0, "wide": 200.0}
+        self._text_column_metrics = None
+        self._text_measure_key = None
+        self._text_locales = None
+        self._inspector_label_width = 168.0
         self._inspector_width = INSPECTOR_COLUMN_MIN
         self._inspector_preferred_height = 200.0
         self._tray_height = 120.0
@@ -453,9 +457,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "show_selection_multiple", lambda: self._selection_type == "multiple"
         )
 
-        model.bind_func("asset_list_wide", lambda: list_columns(self._asset_window_client_width)["modified"])
-        model.bind_func("asset_list_show_folder", lambda: list_columns(self._asset_window_client_width)["folder"])
-        model.bind_func("asset_list_show_size", lambda: list_columns(self._asset_window_client_width)["size"])
+        model.bind_func("asset_list_wide", lambda: self._list_columns()["modified"])
+        model.bind_func("asset_list_show_folder", lambda: self._list_columns()["folder"])
+        model.bind_func("asset_list_show_size", lambda: self._list_columns()["size"])
         for column in ("name", "gallery", "size", "modified", "folder"):
             model.bind_func(
                 f"asset_list_{column}_width",
@@ -463,7 +467,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
             label_binding = "col_" + column + "_label"
             model.bind_func(label_binding, lambda column=column: self._list_header_label(column))
-        model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width)["gallery"] == 24)
+        model.bind_func("asset_list_gallery_compact", lambda: self._list_columns()["gallery"] == 32)
         model.bind_func(
             "check_gallery_tooltip",
             lambda: f"{tr('projects.action.check_gallery')} · {self._gallery_checked_label()}",
@@ -1599,7 +1603,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_list_top_spacer_height = 0.0
             self._asset_list_bottom_spacer_height = 0.0
         else:
-            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
             visible = (
                 math.ceil(client_height / row_height)
@@ -3330,6 +3334,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty("folders")
             self._handle.dirty("all_assets_count")
         if assets:
+            self._measure_text_columns()
             self._release_obsolete_thumbnail_sources()
             rows = self.get_filtered_assets()
             self._release_thumbnails_outside_window()
@@ -3790,7 +3795,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             start = row * row_height
             end = start + row_height
         else:
-            row_height = list_row_height(gallery_column_visible=list_columns(self._asset_window_client_width)["gallery"] != 24) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
             start = index * row_height
             end = start + row_height
         top = self._asset_window_scroll_top
@@ -4028,8 +4033,58 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def on_bottom_panel_resize_start(self, _handle, event, _args):
         self._start_resize("inspector-height", event)
 
+    def _list_columns(self):
+        return list_columns(self._asset_window_client_width, self._text_column_metrics, self._list_column_overrides)
+
+    def _measure_text_columns(self):
+        if not self._doc:
+            return
+        prose = self._doc.get_element_by_id("asset-measure-prose")
+        mono = self._doc.get_element_by_id("asset-measure-mono")
+        if not prose or not mono or not hasattr(prose, "measure_text"):
+            return
+        scale = self._ui_scale()
+        folders = tuple(sorted({self._folder_name(a.get("folder_id")) for a in self._asset_index_assets().values()}))
+        key = (scale, lf.ui.get_current_language(), folders)
+        if key == self._text_measure_key:
+            return
+        if self._text_locales is None:
+            import json
+            lf.ui.get_languages()  # Load fallback glyphs before measuring every locale.
+            directory = Path(lf.ui.resource_directory()) / "locales"
+            def flatten(data, prefix=""):
+                result = {}
+                for name, value in data.items():
+                    full = prefix + name
+                    if isinstance(value, dict):
+                        result.update(flatten(value, full + "."))
+                    else:
+                        result[full] = value
+                return result
+            self._text_locales = [flatten(json.loads(path.read_text())) for path in sorted(directory.glob("*.json"))]
+        def widest(element, texts):
+            return max((element.measure_text(text) / scale for text in texts), default=0.0)
+        gallery = [value.format(percent=100) for locale in self._text_locales for name, value in locale.items()
+                   if name.startswith("projects.gallery.state.") and "{" not in value.replace("{percent}", "")]
+        labels = [value for locale in self._text_locales for name, value in locale.items()
+                  if name.startswith("projects.property.")]
+        self._inspector_label_width = math.ceil(widest(prose, labels))
+        self._text_column_metrics = dict(
+            gallery=math.ceil(widest(prose, gallery)) + 16.0 + 24.0,
+            size=math.ceil(widest(mono, ["1023.9 " + unit for unit in ("B", "KB", "MB", "GB", "TB")])) + 16.0,
+            modified=math.ceil(widest(mono, ["2000-12-30 23:59"])) + 16.0,
+            folder=min(240.0, math.ceil(widest(prose, folders)) + 16.0))
+        for column in self._text_column_metrics:
+            self._text_column_metrics[column] = max(self._text_column_metrics[column],
+                math.ceil(prose.measure_text(self._list_header_label(column)) / scale) + 16.0)
+        for label in self._doc.query_selector_all(".parameter-label"):
+            label.set_property("width", f"{self._inspector_label_width}dp")
+            label.set_property("min-width", f"{self._inspector_label_width}dp")
+            label.set_property("flex-basis", f"{self._inspector_label_width}dp")
+        self._text_measure_key = key
+
     def _list_column_width(self, column: str) -> float:
-        return list_column_widths(self._asset_window_client_width, self._list_column_overrides)[column]
+        return list_column_widths(self._asset_window_client_width, self._list_column_overrides, self._text_column_metrics)[column]
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
@@ -4068,6 +4123,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             column = region.partition(":")[2]
             self._list_column_overrides.pop(column, None)
             self._dirty_fields(
+                "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )
 
@@ -4111,18 +4167,19 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._stop_event(event)
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
-            minimum_name = 80.0 if self._asset_window_client_width < 420 else 120.0
+            minimum_name = 80.0
             if column == "name":
-                minimum_gallery = 24.0 if self._asset_window_client_width < 480 else 96.0
+                minimum_gallery = 32.0 if self._list_columns()["gallery"] == 32 else (self._text_column_metrics or {}).get("gallery", 32.0)
                 maximum = self._list_column_width("name") + max(0.0, self._list_column_width("gallery") - minimum_gallery)
                 minimum = minimum_name
                 self._list_column_overrides.pop("gallery", None)
             else:
                 maximum = min(280.0, self._list_column_width(column) + max(0.0, self._list_column_width("name") - minimum_name))
-                minimum = 64.0
+                minimum = (self._text_column_metrics or {}).get(column, 32.0)
                 self._list_column_overrides.pop("name", None)
             self._list_column_overrides[column] = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
             self._dirty_fields(
+                "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )
             self._stop_event(event)
@@ -4248,6 +4305,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._panel_mounted = True
         self._mount_generation += 1
         self._doc = doc
+        self._text_measure_key = None
         self._subscribe_gallery()
         if self._asset_index is None:
             self._start_backend_initialization()
