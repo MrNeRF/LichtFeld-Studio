@@ -402,3 +402,35 @@ def test_pinned_download_uses_authenticated_ranges_and_checks_digest(tmp_path, m
     with pytest.raises(portal_gallery.GalleryTransferInvalid, match="checksum"):
         client.download(identifier, tmp_path / "bad.licht")
     assert not (tmp_path / "bad.licht").exists()
+
+
+def test_pinned_download_storage_redirect_never_forwards_account_token(tmp_path, monkeypatch):
+    import hashlib
+    data, identifier = b"viewing copy", str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p")
+    choice = dict(representationId="pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(), format="licht", status="ready")
+    location = ["https://storage.example/viewing.licht?signature=test"]
+    def request(method, path, body=None, **kwargs):
+        return {"representations": [choice]} if path.endswith("download-options") else scene
+    def response(method, path, **kwargs):
+        assert kwargs["allow_redirect"] is True
+        return 302, {"Location": location[0]}, b""
+    def storage(request, **kwargs):
+        assert request.get_header("Authorization") is None
+        assert request.get_header("Range") == f"bytes=0-{len(data)-1}"
+        assert kwargs["no_redirect"] is True
+        result = io.BytesIO(data)
+        result.status = 206
+        result.headers = {"Content-Range": f"bytes 0-{len(data)-1}/{len(data)}"}
+        return result
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request, request_response_authenticated=response))
+    client.storage_hosts = ["storage.example"]
+    client.max_file_bytes = 1024
+    monkeypatch.setattr(portal_gallery, "urlopen", storage)
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *_: None)
+    target = tmp_path / "new.licht"
+    client.download(identifier, target)
+    assert target.read_bytes() == data
+    location[0] = "https://untrusted.example/data"
+    with pytest.raises(PortalProtocolError):
+        client.download(identifier, tmp_path / "unsafe.licht")

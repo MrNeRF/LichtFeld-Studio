@@ -529,8 +529,18 @@ class PortalGalleryClient:
                     end = min(total, offset + 4 * 1024 * 1024) - 1
                     status, headers, data = self.account.request_response_authenticated("GET", API + route,
                         headers={"Range": f"bytes={offset}-{end}"}, max_bytes=end - offset + 1,
-                        expected_session=self.expected_session)
+                        expected_session=self.expected_session, allow_redirect=True)
                     headers = {key.lower(): value for key, value in headers.items()}
+                    if status in (301, 302, 303, 307, 308):
+                        url = self._storage_url(headers.get("location", ""))
+                        request = urllib.request.Request(url, headers={
+                            "Range": f"bytes={offset}-{end}", "User-Agent": self.user_agent})
+                        # The authenticated endpoint pins the representation.
+                        # Storage receives a range request with no account token.
+                        with urlopen(request, timeout=120, no_redirect=True) as response:
+                            status = response.status
+                            headers = {key.lower(): value for key, value in response.headers.items()}
+                            data = response.read(end - offset + 2)
                     if (len(data) != end - offset + 1 or status != 206
                             or headers.get("content-range") != f"bytes {offset}-{end}/{total}"):
                         raise GalleryTransferInvalid("Invalid gallery representation range")

@@ -366,10 +366,10 @@ class PortalAccountService:
         return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
     def request_response_authenticated(self, method, path, *, body=None, headers=None, max_bytes=4 * 1024 * 1024,
-                                       expected_session=None):
+                                       expected_session=None, allow_redirect=False):
         """Bounded bytes and headers, using the same account/session refresh ladder."""
         return self._authenticated_request(method, path, body, expected_session=expected_session,
-            response_options={"headers": headers or {}, "max_bytes": max_bytes})
+            response_options={"headers": headers or {}, "max_bytes": max_bytes, "allow_redirect": allow_redirect})
 
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
@@ -905,6 +905,9 @@ class PortalAccountService:
                 if response_options is not None and len(raw) > response_options["max_bytes"]:
                     raise PortalProtocolError("Portal response exceeds its size limit")
         except urllib.error.HTTPError as exc:
+            if response_options is not None and response_options.get("allow_redirect") and exc.code in (301, 302, 303, 307, 308):
+                exc.close()
+                return exc.code, dict(exc.headers), b""
             if response_options is not None and exc.code == 304:
                 exc.close()
                 return 304, dict(exc.headers), b""
