@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checkpoint_format.hpp"
+#include "core/user_paths.hpp"
 #include "io/project_document.hpp"
 #include "io/project_operations.hpp"
 #include "licht_test_support.hpp"
@@ -90,7 +91,9 @@ namespace {
         const auto before = require_result(inspect_project_card(path));
         const auto card = require_result(rebind_checkpoint(path, first));
         EXPECT_EQ(card.open_state, OpenState::Open);
-        EXPECT_TRUE(fs::is_regular_file(path.string() + ".before-rebind-" + before.commit_uuid.to_string() + ".bak"));
+        const auto backups = require_result(lfs::core::UserPaths::resolve()).backupDir() /
+                             "contents" / before.project_uuid.to_string();
+        EXPECT_TRUE(fs::is_regular_file(backups / (before.commit_uuid.to_string() + ".licht.bak")));
         const auto details = require_result(inspect_project_details(path));
         ASSERT_TRUE(details.scene_graph.training_node_id.has_value());
         ASSERT_TRUE(details.retained_checkpoints.size() >= 2);
@@ -101,7 +104,7 @@ namespace {
         EXPECT_EQ(bound->instance_uuid, first);
         const auto resumed_again = require_result(rebind_checkpoint(path, second));
         EXPECT_NE(resumed_again.commit_uuid, card.commit_uuid);
-        EXPECT_TRUE(fs::is_regular_file(path.string() + ".before-rebind-" + card.commit_uuid.to_string() + ".bak"));
+        EXPECT_TRUE(fs::is_regular_file(backups / (card.commit_uuid.to_string() + ".licht.bak")));
         EXPECT_EQ(std::ranges::count_if(fs::directory_iterator(temporary.path),
                                         [](const auto& entry) { return entry.path().extension() == ".licht"; }),
                   1);

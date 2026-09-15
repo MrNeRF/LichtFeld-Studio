@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/user_paths.hpp"
 #include "crc32c.hpp"
 #include "io/atomic_output.hpp"
 #include "io/embedded_dataset.hpp"
@@ -88,8 +89,12 @@ namespace lfs::io::project {
             }
         }
 
+        thread_local const WriterLockLease* active_operation_lease = nullptr;
+
         lfs::Result<WriterLockLease>
         acquire_operation_lock(const std::filesystem::path& path) {
+            if (active_operation_lease && active_operation_lease->owns(path))
+                return *active_operation_lease;
             auto lease = WriterLockLease::acquire(path);
             if (lease) {
                 return std::move(*lease);
@@ -116,8 +121,8 @@ namespace lfs::io::project {
                        const std::filesystem::path& rhs) {
             std::error_code lhs_error;
             std::error_code rhs_error;
-            const auto left = std::filesystem::absolute(lhs, lhs_error);
-            const auto right = std::filesystem::absolute(rhs, rhs_error);
+            const auto left = std::filesystem::weakly_canonical(lhs, lhs_error);
+            const auto right = std::filesystem::weakly_canonical(rhs, rhs_error);
             return !lhs_error && !rhs_error &&
                    left.lexically_normal() == right.lexically_normal();
         }
@@ -930,6 +935,115 @@ namespace lfs::io::project {
 
     } // namespace
 
+    lfs::Result<void> run_project_operation(
+        const std::filesystem::path& path, const lfs::core::Uuid& expected_project,
+        const lfs::core::Uuid& expected_commit, const std::function<void()>& operation) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease)
+            return lfs::Result<void>::failure(std::move(lease).error());
+        auto reader = ProjectReader::open(path);
+        if (!reader)
+            return lfs::Result<void>::failure(std::move(reader).error());
+        if (expected_project.is_nil() || reader->superblock().project_uuid != expected_project ||
+            (!expected_commit.is_nil() && reader->commit().commit_uuid != expected_commit))
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
+                              "The project changed before the operation started. Refresh Projects and try again.",
+                              "selected project or commit identity does not match the locked file", "operation.identity");
+        struct RestoreLease {
+            const WriterLockLease* previous;
+            ~RestoreLease() { active_operation_lease = previous; }
+        } restore{active_operation_lease};
+        active_operation_lease = &*lease;
+        operation();
+        return {};
+    }
+
+    static lfs::Result<std::filesystem::path> backup_locked_project_file(const std::filesystem::path& path) {
+        auto reader = ProjectReader::open(path);
+        if (!reader)
+            return std::move(reader).error();
+        auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return std::move(paths).error();
+        const auto recovery = paths->backupDir() / "contents" /
+                              reader->superblock().project_uuid.to_string() /
+                              (reader->commit().commit_uuid.to_string() + ".licht.bak");
+        std::error_code error;
+        if (std::filesystem::exists(recovery, error)) {
+            auto backup = ProjectReader::open(recovery);
+            if (backup && backup->superblock().project_uuid == reader->superblock().project_uuid &&
+                backup->commit().commit_uuid == reader->commit().commit_uuid &&
+                backup->superblock().file_uuid == reader->superblock().file_uuid)
+                return recovery;
+            return fail<std::filesystem::path>(lfs::ErrorCode::DataLoss, recovery,
+                                               "The existing recovery copy is damaged or belongs to another file.",
+                                               "backup identity does not match its source", "recovery_copy");
+        }
+        std::filesystem::create_directories(recovery.parent_path(), error);
+        if (error)
+            return fail<std::filesystem::path>(lfs::ErrorCode::PermissionDenied, recovery,
+                                               "The recovery folder could not be created.", error.message(), "recovery_copy");
+        const auto temporary = lfs::io::make_atomic_temp_output_path(recovery);
+        if (!std::filesystem::copy_file(path, temporary, std::filesystem::copy_options::none, error)) {
+            const auto reason = error.message();
+            std::filesystem::remove(temporary, error);
+            return fail<std::filesystem::path>(lfs::ErrorCode::PermissionDenied, temporary,
+                                               "The recovery copy could not be created.", reason, "recovery_copy");
+        }
+        auto copied = lfs::io::replace_atomic_output_file(temporary, recovery, lfs::io::AtomicOutputDurability::Durable);
+        if (!copied) {
+            std::filesystem::remove(temporary, error);
+            return fail<std::filesystem::path>(lfs::ErrorCode::PermissionDenied, recovery,
+                                               "The recovery copy could not be saved.", copied.error().message, "recovery_copy");
+        }
+        return recovery;
+    }
+
+    lfs::Result<std::filesystem::path> backup_project_file(const std::filesystem::path& path) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease)
+            return std::move(lease).error();
+        return backup_locked_project_file(path);
+    }
+
+    lfs::Result<void> restore_project_backup(const std::filesystem::path& path,
+                                             const std::filesystem::path& backup,
+                                             const lfs::core::Uuid& expected_project,
+                                             const lfs::core::Uuid& expected_commit) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease)
+            return lfs::Result<void>::failure(std::move(lease).error());
+        auto current = ProjectReader::open(path);
+        auto recovery = ProjectReader::open(backup);
+        if (!current)
+            return lfs::Result<void>::failure(std::move(current).error());
+        if (!recovery)
+            return lfs::Result<void>::failure(std::move(recovery).error());
+        if (current->superblock().project_uuid != expected_project ||
+            current->commit().commit_uuid != expected_commit ||
+            recovery->superblock().project_uuid != expected_project)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
+                              "The project identity changed. The recovery copy was kept.",
+                              "recovery refused to overwrite a different project or commit", "recovery.identity");
+        if (auto verified = recovery->verify_all(); !verified)
+            return lfs::Result<void>::failure(std::move(verified).error());
+        const auto temporary = lfs::io::make_atomic_temp_output_path(path);
+        std::error_code error;
+        if (!std::filesystem::copy_file(backup, temporary, std::filesystem::copy_options::none, error)) {
+            const auto reason = error.message();
+            std::filesystem::remove(temporary, error);
+            return fail<void>(lfs::ErrorCode::PermissionDenied, path,
+                              "The recovery copy could not be restored.", reason, "recovery.copy");
+        }
+        auto restored = lfs::io::replace_atomic_output_file(temporary, path, lfs::io::AtomicOutputDurability::Durable);
+        if (!restored) {
+            std::filesystem::remove(temporary, error);
+            return fail<void>(lfs::ErrorCode::PermissionDenied, path,
+                              "The recovery copy could not replace the project.", restored.error().message, "recovery.replace");
+        }
+        return {};
+    }
+
     lfs::Result<ProjectInspectorCard>
     restore_save(const std::filesystem::path& path,
                  const std::uint64_t generation,
@@ -1163,11 +1277,9 @@ namespace lfs::io::project {
             return std::move(verified).error();
         }
         if (replace_source) {
-            const auto recovery = path.parent_path() / (path.filename().string() + ".before-restore-" + reader->commit().commit_uuid.to_string() + ".bak");
-            std::error_code error;
-            if (!std::filesystem::copy_file(path, recovery, std::filesystem::copy_options::none, error))
-                return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, recovery,
-                                                  "The recovery copy could not be created.", error.message(), "restore.recovery");
+            auto recovery = backup_locked_project_file(path);
+            if (!recovery)
+                return std::move(recovery).error();
             if (auto replaced = lfs::io::replace_atomic_output_file(destination, path, lfs::io::AtomicOutputDurability::Durable); !replaced)
                 return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, path,
                                                   "The restored save could not replace the project.", replaced.error().message, "restore.replace");
@@ -1233,21 +1345,9 @@ namespace lfs::io::project {
             !updated) {
             return std::move(updated).error();
         }
-        const auto recovery = path.parent_path() /
-                              (path.filename().string() + ".before-rebind-" + document->source_reader()->commit().commit_uuid.to_string() + ".bak");
-        std::error_code copy_error;
-        if (!std::filesystem::copy_file(path, recovery,
-                                        std::filesystem::copy_options::none,
-                                        copy_error)) {
-            return fail<ProjectInspectorCard>(
-                copy_error == std::errc::file_exists
-                    ? lfs::ErrorCode::AlreadyExists
-                    : lfs::ErrorCode::PermissionDenied,
-                recovery,
-                "The recovery copy could not be created.",
-                copy_error ? copy_error.message() : "copy_file returned false",
-                "recovery_copy");
-        }
+        auto recovery = backup_locked_project_file(path);
+        if (!recovery)
+            return std::move(recovery).error();
         ProjectDocumentSaveOptions options;
         options.commit.kind = CommitKind::Explicit;
         options.regenerate_dataset_preview = false;
@@ -1263,7 +1363,11 @@ namespace lfs::io::project {
     compact_project_file(const std::filesystem::path& path,
                          ProjectOperationProgress progress,
                          ProjectOperationCancel cancel) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease)
+            return std::move(lease).error();
         CompactionOptions options;
+        options.writer_lock_lease = *lease;
         options.progress = std::move(progress);
         options.cancel = std::move(cancel);
         auto compacted = ProjectWriter::compact(path, std::move(options));
@@ -1336,9 +1440,10 @@ namespace lfs::io::project {
                     "the planned commit is no longer the current head", "reduce.commit_uuid");
             }
         }
-        const auto recovery = path.parent_path() /
-                              (path.filename().string() + ".before-reduce-" +
-                               plan->input_commit_uuid.to_string() + ".bak");
+        auto recovery_result = backup_locked_project_file(path);
+        if (!recovery_result)
+            return std::move(recovery_result).error();
+        const auto recovery = *recovery_result;
         if (progress) {
             progress(0.05F, "Preparing project reduction");
         }
@@ -1426,7 +1531,7 @@ namespace lfs::io::project {
                         .uuid = lfs::core::generate_uuid_v4(),
                         .node_uuid = (*node)->uuid,
                         .fourcc = "SPLT",
-                        .import_locator = ReferenceLocator{.preferred = recovery.filename().string(), .base = LocatorBase::Project, .absolute_fallback = std::nullopt},
+                        .import_locator = ReferenceLocator{.preferred = lfs::core::path_to_utf8(recovery), .base = LocatorBase::Absolute, .absolute_fallback = std::nullopt},
                         .import_fingerprint = *fingerprint,
                         .content_xxh3_128 = xxh3_128(splat->bytes())});
                     !updated)
@@ -1479,18 +1584,6 @@ namespace lfs::io::project {
                     ++result.checkpoints_removed;
                 }
             }
-        }
-        std::error_code copy_error;
-        if (!std::filesystem::copy_file(path, recovery,
-                                        std::filesystem::copy_options::none,
-                                        copy_error)) {
-            return fail<ProjectReduceResult>(
-                copy_error == std::errc::file_exists ? lfs::ErrorCode::AlreadyExists
-                                                     : lfs::ErrorCode::PermissionDenied,
-                recovery,
-                "The reduction recovery copy could not be created.",
-                copy_error ? copy_error.message() : "copy_file returned false",
-                "recovery_copy");
         }
         ProjectDocumentSaveOptions save_options;
         save_options.commit.kind = CommitKind::Explicit;
@@ -1580,11 +1673,11 @@ namespace lfs::io::project {
             return result;
         }
         save_options.writer_lock_lease.reset();
-        lease->release();
         if (progress) {
             progress(0.35F, "Compacting reduced project");
         }
         CompactionOptions compact_options;
+        compact_options.writer_lock_lease = *lease;
         compact_options.progress = [progress](const float value, const std::string& stage) {
             if (progress) {
                 progress(0.35F + value * 0.55F, stage);
@@ -2026,7 +2119,8 @@ namespace lfs::io::project {
 
     lfs::Result<ProjectRepairResult>
     repair_project(const std::filesystem::path& path,
-                   const std::filesystem::path& destination) {
+                   const std::filesystem::path& destination,
+                   const lfs::core::Uuid& expected_project) {
         if (path.empty() || destination.empty() || same_path(path, destination)) {
             return fail<ProjectRepairResult>(
                 lfs::ErrorCode::InvalidArgument, destination,
@@ -2071,6 +2165,10 @@ namespace lfs::io::project {
         if (!reader) {
             return std::move(reader).error();
         }
+        if (!expected_project.is_nil() && reader->superblock().project_uuid != expected_project)
+            return fail<ProjectRepairResult>(lfs::ErrorCode::FailedPrecondition, path,
+                                             "The project identity changed before repair started.",
+                                             "recovered source does not match the selected project", "repair.identity");
         const auto& source_commit = reader->commit();
         std::uint64_t planned_bytes = 0;
         for (const auto& row : reader->chunks()) {

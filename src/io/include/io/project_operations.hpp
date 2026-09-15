@@ -20,6 +20,17 @@ namespace lfs::io::project {
         std::function<void(float progress, const std::string& stage)>;
     using ProjectOperationCancel = std::function<bool()>;
 
+    [[nodiscard]] LFS_IO_API lfs::Result<void> run_project_operation(
+        const std::filesystem::path& path, const lfs::core::Uuid& expected_project,
+        const lfs::core::Uuid& expected_commit, const std::function<void()>& operation);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<std::filesystem::path>
+    backup_project_file(const std::filesystem::path& path);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<void> restore_project_backup(
+        const std::filesystem::path& path, const std::filesystem::path& backup,
+        const lfs::core::Uuid& expected_project, const lfs::core::Uuid& expected_commit);
+
     enum class ProjectVerificationStatus {
         Verified,
         Canceled,
@@ -163,7 +174,8 @@ namespace lfs::io::project {
 
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectRepairResult>
     repair_project(const std::filesystem::path& path,
-                   const std::filesystem::path& destination);
+                   const std::filesystem::path& destination,
+                   const lfs::core::Uuid& expected_project = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectVerificationResult>
     verify_project_file(const std::filesystem::path& path,

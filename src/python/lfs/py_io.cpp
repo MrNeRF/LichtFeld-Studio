@@ -732,6 +732,21 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
+        m.def("run_project_operation", [](const std::filesystem::path& path, const std::string& project_uuid, const std::string& commit_uuid, nb::callable operation) {
+            const auto expected_project = parse_reference_uuid(project_uuid);
+            const auto expected_commit = commit_uuid.empty() ? lfs::core::Uuid{} : parse_reference_uuid(commit_uuid);
+            unwrap(project::run_project_operation(path, expected_project, expected_commit, [&operation] { operation(); })); }, nb::arg("path"), nb::arg("project_uuid"), nb::arg("commit_uuid"), nb::arg("operation"));
+
+        m.def("backup_project_file", [](const std::filesystem::path& path) {
+            nb::gil_scoped_release release;
+            return unwrap(project::backup_project_file(path)); }, nb::arg("path"));
+
+        m.def("restore_project_backup", [](const std::filesystem::path& path, const std::filesystem::path& backup, const std::string& project_uuid, const std::string& commit_uuid) {
+            const auto project = parse_reference_uuid(project_uuid);
+            const auto commit = parse_reference_uuid(commit_uuid);
+            nb::gil_scoped_release release;
+            unwrap(project::restore_project_backup(path, backup, project, commit)); }, nb::arg("path"), nb::arg("backup"), nb::arg("project_uuid"), nb::arg("commit_uuid"));
+
         m.def("inspect_project_card", [](const std::filesystem::path& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
@@ -875,13 +890,14 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("format"), nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("repair_project", [](const std::filesystem::path& path, const std::filesystem::path& destination) {
+        m.def("repair_project", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_project) {
+            const auto expected = expected_project.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_project);
             std::optional<lfs::Result<project::ProjectRepairResult>> result;
             {
                 nb::gil_scoped_release release;
-                result = project::repair_project(path, destination);
+                result = project::repair_project(path, destination, expected);
             }
-            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("destination"));
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("destination"), nb::arg("expected_project") = "");
 
         m.def("verify_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
             PyProgressCallback progress_callback{std::move(progress)};

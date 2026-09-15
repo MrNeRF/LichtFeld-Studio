@@ -117,7 +117,9 @@ def test_restore_replaces_same_path_with_new_identity(native_io,tmp_path):
     assert restored.title=='Old title'
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
     assert len(list(tmp_path.glob('*.licht')))==1
-    assert len(list(tmp_path.glob('*.bak')))==1
+    assert not list(tmp_path.glob('*.bak'))
+    home = Path(os.environ['LFS_HOME'])
+    assert (home / 'data/backups/contents' / str(old.project_uuid)).is_dir()
 
 
 def test_removing_bound_checkpoint_preserves_visible_model(native_io, tmp_path):
@@ -164,7 +166,10 @@ def test_rebinding_repeatedly_keeps_recovery_copies_out_of_catalog(native_io, tm
     assert first.commit_uuid != second.commit_uuid
     assert first.project_uuid == second.project_uuid == details.card.project_uuid
     assert len(list(tmp_path.glob("*.licht"))) == 1
-    assert len(list(tmp_path.glob("*.bak"))) == 2
+    assert not list(tmp_path.glob("*.bak"))
+    backups = Path(os.environ['LFS_HOME']) / 'data/backups/contents' / str(first.project_uuid)
+    assert (backups / (str(details.card.commit_uuid) + '.licht.bak')).is_file()
+    assert (backups / (str(first.commit_uuid) + '.licht.bak')).is_file()
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
@@ -209,3 +214,122 @@ def test_chosen_thumbnail_survives_other_contents_edits(native_io, tmp_path):
     native_io.clear_project_license(path)
     assert not native_io.inspect_project_card(path).has_preview
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
+
+
+def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_path):
+    import uuid
+    source = _fixture()
+    if not source.is_file():
+        pytest.skip('native project fixture unavailable')
+    path = tmp_path / '项目.licht'
+    shutil.copy2(source, path)
+    card = native_io.inspect_project_card(path)
+    called = []
+    with pytest.raises(Exception, match='project changed'):
+        native_io.run_project_operation(path, str(uuid.uuid4()), str(card.commit_uuid), lambda: called.append(True))
+    native_io.set_project_title(path, 'Changed')
+    with pytest.raises(Exception, match='project changed'):
+        native_io.run_project_operation(path, str(card.project_uuid), str(card.commit_uuid), lambda: called.append(True))
+    assert called == []
+    current = native_io.inspect_project_card(path)
+    def edit():
+        native_io.set_project_title(path, 'Guarded')
+        native_io.compact_project_file(path)
+    native_io.run_project_operation(path, str(current.project_uuid), str(current.commit_uuid), edit)
+    assert native_io.inspect_project_card(path).title == 'Guarded'
+    assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
+
+
+@pytest.mark.parametrize('kill_point', ['running', 'completed'])
+def test_contents_kill_rolls_back_on_restart(native_io, tmp_path, kill_point):
+    import subprocess
+    import sys
+    from lfs_plugins.project_operations import ProjectOperations
+    source = _fixture()
+    if not source.is_file():
+        pytest.skip('native project fixture unavailable')
+    path = tmp_path / '中断.licht'
+    shutil.copy2(source, path)
+    before = native_io.inspect_project_card(path)
+    root = tmp_path / 'store'
+    code = '''
+import os, sys
+from lichtfeld import io
+from lfs_plugins.project_operations import ProjectOperations
+path, root, point = sys.argv[1:]
+class KilledOperations(ProjectOperations):
+    def _put(self, row):
+        if point == "completed" and row["status"] == "completed":
+            os._exit(37)
+        super()._put(row)
+        if point == "running" and row["status"] == "running":
+            os._exit(37)
+card = io.inspect_project_card(path)
+KilledOperations(io, root).run("project-kill", {"id": str(card.project_uuid), "path": path,
+    "commit_uuid": str(card.commit_uuid)}, "Set license",
+    lambda: io.set_project_license(path, "CC0-1.0", "kill marker"))
+'''
+    child = subprocess.run([sys.executable, '-c', code, str(path), str(root), kill_point],
+        capture_output=True, text=True, timeout=60)
+    assert child.returncode == 37, child.stderr
+    rows = ProjectOperations(native_io, root).recover()
+    assert rows['project-kill']['status'] == 'failed'
+    assert Path(rows['project-kill']['backup_path']).is_file()
+    after = native_io.inspect_project_card(path)
+    assert after.project_uuid == before.project_uuid and after.commit_uuid == before.commit_uuid
+    assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
+    assert ProjectOperations(native_io, root).recover() == rows
+
+
+def test_contents_recovery_refuses_a_different_project(native_io, tmp_path):
+    from lfs_plugins.project_operations import ProjectOperations
+    source = _fixture()
+    if not source.is_file():
+        pytest.skip('native project fixture unavailable')
+    path = tmp_path / 'changed.licht'
+    shutil.copy2(source, path)
+    card = native_io.inspect_project_card(path)
+    backup = native_io.backup_project_file(path)
+    store = ProjectOperations(native_io, tmp_path / 'store')
+    store._put(dict(id='project-changed', asset_id=str(card.project_uuid), path=str(path), title='Edit',
+        status='running', input_commit=str(card.commit_uuid), backup_path=str(backup)))
+    replacement = native_io.restore_save(path, card.generation, path)
+    before = path.read_bytes()
+    rows = store.recover()
+    assert 'project changed' in rows['project-changed']['reason']
+    assert path.read_bytes() == before
+    assert native_io.inspect_project_card(path).project_uuid == replacement.project_uuid
+
+
+def test_repair_checks_recovered_identity_before_creating_destination(native_io, tmp_path):
+    import uuid
+    source = _fixture()
+    if not source.is_file():
+        pytest.skip('native project fixture unavailable')
+    path = tmp_path / 'damaged.licht'
+    shutil.copy2(source, path)
+    before = native_io.inspect_project_card(path)
+    with path.open('r+b') as stream:
+        stream.seek(4096)
+        stream.write(bytes(8192))
+    destination = tmp_path / 'repaired.licht'
+    with pytest.raises(Exception, match='identity changed'):
+        native_io.repair_project(path, destination, str(uuid.uuid4()))
+    assert not destination.exists()
+    restored = native_io.repair_project(path, destination, str(before.project_uuid))
+    assert restored.card.project_uuid == before.project_uuid
+    assert native_io.verify_project_file(destination).status is native_io.ProjectVerificationStatus.VERIFIED
+
+
+def test_contents_history_clear_is_durable_and_keeps_recovery_files(tmp_path):
+    from lfs_plugins.project_operations import ProjectOperations
+    store = ProjectOperations(None, tmp_path / 'store')
+    backup = tmp_path / 'backup.licht'
+    backup.write_bytes(b'kept')
+    store._put(dict(id='done', asset_id='project', path='/project.licht', title='Edit',
+        status='completed', backup_path=str(backup)))
+    store._put(dict(id='failed', asset_id='project', path='/project.licht', title='Edit',
+        status='failed', backup_path=str(backup)))
+    store.clear_finished()
+    assert set(ProjectOperations(None, tmp_path / 'store').recover()) == {'failed'}
+    assert backup.read_bytes() == b'kept'

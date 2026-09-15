@@ -3145,9 +3145,11 @@ namespace lfs::io::project {
         std::optional<detail::WriterLock> source_lock;
         std::optional<detail::WriterLock> destination_lock;
         const auto acquire_lock =
-            [](const std::filesystem::path& lock_path,
-               std::optional<detail::WriterLock>& target)
+            [&options](const std::filesystem::path& lock_path,
+                       std::optional<detail::WriterLock>& target)
             -> lfs::Result<void> {
+            if (options.writer_lock_lease && options.writer_lock_lease->owns(lock_path))
+                return {};
             auto lock_result = detail::WriterLock::acquire(lock_path);
             if (!lock_result) {
                 return lfs::Result<void>::failure(

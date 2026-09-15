@@ -570,6 +570,7 @@ namespace lfs::io::project {
     };
 
     struct CompactionOptions {
+        std::optional<WriterLockLease> writer_lock_lease = std::nullopt;
         ReaderOptions compatibility;
         lfs::core::Uuid new_file_uuid;
         // Save As staging may replace the project identity before rewriting

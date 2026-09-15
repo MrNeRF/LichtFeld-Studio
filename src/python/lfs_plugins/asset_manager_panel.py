@@ -9,6 +9,8 @@ import logging
 import math
 import subprocess
 import threading
+import uuid
+import queue
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -235,7 +237,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspection_by_asset: Dict[str, Dict[str, Any]] = {}
         self._inspection_errors: Dict[str, str] = {}
         self._project_operations: Dict[str, Dict[str, Any]] = {}
-        self._operation_counter = 0
+        self._ui_callbacks = queue.SimpleQueue()
         self._dialog_kind = ""
         self._dialog_asset_id = ""
         self._dialog_data: Dict[str, Any] = {}
@@ -341,9 +343,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         def worker() -> None:
             index = None
+            service = None
             storage_path = None
             default_path = ""
             loaded = False
+            recovered_operations = {}
+            backend_error = None
             try:
                 storage_path = resolve_asset_manager_storage_path()
                 storage_path.mkdir(parents=True, exist_ok=True)
@@ -358,8 +363,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 index = service.index
                 loaded = service._call("load")
                 default_path = str(resolve_default_asset_directory())
+                from .project_operations import ProjectOperations
+                recovered_operations = ProjectOperations(lf.io).recover()
             except Exception as exc:
-                self._log_error("Failed to initialize Asset Manager: %s", exc)
+                backend_error = exc
+                self._log_error("Failed to initialize Projects path=%s: %s", storage_path, exc)
 
             def complete() -> None:
                 if generation != self._mount_generation or not self._panel_mounted:
@@ -367,7 +375,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     return
                 self._backend_load_active = False
                 self._catalog_load_failed = not loaded
-                if index is not None:
+                self._project_operations.update(recovered_operations)
+                if backend_error is not None:
+                    self._set_catalog_notice(str(backend_error))
+                if index is not None and service is not None:
                     self._asset_index = index
                     self._library_service = service
                     self.STORAGE_PATH = storage_path
@@ -385,15 +396,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     self._scan_asset_folders()
                 self._request_model_update()
 
-            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-            if callable(scheduler):
-                scheduler(complete)
-            else:
-                complete()
+            self._schedule_ui(complete)
 
-        threading.Thread(
-            target=worker, daemon=True, name="AssetManagerCatalogLoad"
-        ).start()
+        try:
+            threading.Thread(target=worker, daemon=True, name="AssetManagerCatalogLoad").start()
+        except Exception as exc:
+            self._backend_load_active = False
+            self._catalog_load_failed = True
+            _log.exception("Start Projects catalog worker failed path=%s", self.STORAGE_PATH)
+            self._set_catalog_notice(str(exc))
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("asset_manager")
@@ -1191,6 +1202,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "can_pause": False,
                 "can_resume": False,
                 "can_cancel": False,
+                "can_recover": bool(operation.get("backup_path")),
             })
         projects = self._all_display_assets()
         for row in rows:
@@ -1212,9 +1224,26 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _schedule_ui(self, callback: Callable[[], None]) -> None:
         scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
         if callable(scheduler):
-            scheduler(callback)
+            try:
+                scheduler(callback)
+            except Exception:
+                _log.exception("Schedule Projects callback failed path=%s", self.STORAGE_PATH)
+                self._ui_callbacks.put(callback)
+                try:
+                    self._request_model_update()
+                except Exception:
+                    _log.exception("Wake Projects UI failed path=%s", self.STORAGE_PATH)
         else:
             callback()
+
+    def _drain_ui_callbacks(self):
+        while not self._ui_callbacks.empty():
+            callback = self._ui_callbacks.get_nowait()
+            try:
+                callback()
+            except Exception as exc:
+                _log.exception("Projects callback failed path=%s", self.STORAGE_PATH)
+                self._set_catalog_notice(str(exc))
 
     def _default_folder_id(self) -> Optional[str]:
         folders = self._asset_index_folders()
@@ -2306,7 +2335,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 data["destination"] = destination
             if not destination:
                 return
-            self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel))
+            self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel), backup=False)
         elif action == "update_thumbnail":
             self._start_thumbnail_operation(asset)
         elif action == "license":
@@ -2342,7 +2371,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self.dialog_choose_destination()
                 destination = str(data.get("destination") or "")
             if destination:
-                self._start_project_operation(asset["id"], "Repair project", lambda _progress, _cancel: self._native_io_call("repair_project", path, destination))
+                self._start_project_operation(asset["id"], "Repair project", lambda _progress, _cancel: self._native_io_call("repair_project", path, destination, asset["id"]), backup=False)
         elif action == "locate_dataset":
             directory = lf.ui.open_folder_dialog(tr("projects.dialog.select_dataset"), str(Path(path).parent))
             if directory:
@@ -2358,10 +2387,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return str(getattr(lf.ui, "open_project_file_dialog", lambda *_args: "")(""))
 
     def _rename_catalog_entry(self, asset_id: str, name: str) -> None:
-        try:
-            self._library_command("update_asset", asset_id, name=name)
-        except Exception:
-            pass
+        self._library_command("update_asset", asset_id, name=name)
 
     def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> None:
         source = str(self._dialog_data.get("source") or "first_dataset")
@@ -2396,11 +2422,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         operation: Callable[[Callable[..., None], Callable[[], bool]], Any],
         *,
         after: Optional[Callable[[], None]] = None,
+        backup: bool = True,
     ) -> None:
         if self._contents_busy(asset_id):
             return
-        self._operation_counter += 1
-        operation_id = f"project-{self._operation_counter}"
+        asset = dict(self._asset_dict(asset_id) or {})
+        if not asset.get("path"):
+            self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
+            return
+        operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
         self._project_operations[operation_id] = {
             "id": operation_id,
@@ -2423,36 +2453,48 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 percent = 0.0
             self._schedule_ui(lambda: self._update_project_operation(operation_id, percent, stage))
 
-        def worker() -> None:
+        def complete(result=None, error=None, record=None) -> None:
+            row = self._project_operations.get(operation_id)
+            if row is None:
+                return
+            if record:
+                row["backup_path"] = record.get("backup_path", "")
             try:
-                result = operation(progress, cancel.is_set)
-                error = None
+                if error is not None:
+                    raise error
+                row.update(status="completed", progress=100.0, phase=tr("projects.transfer.done"), result=result)
+                if self._inspection_pipeline is not None:
+                    self._inspection_pipeline.invalidate(asset_id)
+                self._inspection_by_asset.pop(asset_id, None)
+                self._inspection_errors.pop(asset_id, None)
+                if after is not None:
+                    after()
+                self._start_inspection_refresh()
+                self.refresh_catalog(scan_folders=False)
             except Exception as exc:
-                result, error = None, exc
-
-            def complete() -> None:
-                row = self._project_operations.get(operation_id)
-                if row is None:
-                    return
-                if error is None:
-                    row.update(status="completed", progress=100.0, phase=tr("projects.transfer.done"), result=result)
-                    if self._inspection_pipeline is not None:
-                        self._inspection_pipeline.invalidate(asset_id)
-                    self._inspection_by_asset.pop(asset_id, None)
-                    self._inspection_errors.pop(asset_id, None)
-                    if after is not None:
-                        after()
-                    self._start_inspection_refresh()
-                    self.refresh_catalog(scan_folders=False)
-                else:
-                    row.update(status="failed", phase=tr("projects.transfer.failed"), reason=str(error))
-                    self._set_catalog_notice(str(error))
+                _log.exception("Complete project operation failed operation=%s path=%s", title, asset["path"])
+                row.update(status="failed", phase=tr("projects.transfer.failed"), reason=str(exc))
+                self._set_catalog_notice(str(exc))
+            finally:
                 self._refresh_transfer_rows()
                 self._dirty_selection()
 
-            self._schedule_ui(complete)
+        def worker() -> None:
+            from .project_operations import ProjectOperations
+            store = ProjectOperations(lf.io)
+            try:
+                result, record = store.run(operation_id, asset, title,
+                    lambda: operation(progress, cancel.is_set), backup=backup)
+                error = None
+            except Exception as exc:
+                _log.exception("Project worker failed operation=%s path=%s", title, asset["path"])
+                result, error, record = None, exc, getattr(exc, "record", None)
+            self._schedule_ui(lambda: complete(result, error, record))
 
-        threading.Thread(target=worker, daemon=True, name="ProjectsOperation").start()
+        try:
+            threading.Thread(target=worker, daemon=True, name="ProjectsOperation").start()
+        except Exception as exc:
+            complete(error=exc)
 
     def _update_project_operation(self, operation_id: str, progress: float, stage: str) -> None:
         row = self._project_operations.get(operation_id)
@@ -2517,6 +2559,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self.on_open_gallery()
         else:
             if action == "clear_finished":
+                try:
+                    from .project_operations import ProjectOperations
+                    ProjectOperations(None).clear_finished()
+                except Exception as exc:
+                    _log.exception("Clear Contents history failed path=%s", self.STORAGE_PATH)
+                    self._set_catalog_notice(str(exc))
+                    return
                 self._project_operations = {key: row for key, row in self._project_operations.items() if row.get("status") not in ("completed", "canceled")}
                 self._refresh_transfer_rows()
                 if not any(row["status"] in ("completed", "canceled") for row in transfer_rows(self._gallery_state, self._transfer_history_limit)):
@@ -3083,17 +3132,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
             self._catalog_verify_succeeded = not cancel_event.is_set()
             _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
-        except Exception:
-            _log.exception("Asset Manager catalog verify failed")
+        except Exception as exc:
+            _log.exception("Projects catalog verification failed path=%s", self.STORAGE_PATH)
+            reason = str(exc)
+            self._schedule_ui(lambda: self._set_catalog_notice(reason))
         finally:
             with self._folder_scan_lock:
                 self._catalog_verify_active = False
                 self._catalog_verify_refresh_pending = True
                 if self._catalog_verify_thread is threading.current_thread():
                     self._catalog_verify_thread = None
-            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-            if callable(scheduler):
-                scheduler(lambda: self._complete_catalog_verify(generation))
+            self._schedule_ui(lambda: self._complete_catalog_verify(generation))
 
     def _complete_catalog_verify(self, generation: Optional[int] = None) -> None:
         if generation is not None and generation != self._mount_generation:
@@ -4150,6 +4199,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._scan_asset_folders()
 
     def on_update(self, doc):
+        self._drain_ui_callbacks()
         changed = self._sync_panel_space_state()
         changed = self._sync_default_folder_path() or changed
         changed = self._refresh_after_project_write() or changed

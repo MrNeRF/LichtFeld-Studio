@@ -2524,3 +2524,72 @@ def test_translated_message_has_no_english_append(panel_module):
     from lfs_plugins.gallery_messages import localize_message
     panel_module.lf.ui.tr = lambda key: "Téléversement terminé."
     assert localize_message("Upload complete.") == "Téléversement terminé."
+
+
+def test_project_operation_thread_start_failure_restores_controls(panel_module, monkeypatch, caplog):
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel, '_asset_dict', lambda _id: {'id': 'project', 'path': '/项目.licht'})
+    monkeypatch.setattr(panel, '_refresh_transfer_rows', lambda: None)
+    monkeypatch.setattr(panel, '_dirty_selection', lambda: None)
+    class FailedThread:
+        def __init__(self, **_kwargs):
+            pass
+        def start(self):
+            raise RuntimeError('thread start marker')
+    monkeypatch.setattr(panel_module.threading, 'Thread', FailedThread)
+    panel._start_project_operation('project', 'Set license', lambda *_args: None)
+    row = next(iter(panel._project_operations.values()))
+    assert row['status'] == 'failed' and row['reason'] == 'thread start marker'
+    assert not panel._contents_busy('project')
+    assert 'path=/项目.licht' in caplog.text
+
+
+def test_project_operation_refresh_failure_restores_controls(panel_module, monkeypatch, caplog):
+    from lfs_plugins.project_operations import ProjectOperations
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel, '_asset_dict', lambda _id: {'id': 'project', 'path': '/项目.licht'})
+    monkeypatch.setattr(panel, '_refresh_transfer_rows', lambda: None)
+    monkeypatch.setattr(panel, '_dirty_selection', lambda: None)
+    monkeypatch.setattr(ProjectOperations, 'run', lambda *_args, **_kwargs: (None, {'backup_path': '/backup'}))
+    monkeypatch.setattr(panel_module.lf, 'io', SimpleNamespace(), raising=False)
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+        def start(self):
+            self.target()
+    monkeypatch.setattr(panel_module.threading, 'Thread', InlineThread)
+    def fail():
+        raise OSError('refresh marker')
+    panel._start_project_operation('project', 'Rename', lambda *_args: None, after=fail)
+    row = next(iter(panel._project_operations.values()))
+    assert row['status'] == 'failed' and row['reason'] == 'refresh marker'
+    assert row['backup_path'] == '/backup'
+    assert not panel._contents_busy('project')
+    assert 'operation=Rename path=/项目.licht' in caplog.text
+
+
+def test_project_scheduler_failure_preserves_completion_for_ui_update(panel_module, monkeypatch, caplog):
+    panel = panel_module.AssetManagerPanel()
+    def fail(_callback):
+        raise RuntimeError('scheduler marker')
+    monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', fail, raising=False)
+    called = []
+    panel._schedule_ui(lambda: called.append(True))
+    assert called == []
+    panel._drain_ui_callbacks()
+    assert called == [True]
+    assert 'Schedule Projects callback failed' in caplog.text
+
+
+def test_catalog_worker_start_failure_restores_controls(panel_module, monkeypatch, caplog):
+    panel = panel_module.AssetManagerPanel()
+    class FailedThread:
+        def __init__(self, **_kwargs):
+            pass
+        def start(self):
+            raise RuntimeError('catalog thread marker')
+    monkeypatch.setattr(panel_module.threading, 'Thread', FailedThread)
+    panel._start_backend_initialization()
+    assert not panel._backend_load_active
+    assert panel._catalog_load_failed
+    assert 'Start Projects catalog worker failed' in caplog.text

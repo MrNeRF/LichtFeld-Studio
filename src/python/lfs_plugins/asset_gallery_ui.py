@@ -432,6 +432,10 @@ class GalleryAssetMixin:
                 self._gallery_command("retry")
                 return
             if action == "open_recovery":
+                operation = self._project_operations.get(identifier, {})
+                if operation.get("backup_path"):
+                    lf.ui.reveal_in_file_manager(operation["backup_path"])
+                    return
                 self._controller().command("show_recovery_folder")
                 return
             if action == "undo":
@@ -574,7 +578,7 @@ class GalleryAssetMixin:
                 scene = self._gallery_scene(asset)
                 self._confirm_gallery("confirm.remove", lambda: self._controller().service.remove(scene["id"], scene))
         except Exception as exc:
-            log_failure(action, exc, path=(self.get_selected_asset() or {}).get("path", ""))
+            log_failure(action, exc, path=(self._get_selected_asset() or {}).get("path", ""))
             from .gallery_messages import localize_message
             self._gallery_notice = localize_message(str(exc))
             if action == "undo" and self._gallery_undo_kind == "pull" and self._gallery_undo:
