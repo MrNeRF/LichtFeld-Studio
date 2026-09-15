@@ -124,6 +124,8 @@ set(LICHT_FORMAT_WINDOWS_FILES
     ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
     ${CMAKE_SOURCE_DIR}/src/core/property_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
     ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
