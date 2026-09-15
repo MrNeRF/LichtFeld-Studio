@@ -567,3 +567,45 @@ TEST_F(TensorStreamTest, BoolToUInt8OrderedAgainstGatedProducerStream) {
 
     destroyStreamSafely(stream);
 }
+
+// A busy default stream must not initialize a tensor after its owning stream
+// has already overwritten it (the GT preview's UInt8 vertical flip did this).
+TEST_F(TensorStreamTest, ConstantInitializationStaysOnNonBlockingStream) {
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    for (const auto dtype : {DataType::UInt8, DataType::Bool, DataType::Int32, DataType::Int64}) {
+        SCOPED_TRACE(static_cast<int>(dtype));
+        CUDAStreamGuard guard(stream);
+        {
+            auto warm = Tensor::zeros({4096}, Device::CUDA, dtype);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        }
+        std::atomic<bool> release{false};
+        ASSERT_EQ(cudaLaunchHostFunc(nullptr, [](void* data) {
+            auto& ready = *static_cast<std::atomic<bool>*>(data);
+            while (!ready.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            } }, &release), cudaSuccess);
+        std::jthread watchdog([&](std::stop_token stop) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!stop.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            release.store(true, std::memory_order_release);
+        });
+        auto tensor = Tensor::zeros({4096}, Device::CUDA, dtype);
+        EXPECT_EQ(cudaMemsetAsync(tensor.data_ptr(), 0x7f, tensor.bytes(), stream), cudaSuccess);
+        EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+        const bool gate_timed_out = release.load(std::memory_order_acquire);
+        release.store(true, std::memory_order_release);
+        watchdog.request_stop();
+        watchdog.join();
+        ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+        const auto cpu = tensor.cpu();
+        const auto* bytes = static_cast<const uint8_t*>(cpu.data_ptr());
+        EXPECT_FALSE(gate_timed_out) << "Factory waited on the unrelated default stream";
+        EXPECT_EQ(std::count(bytes, bytes + cpu.bytes(), uint8_t{0x7f}), cpu.bytes())
+            << "Late default-stream initialization overwrote the tensor";
+    }
+    destroyStreamSafely(stream);
+}

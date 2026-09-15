@@ -969,51 +969,25 @@ namespace nvjpeg {
 
             // Batch-aware heuristic used by decodeBatch dispatch.
             DecodePath chooseDecodePath(int batch_size, const nvimgcodecCodeStreamDesc_t** code_streams) const {
-                if (force_legacy_batch_)
-                    return DecodePath::Legacy;
+                (void)code_streams;
                 if (force_batch_single_)
                     return DecodePath::BatchSingle;
 
-                // On single-engine GPUs (e.g. A100) the BatchSingle setup overhead
-                // doesn't pay for itself when there is only one engine to feed; route
-                // to the legacy batched path instead.  Multi-engine GPUs benefit from
-                // BatchSingle's parallelism even at batch_size == 1.  This check must
-                // run before the max_num_cpu_threads guard: the Python
-                // single_python_threads path intentionally uses one C++ thread per
-                // Decoder while relying on concurrent single-image BatchSingle work.
-                if (batch_size <= 1) {
-                    return (num_hw_engines_ <= 1) ? DecodePath::Legacy : DecodePath::BatchSingle;
-                }
+                // nvjpegDecodeBatched* reports only one enqueue result for the whole
+                // batch. It cannot prove that every destination was written, so never
+                // use it for a multi-member submission. BatchSingle checks each
+                // member's host/transfer/device calls and joins its worker event back
+                // to the batch stream explicitly.
+                if (batch_size > 1)
+                    return DecodePath::BatchSingle;
 
-                if (exec_params_->max_num_cpu_threads < 2)
+                // Keep the legacy path for the existing single-engine, single-image
+                // optimization (notably A100) and for explicit compatibility/perf
+                // testing via force_legacy_batch. With exactly one accepted member,
+                // the call-level nvJPEG result is also that member's result.
+                if (force_legacy_batch_ || num_hw_engines_ <= 1)
                     return DecodePath::Legacy;
-
-                // Mixed CSS + fancy upsampling + non-trivial batches are routed to
-                // BatchSingle on multi-engine GPUs.
-                if (fancy_upsampling_ && batch_size >= 13) {
-                    unsigned int css_mask = 0;
-                    if (!getCanDecodeCssMaskFromSetup(batch_size, css_mask)) {
-                        // Fallback for direct decodeBatch calls or cases where setup
-                        // probed more samples than were assigned to this backend.
-                        for (int i = 0; i < batch_size; ++i) {
-                            if (code_streams[i] == nullptr)
-                                continue;
-                            nvimgcodecImageInfo_t cs_info{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), 0};
-                            if (code_streams[i]->getImageInfo(code_streams[i]->instance, &cs_info) != NVIMGCODEC_STATUS_SUCCESS)
-                                continue;
-                            css_mask |= chromaSubsamplingMaskBit(cs_info.chroma_subsampling);
-                            if (hasMixedChromaSubsampling(css_mask))
-                                break;
-                        }
-                    }
-                    if (hasMixedChromaSubsampling(css_mask)) {
-                        if (num_hw_engines_ <= 1)
-                            return DecodePath::Legacy;
-                        return DecodePath::BatchSingle;
-                    }
-                }
-
-                return DecodePath::Legacy;
+                return DecodePath::BatchSingle;
             }
 
             // Configure nvjpeg_params for this decode request: sets EXIF orientation (with
@@ -2586,9 +2560,18 @@ namespace nvjpeg {
                         handle_, state_, legacy_batch_bitstreams_.data(), legacy_batch_bitstream_sizes_.data(), legacy_batch_outputs_.data(), stream));
                 }
 
-                // set status to success, it may be overwritten to fail if post processing (OOB ROI or YUV planar conversion) fails
-                for (int sample_idx : legacy_batch_valid_sample_idxs_) {
-                    images[sample_idx]->imageReady(images[sample_idx]->instance, NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
+                // nvjpegDecodeBatched* has no per-member result. Multi-member callers
+                // must have been routed to BatchSingle; fail closed if that invariant
+                // is ever violated instead of promoting one enqueue result to a set of
+                // fabricated per-sample successes.
+                if (legacy_batch_valid_sample_idxs_.size() != 1) {
+                    NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                         "Legacy HW batched decode cannot report per-member results for "
+                                             << legacy_batch_valid_sample_idxs_.size() << " samples");
+                    for (int sample_idx : legacy_batch_valid_sample_idxs_) {
+                        images[sample_idx]->imageReady(images[sample_idx]->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+                    }
+                    return NVIMGCODEC_STATUS_EXECUTION_FAILED;
                 }
 
                 if (need_convert_from_planar) {
@@ -2653,11 +2636,14 @@ namespace nvjpeg {
                                 framework_, plugin_id_,
                                 "Could not fill out of bounds ROI for sample " << sample_idx << " - " << e.what());
                             images[sample_idx]->imageReady(images[sample_idx]->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+                            return NVIMGCODEC_STATUS_EXECUTION_FAILED;
                         }
                     }
                 }
 
                 XM_CHECK_CUDA(cudaEventRecord(event_, stream));
+                const int sample_idx = legacy_batch_valid_sample_idxs_.front();
+                images[sample_idx]->imageReady(images[sample_idx]->instance, NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
             }
             return NVIMGCODEC_STATUS_SUCCESS;
         } catch (const NvJpegException& e) {

@@ -39,6 +39,9 @@ namespace lfs::vis {
         p.ppisp_mode = static_cast<int>(s.ppisp_mode);
         p.ppisp = s.ppisp_overrides;
         p.background_color = detail::to_array(s.background_color);
+        p.color_exposure = s.color_exposure;
+        p.color_tonemapping = s.color_tonemapping;
+        p.splat_render_profile = s.splat_render_profile;
         p.environment_mode = static_cast<int>(s.environment_mode);
         p.environment_map_path = s.environment_map_path;
         p.environment_exposure = s.environment_exposure;
@@ -129,6 +132,9 @@ namespace lfs::vis {
         s.ppisp_mode = static_cast<RenderSettings::PPISPMode>(p.ppisp_mode);
         s.ppisp_overrides = p.ppisp;
         s.background_color = detail::to_vec3(p.background_color);
+        s.color_exposure = p.color_exposure;
+        s.color_tonemapping = p.color_tonemapping;
+        s.splat_render_profile = p.splat_render_profile;
         s.environment_mode = static_cast<EnvironmentBackgroundMode>(p.environment_mode);
         s.environment_map_path = p.environment_map_path;
         s.environment_exposure = p.environment_exposure;

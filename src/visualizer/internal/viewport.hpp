@@ -5,6 +5,7 @@
 #pragma once
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
+#include "visualizer/preferences.hpp"
 #include <algorithm>
 #include <chrono>
 #include <glm/glm.hpp>
@@ -39,11 +40,13 @@ class Viewport {
         void decreaseWasdSpeed() { wasdSpeed = std::max(wasdSpeed / kSpeedStepFactor, 1.0f); }
         float getWasdSpeed() const { return wasdSpeed; }
         float getMaxWasdSpeed() const { return maxWasdSpeed; }
+        void setWasdSpeed(const float speed) { wasdSpeed = std::clamp(speed, 1.0f, maxWasdSpeed); }
 
         void increaseZoomSpeed() { zoomSpeed = std::min(zoomSpeed * kSpeedStepFactor, maxZoomSpeed); }
         void decreaseZoomSpeed() { zoomSpeed = std::max(zoomSpeed / kSpeedStepFactor, 1.0f); }
         float getZoomSpeed() const { return zoomSpeed; }
         float getMaxZoomSpeed() const { return maxZoomSpeed; }
+        void setZoomSpeed(const float speed) { zoomSpeed = std::clamp(speed, 1.0f, maxZoomSpeed); }
 
         // Camera state
         glm::vec3 t = glm::vec3(-5.657f, 3.0f, -5.657f);
@@ -1009,6 +1012,8 @@ public:
     Viewport(size_t width = 1280, size_t height = 720) {
         windowSize = glm::ivec2(width, height);
         camera = CameraMotion();
+        camera.setZoomSpeed(lfs::vis::UserPreferences::instance().zoomSpeed());
+        camera.setWasdSpeed(lfs::vis::UserPreferences::instance().navigationSpeed());
     }
 
     void setViewMatrix(const glm::mat3& R, const glm::vec3& t) {

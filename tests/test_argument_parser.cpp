@@ -6,7 +6,9 @@
 
 #include "core/argument_parser.hpp"
 #include "core/optimization_properties.hpp"
+#include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
 
@@ -32,6 +34,31 @@ namespace {
     }
 
 } // namespace
+
+// An untrained .licht on --data-path is its own destination, so
+// --output-path is optional and the project stays bound for the run.
+TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_dataset_project");
+    const auto project =
+        std::filesystem::path(directory) / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "-d",
+        project_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->dataset_project, project);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    EXPECT_TRUE((*parsed)->dataset.output_path.empty());
+    EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
+}
 
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
@@ -245,6 +272,78 @@ TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
         lfs::io::project::unpublishedLichtUserMessage(unpublished));
 }
 
+TEST(ArgumentParserTest, UsdFilesAcceptExplicitAndBareViewPaths) {
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_arg_parser_usd" /
+                           std::filesystem::path(u8"splat \u00e8 \u6d4b\u8bd5");
+    std::filesystem::create_directories(directory);
+
+    // Parsing only routes paths; USD decoding is covered by UsdFormatTest.
+    for (const auto* extension : {".usd", ".usda", ".usdc", ".usdz",
+                                  ".USD", ".USDA", ".USDC", ".USDZ",
+                                  ".Usd", ".UsdA", ".UsdC", ".UsdZ"}) {
+        const auto path = directory / (std::string("model with spaces") + extension);
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+        const auto path_text = lfs::core::path_to_utf8(path);
+
+        for (const auto* flag : {"-v", "--view", ""}) {
+            SCOPED_TRACE(path_text + " via " + (flag[0] ? flag : "bare path"));
+            std::vector<const char*> argv = {"LichtFeld-Studio"};
+            if (flag[0])
+                argv.push_back(flag);
+            argv.push_back(path_text.c_str());
+
+            auto parsed = lfs::core::args::parse_args_and_params(
+                static_cast<int>(argv.size()), argv.data());
+            ASSERT_TRUE(parsed) << parsed.error();
+            EXPECT_EQ((*parsed)->view_paths, std::vector<std::filesystem::path>{path});
+            EXPECT_FALSE((*parsed)->project_path);
+            EXPECT_FALSE((*parsed)->resume_checkpoint);
+            EXPECT_FALSE((*parsed)->resume_project);
+        }
+    }
+}
+
+TEST(ArgumentParserTest, ViewDirectoryIncludesUsdAndPreservesFiltering) {
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_arg_parser_usd_directory";
+    std::filesystem::create_directories(directory);
+    std::vector<std::filesystem::path> expected;
+    for (const auto* name : {"d.usdz", "b.USDA", "c.UsdC", "a.usd", "f.ply", "e.obj"}) {
+        const auto path = directory / name;
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+        expected.push_back(path);
+    }
+    const auto ignored_directory = directory / "nested.usd";
+    std::filesystem::create_directories(ignored_directory);
+    for (const auto& path : {directory / "notes.txt", directory / "project.licht",
+                             ignored_directory / "nested.usda"}) {
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+    }
+    std::sort(expected.begin(), expected.end());
+    const auto path_text = lfs::core::path_to_utf8(directory);
+
+    for (const auto* flag : {"-v", "--view", ""}) {
+        SCOPED_TRACE(flag[0] ? flag : "bare directory");
+        std::vector<const char*> argv = {"LichtFeld-Studio"};
+        if (flag[0])
+            argv.push_back(flag);
+        argv.push_back(path_text.c_str());
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(argv.size()), argv.data());
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ((*parsed)->view_paths, expected);
+        EXPECT_FALSE((*parsed)->project_path);
+    }
+}
+
 TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
     const auto directory = make_test_path("lfs_arg_parser_view_project");
     const auto project = std::filesystem::path(directory) / "session.LICHT";
@@ -351,6 +450,39 @@ TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefault
     }
 }
 
+TEST(ArgumentParserTest, CliOutputPathSetsExplicitAndSurvivesCreateForDataset) {
+    const auto data_path = make_test_path("lfs_arg_parser_cli_output_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cli_output_out");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--export",
+        "ply",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->dataset.output_path_explicit);
+    EXPECT_EQ((*parsed)->dataset.output_path, std::filesystem::path(output_path));
+    ASSERT_EQ((*parsed)->export_formats.size(), 1u);
+    EXPECT_EQ((*parsed)->export_formats.front(), lfs::core::param::OutputFormat::PLY);
+
+    lfs::vis::ParameterManager manager;
+    const auto load_result = manager.ensureLoaded();
+    ASSERT_TRUE(load_result.has_value()) << load_result.error();
+    manager.setSessionDefaults(**parsed);
+    const auto recreated = manager.createForDataset(
+        "/tmp/override_dataset", "/tmp/override_output");
+    EXPECT_TRUE(recreated.dataset.output_path_explicit);
+    EXPECT_EQ(recreated.dataset.output_path, std::filesystem::path("/tmp/override_output"));
+    ASSERT_EQ(recreated.export_formats.size(), 1u);
+    EXPECT_EQ(recreated.export_formats.front(), lfs::core::param::OutputFormat::PLY);
+}
+
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");
     const auto output_path = make_test_path("lfs_arg_parser_default_output");
@@ -374,6 +506,26 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.0f);
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
+}
+
+TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
+    const auto data_path = make_test_path("lfs_arg_parser_exposure_correction_data");
+    const auto output_path = make_test_path("lfs_arg_parser_exposure_correction_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--exposure-correction"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_exposure_correction);
+    EXPECT_FALSE((*parsed)->optimization.use_bilateral_grid);
+    EXPECT_FALSE((*parsed)->optimization.use_ppisp);
+    EXPECT_EQ((*parsed)->optimization.exposure_correction_grid_start_iter, 1000);
 }
 
 TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
@@ -646,17 +798,18 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
         "--output",
         output_str.c_str(),
         "--format",
-        "ply,spz,html"};
+        ".ply,.spz,.html,.ssog"};
 
     auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     auto* mode = std::get_if<lfs::core::args::Mesh2SplatMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
-    ASSERT_EQ(mode->params.formats.size(), 3u);
+    ASSERT_EQ(mode->params.formats.size(), 4u);
     EXPECT_EQ(mode->params.formats[0], lfs::core::param::OutputFormat::PLY);
     EXPECT_EQ(mode->params.formats[1], lfs::core::param::OutputFormat::SPZ);
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
+    EXPECT_EQ(mode->params.formats[3], lfs::core::param::OutputFormat::SSOG);
 }
 
 TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {
@@ -1439,4 +1592,63 @@ TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
     EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
     EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
     EXPECT_EQ(restored.dataset.test_every, 64);
+}
+
+TEST(ArgumentParserTest, ViewModeHonorsMcpPortOverride) {
+    const auto directory = make_test_path("lfs_arg_parser_view_mcp_port");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--mcp-port",
+        "45690",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->mcp_port, std::optional<int>(45690));
+}
+
+#ifndef LFS_BUILD_PORTABLE
+TEST(ArgumentParserTest, ViewModeHonorsNoSplash) {
+    const auto directory = make_test_path("lfs_arg_parser_view_no_splash");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--no-splash",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.no_splash);
+}
+#endif
+
+TEST(ArgumentParserTest, ViewModeRejectsOutOfRangeMcpPort) {
+    const auto directory = make_test_path("lfs_arg_parser_view_mcp_port_invalid");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--mcp-port",
+        "70000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("must be between 1 and 65535"),
+              std::string::npos);
 }

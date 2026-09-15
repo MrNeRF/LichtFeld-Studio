@@ -1302,7 +1302,9 @@ namespace {
             if (!python_module_dir.empty()) {
                 PyObject* sys_path = PySys_GetObject("path");
                 if (sys_path) {
-                    PyObject* py_path = PyUnicode_FromString(python_module_dir.string().c_str());
+                    const auto python_module_dir_utf8 =
+                        lfs::core::path_to_utf8(python_module_dir);
+                    PyObject* py_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
                     if (py_path) {
                         PyList_Insert(sys_path, 0, py_path);
                         Py_DECREF(py_path);

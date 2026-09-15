@@ -112,6 +112,71 @@ namespace lfs::io::project {
         return crc32c_software(crc, data, size);
     }
 
+    namespace {
+
+        constexpr int kCrc32cGf2Dim = 32;
+
+        std::uint32_t gf2_matrix_times(const std::uint32_t* mat,
+                                       std::uint32_t vec) noexcept {
+            std::uint32_t sum = 0;
+            while (vec != 0) {
+                if ((vec & 1u) != 0) {
+                    sum ^= *mat;
+                }
+                vec >>= 1;
+                ++mat;
+            }
+            return sum;
+        }
+
+        void gf2_matrix_square(std::uint32_t* square,
+                               const std::uint32_t* mat) noexcept {
+            for (int n = 0; n < kCrc32cGf2Dim; ++n) {
+                square[n] = gf2_matrix_times(mat, mat[n]);
+            }
+        }
+
+    } // namespace
+
+    std::uint32_t crc32c_combine(const std::uint32_t crc_a,
+                                 const std::uint32_t crc_b,
+                                 std::uint64_t len_b) {
+        if (len_b == 0) {
+            return crc_a;
+        }
+
+        std::uint32_t odd[kCrc32cGf2Dim];
+        std::uint32_t even[kCrc32cGf2Dim];
+        odd[0] = CRC32C_POLY_REFLECTED;
+        std::uint32_t row = 1;
+        for (int n = 1; n < kCrc32cGf2Dim; ++n) {
+            odd[n] = row;
+            row <<= 1;
+        }
+
+        gf2_matrix_square(even, odd);
+        gf2_matrix_square(odd, even);
+
+        std::uint32_t crc = crc_a;
+        do {
+            gf2_matrix_square(even, odd);
+            if ((len_b & 1u) != 0) {
+                crc = gf2_matrix_times(even, crc);
+            }
+            len_b >>= 1;
+            if (len_b == 0) {
+                break;
+            }
+            gf2_matrix_square(odd, even);
+            if ((len_b & 1u) != 0) {
+                crc = gf2_matrix_times(odd, crc);
+            }
+            len_b >>= 1;
+        } while (len_b != 0);
+
+        return crc ^ crc_b;
+    }
+
 #if defined(__x86_64__) || defined(_M_X64)
     std::uint32_t crc32c_sse42(const std::uint32_t crc, const void* data,
                                const std::size_t size) {

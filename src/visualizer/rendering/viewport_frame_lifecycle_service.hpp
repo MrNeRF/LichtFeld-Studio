@@ -21,6 +21,11 @@ namespace lfs::vis {
 
     class LFS_VIS_API ViewportFrameLifecycleService {
     public:
+        enum class ModelSource {
+            Scene,
+            Training,
+        };
+
         struct ResizeResult {
             DirtyMask dirty = 0;
             bool completed = false;
@@ -35,7 +40,8 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] ResizeResult handleViewportResize(const glm::ivec2& current_size);
-        [[nodiscard]] ModelChangeResult handleModelChange(size_t model_ptr, ViewportArtifactService& viewport_artifacts);
+        [[nodiscard]] ModelChangeResult handleModelChange(size_t model_ptr, ViewportArtifactService& viewport_artifacts,
+                                                          ModelSource source = ModelSource::Scene);
         [[nodiscard]] DirtyMask handleTrainingRefresh(bool is_training, float refresh_interval_sec);
         [[nodiscard]] DirtyMask requiredDirtyMask(bool has_viewport_output,
                                                   bool has_renderable_content,
@@ -51,12 +57,16 @@ namespace lfs::vis {
         [[nodiscard]] bool isResizeDeferring() const {
             return resize_active_.load(std::memory_order_relaxed) || resize_settle_pending_;
         }
-        void resetModelTracking() { last_model_ptr_ = 0; }
+        void resetModelTracking() {
+            last_model_ptr_ = 0;
+            last_model_source_ = ModelSource::Scene;
+        }
         [[nodiscard]] glm::ivec2 lastViewportSize() const { return last_viewport_size_; }
 
     private:
         glm::ivec2 last_viewport_size_{0, 0};
         size_t last_model_ptr_ = 0;
+        ModelSource last_model_source_ = ModelSource::Scene;
         std::chrono::steady_clock::time_point last_training_render_{};
         std::chrono::steady_clock::time_point last_resize_change_{};
         std::atomic<bool> resize_active_{false};

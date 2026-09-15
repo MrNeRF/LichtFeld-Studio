@@ -135,3 +135,26 @@
     flex-shrink: 0;
     font-size: 12dp;
 }
+
+.impdlg-advanced-header {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin: 4dp 0 8dp 0;
+    cursor: pointer;
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.impdlg-advanced-header .section-arrow {
+    transform: rotate(0deg);
+}
+
+.impdlg-advanced-header.expanded .section-arrow {
+    transform: rotate(90deg);
+}
+
+.impdlg-advanced-content {
+    display: flex;
+    flex-direction: column;
+}

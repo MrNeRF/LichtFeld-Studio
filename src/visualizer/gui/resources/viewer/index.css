@@ -199,6 +199,9 @@ button {
 #controlsWrap > #buttonsContainer #measure.active {
   color: #F60;
 }
+#controlsWrap > #buttonsContainer #labels.active {
+  color: #F60;
+}
 #controlsWrap > #buttonsContainer #orthoCamera.active {
   color: #F60;
 }
@@ -233,6 +236,46 @@ button {
   stroke: black;
   stroke-width: 2;
   r: 5;
+}
+
+/* Label tool overlay */
+#labelToolSvg,
+#labelToolSvg * {
+  pointer-events: none;
+}
+#labelToolSvg {
+  display: inline;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+#labelToolSvg.hidden {
+  display: none;
+}
+#labelToolSvg > g > .leaderBottom {
+  stroke: black;
+  stroke-width: 5;
+}
+#labelToolSvg > g > .leaderTop {
+  stroke: white;
+  stroke-width: 1.5;
+}
+#labelToolSvg > g > .labelPoint {
+  fill: #F60;
+  stroke: black;
+  stroke-width: 1.5;
+}
+#labelToolSvg > g > .labelText {
+  fill: #fff;
+  stroke: black;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  font-family: "Arial", sans-serif;
+  font-size: 14px;
+  text-anchor: end;
 }
 
 #measurePanel {
@@ -329,6 +372,24 @@ button {
   height: 1px;
   margin: 8px 0;
   background-color: #666;
+}
+#settingsPanel > .settingsRow > .fovLabel {
+  cursor: default;
+  white-space: nowrap;
+}
+#settingsPanel > .settingsRow > #fovSlider {
+  flex-grow: 1;
+  margin: 8px 4px;
+  accent-color: #F60;
+}
+#settingsPanel > .settingsRow > #fovValue {
+  min-width: 38px;
+  text-align: center;
+  white-space: nowrap;
+}
+#settingsPanel > .settingsRow > #fovReset {
+  flex-grow: 0;
+  padding: 10px 12px;
 }
 
 /* infoPanel */

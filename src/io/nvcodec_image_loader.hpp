@@ -34,6 +34,14 @@ namespace lfs::io {
     class NvCodecImageLoader {
     public:
         struct Options {
+            struct SentinelValidationTestSeam {
+                // Negative disables the seam. Otherwise the selected batch member
+                // decodes into a discard buffer so its real destination stays sentinel-filled.
+                int skipped_member = -1;
+                // Apply the discard buffer to the one permitted CUDA retry as well.
+                bool skip_cuda_retry = false;
+            };
+
             int device_id = 0;
             int max_num_cpu_threads = 0;
             bool enable_fallback = true;
@@ -44,6 +52,7 @@ namespace lfs::io {
             // remains live; do not enable without a recovery policy for CUDA errors.
             bool enable_device_allocator = false;
             size_t device_allocator_budget_bytes = size_t(256) << 20;
+            SentinelValidationTestSeam sentinel_validation_test_seam{};
         };
 
         explicit NvCodecImageLoader(const Options& options);

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <limits>
 #include <random>
@@ -452,6 +453,54 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         EXPECT_EQ(params[1].item<float>(), 1.0f);
         EXPECT_EQ(exp_avg.abs().max().item<float>(), 0.0f);
         EXPECT_EQ(exp_avg_sq.abs().max().item<float>(), 0.0f);
+    }
+
+    TEST_F(PPISPCudaVsTorchTest, NegativeHomographyZStaysFiniteAndMatchesFD) {
+        // Saturated pixel + large negative neutral latent drives rgi_out.z < 0.
+        // The colour-homography guard must keep the output finite and uninverted
+        // (no sign flip from a negative denominator) and the VJP must match FD.
+        auto params = createParams(1, 1, DEFAULT_SEED);
+        params.exposure.zero_();
+        params.vignetting.zero_();
+        params.crf.zero_();
+        params.color.zero_();
+        params.color[0][6] = -8.0f;
+        params.color[0][7] = -8.0f;
+
+        auto rgb_in = torch::ones({3, 4, 4}, GPU_F32);
+        const auto output = runCudaForward(params, rgb_in, 4, 4, 0, 0);
+        EXPECT_TRUE(torch::isfinite(output).all().item<bool>());
+        EXPECT_GE(output.min().item<float>(), 0.0f);
+        EXPECT_LE(output.max().item<float>(), 1.0f + 1.0e-5f);
+
+        auto grad_out = (2.0f * output).contiguous();
+        const auto grads = runCudaBackward(params, rgb_in, grad_out, 4, 4, 0, 0);
+        EXPECT_TRUE(torch::isfinite(grads.rgb_in).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.color).all().item<bool>());
+
+        // CRF clamps the exploded colour-homography output, so colour-parameter
+        // FDs are noise at the clip. Check rgb VJP instead; the unclipped
+        // colour VJP is covered by BilateralGridExposureChromaTest.NegativeZ.
+        constexpr float kEps = 1e-3f;
+        auto rgb_host = rgb_in.clone();
+        const auto rgb_grad = grads.rgb_in.contiguous();
+        for (int i = 0; i < 3; ++i) {
+            auto plus = rgb_host.clone();
+            auto minus = rgb_host.clone();
+            plus[i].add_(kEps);
+            minus[i].add_(-kEps);
+            const auto lp = runCudaForward(params, plus, 4, 4, 0, 0).square().sum().item<float>();
+            const auto lm = runCudaForward(params, minus, 4, 4, 0, 0).square().sum().item<float>();
+            const float numerical = (lp - lm) / (2.0f * kEps);
+            const float analytical = rgb_grad[i].sum().item<float>();
+            const float abs_diff = std::abs(analytical - numerical);
+            if (std::max(std::abs(analytical), std::abs(numerical)) < 5e-3f && abs_diff < 5e-3f) {
+                continue;
+            }
+            EXPECT_TRUE(abs_diff < 2.5e-2f ||
+                        abs_diff <= 5e-2f * std::max({std::abs(analytical), std::abs(numerical), 1e-6f}))
+                << "rgb[" << i << "] analytical=" << analytical << " numerical=" << numerical;
+        }
     }
 
 } // namespace

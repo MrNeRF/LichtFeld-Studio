@@ -45,6 +45,7 @@ namespace lfs::core {
     };
 
     struct LFS_LOGGER_API LogEntrySnapshot {
+        uint64_t sequence = 0;
         std::chrono::system_clock::time_point timestamp{};
         LogLevel level = LogLevel::Info;
         std::string file;
@@ -107,6 +108,8 @@ namespace lfs::core {
         [[nodiscard]] size_t buffered_log_count() const;
         [[nodiscard]] uint64_t buffered_log_generation() const;
         [[nodiscard]] std::vector<LogEntrySnapshot> buffered_logs() const;
+        [[nodiscard]] std::vector<LogEntrySnapshot>
+        buffered_logs_since(uint64_t generation, size_t max_count) const;
         [[nodiscard]] std::string buffered_logs_as_text() const;
 
         bool is_enabled(LogLevel level) const {
@@ -213,18 +216,19 @@ namespace lfs::core {
     // Scoped timer for performance measurement
     class LFS_LOGGER_API ScopedTimer {
     public:
-        explicit ScopedTimer(std::string name, LogLevel level, SourceSite loc);
-        ScopedTimer(std::string name, double min_log_ms,
+        explicit ScopedTimer(std::string_view name, LogLevel level, SourceSite loc);
+        ScopedTimer(std::string_view name, double min_log_ms,
                     LogLevel level, SourceSite loc);
         ~ScopedTimer();
 
     private:
-        std::chrono::high_resolution_clock::time_point start_;
+        std::chrono::high_resolution_clock::time_point start_{};
         std::string name_;
         double min_log_ms_ = 0.0;
         LogLevel level_;
         SourceSite loc_;
         bool diagnostics_scope_active_ = false;
+        bool disabled_ = false;
     };
 
 } // namespace lfs::core

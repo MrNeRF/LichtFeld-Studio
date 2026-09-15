@@ -73,6 +73,8 @@ namespace lfs::python {
         // Sequencer timeline callbacks
         HasKeyframesCallback g_has_keyframes_cb = nullptr;
         SaveCameraPathCallback g_save_camera_path_cb = nullptr;
+        GetCameraPathDataCallback g_get_camera_path_data_cb = nullptr;
+        SetCameraPathDataCallback g_set_camera_path_data_cb = nullptr;
         LoadCameraPathCallback g_load_camera_path_cb = nullptr;
         ClearKeyframesCallback g_clear_keyframes_cb = nullptr;
         SetPlaybackSpeedCallback g_set_playback_speed_cb = nullptr;
@@ -550,6 +552,19 @@ namespace lfs::python {
 
     bool save_camera_path(const std::string& path) {
         return g_save_camera_path_cb ? g_save_camera_path_cb(path) : false;
+    }
+
+    void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb) {
+        g_get_camera_path_data_cb = get_cb;
+        g_set_camera_path_data_cb = set_cb;
+    }
+
+    std::string get_camera_path_data() {
+        return g_get_camera_path_data_cb ? g_get_camera_path_data_cb() : "null";
+    }
+
+    bool set_camera_path_data(const std::string& value) {
+        return g_set_camera_path_data_cb ? g_set_camera_path_data_cb(value) : false;
     }
 
     bool load_camera_path(const std::string& path) {
@@ -1244,7 +1259,8 @@ namespace lfs::python {
                        bool rad_flip_y,
                        bool rad_streamable,
                        int spz_version,
-                       bool include_provenance) {
+                       bool include_provenance,
+                       int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (!g_export_callback)
             return;
 
@@ -1258,7 +1274,7 @@ namespace lfs::python {
                           rad_flip_y,
                           rad_streamable,
                           spz_version,
-                          include_provenance);
+                          include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
     }
 
     void cancel_active_operator() {

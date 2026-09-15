@@ -19,13 +19,17 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_config.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
+#include <numeric>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -88,6 +92,33 @@ namespace {
         ASSERT_EQ(ac.numel(), bc.numel()) << name;
         ASSERT_EQ(ac.shape().str(), bc.shape().str()) << name;
         ASSERT_EQ(std::memcmp(ac.data_ptr(), bc.data_ptr(), ac.bytes()), 0) << name;
+    }
+
+    [[nodiscard]] float max_abs_diff(const Tensor& a, const Tensor& b) {
+        auto ac = a.cpu().contiguous();
+        auto bc = b.cpu().contiguous();
+        EXPECT_EQ(ac.numel(), bc.numel());
+        EXPECT_EQ(ac.dtype(), DataType::Float32);
+        EXPECT_EQ(bc.dtype(), DataType::Float32);
+        const auto* pa = ac.ptr<float>();
+        const auto* pb = bc.ptr<float>();
+        float m = 0.0f;
+        for (size_t i = 0; i < ac.numel(); ++i) {
+            const float d = std::fabs(pa[i] - pb[i]);
+            if (d > m)
+                m = d;
+        }
+        return m;
+    }
+
+    void fill_float_noise(Tensor& t, const uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        auto cpu = t.cpu();
+        auto* p = cpu.ptr<float>();
+        for (size_t i = 0; i < cpu.numel(); ++i)
+            p[i] = nd(rng);
+        t = cpu.to(Device::CUDA);
     }
 
     [[nodiscard]] double psnr_from_mse(double mse) {
@@ -384,6 +415,95 @@ TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
 
     std::filesystem::remove(source_path);
     std::filesystem::remove(merged_path);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16MultiSourceIdentityMergeDecodesFloat) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto a = make_random_sh3(64, /*seed=*/0xA101);
+    auto b = make_random_sh3(64, /*seed=*/0xB202);
+    fill_float_noise(a.means_raw(), 0xA103);
+    fill_float_noise(a.sh0_raw(), 0xA104);
+    fill_float_noise(a.opacity_raw(), 0xA105);
+    fill_float_noise(b.means_raw(), 0xB203);
+    fill_float_noise(b.sh0_raw(), 0xB204);
+    fill_float_noise(b.opacity_raw(), 0xB205);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(a));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(b));
+    ASSERT_TRUE(a.shN_value_quantized());
+    ASSERT_TRUE(b.shN_value_quantized());
+
+    const auto a_canon = a.shN_canonical_cpu();
+    const auto b_canon = b.shN_canonical_cpu();
+    const auto a_means = a.means_raw().clone();
+    const auto a_sh0 = a.sh0_raw().clone();
+    const auto a_opacity = a.opacity_raw().clone();
+    const auto b_means = b.means_raw().clone();
+    const auto b_sh0 = b.sh0_raw().clone();
+    const auto b_opacity = b.opacity_raw().clone();
+
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&a, glm::mat4{1.0f}}, {&b, glm::mat4{1.0f}}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 128);
+    EXPECT_EQ(merged->shN_raw().dtype(), DataType::Float32);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    const auto merged_canon = merged->shN_canonical_cpu();
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 0, 64).contiguous(), a_canon,
+                                 "identity merge a shN");
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 64, 128).contiguous(), b_canon,
+                                 "identity merge b shN");
+    expect_tensors_bitwise_equal(merged->means_raw().slice(0, 0, 64).contiguous(), a_means,
+                                 "identity merge a means");
+    expect_tensors_bitwise_equal(merged->means_raw().slice(0, 64, 128).contiguous(), b_means,
+                                 "identity merge b means");
+    expect_tensors_bitwise_equal(merged->sh0_raw().slice(0, 0, 64).contiguous(), a_sh0,
+                                 "identity merge a sh0");
+    expect_tensors_bitwise_equal(merged->sh0_raw().slice(0, 64, 128).contiguous(), b_sh0,
+                                 "identity merge b sh0");
+    expect_tensors_bitwise_equal(merged->opacity_raw().slice(0, 0, 64).contiguous(), a_opacity,
+                                 "identity merge a opacity");
+    expect_tensors_bitwise_equal(merged->opacity_raw().slice(0, 64, 128).contiguous(), b_opacity,
+                                 "identity merge b opacity");
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16MultiSourceTranslationMergeDecodesFloat) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto a = make_random_sh3(64, /*seed=*/0xA301);
+    auto b = make_random_sh3(64, /*seed=*/0xB302);
+    fill_float_noise(b.means_raw(), 0xB303);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(a));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(b));
+    ASSERT_TRUE(a.shN_value_quantized());
+    ASSERT_TRUE(b.shN_value_quantized());
+
+    const auto b_canon = b.shN_canonical_cpu();
+    auto expected_b_means = b.means_raw().cpu().contiguous();
+    {
+        auto* p = expected_b_means.ptr<float>();
+        for (size_t i = 0; i < 64; ++i)
+            p[i * 3 + 0] += 1.0f;
+    }
+
+    const glm::mat4 translation = glm::translate(glm::mat4{1.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&a, glm::mat4{1.0f}}, {&b, translation}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 128);
+    EXPECT_EQ(merged->shN_raw().dtype(), DataType::Float32);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    const auto merged_canon = merged->shN_canonical_cpu();
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 64, 128).contiguous(), b_canon,
+                                 "translation merge b shN");
+    EXPECT_LT(max_abs_diff(merged->means_raw().slice(0, 64, 128).contiguous(), expected_b_means),
+              1e-5f);
+
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
@@ -1115,5 +1235,238 @@ TEST(ShDegreeCollisionTest, StopRefineCrossingAlwaysCommitQ16Throughout) {
     // Cross stop_refine: no further densify windows leave float behind.
     EXPECT_TRUE(splat.shN_value_quantized());
     EXPECT_EQ(splat.shN().dtype(), DataType::Float16);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+namespace {
+
+    std::vector<std::uint16_t> copy_u16_device(const Tensor& t) {
+        EXPECT_TRUE(t.is_valid());
+        std::vector<std::uint16_t> out(static_cast<size_t>(t.numel()));
+        if (out.empty()) {
+            return out;
+        }
+        EXPECT_EQ(cudaMemcpy(out.data(), t.data_ptr(), out.size() * sizeof(std::uint16_t),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        return out;
+    }
+
+    std::vector<float> copy_f32_device(const Tensor& t) {
+        EXPECT_TRUE(t.is_valid());
+        std::vector<float> out(static_cast<size_t>(t.numel()));
+        if (out.empty()) {
+            return out;
+        }
+        EXPECT_EQ(cudaMemcpy(out.data(), t.data_ptr(), out.size() * sizeof(float),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        return out;
+    }
+
+    void append_dummy_attr_rows(SplatData& splat, const size_t k) {
+        auto append = [&](Tensor& t) {
+            if (!t.is_valid() || t.ndim() == 0) {
+                return;
+            }
+            auto dims = t.shape().dims();
+            dims[0] = k;
+            Tensor extra = Tensor::zeros(TensorShape(dims), t.device(), t.dtype());
+            t = Tensor::cat({t, extra}, 0);
+        };
+        append(splat.means_raw());
+        append(splat.sh0_raw());
+        append(splat.scaling_raw());
+        append(splat.rotation_raw());
+        append(splat.opacity_raw());
+    }
+
+    void run_refine_like_shN_mutation(SplatData& splat,
+                                      const Tensor& dup_idx,
+                                      const Tensor& zero_idx,
+                                      const bool full_expand) {
+        LiveModelMutationGuard guard("refine_like_shN_mutation");
+        const size_t old_n = static_cast<size_t>(splat.size());
+        if (full_expand) {
+            ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+            ASSERT_FALSE(splat.shN_value_quantized());
+        } else {
+            ASSERT_TRUE(splat.shN_value_quantized());
+        }
+        Tensor child;
+        sh_value::gather_shN_to_canonical(splat, dup_idx, child, old_n);
+        append_dummy_attr_rows(splat, dup_idx.numel());
+        if (full_expand) {
+            sh_value::append_canonical_to_shN(splat, child, old_n);
+            sh_value::zero_shN_at_indices(splat, zero_idx);
+            ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+        } else {
+            sh_value::ShNMutationBatch batch(splat);
+            batch.append(child, old_n);
+            batch.zero(zero_idx);
+            batch.flush();
+        }
+        ASSERT_TRUE(splat.shN_value_quantized());
+    }
+
+} // namespace
+
+TEST(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStayPristine) {
+    // Old full-expand commit_shN_after_mutation re-encodes every block from already
+    // quantized values, so untouched blocks are not idempotent. The chunked path
+    // must leave those blocks bit-identical to the pre-mutation snapshot and match
+    // the old path only on blocks that contain dest rows.
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    constexpr size_t n = 70000; // not a multiple of 256 or 32
+    auto splat = make_random_sh3(n, /*seed=*/20260830);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
+    const size_t n_dup = n / 20;  // 5%
+    const size_t n_zero = n / 50; // 2%
+    std::vector<int> order(n);
+    std::iota(order.begin(), order.end(), 0);
+    std::mt19937 rng(20260830);
+    std::shuffle(order.begin(), order.end(), rng);
+
+    std::vector<int> dup_host(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(n_dup));
+    std::vector<int> zero_host(order.begin() + static_cast<std::ptrdiff_t>(n_dup),
+                               order.begin() + static_cast<std::ptrdiff_t>(n_dup + n_zero));
+    auto dup_idx = Tensor::from_vector(dup_host, TensorShape({n_dup}), Device::CUDA)
+                       .to(DataType::Int64);
+    auto zero_idx = Tensor::from_vector(zero_host, TensorShape({n_zero}), Device::CUDA)
+                        .to(DataType::Int64);
+
+    const auto orig_codes = copy_u16_device(splat.shN());
+    const auto orig_bounds = copy_f32_device(splat.shN_value_bounds());
+    const size_t orig_n_blocks = sh_value_quant::n_bounds_for_prims(n);
+    ASSERT_EQ(orig_bounds.size(), orig_n_blocks * 2);
+
+    auto splat_old = splat.clone();
+    auto splat_new = splat.clone();
+    run_refine_like_shN_mutation(splat_old, dup_idx, zero_idx, /*full_expand=*/true);
+    run_refine_like_shN_mutation(splat_new, dup_idx, zero_idx, /*full_expand=*/false);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_TRUE(splat_old.shN_value_quantized());
+    ASSERT_TRUE(splat_new.shN_value_quantized());
+    const auto codes_old = copy_u16_device(splat_old.shN());
+    const auto codes_new = copy_u16_device(splat_new.shN());
+    const auto bounds_old = copy_f32_device(splat_old.shN_value_bounds());
+    const auto bounds_new = copy_f32_device(splat_new.shN_value_bounds());
+    ASSERT_EQ(codes_old.size(), codes_new.size());
+    ASSERT_EQ(bounds_old.size(), bounds_new.size());
+
+    const size_t new_n = n + n_dup;
+    ASSERT_EQ(static_cast<size_t>(splat_old.size()), new_n);
+    ASSERT_EQ(static_cast<size_t>(splat_new.size()), new_n);
+    ASSERT_EQ(codes_old.size(), sh_value_quant::sh_value_u16_count(new_n, rest));
+
+    const size_t n_blocks = sh_value_quant::n_bounds_for_prims(new_n);
+    ASSERT_EQ(bounds_old.size(), n_blocks * 2);
+    std::vector<char> touched(n_blocks, 0);
+    const size_t first_append_block = n / static_cast<size_t>(sh_value_quant::kBlockSize);
+    const size_t last_block = (new_n - 1) / static_cast<size_t>(sh_value_quant::kBlockSize);
+    for (size_t b = first_append_block; b <= last_block; ++b) {
+        touched[b] = 1;
+    }
+    for (int idx : zero_host) {
+        touched[static_cast<size_t>(idx) / static_cast<size_t>(sh_value_quant::kBlockSize)] = 1;
+    }
+
+    auto cells_match = [&](const std::vector<std::uint16_t>& a,
+                           const std::vector<std::uint16_t>& b,
+                           const size_t block,
+                           const size_t n_prims) {
+        const size_t bs = static_cast<size_t>(sh_value_quant::kBlockSize);
+        const size_t p0 = block * bs;
+        const size_t p1 = std::min(n_prims, p0 + bs);
+        const size_t cell0 = sh_value_quant::sh_value_u16_count(p0, rest);
+        const size_t cell1 = sh_value_quant::sh_value_u16_count(p1, rest);
+        if (cell1 > a.size() || cell1 > b.size()) {
+            ADD_FAILURE() << "cell range OOB block " << block << " cell1=" << cell1
+                          << " a=" << a.size() << " b=" << b.size();
+            return false;
+        }
+        return std::equal(a.begin() + static_cast<std::ptrdiff_t>(cell0),
+                          a.begin() + static_cast<std::ptrdiff_t>(cell1),
+                          b.begin() + static_cast<std::ptrdiff_t>(cell0));
+    };
+
+    size_t untouched = 0;
+    size_t old_drifted = 0;
+    for (size_t b = 0; b < orig_n_blocks; ++b) {
+        if (touched[b]) {
+            continue;
+        }
+        ++untouched;
+        EXPECT_EQ(bounds_new[b * 2], orig_bounds[b * 2]) << "new bounds lo block " << b;
+        EXPECT_EQ(bounds_new[b * 2 + 1], orig_bounds[b * 2 + 1]) << "new bounds hi block " << b;
+        EXPECT_TRUE(cells_match(orig_codes, codes_new, b, n))
+            << "new path mutated untouched block " << b;
+
+        const bool bounds_drift = bounds_old[b * 2] != orig_bounds[b * 2] ||
+                                  bounds_old[b * 2 + 1] != orig_bounds[b * 2 + 1];
+        const bool cells_drift = !cells_match(orig_codes, codes_old, b, n);
+        if (bounds_drift || cells_drift) {
+            ++old_drifted;
+        }
+    }
+    EXPECT_GT(untouched, 0u);
+    EXPECT_GT(old_drifted, 0u)
+        << "old full-expand path must drift on at least one untouched block "
+           "(re-encode from decoded q16 is not idempotent; this is why new != old globally)";
+
+    // Touched blocks contain appended / overlaid / zeroed dest rows. Chunked cells+bounds
+    // must match the old full-expand path bit-identically. If this fails, the helpers
+    // are wrong — do not weaken.
+    const size_t bs = static_cast<size_t>(sh_value_quant::kBlockSize);
+    size_t n_touched = 0;
+    for (size_t b = 0; b < n_blocks; ++b) {
+        if (!touched[b]) {
+            continue;
+        }
+        ++n_touched;
+        size_t zeros_in_block = 0;
+        for (int idx : zero_host) {
+            if (static_cast<size_t>(idx) / bs == b) {
+                ++zeros_in_block;
+            }
+        }
+        const bool append_overlap = b >= first_append_block && b <= last_block;
+        EXPECT_EQ(bounds_new[b * 2], bounds_old[b * 2])
+            << "touched bounds lo block " << b << " zeros=" << zeros_in_block
+            << " append_overlap=" << append_overlap;
+        EXPECT_EQ(bounds_new[b * 2 + 1], bounds_old[b * 2 + 1])
+            << "touched bounds hi block " << b << " zeros=" << zeros_in_block
+            << " append_overlap=" << append_overlap;
+        EXPECT_TRUE(cells_match(codes_old, codes_new, b, new_n))
+            << "touched block " << b
+            << " must be bit-identical between chunked and full-expand paths"
+            << " zeros=" << zeros_in_block << " append_overlap=" << append_overlap;
+    }
+    EXPECT_GT(n_touched, 0u);
+
+    std::vector<int> mutated_host;
+    mutated_host.reserve(n_dup + n_zero);
+    for (size_t i = 0; i < n_dup; ++i) {
+        mutated_host.push_back(static_cast<int>(n + i));
+    }
+    mutated_host.insert(mutated_host.end(), zero_host.begin(), zero_host.end());
+    auto mutated_idx =
+        Tensor::from_vector(mutated_host, TensorShape({mutated_host.size()}), Device::CUDA)
+            .to(DataType::Int64);
+    Tensor decoded_old;
+    Tensor decoded_new;
+    {
+        LiveModelMutationGuard guard("decode_mutated_shN_rows");
+        sh_value::gather_shN_to_canonical(splat_old, mutated_idx, decoded_old, new_n);
+        sh_value::gather_shN_to_canonical(splat_new, mutated_idx, decoded_new, new_n);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    expect_tensors_bitwise_equal(decoded_old, decoded_new, "decoded mutated shN rows");
+
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }

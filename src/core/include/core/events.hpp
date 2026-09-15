@@ -30,7 +30,12 @@ namespace lfs::core {
                               USD = 4,
                               NUREC_USDZ = 5,
                               RAD = 6,
-                              COLMAP = 7 };
+                              COLMAP = 7,
+                              SSOG = 8,
+                              GALLERY_SCENE = 9,
+                              GALLERY_SOG = 10,
+                              GALLERY_SSOG = 11,
+                              GALLERY_SPZ = 12 }; // Internal local-node staging for gallery bundles.
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \
@@ -60,22 +65,27 @@ namespace lfs::core {
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
             EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false;);
+            EVENT(PrepareGalleryProject, std::filesystem::path source_path; std::filesystem::path destination; ExportFormat payload_format = ExportFormat::GALLERY_SOG; std::string expected_commit_uuid;);
+            EVENT(LoadGalleryScene, std::vector<std::filesystem::path> paths; std::vector<std::string> names; std::vector<glm::mat4> transforms; std::vector<int> sh_degrees; std::string group_name; bool hidden = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
-            EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
+            EVENT(ShowNewProjectDialog, std::filesystem::path source_path;);
             EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
             EVENT(NewProject, bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectSave, bool regenerate_preview = true;);
             EVENT(ProjectSaveAs, std::filesystem::path path;);
+            EVENT(ProjectCreate, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool allow_existing_destination_replacement = false;);
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool keep_asset_manager_open = false;);
             EVENT(ProjectCompact, );
-            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false;);
+            EVENT(ProjectEmbedDataset, );
+            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
             EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false;);
-            EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false; bool keep_asset_manager_open = false;);
+            EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
+            EVENT(SetEmbedDatasetByDefault, bool enabled;);
             EVENT(SetProjectAutosaveInterval, std::uint64_t seconds;);
             EVENT(RequestExit, );
             EVENT(ShowExitConfirmation,
@@ -99,16 +109,19 @@ namespace lfs::core {
             EVENT(RemoveNodeById, int32_t node_id; bool keep_children = false;);
             EVENT(RenameNodeById, int32_t node_id; std::string new_name;);
             EVENT(SetNodeVisibilityById, int32_t node_id; bool visible;);
-            EVENT(ReparentNode, std::string node_name; std::string new_parent_name;);    // Empty parent = root
-            EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);            // -1 parent = root
-            EVENT(MoveNodeById, int32_t node_id; int32_t new_parent_id; int32_t index;); // -1 parent = root, -1 index = append
-            EVENT(AddGroup, std::string name; std::string parent_name;);                 // Create empty group node
-            EVENT(AddGroupByParentId, std::string name; int32_t parent_id;);             // -1 parent = root
-            EVENT(DuplicateNode, std::string name;);                                     // Duplicate node (and children if group)
-            EVENT(DuplicateNodeById, int32_t node_id;);                                  // Duplicate node (and children if group)
-            EVENT(MergeGroup, std::string name;);                                        // Merge group children into single PLY
-            EVENT(MergeGroupById, int32_t node_id;);                                     // Merge group children into single PLY
-            EVENT(SetNodeLocked, std::string name; bool locked;);                        // Lock/unlock node for editing
+            EVENT(ReparentNode, std::string node_name; std::string new_parent_name;);                   // Empty parent = root
+            EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);                           // -1 parent = root
+            EVENT(MoveNodeById, int32_t node_id; int32_t new_parent_id; int32_t index;);                // -1 parent = root, -1 index = append
+            EVENT(MoveNodesById, std::vector<int32_t> node_ids; int32_t new_parent_id; int32_t index;); // -1 parent = root
+            EVENT(GroupNodesById, std::vector<int32_t> node_ids;);
+            EVENT(UngroupNodeById, int32_t node_id;);
+            EVENT(AddGroup, std::string name; std::string parent_name;);     // Create empty group node
+            EVENT(AddGroupByParentId, std::string name; int32_t parent_id;); // -1 parent = root
+            EVENT(DuplicateNode, std::string name;);                         // Duplicate node (and children if group)
+            EVENT(DuplicateNodeById, int32_t node_id;);                      // Duplicate node (and children if group)
+            EVENT(MergeGroup, std::string name;);                            // Merge group children into single PLY
+            EVENT(MergeGroupById, int32_t node_id;);                         // Merge group children into single PLY
+            EVENT(SetNodeLocked, std::string name; bool locked;);            // Lock/unlock node for editing
             EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
             EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);
             EVENT(ApplyCropBox, );
@@ -221,7 +234,7 @@ namespace lfs::core {
                   int iteration;
                   float psnr;
                   float ssim;
-                  float lpips;
+                  std::optional<float> lpips;
                   float elapsed_time;
                   int num_gaussians;);
 

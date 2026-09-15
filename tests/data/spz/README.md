@@ -1,0 +1,1 @@
+These synthetic fixtures were exported with LichtFeld Studio native `io.save_spz(version=4)`. `native-v4.spz` contains 64 SH0 splats. `reference-sh3-v4.spz` contains 4096 asymmetric SH3 splats with varied positions, colors, scales and rotations (deterministic RNG seed 4911). They contain no user data. Both carry the native Adobe coordinate extension.

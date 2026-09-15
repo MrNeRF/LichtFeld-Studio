@@ -58,20 +58,23 @@ namespace lfs::core {
 
     // Resource lookup: production (bin/../share/LichtFeld-Studio) or dev (build/resources)
     inline std::filesystem::path getResourceBaseDir() {
-        const auto exe_dir = getExecutableDir();
+        static const std::filesystem::path resource_base = [] {
+            const auto exe_dir = getExecutableDir();
 
-        // Production: exe in bin/, resources in ../share/LichtFeld-Studio/
-        if (const auto prod = exe_dir.parent_path() / "share" / "LichtFeld-Studio";
-            std::filesystem::exists(prod)) {
-            return prod;
-        }
+            // Production: exe in bin/, resources in ../share/LichtFeld-Studio/
+            if (const auto prod = exe_dir.parent_path() / "share" / "LichtFeld-Studio";
+                std::filesystem::exists(prod)) {
+                return prod;
+            }
 
-        // Development: resources/ alongside executable
-        if (const auto dev = exe_dir / "resources"; std::filesystem::exists(dev)) {
-            return dev;
-        }
+            // Development: resources/ alongside executable
+            if (const auto dev = exe_dir / "resources"; std::filesystem::exists(dev)) {
+                return dev;
+            }
 
-        return exe_dir;
+            return exe_dir;
+        }();
+        return resource_base;
     }
 
     inline std::filesystem::path getAssetsDir() { return getResourceBaseDir() / "assets"; }

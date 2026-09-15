@@ -14,9 +14,12 @@
 #include <format>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <map>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -196,6 +199,15 @@ namespace lfs::io::project {
                 static_cast<std::int32_t>(camera.camera_model_type());
             result.camera_width = camera.camera_width();
             result.camera_height = camera.camera_height();
+            if (camera.is_undistort_prepared()) {
+                const auto& source = camera.undistort_params();
+                result.focal_x = source.src_fx;
+                result.focal_y = source.src_fy;
+                result.center_x = source.src_cx;
+                result.center_y = source.src_cy;
+                result.camera_width = source.src_width;
+                result.camera_height = source.src_height;
+            }
             result.image_width = camera.image_width();
             result.image_height = camera.image_height();
             result.image_name = camera.image_name();
@@ -247,9 +259,15 @@ namespace lfs::io::project {
                 }
                 return {};
             }
+            if (node.type == lfs::core::NodeType::SPLAT && binding.fourcc == "DSRC" &&
+                (binding.source_kind == "ply" || binding.source_kind == "sog" ||
+                 binding.source_kind == "ssog" || binding.source_kind == "spz") &&
+                binding.instance_uuid == node.uuid && !binding.reference_uuid) {
+                return {};
+            }
             if (node.type == lfs::core::NodeType::SPLAT &&
                 (binding.source_kind == "ply" || binding.source_kind == "spz" ||
-                 binding.source_kind == "sog" ||
+                 binding.source_kind == "sog" || binding.source_kind == "ssog" ||
                  binding.source_kind == "generated" ||
                  binding.source_kind == "baked_rad") &&
                 (binding.fourcc != "SPLT" ||
@@ -390,8 +408,14 @@ namespace lfs::io::project {
                 lfs::core::Device::CPU);
         }
 
+        using UndistortCacheKey = std::tuple<
+            std::int32_t, float, float, float, float,
+            std::int32_t, std::int32_t, std::int32_t,
+            std::vector<float>, std::vector<float>>;
+        using UndistortCache = std::map<UndistortCacheKey, lfs::core::UndistortParams>;
+
         std::shared_ptr<lfs::core::Camera> hydrate_camera(
-            const CameraRecord& value) {
+            const CameraRecord& value, UndistortCache& undistort_cache) {
             auto camera = std::make_shared<lfs::core::Camera>(
                 float_tensor(value.rotation, {3, 3}),
                 float_tensor(value.translation, {3}),
@@ -406,6 +430,21 @@ namespace lfs::io::project {
                 value.camera_height, value.uid, value.camera_id,
                 lfs::core::utf8_to_path(value.depth_path),
                 lfs::core::utf8_to_path(value.normal_path));
+            if (camera->has_distortion()) {
+                // Camera IDs can overlap across datasets; reuse only identical calibrations.
+                UndistortCacheKey key{
+                    value.camera_id, value.focal_x, value.focal_y,
+                    value.center_x, value.center_y, value.camera_width,
+                    value.camera_height, value.camera_model_type,
+                    value.radial_distortion, value.tangential_distortion};
+                const auto cached = undistort_cache.find(key);
+                if (cached != undistort_cache.end()) {
+                    camera->adopt_undistortion(cached->second);
+                } else {
+                    camera->precompute_undistortion(0.0f);
+                    undistort_cache.emplace(std::move(key), camera->undistort_params());
+                }
+            }
             camera->set_image_dimensions(value.image_width, value.image_height);
             camera->set_has_alpha(value.has_alpha);
             camera->set_has_image(value.has_image);
@@ -527,7 +566,9 @@ namespace lfs::io::project {
         lfs::Result<void> populate_scene_stage(
             const SceneGraphChapter& chapter, lfs::core::Scene& scene,
             const ScenePayloadResolver& resolver,
-            const bool defer_geometry_payloads) {
+            const bool defer_geometry_payloads,
+            const bool payload_units_only) {
+            UndistortCache undistort_cache;
             auto nodes = chapter.nodes();
             if (!nodes) {
                 return lfs::Result<void>::failure(std::move(nodes).error());
@@ -553,8 +594,40 @@ namespace lfs::io::project {
                 }
             }
 
+            std::unordered_set<lfs::core::Uuid> keep;
+            if (payload_units_only) {
+                std::unordered_map<lfs::core::Uuid,
+                                   std::optional<lfs::core::Uuid>>
+                    parents;
+                parents.reserve(nodes->size());
+                std::vector<lfs::core::Uuid> geometry;
+                for (const SceneNodeRecord& record : *nodes) {
+                    parents.emplace(record.uuid, record.parent_uuid);
+                    const auto type = parse_node_type(record.type);
+                    if (type &&
+                        (*type == lfs::core::NodeType::SPLAT ||
+                         *type == lfs::core::NodeType::POINTCLOUD ||
+                         *type == lfs::core::NodeType::MESH)) {
+                        geometry.push_back(record.uuid);
+                    }
+                }
+                keep.reserve(geometry.size() + parents.size());
+                for (const lfs::core::Uuid& uuid : geometry) {
+                    std::optional<lfs::core::Uuid> current = uuid;
+                    while (current) {
+                        if (!keep.insert(*current).second) {
+                            break;
+                        }
+                        const auto parent = parents.find(*current);
+                        current = parent == parents.end()
+                                      ? std::nullopt
+                                      : parent->second;
+                    }
+                }
+            }
+
             std::vector<StagedNode> staged;
-            staged.reserve(nodes->size());
+            staged.reserve(payload_units_only ? keep.size() : nodes->size());
             for (const SceneNodeRecord& record : *nodes) {
                 const auto type = parse_node_type(record.type);
                 if (!type) {
@@ -601,6 +674,9 @@ namespace lfs::io::project {
                         std::format("SCNG camera model {} is outside the v1 enum",
                                     record.camera->camera_model_type),
                         record.uuid);
+                }
+                if (payload_units_only && !keep.contains(record.uuid)) {
+                    continue;
                 }
                 lfs::core::Scene::RestoreNodeDesc desc{
                     .uuid = record.uuid,
@@ -676,7 +752,7 @@ namespace lfs::io::project {
                 }
                 if (record.camera) {
                     try {
-                        desc.camera = hydrate_camera(*record.camera);
+                        desc.camera = hydrate_camera(*record.camera, undistort_cache);
                     } catch (const std::exception& error) {
                         // LFS-CENSUS-OK(empty-catch): reject malformed camera tensors before mutating the scene.
                         return fail<void>(
@@ -828,7 +904,8 @@ namespace lfs::io::project {
                 }
                 ids.emplace(node.record.uuid, id);
             }
-            if (*training_uuid) {
+            if (*training_uuid &&
+                (!payload_units_only || ids.contains(**training_uuid))) {
                 scene.setTrainingModelNode(**training_uuid);
                 if (scene.getTrainingModelNodeUuid() != **training_uuid) {
                     return fail<void>(
@@ -853,7 +930,25 @@ namespace lfs::io::project {
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, resolver, false);
+                    chapter, *staged, resolver, false, false);
+            !populated) {
+            return std::move(populated).error();
+        }
+        return staged;
+    }
+
+    lfs::Result<std::unique_ptr<lfs::core::Scene>>
+    stage_scene_graph(
+        const SceneGraphChapter& chapter,
+        lfs::core::Scene& target,
+        const ScenePayloadResolver& resolver,
+        const bool payload_units_only) {
+        auto staged =
+            lfs::core::Scene::createRestoreStage(target);
+        if (auto populated =
+                populate_scene_stage(
+                    chapter, *staged, resolver, false,
+                    payload_units_only);
             !populated) {
             return std::move(populated).error();
         }
@@ -868,7 +963,7 @@ namespace lfs::io::project {
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, {}, true);
+                    chapter, *staged, {}, true, false);
             !populated) {
             return std::move(populated).error();
         }

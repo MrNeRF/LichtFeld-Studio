@@ -24,6 +24,18 @@ namespace lfs::vis::gui::panels {
         int custom_height = 1080;
         int framerate = 30;
         int quality = 18;
+
+        [[nodiscard]] int outputWidth() const {
+            if (preset == lfs::io::video::VideoPreset::CUSTOM)
+                return custom_width;
+            return lfs::io::video::getPresetInfo(preset).width;
+        }
+
+        [[nodiscard]] int outputHeight() const {
+            if (preset == lfs::io::video::VideoPreset::CUSTOM)
+                return custom_height;
+            return lfs::io::video::getPresetInfo(preset).height;
+        }
     };
 
 } // namespace lfs::vis::gui::panels

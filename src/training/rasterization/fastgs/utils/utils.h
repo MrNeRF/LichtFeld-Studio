@@ -38,6 +38,15 @@ inline int checked_to_int(uint64_t value, const char* message) {
     return static_cast<int>(value);
 }
 
+inline int checked_fastgs_visible_count(uint64_t value, uint64_t n_primitives) {
+    if (value > n_primitives) {
+        throw std::runtime_error(
+            "FastGS visible count exceeds primitive count: " + std::to_string(value) +
+            " visible primitives from " + std::to_string(n_primitives) + " primitives");
+    }
+    return checked_to_int(value, "visible primitive count exceeds int range");
+}
+
 // Host-side EWA clip box (same IEEE expression the kernels used to evaluate per thread).
 inline void ewa_clip_bounds(
     const float w,

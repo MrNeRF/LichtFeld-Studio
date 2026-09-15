@@ -3,6 +3,7 @@
 """Selection controls controller for the viewport selection overlay."""
 
 import math
+import time
 
 import lichtfeld as lf
 
@@ -22,6 +23,7 @@ _DEPTH_MAX = 1000.0
 _DEPTH_GAP = 0.01
 _DEPTH_SLIDER_HALF_WINDOW = 20.0
 _DEPTH_SLIDER_MIN_SPAN = 1.0
+_DEPTH_USER_EDIT_MARK_TTL = 0.75
 _DEFAULT_DEPTH_NEAR = 0.0
 _DEFAULT_DEPTH_FAR = 6.0
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
@@ -129,6 +131,7 @@ class SelectionControlsController:
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
+        self._depth_user_edit_pending = {}
         self._depth_text_bufs = {
             "selection_depth_near_str": None,
             "selection_depth_far_str": None,
@@ -195,6 +198,18 @@ class SelectionControlsController:
 
         self._mount_depth_text_input(doc, "selection-depth-near", "selection_depth_near_str")
         self._mount_depth_text_input(doc, "selection-depth-far", "selection_depth_far_str")
+        for element_id, key in (
+            ("selection-depth-near-slider", "near"),
+            ("selection-depth-far-slider", "far"),
+        ):
+            slider = doc.get_element_by_id(element_id)
+            if slider is not None:
+                slider.add_event_listener(
+                    "mousedown", lambda _event, k=key: self._mark_depth_user_edit(k)
+                )
+                slider.add_event_listener(
+                    "focus", lambda _event, k=key: self._mark_depth_user_edit(k)
+                )
 
     def update(self, doc):
         dirty = False
@@ -240,6 +255,7 @@ class SelectionControlsController:
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
+        self._depth_user_edit_pending.clear()
         self._editing_depth_text.clear()
         self._escape_revert.clear()
 
@@ -370,7 +386,7 @@ class SelectionControlsController:
             return False
 
     def _set_depth_near(self, value):
-        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("near"):
             return
         self._refresh_depth_state()
         near = _clamp(_parse_float(value, self._depth_near), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
@@ -378,11 +394,24 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, near, far)
 
     def _set_depth_far(self, value):
-        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("far"):
             return
         self._refresh_depth_state()
         far = _clamp(_parse_float(value, self._depth_far), self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
         self._apply_depth_range(self._depth_enabled, self._depth_near, far)
+
+    def _mark_depth_user_edit(self, key):
+        self._depth_user_edit_pending[key] = time.monotonic()
+
+    def _depth_setter_allowed(self, key):
+        if not self._visible or self._last_state_key is None:
+            return False
+        marked_at = self._depth_user_edit_pending.pop(key, None)
+        user_edit = (
+            marked_at is not None
+            and time.monotonic() - marked_at <= _DEPTH_USER_EDIT_MARK_TTL
+        )
+        return self._depth_echo_holdoff == 0 or user_edit
 
     def _apply_depth_range(self, enabled, near, far):
         self._depth_enabled = bool(enabled)
@@ -428,6 +457,10 @@ class SelectionControlsController:
 
     def _begin_depth_text_edit(self, key):
         self._editing_depth_text.add(key)
+        if key == "selection_depth_near_str":
+            self._mark_depth_user_edit("near")
+        elif key == "selection_depth_far_str":
+            self._mark_depth_user_edit("far")
 
     def _end_depth_text_edit(self, key):
         self._editing_depth_text.discard(key)
@@ -448,8 +481,10 @@ class SelectionControlsController:
                 self._sync_depth_text_bufs(force=True)
                 return
             if key == "selection_depth_near_str":
+                self._mark_depth_user_edit("near")
                 self._set_depth_near(parsed)
             elif key == "selection_depth_far_str":
+                self._mark_depth_user_edit("far")
                 self._set_depth_far(parsed)
 
         self._sync_depth_text_bufs(force=True)
@@ -479,6 +514,7 @@ class SelectionControlsController:
 
         action = str(args[0])
         if action == "toggle_depth":
+            self._depth_echo_holdoff = 0
             self._refresh_depth_state()
             self._apply_depth_range(not self._depth_enabled, self._depth_near, self._depth_far)
         elif action == "delete":

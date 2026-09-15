@@ -6,6 +6,8 @@
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 
+#include "core/path_utils.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -30,7 +32,7 @@ namespace {
         return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
     }
 
-    [[nodiscard]] std::optional<Args> parseArgs(const int argc, char** argv) {
+    [[nodiscard]] std::optional<Args> parseArgs(const int argc, const char* const argv[]) {
         Args args;
         for (int i = 1; i < argc; ++i) {
             const std::string_view key = argv[i];
@@ -40,9 +42,9 @@ namespace {
             }
             const char* const value = argv[++i];
             if (key == "--input") {
-                args.input = value;
+                args.input = lfs::core::utf8_to_path(value);
             } else if (key == "--output") {
-                args.output = value;
+                args.output = lfs::core::utf8_to_path(value);
             } else if (key == "--symbol") {
                 args.symbol = value;
             } else {
@@ -68,7 +70,7 @@ namespace {
     }
 
     [[nodiscard]] std::optional<EShLanguage> inferStage(const std::filesystem::path& path) {
-        const std::string filename = path.filename().string();
+        const std::string filename = lfs::core::path_to_utf8(path.filename());
         if (endsWith(filename, ".vert") || endsWith(filename, "VS.glsl")) {
             return EShLangVertex;
         }
@@ -85,7 +87,8 @@ namespace {
     }
 
     [[nodiscard]] std::optional<std::string> readTextFile(const std::filesystem::path& path) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file;
+        lfs::core::open_file_for_read(path, std::ios::binary, file);
         if (!file) {
             std::cerr << "Failed to open shader source: " << path << '\n';
             return std::nullopt;
@@ -93,12 +96,33 @@ namespace {
         return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     }
 
+    class LocalShaderIncluder final : public glslang::TShader::Includer {
+    public:
+        IncludeResult* includeLocal(const char* header, const char* includer, size_t depth) override {
+            if (depth > 32)
+                return nullptr;
+            const auto path = std::filesystem::path(includer).parent_path() / header;
+            auto text = readTextFile(path);
+            if (!text)
+                return nullptr;
+            auto* owned = new std::string(std::move(*text));
+            return new IncludeResult(lfs::core::path_to_utf8(path), owned->data(), owned->size(), owned);
+        }
+        IncludeResult* includeSystem(const char*, const char*, size_t) override { return nullptr; }
+        void releaseInclude(IncludeResult* result) override {
+            if (result) {
+                delete static_cast<std::string*>(result->userData);
+                delete result;
+            }
+        }
+    };
+
     [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(
         const std::filesystem::path& input,
         const std::string& source,
         const EShLanguage stage) {
         const char* source_ptr = source.c_str();
-        const std::string input_name = input.string();
+        const std::string input_name = lfs::core::path_to_utf8(input);
         const char* source_name = input_name.c_str();
 
         glslang::TShader shader(stage);
@@ -108,7 +132,8 @@ namespace {
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
 
         constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-        if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
+        LocalShaderIncluder includer;
+        if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
             std::cerr << "Failed to compile " << input << ":\n"
                       << shader.getInfoLog() << '\n'
                       << shader.getInfoDebugLog() << '\n';
@@ -137,7 +162,8 @@ namespace {
             std::filesystem::create_directories(parent);
         }
 
-        std::ofstream file(output, std::ios::binary | std::ios::trunc);
+        std::ofstream file;
+        lfs::core::open_file_for_write(output, std::ios::binary | std::ios::trunc, file);
         if (!file) {
             std::cerr << "Failed to open generated header: " << output << '\n';
             return false;
@@ -169,8 +195,13 @@ namespace {
     }
 } // namespace
 
-int main(const int argc, char** argv) {
-    const auto args = parseArgs(argc, argv);
+int run_main(const std::vector<std::string>& arguments) {
+    std::vector<const char*> argv;
+    argv.reserve(arguments.size());
+    for (const auto& argument : arguments)
+        argv.push_back(argument.c_str());
+
+    const auto args = parseArgs(static_cast<int>(argv.size()), argv.data());
     if (!args) {
         return 2;
     }
@@ -203,3 +234,13 @@ int main(const int argc, char** argv) {
     }
     return writeHeader(args->output, args->symbol, *spirv) ? 0 : 1;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t* argv[]) {
+    return run_main(lfs::core::utf8_argv(argc, argv));
+}
+#else
+int main(int argc, char** argv) {
+    return run_main(lfs::core::utf8_argv(argc, argv));
+}
+#endif

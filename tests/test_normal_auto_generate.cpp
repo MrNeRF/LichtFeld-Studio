@@ -351,3 +351,45 @@ TEST(NormalAutoGenerateIntegration, OverwritesExistingMapWhenCameraHasNone) {
 
     fs::remove_all(root);
 }
+
+TEST(NormalAutoGenerate, PriorLoadingRequiresNormalChannel) {
+    lfs::core::param::OptimizationParameters opt;
+    opt.use_normal_loss = true;
+    opt.normal_loss_weight = 0.05f;
+    opt.gut = false;
+    EXPECT_TRUE(lfs::training::training_normal_priors_enabled(opt));
+    opt.gut = true;
+    EXPECT_FALSE(lfs::training::training_normal_priors_enabled(opt));
+    EXPECT_TRUE(opt.use_normal_loss);
+    opt.gut = false;
+    opt.normal_loss_weight = 0.0f;
+    EXPECT_FALSE(lfs::training::training_normal_priors_enabled(opt));
+    opt.normal_loss_weight = 0.05f;
+    opt.use_normal_loss = false;
+    EXPECT_FALSE(lfs::training::training_normal_priors_enabled(opt));
+}
+
+TEST(NormalAutoGenerateIntegration, GutSkipsEstimatorAndKeepsConfig) {
+    lfs::core::param::TrainingParameters params;
+    params.optimization.gut = true;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{
+        make_camera("missing.jpg", "missing.jpg")};
+    bool called = false;
+    const auto outcome = lfs::training::ensure_training_normal_maps(
+        params, cameras,
+        [&](std::span<const lfs::training::NormalAutoGenerateJob>,
+            const lfs::training::NormalGenerateProgress&) -> std::expected<void, lfs::Error> {
+            called = true;
+            return {};
+        });
+    EXPECT_FALSE(called);
+    EXPECT_FALSE(outcome.attempted);
+    EXPECT_FALSE(outcome.generated);
+    EXPECT_FALSE(outcome.failed);
+    EXPECT_FALSE(cameras.front()->has_normal());
+    EXPECT_TRUE(params.optimization.use_normal_loss);
+    EXPECT_FLOAT_EQ(params.optimization.normal_loss_weight, 0.05f);
+}

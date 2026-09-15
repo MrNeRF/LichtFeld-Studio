@@ -13,6 +13,7 @@ set(LFS_CORE_CUDA_SOURCES
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu
     kernels/selection_ops.cu
+    kernels/splat_transform.cu
     kernels/sh_layout.cu
     sh_value_quant_kernels.cu
     tensor_debug.cu

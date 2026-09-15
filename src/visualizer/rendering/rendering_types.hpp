@@ -10,11 +10,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis {
 
@@ -68,6 +70,26 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesPLYComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::PLYComparison;
+    }
+
+    // Ordered pair of visible splat-node indices for a PLY-comparison offset.
+    // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
+    [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>
+    plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
+        if (node_count < 2) {
+            return std::nullopt;
+        }
+
+        size_t remaining = offset % ((node_count * (node_count - 1)) / 2);
+        for (size_t left = 0; left + 1 < node_count; ++left) {
+            const size_t row_count = node_count - left - 1;
+            if (remaining < row_count) {
+                return std::pair<size_t, size_t>{left, left + 1 + remaining};
+            }
+            remaining -= row_count;
+        }
+
+        return std::nullopt;
     }
 
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
@@ -131,6 +153,62 @@ namespace lfs::vis {
              .end_position = 1.0f},
         }};
     };
+
+    struct PlyComparisonPanelLayout {
+        SplitViewPanelLayout panel;
+        // Maps full-viewport UVs into the panel render target. The render target
+        // includes a margin around the cached splitter position.
+        glm::vec2 texcoord_scale{1.0f, 1.0f};
+        glm::vec2 texcoord_offset{0.0f, 0.0f};
+    };
+
+    inline constexpr float PLY_COMPARISON_SPLITTER_MARGIN_FRACTION = 0.125f;
+
+    [[nodiscard]] inline std::array<PlyComparisonPanelLayout, 2>
+    makePlyComparisonPanelLayouts(const int total_width, const float split_position) {
+        const int divider_x = splitViewDividerPixel(total_width, split_position);
+        const int margin = std::clamp(
+            static_cast<int>(std::lround(static_cast<float>(std::max(total_width, 0)) *
+                                         PLY_COMPARISON_SPLITTER_MARGIN_FRACTION)),
+            0,
+            std::max(total_width, 0));
+        const int left_render_width = std::min(total_width, divider_x + margin);
+        const int right_render_x = std::max(0, divider_x - margin);
+        const int right_render_width = std::max(total_width - right_render_x, 0);
+        const auto normalized = [total_width](const int x) {
+            return total_width > 0 ? static_cast<float>(x) / static_cast<float>(total_width) : 0.0f;
+        };
+        const auto scale = [total_width](const int width) {
+            return width > 0 ? static_cast<float>(total_width) / static_cast<float>(width) : 1.0f;
+        };
+        return {{
+            {.panel = {.panel = SplitViewPanelId::Left,
+                       .x = 0,
+                       .width = std::max(left_render_width, 0),
+                       .start_position = 0.0f,
+                       .end_position = normalized(left_render_width)},
+             .texcoord_scale = {scale(left_render_width), 1.0f},
+             .texcoord_offset = {0.0f, 0.0f}},
+            {.panel = {.panel = SplitViewPanelId::Right,
+                       .x = right_render_x,
+                       .width = right_render_width,
+                       .start_position = normalized(right_render_x),
+                       .end_position = 1.0f},
+             .texcoord_scale = {scale(right_render_width), 1.0f},
+             .texcoord_offset = {-normalized(right_render_x) * scale(right_render_width), 0.0f}},
+        }};
+    }
+
+    [[nodiscard]] inline bool plyComparisonSplitterWithinMargin(
+        const int total_width, const float cached_split_position, const float current_split_position) {
+        if (total_width <= 0) {
+            return false;
+        }
+        const int margin = static_cast<int>(std::lround(
+            static_cast<float>(total_width) * PLY_COMPARISON_SPLITTER_MARGIN_FRACTION));
+        return std::abs(static_cast<float>(splitViewDividerPixel(total_width, cached_split_position) -
+                                           splitViewDividerPixel(total_width, current_split_position))) <= margin;
+    }
 
     enum class SelectionPreviewMode {
         Centers,
@@ -216,6 +294,11 @@ namespace lfs::vis {
                                AUTO = 1 };
         PPISPMode ppisp_mode = PPISPMode::AUTO;
         PPISPOverrides ppisp_overrides;
+
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
 
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -374,6 +457,8 @@ namespace lfs::vis {
         std::string detail_label;
         std::string left_name;
         std::string right_name;
+
+        [[nodiscard]] friend bool operator==(const SplitViewInfo&, const SplitViewInfo&) = default;
     };
 
     struct ViewportRegion {

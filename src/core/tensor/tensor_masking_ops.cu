@@ -57,6 +57,13 @@ namespace lfs::core::tensor_ops {
     }
 
     namespace {
+        __global__ void and_live_kernel(uint8_t* mask, const unsigned char* live_mask, const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx < n && live_mask[idx] == 0) {
+                mask[idx] = 0;
+            }
+        }
+
         template <typename T>
         void launch_masked_fill_impl(T* data, const unsigned char* mask, T val, size_t n, cudaStream_t stream) {
             auto data_ptr = thrust::device_pointer_cast(data);
@@ -89,6 +96,18 @@ namespace lfs::core::tensor_ops {
                             [] __device__(bool x) { return x; });
         }
     } // namespace
+
+    void launch_and_live(uint8_t* const mask,
+                         const unsigned char* const live_mask,
+                         const size_t n,
+                         const cudaStream_t stream) {
+        if (n == 0) {
+            return;
+        }
+        const int blocks = static_cast<int>((n + 255) / 256);
+        and_live_kernel<<<blocks, 256, 0, stream>>>(mask, live_mask, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.and_live");
+    }
 
     // ============= Import broadcast index calculator =============
     __device__ inline size_t compute_broadcast_index(

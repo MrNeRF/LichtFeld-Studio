@@ -21,6 +21,8 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
+#include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
@@ -676,7 +678,7 @@ namespace lfs::io::project {
                         "REFS", "fingerprint");
                 }
                 Entry entry{
-                    .path = lfs::core::path_to_utf8(relative.generic_string()),
+                    .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
                     .kind = std::filesystem::is_directory(status)
                                 ? 'd'
@@ -1345,6 +1347,61 @@ namespace lfs::io::project {
         return dom_.set_json("georeference", std::move(merged));
     }
 
+    lfs::Result<std::optional<ProjectLicense>> ProjectChapter::license() const {
+        const auto value = dom_.get_json("license");
+        if (!value || value->is_null()) {
+            return std::optional<ProjectLicense>{};
+        }
+        if (auto valid = require_object(*value, "PROJ", "license"); !valid) {
+            return std::move(valid).error();
+        }
+        auto identifier = required<std::string>(*value, "identifier", "PROJ", "license");
+        auto notice = optional<std::string>(*value, "notice", "PROJ", "license");
+        if (!identifier) {
+            return std::move(identifier).error();
+        }
+        if (!notice) {
+            return std::move(notice).error();
+        }
+        if (identifier->empty()) {
+            return fail<std::optional<ProjectLicense>>(
+                lfs::ErrorCode::DataLoss,
+                "The project license identifier is empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        return std::optional<ProjectLicense>(ProjectLicense{
+            .identifier = std::move(*identifier),
+            .notice = notice->value_or(std::string{}),
+        });
+    }
+
+    lfs::Result<void> ProjectChapter::set_license(const ProjectLicense& value) {
+        if (value.identifier.empty()) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The project license identifier cannot be empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        Json known{{"identifier", value.identifier}};
+        if (!value.notice.empty()) {
+            known["notice"] = value.notice;
+        }
+        Json merged = merge_known(
+            dom_.get_json("license").value_or(Json::object()), known);
+        if (value.notice.empty()) {
+            merged.erase("notice");
+        }
+        return dom_.set_json("license", std::move(merged));
+    }
+
+    lfs::Result<void> ProjectChapter::clear_license() {
+        auto removed = dom_.remove("license");
+        return removed ? lfs::Result<void>{}
+                       : lfs::Result<void>::failure(std::move(removed).error());
+    }
+
     lfs::Result<std::vector<EmbedDecision>> ProjectChapter::embed_decisions() const {
         auto items = dom_.array_items("embed_decisions");
         if (!items) {
@@ -1583,7 +1640,7 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<ReferenceRecord>> ReferencesChapter::records() const {
-        auto items = dom_.array_items("references");
+        auto items = dom_.array_item_refs("references");
         if (!items) {
             return std::move(items).error();
         }
@@ -1592,11 +1649,13 @@ namespace lfs::io::project {
         std::unordered_set<std::string> keys;
         for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            auto key = JsonChapterDom::read<std::string>(element, "key");
-            auto kind = JsonChapterDom::read<std::string>(element, "kind");
-            auto unresolved = JsonChapterDom::read<bool>(element, "unresolved");
-            const auto locator_value = JsonChapterDom::read_json(element, "locator");
-            const auto fingerprint_value = JsonChapterDom::read_json(element, "fingerprint");
+            auto key = JsonChapterDom::read<std::string>(*element, "key");
+            auto kind = JsonChapterDom::read<std::string>(*element, "kind");
+            auto unresolved = JsonChapterDom::read<bool>(*element, "unresolved");
+            const JsonChapterDom::Json* locator_value =
+                JsonChapterDom::read_json_ref(*element, "locator");
+            const JsonChapterDom::Json* fingerprint_value =
+                JsonChapterDom::read_json_ref(*element, "fingerprint");
             if (!uuid || !key || key->empty() || !kind || kind->empty() ||
                 !unresolved || !locator_value || !fingerprint_value ||
                 !keys.insert(*key).second) {
@@ -1823,8 +1882,8 @@ namespace lfs::io::project {
             if (relative.empty() || relative == ".") {
                 return true;
             }
-            const auto text = relative.generic_string();
-            return !text.starts_with("..");
+            const auto first = relative.begin();
+            return first == relative.end() || *first != std::filesystem::path("..");
         }
 
         bool fingerprint_content_matches(
@@ -1919,10 +1978,10 @@ namespace lfs::io::project {
             const auto root = absolute_lexically(project_root);
             if (path_is_under(root, absolute)) {
                 const auto relative = absolute.lexically_relative(root);
+                const auto first = relative.begin();
                 if (!relative.empty() && relative != "." &&
-                    !relative.generic_string().starts_with("..")) {
-                    locator.preferred =
-                        lfs::core::path_to_utf8(relative.generic_string());
+                    (first == relative.end() || *first != std::filesystem::path(".."))) {
+                    locator.preferred = lfs::core::path_to_generic_utf8(relative);
                     locator.base = LocatorBase::Project;
                 }
             }
@@ -2358,7 +2417,8 @@ namespace lfs::io::project {
             const Json& element, const lfs::core::Uuid& uuid) {
             auto type = JsonChapterDom::read<std::string>(element, "type");
             auto name = JsonChapterDom::read<std::string>(element, "name");
-            auto parent_value = JsonChapterDom::read_json(element, "parent_uuid");
+            const Json* parent_value =
+                JsonChapterDom::read_json_ref(element, "parent_uuid");
             std::optional<lfs::core::Uuid> parent;
             if (parent_value && !parent_value->is_null()) {
                 auto parsed = parse_uuid(*parent_value, "SCNG", "nodes.parent_uuid");
@@ -2368,7 +2428,8 @@ namespace lfs::io::project {
                 parent = *parsed;
             }
             auto order = JsonChapterDom::read<std::uint32_t>(element, "child_order");
-            const auto transform_value = JsonChapterDom::read_json(element, "local_transform");
+            const Json* transform_value =
+                JsonChapterDom::read_json_ref(element, "local_transform");
             auto visible = JsonChapterDom::read<bool>(element, "visible");
             auto locked = JsonChapterDom::read<bool>(element, "locked");
             auto training = JsonChapterDom::read<bool>(element, "training_enabled");
@@ -2404,7 +2465,9 @@ namespace lfs::io::project {
                 .camera = std::nullopt,
             };
 
-            if (const auto pose = JsonChapterDom::read_json(element, "georef_pose"); pose) {
+            if (const Json* pose =
+                    JsonChapterDom::read_json_ref(element, "georef_pose");
+                pose) {
                 if (auto valid = require_object(*pose, "SCNG", "nodes.georef_pose");
                     !valid) {
                     return std::move(valid).error();
@@ -2440,28 +2503,36 @@ namespace lfs::io::project {
                 }
                 result.georef_pose = GeorefPose{*r, *t};
             }
-            if (const auto payload = JsonChapterDom::read_json(element, "payload"); payload) {
+            if (const Json* payload =
+                    JsonChapterDom::read_json_ref(element, "payload");
+                payload) {
                 auto parsed = parse_payload_binding(*payload, "nodes.payload");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.payload = std::move(*parsed);
             }
-            if (const auto cropbox = JsonChapterDom::read_json(element, "cropbox"); cropbox) {
+            if (const Json* cropbox =
+                    JsonChapterDom::read_json_ref(element, "cropbox");
+                cropbox) {
                 auto parsed = parse_cropbox(*cropbox, "nodes.cropbox");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.cropbox = std::move(*parsed);
             }
-            if (const auto ellipsoid = JsonChapterDom::read_json(element, "ellipsoid"); ellipsoid) {
+            if (const Json* ellipsoid =
+                    JsonChapterDom::read_json_ref(element, "ellipsoid");
+                ellipsoid) {
                 auto parsed = parse_ellipsoid(*ellipsoid, "nodes.ellipsoid");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.ellipsoid = std::move(*parsed);
             }
-            if (const auto camera = JsonChapterDom::read_json(element, "camera"); camera) {
+            if (const Json* camera =
+                    JsonChapterDom::read_json_ref(element, "camera");
+                camera) {
                 auto parsed = parse_camera(*camera, "nodes.camera");
                 if (!parsed) {
                     return std::move(parsed).error();
@@ -2506,7 +2577,7 @@ namespace lfs::io::project {
 
     lfs::Result<std::optional<lfs::core::Uuid>>
     SceneGraphChapter::training_model_uuid() const {
-        const auto value = dom_.get_json("training_model_uuid");
+        const JsonChapterDom::Json* value = dom_.get_json_ref("training_model_uuid");
         if (!value || value->is_null()) {
             return std::optional<lfs::core::Uuid>{};
         }
@@ -2517,8 +2588,14 @@ namespace lfs::io::project {
         return std::optional<lfs::core::Uuid>(*parsed);
     }
 
+    void SceneGraphChapter::invalidate_parsed_nodes() noexcept {
+        cached_nodes_.reset();
+        hierarchy_valid_ = false;
+    }
+
     lfs::Result<void> SceneGraphChapter::set_training_model_uuid(
         const std::optional<lfs::core::Uuid> value) {
+        hierarchy_valid_ = false;
         if (value && value->is_nil()) {
             return fail<void>(
                 lfs::ErrorCode::InvalidArgument,
@@ -2531,7 +2608,10 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<SceneNodeRecord>> SceneGraphChapter::nodes() const {
-        auto items = dom_.array_items("nodes");
+        if (cached_nodes_) {
+            return *cached_nodes_;
+        }
+        auto items = dom_.array_item_refs("nodes");
         if (!items) {
             return std::move(items).error();
         }
@@ -2545,13 +2625,14 @@ namespace lfs::io::project {
                     std::format("SCNG node UUID '{}' cannot be decoded", id), "SCNG",
                     "nodes.uuid");
             }
-            auto parsed = parse_scene_node(element, *uuid);
+            auto parsed = parse_scene_node(*element, *uuid);
             if (!parsed) {
                 return std::move(parsed).error();
             }
             result.push_back(std::move(*parsed));
         }
-        return result;
+        cached_nodes_ = std::move(result);
+        return *cached_nodes_;
     }
 
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
@@ -2574,6 +2655,7 @@ namespace lfs::io::project {
 
     lfs::Result<void> SceneGraphChapter::upsert_node(
         const SceneNodeRecord& value) {
+        invalidate_parsed_nodes();
         if (value.uuid.is_nil() || value.type.empty() || value.name.empty() ||
             (value.parent_uuid && value.parent_uuid->is_nil()) ||
             std::ranges::any_of(value.local_transform,
@@ -2662,6 +2744,7 @@ namespace lfs::io::project {
 
     lfs::Result<bool> SceneGraphChapter::remove_node(
         const lfs::core::Uuid& uuid) {
+        invalidate_parsed_nodes();
         if (uuid.is_nil()) {
             return fail<bool>(
                 lfs::ErrorCode::InvalidArgument, "The scene node UUID cannot be null.",
@@ -2671,19 +2754,31 @@ namespace lfs::io::project {
     }
 
     lfs::Result<void> SceneGraphChapter::validate_hierarchy() const {
+        if (hierarchy_valid_) {
+            return {};
+        }
         auto all = nodes();
         if (!all) {
             return lfs::Result<void>::failure(std::move(all).error());
         }
+        if (auto valid = validate_hierarchy(*all); !valid) {
+            return valid;
+        }
+        hierarchy_valid_ = true;
+        return {};
+    }
+
+    lfs::Result<void> SceneGraphChapter::validate_hierarchy(
+        const std::span<const SceneNodeRecord> all) const {
         std::unordered_map<lfs::core::Uuid, std::size_t> positions;
-        positions.reserve(all->size());
+        positions.reserve(all.size());
         std::unordered_map<lfs::core::Uuid, std::set<std::uint32_t>> orders;
         std::set<std::uint32_t> root_orders;
-        for (std::size_t i = 0; i < all->size(); ++i) {
-            positions.emplace((*all)[i].uuid, i);
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            positions.emplace(all[i].uuid, i);
         }
-        for (std::size_t i = 0; i < all->size(); ++i) {
-            const SceneNodeRecord& node = (*all)[i];
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            const SceneNodeRecord& node = all[i];
             if (node.parent_uuid) {
                 const auto parent = positions.find(*node.parent_uuid);
                 if (parent == positions.end()) {
@@ -2995,9 +3090,12 @@ namespace lfs::io::project {
     }
 
     lfs::Result<ParameterManagerSnapshot> ParametersChapter::snapshot() const {
+        if (cached_snapshot_) {
+            return *cached_snapshot_;
+        }
         const auto active = dom_.get<std::string>("active_strategy");
-        const auto presets = dom_.get_json("presets");
-        const auto dataset = dom_.get_json("dataset");
+        const JsonChapterDom::Json* presets = dom_.get_json_ref("presets");
+        const JsonChapterDom::Json* dataset = dom_.get_json_ref("dataset");
         if (!active || !valid_pending_strategy(*active) || !presets ||
             !presets->is_object() || !dataset) {
             return fail<ParameterManagerSnapshot>(
@@ -3074,7 +3172,7 @@ namespace lfs::io::project {
                 "Each PRMS preset must carry the strategy named by its role",
                 "PRMS", "presets");
         }
-        return ParameterManagerSnapshot{
+        cached_snapshot_ = ParameterManagerSnapshot{
             .active_strategy = *active,
             .mcmc_session = std::move(mcmc_session->parameters),
             .mrnf_session = std::move(mrnf_session->parameters),
@@ -3096,10 +3194,12 @@ namespace lfs::io::project {
                 std::move(igs_current->references),
             .dataset = std::move(*parsed_dataset),
         };
+        return *cached_snapshot_;
     }
 
     lfs::Result<void> ParametersChapter::set_snapshot(
         const ParameterManagerSnapshot& value) {
+        cached_snapshot_.reset();
         if (!valid_pending_strategy(value.active_strategy)) {
             return fail<void>(
                 lfs::ErrorCode::InvalidArgument,
@@ -3230,6 +3330,142 @@ namespace lfs::io::project {
         return merge_at("dataset", dataset_json(value.dataset));
     }
 
+    lfs::Result<std::optional<EmbeddedDatasetManifest>>
+    ParametersChapter::embedded_dataset() const {
+        const auto dataset = dom_.get_json("dataset");
+        if (!dataset || !dataset->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The pending dataset parameters are invalid.",
+                "PRMS.dataset must be an object", "PRMS", "dataset");
+        }
+        const auto embedded = dataset->find("embedded_dataset");
+        if (embedded == dataset->end() || embedded->is_null()) {
+            return std::optional<EmbeddedDatasetManifest>{};
+        }
+        if (!embedded->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is invalid.",
+                "PRMS.dataset.embedded_dataset must be an object", "PRMS",
+                "dataset.embedded_dataset");
+        }
+        const auto schema = embedded->find("schema_version");
+        const auto images_folder = embedded->find("images_folder");
+        const auto complete = embedded->find("complete");
+        const auto entries = embedded->find("entries");
+        if (schema == embedded->end() || !schema->is_number_unsigned() ||
+            images_folder == embedded->end() || !images_folder->is_string() ||
+            complete == embedded->end() || !complete->is_boolean() ||
+            entries == embedded->end() || !entries->is_array()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is incomplete.",
+                "schema_version, images_folder, complete, and entries are required",
+                "PRMS", "dataset.embedded_dataset");
+        }
+        EmbeddedDatasetManifest result{
+            .schema_version = schema->get<std::uint32_t>(),
+            .images_folder = images_folder->get<std::string>(),
+            .complete = complete->get<bool>(),
+            .entries = {},
+        };
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& item : *entries) {
+            if (!item.is_object()) {
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "entries must contain objects", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            try {
+                const auto rel_path = item.at("rel_path").get<std::string>();
+                const auto kind = item.at("kind").get<std::string>();
+                const auto uuid = lfs::core::Uuid::from_string(
+                    item.at("chunk_uuid").get<std::string>());
+                const auto hash = Hash128::from_hex(
+                    item.at("xxh3_128").get<std::string>());
+                const bool valid_kind = kind == "image" || kind == "mask" ||
+                                        kind == "depth" || kind == "normal" ||
+                                        kind == "sparse" || kind == "meta";
+                const auto relative = lfs::core::utf8_to_path(rel_path);
+                if (rel_path.empty() || kind.empty() || !uuid || uuid->is_nil() ||
+                    !hash || !valid_kind || relative.is_absolute() ||
+                    relative.lexically_normal() != relative ||
+                    !paths.insert(rel_path).second ||
+                    !uuids.insert(*uuid).second) {
+                    throw std::invalid_argument("entry identity or hash is invalid");
+                }
+                result.entries.push_back({
+                    .rel_path = rel_path,
+                    .kind = kind,
+                    .chunk_uuid = *uuid,
+                    .bytes = item.at("bytes").get<std::uint64_t>(),
+                    .xxh3_128 = *hash,
+                });
+            } catch (const std::exception& error) {
+                // LFS-CENSUS-OK(empty-catch): JSON entry parsing is converted to a typed chapter error.
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    std::format("PRMS.dataset.embedded_dataset.entries: {}", error.what()),
+                    "PRMS", "dataset.embedded_dataset.entries");
+            }
+        }
+        return std::optional<EmbeddedDatasetManifest>{std::move(result)};
+    }
+
+    lfs::Result<void> ParametersChapter::set_embedded_dataset(
+        const EmbeddedDatasetManifest& value) {
+        if (value.schema_version == 0) {
+            return fail<void>(lfs::ErrorCode::InvalidArgument,
+                              "The embedded dataset schema version is invalid.",
+                              "schema_version must be positive", "PRMS",
+                              "dataset.embedded_dataset.schema_version");
+        }
+        Json entries = Json::array();
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& entry : value.entries) {
+            const bool valid_kind = entry.kind == "image" || entry.kind == "mask" ||
+                                    entry.kind == "depth" || entry.kind == "normal" ||
+                                    entry.kind == "sparse" || entry.kind == "meta";
+            const auto relative = lfs::core::utf8_to_path(entry.rel_path);
+            if (entry.rel_path.empty() || entry.chunk_uuid.is_nil() ||
+                !valid_kind || relative.is_absolute() ||
+                relative.lexically_normal() != relative ||
+                !paths.insert(entry.rel_path).second ||
+                !uuids.insert(entry.chunk_uuid).second) {
+                return fail<void>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "rel_path, kind, and chunk_uuid are required", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            entries.push_back({
+                {"rel_path", entry.rel_path},
+                {"kind", entry.kind},
+                {"chunk_uuid", entry.chunk_uuid.to_string()},
+                {"bytes", entry.bytes},
+                {"xxh3_128", entry.xxh3_128.to_hex()},
+            });
+        }
+        return dom_.set_json(
+            "dataset.embedded_dataset",
+            Json{
+                {"schema_version", value.schema_version},
+                {"images_folder", value.images_folder},
+                {"complete", value.complete},
+                {"entries", std::move(entries)},
+            });
+    }
+
+    void ParametersChapter::clear_embedded_dataset() {
+        (void)dom_.remove("dataset.embedded_dataset");
+    }
+
     lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
         const ReferencesChapter& references, const ProjectChapter& project,
         const SceneGraphChapter& scene,
@@ -3238,8 +3474,21 @@ namespace lfs::io::project {
         if (!records) {
             return std::move(records).error();
         }
+        auto nodes = scene.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        return build_reverse_reference_index(
+            *records, project, *nodes, additional_bindings);
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const std::span<const ReferenceRecord> records,
+        const ProjectChapter& project,
+        const std::span<const SceneNodeRecord> nodes,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
         ReverseReferenceIndex result;
-        for (const ReferenceRecord& record : *records) {
+        for (const ReferenceRecord& record : records) {
             result.try_emplace(record.uuid);
         }
         const auto append = [&](const ReferenceOwnerBinding& binding)
@@ -3276,11 +3525,7 @@ namespace lfs::io::project {
                 return std::move(status).error();
             }
         }
-        auto nodes = scene.nodes();
-        if (!nodes) {
-            return std::move(nodes).error();
-        }
-        for (const SceneNodeRecord& node : *nodes) {
+        for (const SceneNodeRecord& node : nodes) {
             if (node.payload && node.payload->reference_uuid) {
                 if (auto status = append(ReferenceOwnerBinding{
                         .reference_uuid = *node.payload->reference_uuid,
@@ -3330,44 +3575,32 @@ namespace lfs::io::project {
         return result;
     }
 
-    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
-        const ReferencesChapter& references, const ProjectChapter& project,
-        const SceneGraphChapter& scene, const ParametersChapter& parameters,
-        const std::span<const ReferenceOwnerBinding> additional_bindings) {
-        auto result = build_reverse_reference_index(
-            references, project, scene, additional_bindings);
-        if (!result) {
-            return std::move(result).error();
-        }
-        auto snapshot = parameters.snapshot();
-        if (!snapshot) {
-            return std::move(snapshot).error();
-        }
-
+    lfs::Result<ReverseReferenceIndex> apply_parameter_snapshot_to_index(
+        ReverseReferenceIndex result, const ParameterManagerSnapshot& snapshot) {
         struct PresetReferences {
             std::string_view path;
             const ParameterManagerSnapshot::ReferenceBindings* references;
         };
         const std::array presets{
             PresetReferences{"presets.mcmc.session",
-                             &snapshot->mcmc_session_references},
+                             &snapshot.mcmc_session_references},
             PresetReferences{"presets.mrnf.session",
-                             &snapshot->mrnf_session_references},
+                             &snapshot.mrnf_session_references},
             PresetReferences{"presets.igs+.session",
-                             &snapshot->igs_session_references},
+                             &snapshot.igs_session_references},
             PresetReferences{"presets.mcmc.current",
-                             &snapshot->mcmc_current_references},
+                             &snapshot.mcmc_current_references},
             PresetReferences{"presets.mrnf.current",
-                             &snapshot->mrnf_current_references},
+                             &snapshot.mrnf_current_references},
             PresetReferences{"presets.igs+.current",
-                             &snapshot->igs_current_references},
+                             &snapshot.igs_current_references},
         };
         const auto append =
             [&](const lfs::core::Uuid& reference_uuid,
                 const std::string& field,
                 const bool may_target_ppis) -> lfs::Result<void> {
-            const auto found = result->find(reference_uuid);
-            if (found == result->end()) {
+            const auto found = result.find(reference_uuid);
+            if (found == result.end()) {
                 if (may_target_ppis) {
                     return {};
                 }
@@ -3412,7 +3645,7 @@ namespace lfs::io::project {
                 }
             }
         }
-        for (auto& [uuid, bindings] : *result) {
+        for (auto& [uuid, bindings] : result) {
             (void)uuid;
             std::ranges::sort(
                 bindings,
@@ -3435,6 +3668,65 @@ namespace lfs::io::project {
                 });
         }
         return result;
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const ReferencesChapter& references, const ProjectChapter& project,
+        const SceneGraphChapter& scene, const ParametersChapter& parameters,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
+        auto result = build_reverse_reference_index(
+            references, project, scene, additional_bindings);
+        if (!result) {
+            return std::move(result).error();
+        }
+        auto snapshot = parameters.snapshot();
+        if (!snapshot) {
+            return std::move(snapshot).error();
+        }
+        return apply_parameter_snapshot_to_index(
+            std::move(*result), *snapshot);
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const std::span<const ReferenceRecord> records,
+        const ProjectChapter& project,
+        const std::span<const SceneNodeRecord> nodes,
+        const ParameterManagerSnapshot& parameters,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
+        auto result = build_reverse_reference_index(
+            records, project, nodes, additional_bindings);
+        if (!result) {
+            return std::move(result).error();
+        }
+        return apply_parameter_snapshot_to_index(
+            std::move(*result), parameters);
+    }
+
+    void adopt_project_training_parameters(
+        lfs::core::param::TrainingParameters& params,
+        ParameterManagerSnapshot snapshot,
+        std::filesystem::path dataset_root,
+        std::string images_folder) {
+
+        // Take the stored options and supply the resolved and command-line locations.
+        auto dataset = std::move(snapshot.dataset);
+        dataset.data_path = std::move(dataset_root);
+        dataset.images = std::move(images_folder);
+        dataset.output_path = params.dataset.output_path;
+        dataset.output_path_explicit = params.dataset.output_path_explicit;
+        dataset.output_name = params.dataset.output_name;
+        params.dataset = std::move(dataset);
+
+        // The pending block of the active strategy is what the GUI would
+        // train with next. The three process flags describe this launch,
+        // not the project, so they always come from the command line.
+        auto optimization = snapshot.active_optimization();
+        optimization.headless = params.optimization.headless;
+        optimization.auto_train = params.optimization.auto_train;
+        optimization.no_splash = params.optimization.no_splash;
+        params.optimization = std::move(optimization);
+
+        lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
     }
 
 } // namespace lfs::io::project

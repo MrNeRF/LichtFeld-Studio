@@ -181,7 +181,7 @@ __device__ __forceinline__ float ppisp_exposure_value(const float raw) {
 }
 
 // Color correction pinv blocks (constant memory)
-__constant__ float PPISP_COLOR_PINV_BLOCKS[4][4] = {
+static __constant__ float PPISP_COLOR_PINV_BLOCKS[4][4] = {
     {0.0480542f, -0.0043631f, -0.0043631f, 0.0481283f},
     {0.0580570f, -0.0179872f, -0.0179872f, 0.0431061f},
     {0.0433336f, -0.0180537f, -0.0180537f, 0.0580500f},
@@ -321,7 +321,7 @@ __device__ __forceinline__ void ppisp_apply_color_correction(const float3& rgb_i
 
     float3 rgi_out = H * rgi_in;
 
-    float norm_factor = __fdividef(intensity, rgi_out.z + 1.0e-5f);
+    float norm_factor = __fdividef(intensity, fmaxf(rgi_out.z, 0.0f) + 1.0e-5f);
     rgi_out = rgi_out * norm_factor;
 
     rgb_out = make_float3(rgi_out.x, rgi_out.y, rgi_out.z - rgi_out.x - rgi_out.y);

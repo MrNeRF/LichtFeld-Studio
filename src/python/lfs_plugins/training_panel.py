@@ -15,6 +15,7 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .training_confirm import (
     _invoke_project_save_as,
     _project_has_path,
+    _save_titled_project,
     _schedule_once_project_bound,
     confirm_discard_work_then,
 )
@@ -343,6 +344,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func("label_status_starting", lambda: tr("runtime.task_starting"))
         model.bind_func(
             "label_save_project", lambda: tr("training_panel.save_project")
         )
@@ -488,8 +490,11 @@ class TrainingPanel(Panel):
             "dep_depth_loss": params.use_depth_loss,
             "dep_normal_loss": params.use_normal_loss,
             "dep_ppisp": params.ppisp,
+            "dep_ppisp_params": params.ppisp or params.use_exposure_correction,
+            "dep_show_ppisp_reg_weight": params.ppisp and not params.use_exposure_correction,
             "dep_ppisp_controller": params.ppisp and params.ppisp_use_controller,
-            "dep_bilateral": params.use_bilateral_grid,
+            "dep_bilateral": params.use_bilateral_grid or params.use_exposure_correction,
+            "dep_exposure_correction": params.use_exposure_correction,
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
@@ -549,6 +554,7 @@ class TrainingPanel(Panel):
 
         for state_name in [
             "ready",
+            "starting",
             "running",
             "paused",
             "completed",
@@ -599,6 +605,23 @@ class TrainingPanel(Panel):
             "dep_ppisp", lambda: p() is not None and p().has_params() and p().ppisp
         )
         model.bind_func(
+            "dep_ppisp_params",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and (p().ppisp or p().use_exposure_correction)
+            ),
+        )
+        model.bind_func(
+            "dep_show_ppisp_reg_weight",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and p().ppisp
+                and not p().use_exposure_correction
+            ),
+        )
+        model.bind_func(
             "dep_ppisp_frozen_sidecar",
             lambda: (
                 p() is not None
@@ -633,7 +656,15 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_bilateral",
-            lambda: p() is not None and p().has_params() and p().use_bilateral_grid,
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and (p().use_bilateral_grid or p().use_exposure_correction)
+            ),
+        )
+        model.bind_func(
+            "dep_exposure_correction",
+            lambda: p() is not None and p().has_params() and p().use_exposure_correction,
         )
         model.bind_func(
             "dep_mrnf",
@@ -1062,6 +1093,7 @@ class TrainingPanel(Panel):
                 not RuntimeState.has_trainer.value
                 and session.get("available")
                 and not session.get("hydrated")
+                and state in ("idle", "ready", "", None)
             ):
                 state = "completed" if session.get("completed") else "paused"
             it = RuntimeState.iteration.value
@@ -2035,6 +2067,22 @@ class TrainingPanel(Panel):
         if binding is not None and binding.cancel_edit(str(args[0])):
             event.stop_propagation()
 
+    # Exposure correction replaces the standalone bilateral grid and PPISP
+    # (validation rejects the combination), so checking one side unchecks
+    # the other instead of surfacing the conflict at training start.
+    _APPEARANCE_EXCLUSIVE = {
+        "use_exposure_correction": (
+            "use_bilateral_grid",
+            "ppisp",
+            "ppisp_controller",
+            "ppisp_freeze",
+        ),
+        "use_bilateral_grid": ("use_exposure_correction",),
+        "ppisp": ("use_exposure_correction",),
+        "ppisp_controller": ("use_exposure_correction",),
+        "ppisp_freeze": ("use_exposure_correction",),
+    }
+
     def _on_pv_value_change(self, _handle, _event, args):
         if len(args) < 2:
             return
@@ -2042,6 +2090,11 @@ class TrainingPanel(Panel):
         binding = self._pv_binding_by_prop.get(prop)
         if binding is not None:
             binding.set_value(prop, args[1])
+            if bool(args[1]):
+                for other in self._APPEARANCE_EXCLUSIVE.get(prop, ()):
+                    other_binding = self._pv_binding_by_prop.get(other)
+                    if other_binding is not None:
+                        other_binding.set_value(other, False)
 
     def _on_pv_search_clear(self, *_args):
         self._set_property_search_query("")
@@ -2449,14 +2502,27 @@ class TrainingPanel(Panel):
             elif button == _k:
                 lf.start_training()
 
+        message = (
+            tr("training.save_pc.message_project")
+            if _project_has_path()
+            else tr("training.save_pc.message")
+        )
         lf.ui.confirm_dialog(
             tr("training.save_pc.title"),
-            tr("training.save_pc.message"),
+            message,
             [btn_save, btn_skip, btn_cancel],
             _on_result,
         )
 
     def _save_modified_pc(self):
+        if _project_has_path():
+            if _save_titled_project():
+                scene = lf.get_scene()
+                if scene:
+                    scene.is_point_cloud_modified = False
+            else:
+                lf.log.error("Failed to save the point cloud to the project")
+            return
         d = lf.dataset_params()
         if not d or not d.has_params() or not d.data_path:
             return

@@ -89,6 +89,7 @@ namespace lfs::vis::gui {
         DEFAULT_CLOSED = 1 << 0,
         HIDE_HEADER = 1 << 1,
         SELF_MANAGED = 1 << 2,
+        FLOAT_IN_VIEWPORT = 1 << 3,
     };
 
     using PollDependency = lfs::vis::op::PollDependency;
@@ -161,11 +162,23 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        // Called on the GUI thread only after a native viewport drop hit test.
+        virtual bool onViewportDrop(const std::string& type, const std::string& data) {
+            (void)type;
+            (void)data;
+            return false;
+        }
         virtual void draw(const PanelDrawContext& ctx) = 0;
         virtual bool poll(const PanelDrawContext& ctx) {
             (void)ctx;
             return true;
         }
+        // Poll-gated panels can publish whether their last poll allows them to
+        // participate in animation demand. The registry updates this for both
+        // fresh and cached poll results.
+        virtual void setPollVisibility(bool visible) { (void)visible; }
+        virtual bool isVisibleForAnimation() const { return true; }
+        virtual void on_visibility_changed(bool visible) { (void)visible; }
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
         virtual PanelDirectRenderResult renderDirect(
@@ -186,6 +199,8 @@ namespace lfs::vis::gui {
             return {};
         }
         virtual bool needsAnimationFrame() const { return false; }
+        virtual bool needsImmediateAnimationFrame() const { return false; }
+        virtual std::string animationDemandDescription() const { return {}; }
         // Finite scheduled animation/update delay in seconds (> 0). nullopt means
         // no scheduled wake (either continuous demand via needsAnimationFrame or idle).
         virtual std::optional<double> nextScheduledAnimationDelay() const { return std::nullopt; }
@@ -219,6 +234,8 @@ namespace lfs::vis::gui {
         PanelSpace default_space = PanelSpace::Floating;
         int default_order = 100;
         bool default_enabled = true;
+        std::shared_ptr<const std::string> label_storage;
+        std::shared_ptr<const std::string> id_storage;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -324,8 +341,10 @@ namespace lfs::vis::gui {
     struct PanelSnapshot {
         size_t index;
         IPanel* panel;
-        std::string label;
-        std::string id;
+        std::string_view label;
+        std::string_view id;
+        std::shared_ptr<const std::string> label_storage;
+        std::shared_ptr<const std::string> id_storage;
         PanelSpace space;
         uint32_t options;
         bool is_native;
@@ -364,8 +383,11 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
+        std::vector<PanelSummary> get_panel_summaries_for_space(
+            PanelSpace space, const PanelDrawContext& ctx, bool check_poll);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
+        std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
         [[nodiscard]] std::vector<PanelProjectState>
         capture_project_state() const;
         void apply_project_state(
@@ -382,16 +404,26 @@ namespace lfs::vis::gui {
         void apply_panel_payloads(
             const std::unordered_map<std::string, std::string>& payloads);
         [[nodiscard]] uint64_t registration_revision() const;
+        [[nodiscard]] uint64_t visibility_revision() const;
+        [[nodiscard]] bool has_active_floating_drag() const;
+        void cancel_floating_interactions();
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
         bool is_panel_enabled(const std::string& id) const;
+        // Prepare a registered panel without requiring it to be enabled or
+        // visible. Used for small, opt-in startup warmups.
+        void preload_panel(const std::string& id);
         bool apply_floating_resize_cursor() const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;
         PanelAnimationDemand animationDemandForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
+        [[nodiscard]] std::string describeAnimationDemand(
+            PanelAnimationVisibility visibility) const;
+        [[nodiscard]] bool needsImmediateAnimationFrameForVisiblePanels(
+            PanelAnimationVisibility visibility) const;
         // Min finite scheduled delay across visible panels (same visibility rules as
         // needsAnimationFrameForVisiblePanels). nullopt if none are scheduled.
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(
@@ -441,6 +473,7 @@ namespace lfs::vis::gui {
             requested_panel_payloads_;
         uint64_t next_float_stack_order_ = 1;
         uint64_t registration_revision_ = 0;
+        uint64_t visibility_revision_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };

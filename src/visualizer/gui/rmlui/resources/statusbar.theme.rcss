@@ -5,6 +5,10 @@ body,
     color: @{text};
 }
 
+#status-row {
+    @{chrome.status_decor};
+}
+
 .safe-mode #status-row {
     background-color: @{blend(surface,warning,0.20)};
 }
@@ -77,7 +81,7 @@ body,
 }
 
 #progress-fill {
-    background-color: @{primary};
+    @{statusbar.progress_fill_decor};
 }
 
 .progress-marker {
@@ -91,21 +95,6 @@ body,
 .progress-marker.is-hovered,
 .progress-marker.is-preview {
     background-color: @{statusbar.progress_marker_active};
-}
-
-#account-chip {
-    background-color: @{alpha(surface_bright,0.35)};
-    border-color: @{alpha(text_dim,0.55)};
-}
-
-#account-chip:hover {
-    background-color: @{alpha(surface_bright,0.70)};
-    border-color: @{text_dim};
-}
-
-#account-chip.warning {
-    background-color: @{blend(surface,warning,0.14)};
-    border-color: @{warning};
 }
 
 #gpu-icon {

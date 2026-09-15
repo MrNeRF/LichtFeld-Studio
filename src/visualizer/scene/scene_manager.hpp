@@ -57,6 +57,8 @@ namespace lfs::vis {
             return content_type_ == ContentType::Empty && !scene_.hasNodes();
         }
 
+        [[nodiscard]] bool canClearScene() const;
+
         bool hasDataset() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return content_type_ == ContentType::Dataset;
@@ -101,6 +103,21 @@ namespace lfs::vis {
 
         // Operations - Generic splat file loading
         void loadSplatFile(const std::filesystem::path& path);
+        [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
+            const std::filesystem::path& path,
+            lfs::io::ProgressCallback progress = {},
+            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false);
+        [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
+                                                        const std::string& name_hint,
+                                                        bool is_visible,
+                                                        lfs::io::LoadResult load_result,
+                                                        bool replace_scene);
+        [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
+                                                        const std::string& name_hint,
+                                                        bool is_visible,
+                                                        lfs::io::LoadResult load_result,
+                                                        bool preserve_raw = false,
+                                                        core::NodeId parent = core::NULL_NODE);
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
@@ -151,7 +168,7 @@ namespace lfs::vis {
             const glm::ivec2& viewport_size) const;
 
         // Node transforms
-        void setNodeTransform(const std::string& name, const glm::mat4& transform);
+        bool setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
 
         // Full transform for selected node (includes rotation and scale)
@@ -202,8 +219,10 @@ namespace lfs::vis {
         const lfs::core::SplatData* getModelForRendering() const;
 
         // Build complete render state from scene graph
-        // This is the single source of truth for all rendering data
-        SceneRenderState buildRenderState() const;
+        // This is the single source of truth for all rendering data.
+        // metadata_only skips combined-model concatenation and per-gaussian
+        // transform/selection aggregates; the two caches are distinct.
+        SceneRenderState buildRenderState(SceneRenderStateOptions options = {}) const;
 
         // Direct info queries
         struct SceneInfo {
@@ -221,6 +240,9 @@ namespace lfs::vis {
         bool reparentNode(std::string node_name, std::string new_parent_name);
         bool reparentNode(core::NodeId node_id, core::NodeId new_parent_id);
         bool moveNode(core::NodeId node_id, core::NodeId new_parent_id, int index);
+        bool moveNodes(const std::vector<core::NodeId>& node_ids, core::NodeId new_parent_id, int index);
+        bool groupNodes(const std::vector<core::NodeId>& node_ids);
+        bool ungroupNode(core::NodeId node_id);
         std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
@@ -278,6 +300,7 @@ namespace lfs::vis {
 
         void initSelectionService();
         [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
+        void completePendingSelectionCounts() const;
 
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                 std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
@@ -289,9 +312,17 @@ namespace lfs::vis {
         [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
 
+        // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
+        // in-flight Vulkan work references model tensors that are about to be
+        // freed. Must run before releasing splat models, especially when their
+        // tensors are backed by Vulkan-external storage.
+        void drainGpuForTensorRelease();
+
     private:
         enum class HistoryMode : uint8_t {
             Record,
+            RecordFull,
+            RecordPreserveIds,
             Skip,
         };
 
@@ -326,12 +357,6 @@ namespace lfs::vis {
                                                                       bool keep_children,
                                                                       HistoryMode history_mode,
                                                                       TrainingRemovalImpact impact);
-        // Drop the GUI's borrowed scene-image tensor and drain the GPU so no in-flight
-        // Vulkan work references model tensors that are about to be freed. Must run
-        // before releasing splat models, especially when their tensors are backed by
-        // Vulkan-external storage (freeing imported memory under the GPU faults the
-        // device with VK_ERROR_DEVICE_LOST).
-        void drainGpuForTensorRelease();
         void setupEventHandlers();
         void finalizeDatasetSceneLoad(const std::filesystem::path& dataset_path,
                                       const std::filesystem::path& scene_path,
@@ -379,9 +404,14 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::MeshData> mesh;
             glm::mat4 transform{1.0f};
             struct HierarchyNode {
+                std::string name;
                 core::NodeType type = core::NodeType::SPLAT;
                 glm::mat4 local_transform{1.0f};
+                bool visible = true;
+                bool locked = false;
+                std::unique_ptr<lfs::core::SplatData> data;
                 std::unique_ptr<core::CropBoxData> cropbox;
+                std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;
             };
             std::optional<HierarchyNode> hierarchy;
@@ -414,6 +444,15 @@ namespace lfs::vis {
         std::jthread consolidated_compaction_thread_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
+
+        mutable std::shared_ptr<const SceneRenderState> cached_render_state_;
+        mutable std::uint64_t cached_render_scene_generation_ = 0;
+        mutable std::uint64_t cached_render_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_gaussian_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_scene_generation_local_ = 0;
+        mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
+        mutable ContentType cached_render_content_type_ = ContentType::Empty;
+        mutable bool cached_render_metadata_only_ = false;
     };
 
 } // namespace lfs::vis

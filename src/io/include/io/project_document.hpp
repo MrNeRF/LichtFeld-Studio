@@ -33,6 +33,10 @@ namespace lfs::io {
 
 namespace lfs::io::project {
 
+    // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
+    // retained history. This cap counts only unbound historical chapters.
+    inline constexpr std::size_t CHECKPOINT_HISTORY_LIMIT = 16;
+
     // A binary chapter whose clean source range is also its lazy hydration
     // handle. Reading a clean value never marks it dirty; saving that same
     // value reuses its CleanProof byte-for-byte. An owned value retains the
@@ -55,6 +59,9 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<LazyChunkValue>
         from_owned(std::vector<std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Independent owner of the same file-backed or owned bytes. Safe to
+        // retain after the source ProjectDocument is closed or replaced.
+        [[nodiscard]] lfs::Result<LazyChunkValue> share() const;
 
         [[nodiscard]] std::uint64_t size() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
@@ -67,6 +74,11 @@ namespace lfs::io::project {
         read_at(std::uint64_t offset, std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void>
         visit_stream(const StreamVisitor& visitor) const;
+        [[nodiscard]] lfs::Result<void>
+        visit_materialized(const StreamVisitor& visitor,
+                           MaterializeRetirementSink* retirement = nullptr) const;
+        [[nodiscard]] lfs::Result<void>
+        peek_prefix(std::span<std::byte> destination) const;
 
     private:
         friend class ProjectDocument;
@@ -81,6 +93,9 @@ namespace lfs::io::project {
         // Decode the KB-scale shell chapters only. Embedded scene payloads
         // remain clean source spans until stage_hydration() consumes them.
         bool defer_geometry_payloads = false;
+        // Skip Impl::validate after the chapter scan. Hydration re-opens a
+        // path the shell already validated; identity is checked by the caller.
+        bool skip_validation = false;
     };
 
     struct ProjectDocumentSaveOptions {
@@ -91,7 +106,8 @@ namespace lfs::io::project {
         lfs::core::Uuid save_as_project_uuid = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        // Only a file-dialog-confirmed Save As may replace a first-save destination.
+        // First-save replacement requires explicit caller authorization
+        // (file-dialog Save As, or New Project overwrite consent).
         bool allow_existing_destination_replacement = false;
         // Explicit GUI saves may replace THMB. An empty span means carry the
         // current preview forward without regenerating it.
@@ -110,6 +126,15 @@ namespace lfs::io::project {
         // the live document to that app-private path.
         bool leave_unbound = false;
     };
+
+    // Inspect a first-save destination without creating, truncating, or
+    // unlinking it. Unauthorized collisions return AlreadyExists. Authorized
+    // replacement still refuses unreadable or writer-incompatible files so
+    // the previous bytes stay in place.
+    [[nodiscard]] LFS_IO_API lfs::Result<void>
+    preflight_first_save_destination(
+        const std::filesystem::path& path,
+        bool allow_existing_destination_replacement);
 
     [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
     dataset_preview_png(const std::filesystem::path& first_image,
@@ -161,12 +186,18 @@ namespace lfs::io::project {
         std::uint64_t erased_chunks = 0;
     };
 
+    struct LFS_IO_API DatasetEmbedSource {
+        EmbeddedDatasetEntry entry;
+        std::filesystem::path source_path;
+    };
+
     struct ProjectDocumentHydrationReport {
         SelectionHydrationReport selection;
         ParameterManagerSnapshot pending_parameters;
         ReverseReferenceIndex reverse_reference_index;
         std::optional<lfs::core::Uuid> checkpoint_uuid;
         std::optional<lfs::core::CheckpointHeader> checkpoint_header;
+        std::optional<lfs::core::param::TrainingParameters> checkpoint_params;
         bool trainer_state_pending = false;
         ProjectSessionChapters pending_session;
         std::size_t hydrated_payload_units = 0;
@@ -237,6 +268,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const ProjectChapter& project() const noexcept;
         [[nodiscard]] ProjectChapter& edit_project() noexcept;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
         [[nodiscard]] const ReferencesChapter& references() const noexcept;
         [[nodiscard]] ReferencesChapter& edit_references() noexcept;
         [[nodiscard]] const SceneGraphChapter& scene_graph() const noexcept;
@@ -258,6 +291,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
+        bound_checkpoint_uuid() const;
         // Test-only: drop the file-backed CKPT CleanProof. find_checkpoint()
         // is const and LazyChunkValue::Impl is translation-unit local.
         void drop_checkpoint_clean_proof_for_testing(
@@ -269,6 +304,18 @@ namespace lfs::io::project {
         remove_checkpoint(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] std::vector<lfs::core::Uuid>
         checkpoint_uuids() const;
+
+        [[nodiscard]] const LazyChunkValue*
+        find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
+        [[nodiscard]] lfs::Result<std::filesystem::path>
+        materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        dataset_source_uuids() const;
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        embed_dataset_batch(const EmbeddedDatasetManifest& manifest,
+                            std::span<const DatasetEmbedSource> sources,
+                            const ProjectDocumentSaveOptions& options = {});
 
         [[nodiscard]] const LazyChunkValue*
         find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;

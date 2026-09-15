@@ -124,6 +124,40 @@ namespace lfs::mcp {
         return inst;
     }
 
+    void ToolRegistry::set_lazy_initializer(std::function<void()> initializer) {
+        std::lock_guard lock(mutex_);
+        lazy_initializer_ = std::move(initializer);
+    }
+
+    void ToolRegistry::ensure_initialized() const {
+        std::call_once(initialization_once_, [this] {
+            std::function<void()> initializer;
+            {
+                std::lock_guard lock(mutex_);
+                initializer = lazy_initializer_;
+            }
+            if (initializer)
+                initializer();
+        });
+    }
+
+    void ResourceRegistry::set_lazy_initializer(std::function<void()> initializer) {
+        std::lock_guard lock(mutex_);
+        lazy_initializer_ = std::move(initializer);
+    }
+
+    void ResourceRegistry::ensure_initialized() const {
+        std::call_once(initialization_once_, [this] {
+            std::function<void()> initializer;
+            {
+                std::lock_guard lock(mutex_);
+                initializer = lazy_initializer_;
+            }
+            if (initializer)
+                initializer();
+        });
+    }
+
     void ToolRegistry::register_tool(McpTool tool, ToolHandler handler) {
         const std::string normalized_name = normalize_tool_name(tool.name);
         if (!is_valid_tool_name(normalized_name)) {
@@ -155,6 +189,7 @@ namespace lfs::mcp {
     }
 
     std::vector<McpTool> ToolRegistry::list_tools() const {
+        ensure_initialized();
         std::lock_guard lock(mutex_);
         std::vector<McpTool> result;
         result.reserve(tools_.size());
@@ -169,6 +204,7 @@ namespace lfs::mcp {
 
     json ToolRegistry::call_tool(const std::string& name, const json& arguments,
                                  lfs::OperationId operation_id) {
+        ensure_initialized();
         ToolHandler handler;
         std::vector<std::string> required;
         {
@@ -211,6 +247,7 @@ namespace lfs::mcp {
     }
 
     std::vector<McpResource> ResourceRegistry::list_resources() const {
+        ensure_initialized();
         std::lock_guard lock(mutex_);
         std::vector<McpResource> result;
         result.reserve(resources_.size());
@@ -224,6 +261,7 @@ namespace lfs::mcp {
     }
 
     std::expected<std::vector<McpResourceContent>, std::string> ResourceRegistry::read_resource(const std::string& uri) const {
+        ensure_initialized();
         ResourceHandler handler;
         {
             std::lock_guard lock(mutex_);

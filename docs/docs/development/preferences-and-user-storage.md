@@ -14,9 +14,11 @@ the user's application preferences or desktop window placement.
 The Preferences panel currently exposes:
 
 - language;
-- working folder (the parent of the temp project directory used for untitled
-  sessions);
+- project location for new projects and the Asset Manager Default folder;
 - application theme and UI scale;
+- status bar progress bar style (`status_bar_progress_style`: `classic` or `miner`);
+- viewport control style (`viewport_chrome_style`: `solid`, `translucent`, or `frosted`);
+- left viewport toolbar position (`viewport_toolbar_position`: `top`, `centered`, or `free`);
 - viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
@@ -66,6 +68,25 @@ settings, keymaps, and the Asset Manager catalog are published with
 same-directory atomic replacement so an interrupted write cannot expose a
 partially written destination.
 
+Family-aware theme selectors store the `theme` preference as `family_id:mode`,
+where `mode` is `dark`, `light`, or `auto`. Compatibility paths, including the
+legacy `set_theme` API and the Appearance section reset, may instead store a
+stable preset id. Both forms are accepted on read. Theme JSON files themselves
+are packaged application assets: the current user tree has no custom-theme
+install directory, and no preference reset or migration operation should imply
+that one exists.
+
+`viewport_chrome_style` is intentionally separate from the theme manifest. Its
+default is `translucent`; resetting Appearance restores that value. The chosen
+mode controls opacity and optional backdrop processing, while the active theme
+continues to supply palette, gradient, border, icon, and contrast colors.
+
+`viewport_toolbar_position` is also user-global and defaults to `centered`.
+`top` retains a small gap below the top bar. `free` exposes a drag handle and
+stores the chosen vertical position as the normalized `viewport_toolbar_free_y`
+value, so it remains proportional and clamped inside the viewport after window
+or UI-scale changes. Both sides of a split viewport use the same position.
+
 Scene reconstruction preferences are user-global rather than `.licht` project
 state. They affect viewport presentation only and do not alter training or
 stored splat data. See [Scene reconstruction](scene-reconstruction) for the
@@ -111,44 +132,42 @@ logs/
 logs/mcp/
 plugins/
 venv/
-assets/     (default Asset Manager project folder)
-temp/
+projects/   (default project and Asset Manager folder)
+tmp/
 recovery/   (legacy untitled crash files; scanned at startup if present)
 ```
 
-The **working folder** preference (`working_directory` in
-`config/preferences.json`) defaults to this unified root (`UserPaths::rootDir()`:
-`~/.lichtfeld` or `%USERPROFILE%\\.lichtfeld`, still overridden by `LFS_HOME`
-and portable mode). An empty or absent key means the default. A custom value
-must be an absolute, writable directory; LichtFeld creates it if needed and
-rejects the change without persisting when the write probe fails.
+The **Project location** preference (`project_location` in
+`config/preferences.json`) defaults to `<root>/projects` (normally
+`~/.lichtfeld/projects`). New projects and the Asset Manager Default folder use
+this same directory. A custom value must be an absolute, writable directory;
+LichtFeld creates it if needed and rejects the change without persisting when the
+write probe fails.
 
-The **Asset Manager folder** preference (`asset_manager_directory`) is also in
-`config/preferences.json` and defaults to `<root>/assets` (normally
-`~/.lichtfeld/assets`). Every folder shown in the Asset Manager maps one-to-one
-to a real directory selected by the user; folder names are derived from the
-directory names. The catalog remains internal at `data/asset_library/library.json`
-and stores only these directory mappings and `.licht` project locators. Changing
-the default preserves an old directory mapping when it still contains cataloged
-projects, and removing a mapping never deletes the directory or project files.
+On first load, preferences migrate the legacy `asset_manager_directory` and
+`working_directory` keys to `project_location`. The asset-manager value wins;
+otherwise a non-empty working-directory value wins unless it is the unified
+user root itself. If neither value is usable, an existing `<root>/assets`
+directory containing a `.licht` project is retained. Legacy keys are then
+removed. The migration does not perform a write probe.
 
 Untitled crash files and untitled training snapshots live in
-`<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
-The temp directory is created lazily on first scratch write. Changing the
-working folder applies to the next untitled session (New Project or restart);
-a live session keeps the temp file it already bound. Cache, logs, plugins,
-the venv, and ONNX models stay on the unified root and do not follow the
-working folder.
+`<root>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
+An explicit CLI `-o` / `--output-path` is different: training binds a titled
+`<output_path>/project.licht` instead of the untitled temp file. The temp
+directory is created lazily on first scratch write. The project location
+applies to newly created projects; a live project keeps its existing path.
+Cache, logs, plugins, the venv, and ONNX models stay on the unified root.
 
 The legacy `<root>/recovery` directory is no longer created up front. Startup
-still scans it, if it exists and differs from `<working folder>/tmp`, so
+still scans it, if it exists and differs from `<root>/tmp`, so
 crash files from older builds can be offered and then pruned.
 
 A GUI load that **replaces** the scene (dataset import, Asset Manager Load New,
 a splat or mesh load onto a Dataset scene, or checkpoint resume) closes the
 current project document without writing it and starts a fresh untitled
 session. The previous `.licht` file and MRU entry are left unchanged, and the
-import panel's chosen parameters (output path, images folder, iterations,
+New Project panel's chosen parameters (images folder, iterations,
 strategy, max cap, init path, and the rest of the LoadFile fields) are kept.
 Adding a splat or mesh onto an existing SplatFiles scene does not start a new
 session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
@@ -236,3 +255,30 @@ keeps every live configuration control disabled.
 Explicit operations such as exporting a keymap remain separate from automatic
 persistence and can stay available in safe mode. The status bar identifies
 safe mode for the lifetime of the process.
+
+## Gallery
+
+Preferences → General → Gallery stores the default upload format (SOG), public
+visibility confirmation (on), and poster cache limit (64 MiB).
+These device-local values live in the Asset Manager storage
+folder's `gallery/preferences.json`; they are not saved into `.licht` projects or
+account credentials. The per-publish format selector updates the same default.
+The gallery verifies remote files after connecting and when Refresh is pressed.
+Uploads and updates require an explicit action.
+
+## Key Bindings
+
+With the Asset Manager focused, outside its text inputs:
+
+| Shortcut | Action |
+| --- | --- |
+| Enter | Open the selected local project |
+| Ctrl+Enter | Run the selected card's primary gallery action |
+| Ctrl+Shift+C | Copy a working share link for the selected portal scene |
+| F5 | Refresh the active local or gallery scope |
+
+The Python adapter uses `ASSET_GALLERY_PRIMARY`, `ASSET_GALLERY_COPY_LINK`, and
+`ASSET_REFRESH` from the native keymap when available, including rebindings and
+explicitly cleared bindings. Older native modules use the scoped defaults, with
+existing native collisions taking precedence. Preferences → Input → Key Bindings
+shows the defaults and exposes the native action rows when those actions exist.

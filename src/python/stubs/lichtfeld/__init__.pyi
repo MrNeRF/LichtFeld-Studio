@@ -246,7 +246,9 @@ def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
 def start_training() -> None:
-    """Start training with current parameters"""
+    """
+    Start training with current parameters. Returns after dispatch on the viewer thread; other callers wait for initialization. Asynchronous failures are reported through training state.
+    """
 
 def training_start_overwrite_conflict() -> int | None:
     """Return the blocking training-start overwrite conflict, if any"""
@@ -275,16 +277,34 @@ def reset_training() -> None:
     """Reset training state to initial"""
 
 def is_training_active() -> bool:
-    """Whether training is running or paused"""
+    """Whether training is starting, running, or paused"""
 
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
+
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False, overwrite: bool = False) -> bool:
+    """Create and bind a new .licht project at path"""
+
+def project_create_pending() -> bool:
+    """Whether a stop-then-create is queued and has not bound yet"""
+
+def project_embed_dataset() -> None:
+    """Embed the active project's external dataset verbatim"""
 
 def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
+
+def project_get_license() -> dict | None:
+    """Return the license metadata for the active project, or None"""
+
+def project_set_license(identifier: str, notice: str = '') -> None:
+    """Set the license metadata for the active project"""
+
+def project_clear_license() -> None:
+    """Clear the license metadata for the active project"""
 
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
@@ -300,6 +320,9 @@ def project_is_dirty() -> bool:
 
 def project_has_path() -> bool:
     """Return whether the active project has a bound .licht path"""
+
+def project_can_embed_dataset() -> bool:
+    """Return whether the active project can embed its external dataset"""
 
 def project_recent_files() -> list[str]:
     """Return the most-recently-used .licht project paths"""
@@ -326,6 +349,11 @@ def project_auto_save_on_close_enabled() -> bool:
 
 def project_set_auto_save_on_close(enabled: bool) -> None:
     """Enable or disable automatic project save on close"""
+
+def project_embed_dataset_by_default_enabled() -> bool: ...
+
+def project_set_embed_dataset_by_default(enabled: bool) -> None:
+    """Set whether new projects copy datasets into the project by default"""
 
 def project_autosave_interval_seconds() -> int:
     """Return the timed project autosave interval in seconds"""
@@ -372,9 +400,24 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
+def load_gallery_scene(nodes: list, name: str, hidden: bool = False) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Load verified gallery nodes on the managed import worker, then attach a complete group. Nodes contain path, affine transform and shDegree. A failed or canceled batch adds no group.
+    """
+
+def prepare_gallery_scene(path: str, payload_format: str = 'ply') -> None:
+    """
+    Publish visible splats and appearance into a fresh native .licht file. The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.
+    """
+
+def prepare_gallery_project(source_path: str, destination: str, payload_format: str = 'sog', expected_commit_uuid: str = '') -> None:
+    """
+    Prepare a saved .licht project on the managed export worker without opening it in the editor. Destination must be a fresh staging directory. Poll ui.get_export_state() for progress, errors and commit_uuid.
+    """
+
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
+    """
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -617,8 +660,10 @@ def get_depth_view_mode() -> str:
 def set_depth_view_mode(mode: str) -> None:
     """Set depth-map visualization mode"""
 
-def set_orthographic(ortho: bool) -> None:
-    """Enable or disable orthographic projection"""
+def set_orthographic(ortho: bool, extent_world: float | None = None) -> None:
+    """
+    Enable or disable orthographic projection, optionally setting its vertical world extent
+    """
 
 def on_training_start(callback: Callable) -> Callable:
     """Decorator for training start handler"""
@@ -1905,6 +1950,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class DensifyErrorMap(enum.Enum):
+    SSIM = 0
+
+    SSIM_CS = 1
+
 class NormalLossSpace(enum.Enum):
     AUTO = 0
 
@@ -2119,6 +2169,38 @@ class OptimizationParams:
     def far_seed_dose(self, arg: int, /) -> None: ...
 
     @property
+    def densify_error_map(self) -> DensifyErrorMap:
+        """Densification error map: full SSIM or contrast-structure only"""
+
+    @densify_error_map.setter
+    def densify_error_map(self, arg: DensifyErrorMap, /) -> None: ...
+
+    @property
+    def max_screen_share(self) -> float:
+        """
+        Shrink Gaussians that cover more than this share of the view; 0 or 1 disables
+        """
+
+    @max_screen_share.setter
+    def max_screen_share(self, arg: float, /) -> None: ...
+
+    @property
+    def screen_share_penalty(self) -> float:
+        """Soft hinge weight on log-scale for Gaussians over the screen-share cap"""
+
+    @screen_share_penalty.setter
+    def screen_share_penalty(self, arg: float, /) -> None: ...
+
+    @property
+    def oversize_split_fraction(self) -> float:
+        """
+        Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables
+        """
+
+    @oversize_split_fraction.setter
+    def oversize_split_fraction(self, arg: float, /) -> None: ...
+
+    @property
     def steps_scaler(self) -> float:
         """Scale factor for training step counts"""
 
@@ -2137,6 +2219,20 @@ class OptimizationParams:
 
     @gut.setter
     def gut(self, arg: bool, /) -> None: ...
+
+    @property
+    def use_exposure_correction(self) -> bool:
+        """Enable combined per-photo exposure correction"""
+
+    @use_exposure_correction.setter
+    def use_exposure_correction(self, arg: bool, /) -> None: ...
+
+    @property
+    def exposure_correction_grid_start_iter(self) -> int:
+        """Iteration at which the local residual grid starts training"""
+
+    @exposure_correction_grid_start_iter.setter
+    def exposure_correction_grid_start_iter(self, arg: int, /) -> None: ...
 
     @property
     def use_bilateral_grid(self) -> bool:

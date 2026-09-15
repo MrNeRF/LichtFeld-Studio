@@ -176,7 +176,7 @@ def histogram_panel_module():
 
 def test_histogram_panel_uses_dirty_update_policy(histogram_panel_module):
     assert histogram_panel_module.HistogramPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in histogram_panel_module.HistogramPanel.__dict__
+    assert histogram_panel_module.HistogramPanel.update_interval_ms == 100
 
 
 def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monkeypatch):
@@ -237,6 +237,66 @@ def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_mod
 
     assert panel._handle.request_update_count == 4
 
+
+def test_histogram_async_result_waits_for_ui_scheduler(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._histogram_compute_token = 7
+    scheduled = []
+    panel._ui_scheduler = scheduled.append
+    monkeypatch.setattr(module.lf, "get_scene_generation", lambda: 3)
+    monkeypatch.setattr(module.RuntimeState, "selection_generation", SimpleNamespace(value=11))
+    cache_key = panel._histogram_cache_key(3, 11)
+
+    panel._schedule_histogram_result(7, cache_key, {"kind": "empty", "scope_active": False})
+
+    assert len(scheduled) == 1
+    assert panel._handle.dirty_all_count == 0
+    scheduled.pop()()
+    assert panel._empty_title == "No visible values"
+    assert panel._handle.dirty_all_count > 0
+
+
+def test_histogram_cache_key_tracks_scene_attribute_bins_and_selection(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._metric_id = "scale_x"
+    panel._histogram_bin_count = 64
+
+    key = panel._histogram_cache_key(19, 23)
+
+    assert key[:4] == (19, "scale_x", 64, 23)
+    panel._histogram_bin_count = 65
+    assert panel._histogram_cache_key(19, 23) != key
+
+
+def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module, lf, numpy):
+    rng = numpy.random.default_rng(42)
+    values = rng.uniform(-2.0, 3.0, size=257).astype(numpy.float32)
+    tensor = lf.Tensor.from_numpy(values)
+
+    class Model:
+        num_points = len(values)
+
+        def get_opacity(self):
+            return tensor
+
+    result = histogram_panel_module.HistogramPanel._compute_histogram_result(
+        SimpleNamespace(get_nodes=lambda: []),
+        Model(),
+        "opacity",
+        32,
+        "",
+        20,
+        20,
+        (None, None),
+        (None, None),
+        set(),
+    )
+
+    assert result["kind"] == "ok"
+    expected, _ = numpy.histogram(values, bins=numpy.asarray(result["primary"]["edges"]))
+    assert result["primary"]["counts"] == expected.tolist()
 
 def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogram_panel_module):
     metric_ids = {metric.id for metric in histogram_panel_module.METRICS}
@@ -1332,3 +1392,35 @@ def test_mouseup_aborts_drag_when_scene_invalid(histogram_panel_module, monkeypa
     assert panel._dragging_mark is False
     assert reset == [False]
     assert event.stopped is True
+
+
+def test_histogram_worker_runs_without_numpy(lf):
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import sys
+        sys.path[:] = PATHS
+        import importlib.abc
+        class NoNumpy(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'numpy' or fullname.startswith('numpy.'):
+                    raise ModuleNotFoundError("No module named 'numpy'")
+        sys.meta_path.insert(0, NoNumpy())
+        import lichtfeld as lf
+        from lfs_plugins.histogram_panel import HistogramPanel
+        panel = HistogramPanel()
+        values = lf.Tensor.linspace(0.0, 1.0, 5, device='cpu')
+        mask = lf.Tensor.ones([5], dtype='bool', device='cpu')
+        result = panel._build_series_result(values, mask, 'opacity', 4, (None, None))
+        assert result['counts'] == [1, 1, 1, 2], result['counts']
+        assert result['mean_value'] == 0.5
+        assert result['median_value'] == 0.5
+        assert abs(result['p95_value'] - 0.95) < 1e-6
+        compare = panel._build_compare_result(values, values, mask, 'opacity', 'opacity',
+                                             4, 4, (None, None), (None, None))
+        assert compare['counts'] == [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,2], compare['counts']
+    """).replace('PATHS', repr(sys.path))
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

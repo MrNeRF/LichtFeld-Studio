@@ -19,6 +19,19 @@ namespace {
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_EQUALS), Rml::Input::KI_OEM_PLUS);
     }
 
+    TEST(SdlRmlKeyMappingTest, ScancodeAndKeycodeMappingsStayInSync) {
+        for (int value = 0; value < SDL_SCANCODE_COUNT; ++value) {
+            const auto scancode = static_cast<SDL_Scancode>(value);
+            const auto keycode = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
+            const auto keycode_mapping = lfs::vis::gui::sdlKeycodeToRml(keycode);
+            if (keycode_mapping == Rml::Input::KI_UNKNOWN)
+                continue;
+
+            EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(scancode), keycode_mapping)
+                << "scancode=" << value << " keycode=" << keycode;
+        }
+    }
+
     TEST(SdlKeyMappingTest, NumpadScancodesMapToAppKeys) {
         EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_0), lfs::vis::input::KEY_KP_0);
         EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_1), lfs::vis::input::KEY_KP_1);
@@ -112,6 +125,53 @@ namespace {
         EXPECT_EQ(buffer.text_codepoints.front(), 0xE9u);
         EXPECT_TRUE(buffer.had_event);
         EXPECT_FALSE(buffer.mouse_moved);
+    }
+
+    TEST(FrameInputBufferTest, PreservesOrderedMouseButtonsAndHorizontalWheel) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+
+        SDL_Event first_down{};
+        first_down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        first_down.button.windowID = 11;
+        first_down.button.button = SDL_BUTTON_LEFT;
+        first_down.button.x = 10.0f;
+        first_down.button.y = 20.0f;
+        first_down.button.timestamp = 100;
+        first_down.button.clicks = 1;
+        buffer.processEvent(first_down, 11);
+
+        SDL_Event first_up = first_down;
+        first_up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        first_up.button.timestamp = 101;
+        buffer.processEvent(first_up, 11);
+
+        SDL_Event second_down = first_down;
+        second_down.button.x = 30.0f;
+        second_down.button.y = 40.0f;
+        second_down.button.timestamp = 102;
+        second_down.button.clicks = 2;
+        buffer.processEvent(second_down, 11);
+
+        SDL_Event wheel{};
+        wheel.type = SDL_EVENT_MOUSE_WHEEL;
+        wheel.wheel.windowID = 11;
+        wheel.wheel.x = 2.0f;
+        wheel.wheel.y = -3.0f;
+        buffer.processEvent(wheel, 11);
+
+        ASSERT_EQ(buffer.mouse_button_events.size(), 3u);
+        EXPECT_TRUE(buffer.mouse_button_events[0].down);
+        EXPECT_FALSE(buffer.mouse_button_events[1].down);
+        EXPECT_TRUE(buffer.mouse_button_events[2].down);
+        EXPECT_FLOAT_EQ(buffer.mouse_button_events[0].x, 10.0f);
+        EXPECT_FLOAT_EQ(buffer.mouse_button_events[2].x, 30.0f);
+        EXPECT_EQ(buffer.mouse_button_events[0].timestamp, 100u);
+        EXPECT_EQ(buffer.mouse_button_events[2].clicks, 2u);
+        EXPECT_FLOAT_EQ(buffer.mouse_wheel, -3.0f);
+        EXPECT_FLOAT_EQ(buffer.mouse_wheel_x, 2.0f);
+        EXPECT_TRUE(buffer.mouse_clicked[0]);
+        EXPECT_TRUE(buffer.mouse_released[0]);
     }
 
     TEST(FrameInputBufferTest, TracksMouseWindowAndWakeEventsForRenderDemand) {

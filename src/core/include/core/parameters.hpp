@@ -31,6 +31,31 @@ namespace lfs::core {
             AlphaConsistent   // Enforce exact alpha values from mask
         };
 
+        enum class DensifyErrorMap {
+            Ssim,   // full SSIM (luminance × contrast × structure)
+            SsimCs, // contrast × structure only (luminance excluded)
+        };
+
+        [[nodiscard]] inline constexpr std::string_view densify_error_map_name(
+            const DensifyErrorMap mode) noexcept {
+            switch (mode) {
+            case DensifyErrorMap::Ssim:
+                return "ssim";
+            case DensifyErrorMap::SsimCs:
+                return "ssim_cs";
+            }
+            return "ssim_cs";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<DensifyErrorMap> densify_error_map_from_string(
+            const std::string_view value) noexcept {
+            if (value == "ssim")
+                return DensifyErrorMap::Ssim;
+            if (value == "ssim_cs")
+                return DensifyErrorMap::SsimCs;
+            return std::nullopt;
+        }
+
         enum class NormalLossSpace {
             Auto,
             CameraOpenCV,
@@ -199,6 +224,17 @@ namespace lfs::core {
             float bilateral_grid_lr = 2e-3f;
             float tv_loss_weight = 10.f;
 
+            // Combined per-photo exposure + residual grid (replaces standalone grid/PPISP)
+            bool use_exposure_correction = false;
+            int exposure_correction_grid_start_iter = 1000;
+
+            [[nodiscard]] bool bilateral_grid_active() const {
+                return use_bilateral_grid || use_exposure_correction;
+            }
+            [[nodiscard]] bool ppisp_active() const {
+                return use_ppisp || use_exposure_correction;
+            }
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;
@@ -228,6 +264,12 @@ namespace lfs::core {
             float means_noise_weight = 50.0f;
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
+            DensifyErrorMap densify_error_map = DensifyErrorMap::SsimCs;
+            // Dimensionless on-screen share cap. <=0 or >=1 disables the cap.
+            float max_screen_share = 0.3f;
+            float screen_share_penalty = 1.0f;
+            // Fraction of MRNF growth budget spent splitting over-cap splats. 0 disables.
+            float oversize_split_fraction = 0.15f;
             bool use_edge_map = true;
             bool background_improvements = false;
             float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0
@@ -290,6 +332,9 @@ namespace lfs::core {
         struct LFS_CORE_API DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
+            // True when -o/--output-path was given on this process's command line.
+            // Runtime-only: to_json, from_json, and PRMS dataset_json omit it.
+            bool output_path_explicit = false;
             std::string output_name = "";
             std::string images = "images";
             int resize_factor = -1;
@@ -335,6 +380,7 @@ namespace lfs::core {
         };
 
         struct TrainingParameters;
+        enum class OutputFormat;
 
         // Process-local presence map for --resume. Keys dumped here are the
         // only ones re-applied after a project/checkpoint restore; omitted
@@ -364,6 +410,7 @@ namespace lfs::core {
             // belong to OptimizationParameters: saved training configurations
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
+            bool no_download = false;
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
@@ -396,6 +443,10 @@ namespace lfs::core {
             // train() is allowed to start.
             std::optional<std::filesystem::path> resume_project = std::nullopt;
 
+            // Untrained .licht passed to --data-path. Its REFS dataset folder,
+            // or the embedded dataset copy, becomes the training data source.
+            std::optional<std::filesystem::path> dataset_project = std::nullopt;
+
             // Headless/integration-test trigger for the production training
             // snapshot path. Empty unless the user passed --save-project-path;
             // the trainer then falls back to the bound project destination.
@@ -407,6 +458,16 @@ namespace lfs::core {
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
+
+            // Additional final-splat exports written next to project.licht after
+            // training completes. Empty = only the .licht project is written.
+            std::vector<OutputFormat> export_formats;
+            int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
@@ -429,7 +490,8 @@ namespace lfs::core {
                                   USD,
                                   USDA,
                                   USDC,
-                                  RAD };
+                                  RAD,
+                                  SSOG };
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades
@@ -447,6 +509,11 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             // PLY -> RAD only: replicate the source across an AxB ground-plane
             // grid instead of pre-tiling the input file.
@@ -466,6 +533,11 @@ namespace lfs::core {
             std::vector<OutputFormat> formats{OutputFormat::PLY};
             Mesh2SplatOptions options;
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal

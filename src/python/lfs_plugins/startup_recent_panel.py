@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -92,20 +93,30 @@ def try_show_startup_recent() -> bool:
     return True
 
 
-def build_project_rows(paths, *, max_rows: int = _MAX_ROWS) -> list[dict]:
+def build_project_rows(paths, *, max_rows: int = _MAX_ROWS, checks=None) -> list[dict]:
     """Build record-list rows for the top MRU paths (newest first)."""
     rows = []
     for index, path in enumerate(list(paths or [])[:max_rows]):
         path_text = str(path)
-        disposition = recovery_disposition(path_text)
+        if checks is None:
+            check = None
+            disposition = recovery_disposition(path_text)
+        else:
+            check = checks.get(path_text)
+            disposition = str(check.get("disposition", "checking")) if check else "checking"
         recoverable = disposition == "offer"
+        if checks is None:
+            last_opened = format_mtime(path_text)
+        else:
+            last_opened = check.get("last_opened", "checking") if check else "checking"
         rows.append(
             {
                 "index": index,
                 "path": path_text,
                 "display_name": display_name_for_path(path_text),
                 "path_display": elide_middle(path_text),
-                "last_opened": format_mtime(path_text),
+                "last_opened": last_opened,
+                "checking": disposition == "checking",
                 "recoverable": recoverable,
                 "show_recoverable": recoverable,
             }
@@ -132,6 +143,11 @@ class StartupRecentPanel(Panel):
         self._rows: list[dict] = []
         self._show_crash_notice = False
         self._dismissed = False
+        self._mounted = False
+        self._mount_generation = 0
+        self._check_cache: dict[str, dict] = {}
+        self._check_in_flight: set[str] = set()
+        self._check_cache_lock = threading.Lock()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("startup_recent")
@@ -178,6 +194,11 @@ class StartupRecentPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._dismissed = False
+        self._mounted = True
+        self._mount_generation += 1
+        with self._check_cache_lock:
+            self._check_cache = {}
+            self._check_in_flight.clear()
         doc.add_event_listener("keydown", self._on_keydown)
         # Title-bar close is Start Blank (Panel base wires #close-btn).
         projects_list = doc.get_element_by_id("startup-recent-list")
@@ -186,6 +207,8 @@ class StartupRecentPanel(Panel):
         self._refresh_rows(force=True)
 
     def on_unmount(self, doc):
+        self._mounted = False
+        self._mount_generation += 1
         if self._handle is not None:
             try:
                 doc.remove_data_model("startup_recent")
@@ -210,7 +233,12 @@ class StartupRecentPanel(Panel):
             paths = list(recent_fn() or [])
         except Exception:
             paths = []
-        rows = build_project_rows(paths, max_rows=_MAX_ROWS)
+        if self._mounted:
+            with self._check_cache_lock:
+                checks = dict(self._check_cache)
+        else:
+            checks = None
+        rows = build_project_rows(paths, max_rows=_MAX_ROWS, checks=checks)
         signature = tuple(
             (row["path"], row["recoverable"], row["last_opened"]) for row in rows
         )
@@ -223,7 +251,65 @@ class StartupRecentPanel(Panel):
         self._show_crash_notice = bool(rows) and bool(rows[0].get("recoverable"))
         self._handle.update_record_list("projects", rows)
         self._handle.dirty_all()
+        if self._mounted:
+            self._start_checks(paths)
         return True
+
+    def _start_checks(self, paths) -> None:
+        pending = []
+        with self._check_cache_lock:
+            for path in list(paths or [])[:_MAX_ROWS]:
+                path_text = str(path)
+                if path_text not in self._check_cache and path_text not in self._check_in_flight:
+                    pending.append(path_text)
+                    self._check_in_flight.add(path_text)
+        if not pending:
+            return
+        generation = self._mount_generation
+        with self._check_cache_lock:
+            cache_snapshot = tuple(self._check_cache.values())
+
+        def worker() -> None:
+            for path in pending:
+                try:
+                    stat = os.stat(path)
+                    mtime_ns = int(stat.st_mtime_ns)
+                except OSError:
+                    mtime_ns = 0
+                cache_key = (path, mtime_ns)
+                cached = next(
+                    (value for value in cache_snapshot
+                     if value.get("cache_key") == cache_key),
+                    None,
+                )
+                if cached is None:
+                    cached = {
+                        "cache_key": cache_key,
+                        "last_opened": format_mtime(path) if mtime_ns else "—",
+                        "disposition": recovery_disposition(path) if mtime_ns else "none",
+                    }
+                result = (path, cached)
+
+                def complete(result=result) -> None:
+                    if generation != self._mount_generation or not self._mounted:
+                        return
+                    result_path, result_value = result
+                    with self._check_cache_lock:
+                        self._check_in_flight.discard(result_path)
+                        self._check_cache[result_path] = result_value
+                    self._refresh_rows(force=True)
+                    if self._handle:
+                        self._handle.dirty_all()
+
+                scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+                if callable(scheduler):
+                    scheduler(complete)
+                else:
+                    complete()
+
+        threading.Thread(
+            target=worker, daemon=True, name="StartupRecentChecks"
+        ).start()
 
     def _find_with_attr(self, element, attr, stop=None):
         while element is not None and element != stop:
@@ -251,11 +337,6 @@ class StartupRecentPanel(Panel):
         path_text = str(path)
         name = display_name_for_path(path_text)
         missing_message = lf.ui.tr("startup_recent.project_missing").format(name=name)
-
-        # Pre-check existence so a deleted MRU entry does not raise into RmlUI.
-        if not Path(path_text).is_file():
-            self._report_open_error(missing_message)
-            return
 
         try:
             outcome = lf.project_open(path_text, True)

@@ -1,0 +1,18 @@
+<rml><head><link type="text/template" href="floating_window.rml"/><link type="text/rcss" href="gallery_transfer_panel.rcss"/></head>
+<body template="floating-window" data-model="gallery_transfer">
+<div class="gallery-transfer-content">
+  <div class="section-header">{{header}}</div>
+  <div class="status-warning" data-if="interrupted > 0">{{recovery}}<button class="btn btn--success" data-event-click="resume_all">{{resume_all_label}}</button></div>
+  <p class="text-muted" data-if="!has_jobs">{{empty_label}}</p>
+  <div class="gallery-transfer-list">
+    <div class="gallery-transfer-row" data-for="job : jobs">
+      <div class="gallery-transfer-title"><span>{{job.direction}}</span><span>{{job.title}}</span><span class="text-muted">{{job.bytes}}</span></div>
+      <span class="status-info">{{job.phase}}</span><span class="status-error">{{job.reason}}</span>
+      <progress max="100" data-attr-value="job.progress"/>
+      <span class="text-muted" data-if="job.detail != ''">{{job.detail}}</span>
+      <div class="gallery-actions"><button class="btn btn--secondary" data-if="job.can_pause" data-event-click="pause(job.id)">{{pause_label}}</button><button class="btn btn--success" data-if="job.can_resume" data-event-click="resume(job.id)">{{resume_label}}</button><button class="btn btn--secondary" data-if="job.can_cancel" data-event-click="cancel(job.id)">{{cancel_label}}</button></div>
+    </div>
+  </div>
+  <div class="gallery-actions"><button class="btn btn--secondary" data-event-click="clear_finished">{{clear_finished_label}}</button><button class="btn btn--secondary" data-event-click="show_older">{{show_older_label}}</button><button class="btn btn--secondary" data-event-click="gallery">{{gallery_label}}</button></div>
+  <p class="text-muted">{{message}}</p>
+</div></body></rml>

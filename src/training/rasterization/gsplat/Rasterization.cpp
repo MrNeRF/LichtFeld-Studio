@@ -138,6 +138,8 @@ namespace gsplat_lfs {
         float* v_opacities,
         float* densification_info,
         const float* densification_error_map,
+        const float* edge_weight_map,
+        float* edge_score_out,
         cudaStream_t stream) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
@@ -168,7 +170,8 @@ namespace gsplat_lfs {
             render_alphas, last_ids,                                 \
             v_render_colors, v_render_alphas,                        \
             v_means, v_quats, v_scales, v_colors, v_opacities,       \
-            densification_info, densification_error_map, stream);    \
+            densification_info, densification_error_map,             \
+            edge_weight_map, edge_score_out, stream);                \
         break;
 
         switch (channels) {
@@ -369,6 +372,8 @@ namespace gsplat_lfs {
         float* v_sh_coeffs,
         float* densification_info,
         const float* densification_error_map,
+        const float* edge_weight_map,
+        float* edge_score_out,
         cudaStream_t stream) {
         // Determine output channels
         uint32_t channels = 3;
@@ -404,6 +409,7 @@ namespace gsplat_lfs {
             v_render_colors, v_render_alphas,
             v_means, v_quats, v_scales, v_colors, v_opacities,
             densification_info, densification_error_map,
+            edge_weight_map, edge_score_out,
             stream);
 
         // Backward through SH

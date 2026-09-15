@@ -17,6 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <expected>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -27,6 +30,8 @@
 namespace lfs::core {
     class Scene;
 }
+
+class TrainingSceneInitConcurrencyTest;
 
 namespace lfs::vis {
 
@@ -70,7 +75,17 @@ namespace lfs::vis {
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control
+        using EvaluationWeightsPreparer =
+            std::function<std::optional<std::filesystem::path>(bool allow_download)>;
+
+        void set_evaluation_weights_preparer(EvaluationWeightsPreparer preparer) {
+            evaluation_weights_preparer_ = std::move(preparer);
+        }
+
         bool startTraining();
+        // Wait for the off-thread initialization phase. Callers must not be the
+        // viewer thread; the GUI start path intentionally returns in Starting.
+        [[nodiscard]] lfs::Result<void> waitForInitialization();
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
@@ -80,18 +95,12 @@ namespace lfs::vis {
         void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
 
         // Temporary pause for short synchronization-sensitive operations; does not change UI state.
-        struct TemporaryPauseResult {
-            bool synchronized = false;
-            bool resume_required = false;
-        };
-
         void pauseTrainingTemporary();
-        [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 
         // State machine access
         [[nodiscard]] const TrainingStateMachine& getStateMachine() const { return state_machine_; }
-        [[nodiscard]] bool canPerform(TrainingAction action) const { return state_machine_.canPerform(action); }
+        [[nodiscard]] bool canPerform(TrainingAction action) const;
         [[nodiscard]] std::string_view getActionBlockedReason(TrainingAction action) const {
             return state_machine_.getActionBlockedReason(action);
         }
@@ -148,11 +157,12 @@ namespace lfs::vis {
             int iteration = 0;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            std::optional<float> lpips;
         };
 
         std::deque<float> getPSNRBuffer() const;
         void updatePSNR(float psnr);
-        void updateEvaluationMetrics(int iteration, float psnr, float ssim);
+        void updateEvaluationMetrics(int iteration, float psnr, float ssim, std::optional<float> lpips);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
         [[nodiscard]] lfs::io::project::MetricsChapter
@@ -220,9 +230,14 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class ::TrainingSceneInitConcurrencyTest;
 
-        // Training thread function
+        // Training initialization and execution thread functions
+        void trainingInitializationThreadFunc(std::stop_token stop_token);
         void trainingThreadFunc(std::stop_token stop_token);
+        [[nodiscard]] lfs::Result<void>
+        initializeTrainingOnWorker(std::stop_token stop_token);
+        void runOnSceneOwnerThread(std::function<void()> run, std::function<void()> cancel);
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
@@ -235,9 +250,9 @@ namespace lfs::vis {
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 
-        [[nodiscard]] lfs::core::SplatTensorAllocator createTrainingSplatTensorAllocator(
+        [[nodiscard]] lfs::Result<lfs::core::SplatTensorAllocator> createTrainingSplatTensorAllocator(
             const lfs::core::param::TrainingParameters& params,
-            std::size_t min_capacity = 0);
+            std::size_t min_capacity);
 
         // Install densify-time grow/rebind hook on the training model.
         void installExportableCapacityEnsure(lfs::core::SplatData& model);
@@ -253,13 +268,26 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        EvaluationWeightsPreparer evaluation_weights_preparer_;
+        std::unique_ptr<std::jthread> initialization_thread_;
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;
         std::mutex training_thread_mutex_;
         std::condition_variable training_thread_cv_;
+        bool initialization_thread_done_ = true;
+        std::mutex initialization_mutex_;
+        std::condition_variable initialization_cv_;
+        bool initialization_complete_ = true;
+        std::optional<lfs::Error> initialization_error_;
+        std::mutex initialization_gate_mutex_;
+        std::condition_variable initialization_gate_cv_;
+        bool initialization_gate_open_ = true;
+        bool initialization_main_step_failed_ = false;
+        std::atomic<bool> initialization_pause_requested_{false};
         std::jthread completion_reaper_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
+        std::function<bool(std::function<void()>, std::function<void()>)> test_scene_owner_poster_;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
         std::shared_ptr<VulkanExternalTensorStorage> splat_interop_parent_;
         lfs::core::SplatTensorAllocator splat_interop_allocator_;

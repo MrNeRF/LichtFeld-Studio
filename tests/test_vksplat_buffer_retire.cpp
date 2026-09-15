@@ -6,6 +6,7 @@
 
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
+#include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_wait.hpp"
 
 #include <gtest/gtest.h>
@@ -444,4 +445,48 @@ TEST(VkSplatBufferRetire, DrainForceMatchesCleanupContract) {
     EXPECT_EQ(pipeline.retired_shell_count(), 0u);
 
     pipeline.destroyBufferRetired(a);
+}
+
+namespace lfs::vis {
+    struct VksplatScratchReleaseTestAccess {
+        static void checkAliasesAreCleared() {
+            VksplatViewportRenderer renderer;
+            auto& keys = renderer.buffers_.primitive_depth_keys.deviceBuffer;
+            auto& tiles = renderer.buffers_.tiles_touched.deviceBuffer;
+            keys.buffer = fakeVkHandle<VkBuffer>(0x101);
+            keys.allocation = fakeVkHandle<VmaAllocation>(0x201);
+            keys.size = keys.capacity = keys.allocSize = 4096;
+            tiles = keys;
+            tiles.buffer = fakeVkHandle<VkBuffer>(0x102);
+            tiles.allocation = fakeVkHandle<VmaAllocation>(0x202);
+            auto& indices = renderer.buffers_.primitive_sort_indices.deviceBuffer;
+            auto& offsets = renderer.buffers_.index_buffer_offset.deviceBuffer;
+            aliasDeviceView(indices, keys);
+            aliasDeviceView(offsets, tiles);
+            indices.extra_usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+            renderer.render_complete_timeline_ = fakeVkHandle<VkSemaphore>(0x301);
+            renderer.last_submitted_render_value_ = 7;
+
+            renderer.releasePrivateScratchBuffers();
+            for (const auto* buffer : {&keys, &tiles, &indices, &offsets}) {
+                EXPECT_EQ(buffer->buffer, VK_NULL_HANDLE);
+                EXPECT_EQ(buffer->allocation, VK_NULL_HANDLE);
+                EXPECT_EQ(buffer->capacity, 0u);
+                EXPECT_EQ(buffer->size, 0u);
+            }
+            EXPECT_EQ(indices.extra_usage, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+            EXPECT_EQ(renderer.retired_private_scratch_buffers_.size(), 2u);
+            for (const auto& [value, buffer] : renderer.retired_private_scratch_buffers_) {
+                EXPECT_EQ(value, 7u);
+                EXPECT_NE(buffer.allocation, VK_NULL_HANDLE);
+            }
+            // The handles above are scripted; they must never reach Vulkan teardown.
+            renderer.retired_private_scratch_buffers_.clear();
+            renderer.render_complete_timeline_ = VK_NULL_HANDLE;
+        }
+    };
+} // namespace lfs::vis
+
+TEST(VksplatScratchReleaseTest, RetiresOwnersAndInvalidatesAliasesBeforeReuse) {
+    lfs::vis::VksplatScratchReleaseTestAccess::checkAliasesAreCleared();
 }

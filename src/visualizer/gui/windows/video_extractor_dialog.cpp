@@ -395,7 +395,7 @@ namespace lfs::gui {
 
             std::string error;
             if (!extractor.extract(extract_params, error)) {
-                if (stop_extraction_requested_.load()) {
+                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled) {
                     LOG_INFO("Video frame extraction stopped");
                     setExtractionStopped();
                 } else {

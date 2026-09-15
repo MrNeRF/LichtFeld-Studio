@@ -18,12 +18,19 @@ results
 data
 !tests/data/
 tests/data/*
+!tests/data/usd/
+!tests/data/usd/**
 !tests/data/param_json_golden/
 tests/data/param_json_golden/*
 !tests/data/param_json_golden/*.json
+!tests/data/nn/
+tests/data/nn/*
+!tests/data/nn/moge2_ref_fixture.json
+!tests/data/nn/lpips_ref_fixture.json
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
+!scripts/verify_video_orientation.py
 !tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
 !src/python/lfs_splat_lod_hierarchy.py
@@ -33,9 +40,12 @@ tests/data/param_json_golden/*
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
 !tools/*.py
+!tools/nn_export/export_lpips_weights.py
 .venv/
 *.png
 !src/**/assets/**/*.png
+!tests/data/nn/lpips_crop_a.png
+!tests/data/nn/lpips_crop_b.png
 *.sqlite
 test.py
 *.nsys-rep
@@ -65,7 +75,6 @@ lib/
 !external/tree-sitter/lib/src/
 !external/tree-sitter/lib/src/query.c
 generatedSchema.usda
-plugInfo.json
 
 # Compiled SPIR-V shader binaries (regenerated from slang/glsl by CMake;
 # slangc + glslang are required by the build anyway, so checking these in

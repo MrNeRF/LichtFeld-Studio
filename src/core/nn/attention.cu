@@ -466,11 +466,26 @@ namespace lfs::core::nn::kernels {
         constexpr int kFlashD = 64;
         constexpr int kFlashLd = 72;
 
+        __device__ __forceinline__ uint4 scale_half8(uint4 packed, float scale) {
+            uint4 out;
+            const auto* src = reinterpret_cast<const __half2*>(&packed);
+            auto* dst = reinterpret_cast<__half2*>(&out);
+#pragma unroll
+            for (int c = 0; c < 4; ++c) {
+                const float2 f = __half22float2(src[c]);
+                dst[c] = __float22half2_rn(make_float2(f.x * scale, f.y * scale));
+            }
+            return out;
+        }
+
         // K/V tiles live at leading-dimension 72 (64 useful + 8 pad). The pad
         // is the load_matrix_sync-compatible form of an 8-half xor swizzle:
         // 8 consecutive rows at a fixed column hit distinct smem banks.
+        // Global K/V are [n_k, d] with d <= 64; columns d..63 are a uint4 zero.
+        // kPad=false is the d==64 path and must stay byte-identical.
+        template <bool kPad>
         __device__ __forceinline__ void load_kv_tile(__half* Ks, __half* Vs, const __half* K,
-                                                     const __half* V, int k0, int n_k,
+                                                     const __half* V, int k0, int n_k, int d,
                                                      long long kv_head, int tid) {
 #pragma unroll
             for (int i = 0; i < 4; ++i) {
@@ -479,24 +494,98 @@ namespace lfs::core::nn::kernels {
                 const int col = off % kFlashD;
                 const int k_idx = k0 + row;
                 const int sm = row * kFlashLd + col;
-                if (k_idx < n_k) {
-                    const long long base = kv_head + static_cast<long long>(k_idx) * kFlashD + col;
-                    device::cp_async16(Ks + sm, K + base);
-                    device::cp_async16(Vs + sm, V + base);
+                if constexpr (!kPad) {
+                    if (k_idx < n_k) {
+                        const long long base =
+                            kv_head + static_cast<long long>(k_idx) * kFlashD + col;
+                        device::cp_async16(Ks + sm, K + base);
+                        device::cp_async16(Vs + sm, V + base);
+                    } else {
+                        *reinterpret_cast<uint4*>(Ks + sm) = uint4{0, 0, 0, 0};
+                        *reinterpret_cast<uint4*>(Vs + sm) = uint4{0, 0, 0, 0};
+                    }
                 } else {
-                    *reinterpret_cast<uint4*>(Ks + sm) = uint4{0, 0, 0, 0};
-                    *reinterpret_cast<uint4*>(Vs + sm) = uint4{0, 0, 0, 0};
+                    const long long base =
+                        kv_head + static_cast<long long>(k_idx) * d + col;
+                    if (k_idx < n_k && col + 8 <= d) {
+                        device::cp_async16(Ks + sm, K + base);
+                        device::cp_async16(Vs + sm, V + base);
+                    } else if (k_idx < n_k && col < d) {
+#pragma unroll
+                        for (int c = 0; c < 8; ++c) {
+                            __half kv = __float2half(0.0f);
+                            __half vv = __float2half(0.0f);
+                            if ((col + c) < d) {
+                                kv = K[base + c];
+                                vv = V[base + c];
+                            }
+                            Ks[sm + c] = kv;
+                            Vs[sm + c] = vv;
+                        }
+                    } else {
+                        *reinterpret_cast<uint4*>(Ks + sm) = uint4{0, 0, 0, 0};
+                        *reinterpret_cast<uint4*>(Vs + sm) = uint4{0, 0, 0, 0};
+                    }
                 }
             }
         }
 
-        // Flash attention for d=64: two 64-row Q tiles per block (Br=128),
-        // Q/O fragment-resident, K/V cp.async double-buffered with xor-swizzle,
-        // P kept in A fragments for the PV mma (no BrxBc overlay on the inner ds loop).
+        template <bool kPad>
+        __device__ __forceinline__ void load_q_tile(__half* Qs, const __half* Q, int q_base,
+                                                    int n_q, int d, long long q_head, float scale,
+                                                    int tid) {
+            if constexpr (!kPad) {
+                for (int i = tid; i < kFlashTile * kFlashD; i += 128) {
+                    const int r = i / kFlashD;
+                    const int c = i % kFlashD;
+                    const int q_row = q_base + r;
+                    float val = 0.0f;
+                    if (q_row < n_q) {
+                        val = __half2float(
+                            Q[q_head + static_cast<long long>(q_row) * kFlashD + c]);
+                    }
+                    Qs[i] = __float2half_rn(val * scale);
+                }
+            } else {
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    const int off = (tid + i * 128) * 8;
+                    const int row = off / kFlashD;
+                    const int col = off % kFlashD;
+                    const int q_row = q_base + row;
+                    uint4 packed = uint4{0, 0, 0, 0};
+                    if (q_row < n_q && col + 8 <= d) {
+                        const long long base =
+                            q_head + static_cast<long long>(q_row) * d + col;
+                        packed = scale_half8(*reinterpret_cast<const uint4*>(Q + base), scale);
+                    } else if (q_row < n_q && col < d) {
+                        const long long base =
+                            q_head + static_cast<long long>(q_row) * d + col;
+                        auto* h = reinterpret_cast<__half*>(&packed);
+#pragma unroll
+                        for (int c = 0; c < 8; ++c) {
+                            if (col + c < d) {
+                                h[c] = __float2half_rn(__half2float(Q[base + c]) * scale);
+                            }
+                        }
+                    }
+                    *reinterpret_cast<uint4*>(Qs + row * kFlashD + col) = packed;
+                }
+            }
+        }
+
+        // Flash attention for d<=64 (head dim padded to 64 in smem/fragments;
+        // tail columns are zero on load and skipped on store). Two 64-row Q
+        // tiles per block (Br=128), Q/O fragment-resident, K/V cp.async
+        // double-buffered with xor-swizzle, P kept in A fragments for the PV
+        // mma (no BrxBc overlay on the inner ds loop).
+        // kPad=false is compiled separately so the d==64 fast path stays
+        // byte-identical (MoGe-2).
+        template <bool kPad>
         __global__ void __launch_bounds__(128, 2)
             flash_attn_d64_kernel(const __half* __restrict__ q_ptr, const __half* __restrict__ k_ptr,
                                   const __half* __restrict__ v_ptr, __half* __restrict__ o_ptr,
-                                  int batch, int heads, int n_q, int n_k, float scale) {
+                                  int batch, int heads, int n_q, int n_k, int d, float scale) {
             const int tid = static_cast<int>(threadIdx.x);
             const int q0 = static_cast<int>(blockIdx.x) * kFlashBr;
             const int bh = static_cast<int>(blockIdx.y);
@@ -514,10 +603,11 @@ namespace lfs::core::nn::kernels {
             auto* Vs1 = Ks1 + kFlashBc * kFlashLd;
             auto* Ps = Qs;
 
+            const int head_d = kPad ? d : kFlashD;
             const long long q_head =
-                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * kFlashD;
+                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * head_d;
             const long long kv_head =
-                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_k) * kFlashD;
+                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_k) * head_d;
 
 #if __CUDA_ARCH__ >= 700
             using namespace nvcuda::wmma;
@@ -534,17 +624,7 @@ namespace lfs::core::nn::kernels {
 #pragma unroll
             for (int tile = 0; tile < 2; ++tile) {
                 const int q_base = q0 + tile * kFlashTile;
-                for (int i = tid; i < kFlashTile * kFlashD; i += 128) {
-                    const int r = i / kFlashD;
-                    const int c = i % kFlashD;
-                    const int q_row = q_base + r;
-                    float val = 0.0f;
-                    if (q_row < n_q) {
-                        val = __half2float(
-                            q_ptr[q_head + static_cast<long long>(q_row) * kFlashD + c]);
-                    }
-                    Qs[i] = __float2half_rn(val * scale);
-                }
+                load_q_tile<kPad>(Qs, q_ptr, q_base, n_q, d, q_head, scale, tid);
                 __syncthreads();
 #pragma unroll
                 for (int ds = 0; ds < 4; ++ds) {
@@ -556,7 +636,7 @@ namespace lfs::core::nn::kernels {
 
             auto* Kcur = Ks0;
             auto* Vcur = Vs0;
-            load_kv_tile(Kcur, Vcur, k_ptr, v_ptr, 0, n_k, kv_head, tid);
+            load_kv_tile<kPad>(Kcur, Vcur, k_ptr, v_ptr, 0, n_k, d, kv_head, tid);
             device::cp_async_commit();
             device::cp_async_wait0();
             __syncthreads();
@@ -566,7 +646,7 @@ namespace lfs::core::nn::kernels {
                 auto* Koth = (Kcur == Ks0) ? Ks1 : Ks0;
                 auto* Voth = (Vcur == Vs0) ? Vs1 : Vs0;
                 if (next < n_k) {
-                    load_kv_tile(Koth, Voth, k_ptr, v_ptr, next, n_k, kv_head, tid);
+                    load_kv_tile<kPad>(Koth, Voth, k_ptr, v_ptr, next, n_k, d, kv_head, tid);
                     device::cp_async_commit();
                 }
 
@@ -684,21 +764,63 @@ namespace lfs::core::nn::kernels {
 #pragma unroll
             for (int tile = 0; tile < 2; ++tile) {
                 const int q_base = q0 + tile * kFlashTile;
+                if constexpr (!kPad) {
 #pragma unroll
-                for (int ds = 0; ds < 4; ++ds) {
+                    for (int ds = 0; ds < 4; ++ds) {
 #pragma unroll
-                    for (int i = 0; i < 8; ++i) {
-                        const int row_off = (i >> 1) & 1;
-                        const int row = warp_row + base_row + row_off * 8;
-                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
-                        const int q_row = q_base + row;
-                        if (q_row < n_q && col < kFlashD) {
-                            const float inv =
-                                (l_i[tile][row_off] == 0.0f) ? 0.0f : 1.0f / l_i[tile][row_off];
-                            o_ptr[q_head + static_cast<long long>(q_row) * kFlashD + col] =
-                                __float2half_rn(o_frag[tile][ds].x[i] * inv);
+                        for (int i = 0; i < 8; ++i) {
+                            const int row_off = (i >> 1) & 1;
+                            const int row = warp_row + base_row + row_off * 8;
+                            const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
+                            const int q_row = q_base + row;
+                            if (q_row < n_q && col < kFlashD) {
+                                const float inv =
+                                    (l_i[tile][row_off] == 0.0f) ? 0.0f : 1.0f / l_i[tile][row_off];
+                                o_ptr[q_head + static_cast<long long>(q_row) * kFlashD + col] =
+                                    __float2half_rn(o_frag[tile][ds].x[i] * inv);
+                            }
                         }
                     }
+                } else {
+#pragma unroll
+                    for (int ds = 0; ds < 4; ++ds) {
+#pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            const int row_off = (i >> 1) & 1;
+                            const int row = warp_row + base_row + row_off * 8;
+                            const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
+                            if (row < kFlashTile) {
+                                const float inv =
+                                    (l_i[tile][row_off] == 0.0f) ? 0.0f : 1.0f / l_i[tile][row_off];
+                                Qs[row * kFlashD + col] =
+                                    __float2half_rn(o_frag[tile][ds].x[i] * inv);
+                            }
+                        }
+                    }
+                    __syncthreads();
+#pragma unroll
+                    for (int i = 0; i < 4; ++i) {
+                        const int off = (tid + i * 128) * 8;
+                        const int row = off / kFlashD;
+                        const int col = off % kFlashD;
+                        const int q_row = q_base + row;
+                        if (q_row < n_q && col + 8 <= d) {
+                            const long long dst =
+                                q_head + static_cast<long long>(q_row) * d + col;
+                            *reinterpret_cast<uint4*>(o_ptr + dst) =
+                                *reinterpret_cast<const uint4*>(Qs + row * kFlashD + col);
+                        } else if (q_row < n_q && col < d) {
+                            const long long dst =
+                                q_head + static_cast<long long>(q_row) * d + col;
+#pragma unroll
+                            for (int c = 0; c < 8; ++c) {
+                                if (col + c < d) {
+                                    o_ptr[dst + c] = Qs[row * kFlashD + col + c];
+                                }
+                            }
+                        }
+                    }
+                    __syncthreads();
                 }
             }
 #else
@@ -715,6 +837,7 @@ namespace lfs::core::nn::kernels {
             (void)o_ptr;
             (void)n_q;
             (void)n_k;
+            (void)d;
             (void)q_head;
             (void)kv_head;
             (void)tid;
@@ -738,24 +861,35 @@ namespace lfs::core::nn::kernels {
         }
         const bool is_half = dtype == DataType::Float16;
 
-        if (is_half && d == 64 && !has_mask && n_k > 0) {
+        if (is_half && d <= kFlashD && !has_mask && n_k > 0) {
             dim3 grid((n_q + kFlashBr - 1) / kFlashBr, batch * heads);
             const int smem = flash_d64_smem_bytes();
-            auto* fn = flash_attn_d64_kernel;
-            LFS_CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<const void*>(fn),
-                                                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                smem));
-            fn<<<grid, 128, smem, stream>>>(
-                static_cast<const __half*>(q), static_cast<const __half*>(k),
-                static_cast<const __half*>(v), static_cast<__half*>(o), batch, heads, n_q, n_k,
-                scale);
-            LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.flash_d64");
+            auto launch = [&](auto* fn, bool& smem_ready) {
+                if (!smem_ready) {
+                    LFS_CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<const void*>(fn),
+                                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                        smem));
+                    smem_ready = true;
+                }
+                fn<<<grid, 128, smem, stream>>>(
+                    static_cast<const __half*>(q), static_cast<const __half*>(k),
+                    static_cast<const __half*>(v), static_cast<__half*>(o), batch, heads, n_q,
+                    n_k, d, scale);
+                LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.flash_d64");
+            };
+            if (d == kFlashD) {
+                static bool smem_d64 = false;
+                launch(flash_attn_d64_kernel<false>, smem_d64);
+            } else {
+                static bool smem_pad = false;
+                launch(flash_attn_d64_kernel<true>, smem_pad);
+            }
             return;
         }
 
         dim3 grid((n_q + kBr - 1) / kBr, batch * heads);
 
-        if (is_half && (d % 16) == 0 && d <= 64 && n_k > 0) {
+        if (is_half && d <= kFlashD && n_k > 0) {
             constexpr int Br = 64;
             constexpr int Bc = 64;
             constexpr int D = 64;

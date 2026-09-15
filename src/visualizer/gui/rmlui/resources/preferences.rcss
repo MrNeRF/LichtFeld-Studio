@@ -91,6 +91,25 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-theme-variant-row {
+    align-items: center;
+}
+
+.preferences-theme-variants {
+    display: flex;
+    flex: 0 0 200dp;
+    gap: 4dp;
+    margin-left: auto;
+}
+
+.preferences-theme-variant {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 7dp;
+    padding-right: 7dp;
+    white-space: nowrap;
+}
+
 .preferences-port-control {
     display: flex;
     flex: 0 0 240dp;

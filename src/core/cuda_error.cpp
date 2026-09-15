@@ -587,9 +587,12 @@ namespace lfs::core {
 
     unsigned diagnostic_modes() noexcept {
         static const unsigned modes = [] {
+            const auto sync_debug_value = environment::value("LFS_CUDA_SYNC_DEBUG");
+            const auto vk_validation_fatal_value = environment::value("LFS_VK_VALIDATION_FATAL");
             const ParsedDiagnosticModes parsed = parse_diagnostic_modes(
-                environment::value("LFS_CUDA_SYNC_DEBUG"),
-                environment::value("LFS_VK_VALIDATION_FATAL"));
+                sync_debug_value ? std::optional<std::string_view>{*sync_debug_value} : std::nullopt,
+                vk_validation_fatal_value ? std::optional<std::string_view>{*vk_validation_fatal_value}
+                                          : std::nullopt);
             try {
                 if (parsed.legacy_alias_present) {
                     std::fprintf(

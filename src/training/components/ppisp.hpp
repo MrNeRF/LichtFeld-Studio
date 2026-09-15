@@ -8,6 +8,7 @@
 #include <cmath>
 #include <expected>
 #include <istream>
+#include <optional>
 #include <ostream>
 #include <unordered_map>
 #include <utility>
@@ -61,6 +62,7 @@ namespace lfs::training {
         float vig_non_pos = 0.01f;  // Penalize positive vignetting alpha coefficients
         float color_mean = 1.0f;    // Encourage color correction mean ~ 0
         float crf_channel = 0.1f;   // Encourage similar CRF across RGB channels
+        bool train_crf = true;      // When false, CRF stays at identity and is not stepped
     };
 
     /// Full-width row band of a larger image: vignetting is evaluated in full-image
@@ -87,8 +89,18 @@ namespace lfs::training {
         /// Write 0.5 * (ev - mean) into exposure_params_ for known UIDs. Moments unchanged.
         void seed_exposure(const std::vector<std::pair<int, float>>& uid_ev);
 
+        void set_exif_exposure_mean(std::optional<float> mean) { exif_exposure_mean_ = mean; }
+        [[nodiscard]] std::optional<float> exif_exposure_mean() const { return exif_exposure_mean_; }
+        void set_train_crf(bool train) { config_.train_crf = train; }
+        [[nodiscard]] bool train_crf() const { return config_.train_crf; }
+
         /// Per-frame exposure in EV (same units as the optimiser).
+        [[nodiscard]] lfs::core::Tensor& exposure_params() { return exposure_params_; }
         [[nodiscard]] const lfs::core::Tensor& exposure_params() const { return exposure_params_; }
+        [[nodiscard]] lfs::core::Tensor& color_params() { return color_params_; }
+        [[nodiscard]] const lfs::core::Tensor& color_params() const { return color_params_; }
+        [[nodiscard]] const lfs::core::Tensor& vignetting_params() const { return vignetting_params_; }
+        [[nodiscard]] const lfs::core::Tensor& crf_params() const { return crf_params_; }
 
         /// Check if a frame UID is registered
         bool is_known_frame(int uid) const;
@@ -113,6 +125,12 @@ namespace lfs::training {
         /// per-frame colour is identity (held-out frames have no colour latent).
         lfs::core::Tensor apply_with_exposure(const lfs::core::Tensor& rgb, int camera_id,
                                               float exposure_ev, const PPISPRegion& region = {});
+
+        /// Identity colour, given EV, camera vig/CRF, then user overrides on top.
+        lfs::core::Tensor apply_with_exposure_and_overrides(const lfs::core::Tensor& rgb, int camera_id,
+                                                            float exposure_ev,
+                                                            const PPISPRenderOverrides& overrides,
+                                                            const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params (for novel view synthesis)
         /// @param rgb input image [C,H,W]
@@ -171,6 +189,15 @@ namespace lfs::training {
         /// Update learning rate schedule
         void scheduler_step();
 
+        /// Subtract the mean over frames from exposure and colour latents.
+        void project_mean();
+
+        /// Mean per-frame exposure EV (CPU; for eval diagnostics).
+        [[nodiscard]] float mean_exposure_ev() const;
+        /// Max absolute mean of the 8 colour offsets after ZCA (CPU; for eval diagnostics).
+        [[nodiscard]] float max_abs_color_offset_mean() const;
+        void log_eval_diagnostics() const;
+
         // Accessors
         int num_cameras() const { return num_cameras_; }
         int num_frames() const { return num_frames_; }
@@ -184,6 +211,9 @@ namespace lfs::training {
             assert(!camera_id_to_idx_.empty());
             return camera_id_to_idx_.begin()->first;
         }
+
+        /// Physical camera with the most registered frames (ties: smallest id).
+        [[nodiscard]] int majority_camera_id() const;
 
         /// Get any valid frame UID (for fallback rendering)
         int any_frame_uid() const {
@@ -270,6 +300,9 @@ namespace lfs::training {
         size_t ctrl_bwd_rgb_h_ = 0;
         size_t ctrl_bwd_rgb_w_ = 0;
 
+        // Persistent GPU scalar for the fused vignetting regulariser (EC path).
+        lfs::core::Tensor vig_reg_loss_;
+
         Config config_;
         int64_t step_ = 0;
         double current_lr_;
@@ -283,6 +316,7 @@ namespace lfs::training {
         std::unordered_map<int, int> uid_to_frame_idx_;
         std::unordered_map<int, int> uid_to_camera_id_;
         bool finalized_ = false;
+        std::optional<float> exif_exposure_mean_;
 
         // ZCA pinv block-diagonal matrix for color mean regularization [8x8]
         lfs::core::Tensor color_pinv_block_diag_;

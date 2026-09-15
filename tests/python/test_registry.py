@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for the plugin registry system."""
 
+import builtins
 import json
+import locale
+import os
 import pytest
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -86,6 +90,56 @@ def mock_plugin_detail():
 class TestRegistryClient:
     """Tests for RegistryClient."""
 
+    def test_cache_is_utf8_when_locale_default_is_cp932(
+        self, registry_cache_dir, monkeypatch
+    ):
+        """Registry caches must not depend on the process text encoding."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        monkeypatch.setattr(
+            locale, "getpreferredencoding", lambda do_setlocale=True: "cp932"
+        )
+        real_open = builtins.open
+
+        def locale_default_open(file, mode="r", *args, **kwargs):
+            if "b" not in mode and "encoding" not in kwargs and not args:
+                kwargs["encoding"] = locale.getpreferredencoding(False)
+            return real_open(file, mode, *args, **kwargs)
+
+        # Make an encoding-less open behave like the affected Windows locale even
+        # when this test is running on a UTF-8 host.
+        monkeypatch.setattr(builtins, "open", locale_default_open)
+
+        detail = {
+            "name": "日本語",
+            "namespace": "community",
+            "display_name": "日本語プラグイン",
+            "repository": "https://example.test/日本語",
+            "versions": {},
+        }
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        cache_path = client._plugin_cache_path("community", "日本語")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(json.dumps(detail, ensure_ascii=False).encode("utf-8"))
+
+        with patch.object(
+            client, "_fetch_json", side_effect=AssertionError("cache should be used")
+        ):
+            assert client.get_plugin("community:日本語") == detail
+
+        cache_path.unlink()
+        with patch.object(client, "_fetch_json", return_value=detail):
+            assert client.get_plugin("community:日本語") == detail
+        assert "日本語" in cache_path.read_bytes().decode("utf-8")
+
+        os.utime(cache_path, (0, 0))
+        with patch.object(client, "_fetch_json", side_effect=RuntimeError("offline")):
+            assert client.get_plugin("community:日本語") == detail
+
     def test_search_by_name(self, registry_cache_dir, mock_registry_index):
         """Should find plugins by name."""
         scripts_dir = Path(__file__).parent.parent.parent / "scripts"
@@ -150,6 +204,26 @@ class TestRegistryClient:
 
         assert len(results) == 1
         assert results[0].name == "colmap"
+
+    def test_search_skips_malformed_entries(self, registry_cache_dir, mock_registry_index):
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        index = json.loads(json.dumps(mock_registry_index))
+        index["plugins"].insert(0, {"summary": "missing identity"})
+        index["plugins"].insert(1, {
+            "name": "bad-keywords",
+            "latest_version": "1.0.0",
+            "keywords": "not-a-list",
+        })
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        with patch.object(client, "_fetch_json", return_value=index):
+            results = client.search("", compatible_only=False)
+
+        assert [result.name for result in results] == ["colmap", "sam-segmentation"]
 
     def test_parse_plugin_id_with_namespace(self, registry_cache_dir):
         """Should parse namespace:name format."""
@@ -410,6 +484,30 @@ class TestCaching:
 
         results = client.search("colmap")
         assert len(results) == 1
+
+    def test_detail_cache_expires_and_offline_uses_stale_record(self, registry_cache_dir):
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient, CACHE_TTL_HOURS
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        old_detail = {"name": "foo", "namespace": "community", "versions": {}}
+        new_detail = {"name": "foo", "namespace": "community", "versions": {"2.0.0": {}}}
+        with patch.object(client, "_fetch_json", return_value=old_detail):
+            assert client.get_plugin("community:foo") == old_detail
+
+        cache_file = registry_cache_dir / "plugins" / "community" / "foo.json"
+        stale_time = time.time() - CACHE_TTL_HOURS * 3600 - 1
+        import os
+        os.utime(cache_file, (stale_time, stale_time))
+        with patch.object(client, "_fetch_json", return_value=new_detail):
+            assert client.get_plugin("community:foo") == new_detail
+
+        os.utime(cache_file, (stale_time, stale_time))
+        with patch.object(client, "_fetch_json", side_effect=OSError("offline")):
+            assert client.get_plugin("community:foo") == new_detail
 
 
 class TestChecksumVerification:

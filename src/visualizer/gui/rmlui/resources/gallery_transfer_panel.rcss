@@ -1,0 +1,7 @@
+.gallery-transfer-content { display: flex; flex-direction: column; gap: 8dp; padding: 8dp; }
+.gallery-transfer-list { max-height: 440dp; overflow-y: auto; }
+.gallery-transfer-row { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 0dp; border-bottom-width: 1dp; }
+.gallery-transfer-title, .gallery-actions { display: flex; align-items: center; gap: 8dp; flex-wrap: wrap; }
+.gallery-transfer-title { justify-content: space-between; }
+.gallery-transfer-row progress { width: 100%; height: 5dp; }
+.gallery-actions .btn { box-sizing: border-box; height: 26dp; min-height: 26dp; padding: 0 10dp; line-height: 24dp; font-size: 11dp; }

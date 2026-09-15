@@ -37,6 +37,41 @@ namespace lfs::python {
         std::atomic_uint64_t g_next_subscription_id{1};
         thread_local bool g_test_drain_with_current_gil = false;
 
+        template <typename Invoke>
+        void invoke_python_subscription(
+            const std::weak_ptr<PyStoreSubscription>& weak_subscription,
+            Invoke&& invoke) {
+            const bool can_acquire = can_acquire_gil();
+            const bool use_current_gil =
+                !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
+            if (!can_acquire && !use_current_gil)
+                return;
+
+            const auto invoke_callback = [&] {
+                // Lock inside the GIL-held scope so self-unsubscription cannot
+                // release the final Python callback reference without the GIL.
+                const auto subscription = weak_subscription.lock();
+                if (!subscription)
+                    return;
+
+                try {
+                    invoke(subscription->callback);
+                } catch (nb::python_error& e) {
+                    (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
+                } catch (const std::exception& e) {
+                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
+                }
+            };
+
+            if (can_acquire) {
+                const GilAcquire gil;
+                invoke_callback();
+            } else {
+                // Test drain already entered from Python with the GIL held.
+                invoke_callback();
+            }
+        }
+
         template <typename Observable>
         std::uint64_t subscribe_observable(Observable& observable, nb::object callback) {
             const auto id = g_next_subscription_id.fetch_add(1, std::memory_order_relaxed);
@@ -44,32 +79,9 @@ namespace lfs::python {
             subscription->callback = std::move(callback);
             const std::weak_ptr<PyStoreSubscription> weak_subscription = subscription;
             subscription->token = observable.subscribe([weak_subscription](const auto& value) {
-                const auto subscription = weak_subscription.lock();
-                if (!subscription)
-                    return;
-                const bool can_acquire = can_acquire_gil();
-                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
-                if (!can_acquire && !use_current_gil)
-                    return;
-                try {
-                    if (can_acquire) {
-                        const GilAcquire gil;
-                        subscription->callback(value);
-                    } else {
-                        subscription->callback(value);
-                    }
-                } catch (nb::python_error& e) {
-                    // Containment needs the GIL to extract and report; if it is
-                    // gone the interpreter is dead or finalizing, and swallowing
-                    // here is deliberate — the pre-Phase 9 e.what() log ran
-                    // GIL-unsafe and was itself a shutdown crash class.
-                    if (can_acquire_gil()) {
-                        const GilAcquire gil;
-                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
-                    }
-                } catch (const std::exception& e) {
-                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
-                }
+                invoke_python_subscription(
+                    weak_subscription,
+                    [&value](const nb::object& callback) { callback(value); });
             });
 
             {
@@ -86,32 +98,9 @@ namespace lfs::python {
             subscription->callback = std::move(callback);
             const std::weak_ptr<PyStoreSubscription> weak_subscription = subscription;
             subscription->token = observable.subscribe([weak_subscription, convert = std::move(convert)](const auto& value) {
-                const auto subscription = weak_subscription.lock();
-                if (!subscription)
-                    return;
-                const bool can_acquire = can_acquire_gil();
-                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
-                if (!can_acquire && !use_current_gil)
-                    return;
-                try {
-                    if (can_acquire) {
-                        const GilAcquire gil;
-                        subscription->callback(convert(value));
-                    } else {
-                        subscription->callback(convert(value));
-                    }
-                } catch (nb::python_error& e) {
-                    // Containment needs the GIL to extract and report; if it is
-                    // gone the interpreter is dead or finalizing, and swallowing
-                    // here is deliberate — the pre-Phase 9 e.what() log ran
-                    // GIL-unsafe and was itself a shutdown crash class.
-                    if (can_acquire_gil()) {
-                        const GilAcquire gil;
-                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
-                    }
-                } catch (const std::exception& e) {
-                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
-                }
+                invoke_python_subscription(
+                    weak_subscription,
+                    [&](const nb::object& callback) { callback(convert(value)); });
             });
 
             {
@@ -175,6 +164,8 @@ namespace lfs::python {
             nb::dict state;
             state["signed_in"] = value.signed_in;
             state["linking"] = value.linking;
+            state["disconnecting"] = value.disconnecting;
+            state["error"] = value.error;
             state["membership_required"] = value.membership_required;
             state["label"] = value.label;
             state["tier"] = value.tier;
@@ -192,10 +183,52 @@ namespace lfs::python {
             lfs::vis::AppStore::AccountState state;
             state.signed_in = dict_value(dict, "signed_in", false);
             state.linking = dict_value(dict, "linking", false);
+            state.disconnecting = dict_value(dict, "disconnecting", false);
+            state.error = dict_value(dict, "error", std::string{});
             state.membership_required = dict_value(dict, "membership_required", false);
             state.label = dict_value(dict, "label", std::string{});
             state.tier = dict_value(dict, "tier", std::string{});
             state.tooltip = dict_value(dict, "tooltip", std::string{});
+            return state;
+        }
+
+        nb::dict gallery_state_to_dict(const lfs::vis::AppStore::GalleryState& value) {
+            nb::dict state;
+            state["signed_in"] = value.signed_in;
+            state["relink_required"] = value.relink_required;
+            state["active_uploads"] = value.active_uploads;
+            state["active_downloads"] = value.active_downloads;
+            state["paused"] = value.paused;
+            state["attention"] = value.attention;
+            state["percent"] = value.percent;
+            state["label"] = value.label;
+            state["detail"] = value.detail;
+            state["tooltip"] = value.tooltip;
+            state["tone"] = value.tone;
+            state["epoch"] = value.epoch;
+            return state;
+        }
+
+        lfs::vis::AppStore::GalleryState gallery_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("gallery_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::GalleryState state;
+            state.signed_in = dict_value(dict, "signed_in", false);
+            state.relink_required = dict_value(dict, "relink_required", false);
+            state.active_uploads = dict_value(dict, "active_uploads", 0);
+            state.active_downloads = dict_value(dict, "active_downloads", 0);
+            state.paused = dict_value(dict, "paused", 0);
+            state.attention = dict_value(dict, "attention", 0);
+            state.percent = dict_value(dict, "percent", -1);
+            state.label = dict_value(dict, "label", std::string{});
+            state.detail = dict_value(dict, "detail", std::string{});
+            state.tooltip = dict_value(dict, "tooltip", std::string{});
+            state.tone = dict_value(dict, "tone", std::string{"idle"});
+            state.epoch = dict_value(dict, "epoch", std::uint64_t{0});
             return state;
         }
 
@@ -307,6 +340,9 @@ namespace lfs::python {
             else if (field == "eval_ssim")
                 store.eval_ssim.set(value.is_none() ? std::optional<float>{}
                                                     : std::optional<float>{nb::cast<float>(value)});
+            else if (field == "eval_lpips")
+                store.eval_lpips.set(value.is_none() ? std::optional<float>{}
+                                                     : std::optional<float>{nb::cast<float>(value)});
             else if (field == "scene_generation")
                 store.scene_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "selection_generation")
@@ -329,6 +365,8 @@ namespace lfs::python {
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
             else if (field == "account_state")
                 store.account_state.set(account_state_from_object(value));
+            else if (field == "gallery_state")
+                store.gallery_state.set(gallery_state_from_object(value));
             else if (field == "video_export_overlay_state")
                 store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
             else if (field == "export_progress_state")
@@ -369,6 +407,8 @@ namespace lfs::python {
                 return nb::cast(store.eval_psnr.get());
             if (field == "eval_ssim")
                 return nb::cast(store.eval_ssim.get());
+            if (field == "eval_lpips")
+                return nb::cast(store.eval_lpips.get());
             if (field == "scene_generation")
                 return nb::cast(store.scene_generation.get());
             if (field == "selection_generation")
@@ -391,6 +431,8 @@ namespace lfs::python {
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
             if (field == "account_state")
                 return account_state_to_dict(store.account_state.get());
+            if (field == "gallery_state")
+                return gallery_state_to_dict(store.gallery_state.get());
             if (field == "video_export_overlay_state")
                 return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
             if (field == "export_progress_state")
@@ -430,6 +472,8 @@ namespace lfs::python {
                 return subscribe_observable(store.eval_psnr, std::move(callback));
             if (field == "eval_ssim")
                 return subscribe_observable(store.eval_ssim, std::move(callback));
+            if (field == "eval_lpips")
+                return subscribe_observable(store.eval_lpips, std::move(callback));
             if (field == "scene_generation")
                 return subscribe_observable(store.scene_generation, std::move(callback));
             if (field == "selection_generation")
@@ -454,6 +498,9 @@ namespace lfs::python {
             if (field == "account_state")
                 return subscribe_observable_as(
                     store.account_state, std::move(callback), account_state_to_dict);
+            if (field == "gallery_state")
+                return subscribe_observable_as(
+                    store.gallery_state, std::move(callback), gallery_state_to_dict);
             if (field == "video_export_overlay_state")
                 return subscribe_observable_as(
                     store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);

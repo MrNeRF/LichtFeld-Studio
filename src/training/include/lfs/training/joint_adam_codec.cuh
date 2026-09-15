@@ -62,7 +62,11 @@ namespace lfs::training::joint_adam {
                                                     const float4 mm) {
             const float2 prim = decode_us(packed, idx, mm);
             const float sqrt_g2 = inverse_sqrt_g2(prim.y);
-            return make_float2(prim.x * (sqrt_g2 + kEpsDevice), sqrt_g2 * sqrt_g2);
+            const float g2 = sqrt_g2 * sqrt_g2;
+            // Match the host decoder: zero variance must not turn quantized
+            // u=0 residue into momentum that Adam amplifies by 1/eps.
+            const float g1 = (g2 == 0.0f) ? 0.0f : prim.x * (sqrt_g2 + kEpsDevice);
+            return make_float2(g1, g2);
         }
 
         // Block-uniform ranges: caller hoists inv_u_range / inv_s_range once

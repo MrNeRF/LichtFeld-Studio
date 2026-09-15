@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -31,15 +32,17 @@ namespace {
 
     constexpr uint32_t BILATERAL_MAGIC = 0x4C464247;
     constexpr uint32_t BILATERAL_LEGACY_VERSION = 1;
-    constexpr uint32_t BILATERAL_VERSION = 2;
+    constexpr uint32_t BILATERAL_VERSION = 3;
     constexpr size_t BILATERAL_CONFIG_OFFSET = 24;
-    constexpr size_t BILATERAL_CONFIG_BLOCK_BYTES = 60;
+    constexpr size_t BILATERAL_CONFIG_BLOCK_BYTES = 64;
+    constexpr uint32_t BILATERAL_CONFIG_SCHEMA_VERSION = 2;
+    constexpr uint32_t BILATERAL_CONFIG_V2_BYTES = 56;
 
     constexpr uint32_t PPISP_MAGIC = 0x4C465050;
     constexpr uint32_t PPISP_LEGACY_VERSION = 2;
-    constexpr uint32_t PPISP_VERSION = 3;
+    constexpr uint32_t PPISP_VERSION = 4;
     constexpr size_t PPISP_CONFIG_OFFSET = 16;
-    constexpr size_t PPISP_CONFIG_BLOCK_BYTES = 84;
+    constexpr size_t PPISP_CONFIG_BLOCK_BYTES = 88;
 
     constexpr uint32_t CONTROLLER_POOL_MAGIC = 0x4C465043;
     constexpr uint32_t CONTROLLER_POOL_LEGACY_VERSION = 1;
@@ -49,7 +52,8 @@ namespace {
 
     constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
     constexpr uint32_t OPTIMIZER_CONFIG_V1_BYTES = 52;
-    constexpr uint32_t PPISP_CONFIG_V1_BYTES = 76;
+    constexpr uint32_t PPISP_CONFIG_SCHEMA_VERSION = 2;
+    constexpr uint32_t PPISP_CONFIG_V2_BYTES = 80;
 
     struct LegacyBilateralConfigV1 {
         double lr;
@@ -179,6 +183,7 @@ namespace {
             .vig_non_pos = 0.17f,
             .color_mean = 0.29f,
             .crf_channel = 0.23f,
+            .train_crf = false,
         };
     }
 
@@ -215,6 +220,7 @@ namespace {
         EXPECT_FLOAT_EQ(actual.vig_non_pos, expected.vig_non_pos);
         EXPECT_FLOAT_EQ(actual.color_mean, expected.color_mean);
         EXPECT_FLOAT_EQ(actual.crf_channel, expected.crf_channel);
+        EXPECT_EQ(actual.train_crf, expected.train_crf);
     }
 
     template <typename Config>
@@ -245,9 +251,9 @@ namespace {
         const std::string& bytes,
         size_t offset,
         const lfs::training::PPISP::Config& config) {
-        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), CONFIG_SCHEMA_VERSION);
+        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), PPISP_CONFIG_SCHEMA_VERSION);
         offset += sizeof(uint32_t);
-        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), PPISP_CONFIG_V1_BYTES);
+        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), PPISP_CONFIG_V2_BYTES);
         offset += sizeof(uint32_t);
         EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.lr);
         offset += sizeof(double);
@@ -274,6 +280,8 @@ namespace {
         EXPECT_FLOAT_EQ(read_little_endian<float>(bytes, offset), config.color_mean);
         offset += sizeof(float);
         EXPECT_FLOAT_EQ(read_little_endian<float>(bytes, offset), config.crf_channel);
+        offset += sizeof(float);
+        EXPECT_EQ(read_little_endian<int32_t>(bytes, offset), config.train_crf ? 1 : 0);
     }
 
     template <typename Load>
@@ -347,11 +355,47 @@ namespace {
 
         const auto bytes = stream.str();
         EXPECT_EQ(read_little_endian<uint32_t>(bytes, sizeof(uint32_t)), BILATERAL_VERSION);
-        expect_optimizer_config_wire(bytes, BILATERAL_CONFIG_OFFSET, config);
+        size_t offset = BILATERAL_CONFIG_OFFSET;
+        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), BILATERAL_CONFIG_SCHEMA_VERSION);
+        offset += sizeof(uint32_t);
+        EXPECT_EQ(read_little_endian<uint32_t>(bytes, offset), BILATERAL_CONFIG_V2_BYTES);
+        offset += sizeof(uint32_t);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.lr);
+        offset += sizeof(double);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.beta1);
+        offset += sizeof(double);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.beta2);
+        offset += sizeof(double);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.eps);
+        offset += sizeof(double);
+        EXPECT_EQ(read_little_endian<int32_t>(bytes, offset), config.warmup_steps);
+        offset += sizeof(int32_t);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.warmup_start_factor);
+        offset += sizeof(double);
+        EXPECT_DOUBLE_EQ(read_little_endian<double>(bytes, offset), config.final_lr_factor);
+        offset += sizeof(double);
+        EXPECT_EQ(read_little_endian<int32_t>(bytes, offset),
+                  static_cast<int32_t>(lfs::training::BilateralGridParameterization::Affine));
 
         lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
         loaded.deserialize(stream);
         expect_optimizer_config_eq(config, loaded.get_config());
+    }
+
+    TEST(BilateralGridConfigSerializationTest, VersionTwoOmitsLastStepAndDefaultsToZero) {
+        const auto config = bilateral_config();
+        lfs::training::BilateralGrid source(1, 2, 3, 4, 100, config);
+        std::stringstream current;
+        source.serialize(current);
+        std::string bytes = current.str();
+        ASSERT_GE(bytes.size(), sizeof(int64_t));
+        write_little_endian_u32(bytes, sizeof(uint32_t), 2);
+        bytes.resize(bytes.size() - sizeof(int64_t));
+        std::stringstream stream(bytes);
+        lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+        loaded.deserialize(stream);
+        expect_optimizer_config_eq(config, loaded.get_config());
+        EXPECT_EQ(loaded.get_step(), source.get_step());
     }
 
     TEST(BilateralGridConfigSerializationTest, LegacyVersionOneRawConfigLoads) {
@@ -428,7 +472,9 @@ namespace {
             legacy));
         lfs::training::PPISP loaded(1);
         loaded.deserialize(stream);
-        expect_ppisp_config_eq(config, loaded.get_config());
+        auto expected = config;
+        expected.train_crf = true; // v2 blobs predate the field; default is identity-trainable
+        expect_ppisp_config_eq(expected, loaded.get_config());
     }
 
     TEST(PPISPControllerPoolConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
@@ -552,6 +598,87 @@ namespace {
         expect_optimizer_config_eq(bilateral, target_bilateral.get_config());
         expect_ppisp_config_eq(ppisp, target_ppisp.get_config());
         expect_optimizer_config_eq(controller, target_controller.get_config());
+    }
+
+    TEST(BilateralGridConfigSerializationTest, ExposureChromaRoundTripPreservesParameterization) {
+        const auto config = bilateral_config();
+        lfs::training::BilateralGrid source(
+            2, 2, 2, 2, 50, config, lfs::training::BilateralGridParameterization::ExposureChroma);
+        EXPECT_EQ(source.parameterization(), lfs::training::BilateralGridParameterization::ExposureChroma);
+        EXPECT_EQ(source.channels(), 9);
+        std::stringstream stream;
+        source.serialize(stream);
+
+        lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+        loaded.deserialize(stream);
+        EXPECT_EQ(loaded.parameterization(), lfs::training::BilateralGridParameterization::ExposureChroma);
+        EXPECT_EQ(loaded.channels(), 9);
+        expect_optimizer_config_eq(config, loaded.get_config());
+
+        lfs::training::BilateralGrid live(
+            2, 2, 2, 2, 50, config, lfs::training::BilateralGridParameterization::ExposureChroma);
+        live.adopt_checkpoint_state(loaded);
+        EXPECT_EQ(live.parameterization(), lfs::training::BilateralGridParameterization::ExposureChroma);
+        EXPECT_EQ(live.channels(), 9);
+    }
+
+    TEST(BilateralGridConfigSerializationTest, AdoptRejectsParameterizationMismatch) {
+        const auto config = bilateral_config();
+        lfs::training::BilateralGrid affine(2, 2, 2, 2, 50, config);
+        std::stringstream stream;
+        affine.serialize(stream);
+
+        lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+        loaded.deserialize(stream);
+
+        lfs::training::BilateralGrid chroma(
+            2, 2, 2, 2, 50, config, lfs::training::BilateralGridParameterization::ExposureChroma);
+        EXPECT_THROW(chroma.adopt_checkpoint_state(loaded), std::runtime_error);
+    }
+
+    TEST(CheckpointComponentConfigRoundTripTest, ExposureChromaMismatchFailsToLoad) {
+        const ScopedTestDirectory temp_dir("lfs_checkpoint_exposure_chroma_mismatch");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir.path();
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 100;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+
+        auto source_model = make_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        const auto bilateral = bilateral_config();
+        lfs::training::BilateralGrid source_bilateral(1, 2, 3, 4, 100, bilateral);
+
+        const auto saved = lfs::test::write_checkpoint_fixture(
+            temp_dir.path(),
+            17,
+            source_strategy,
+            params,
+            &source_bilateral,
+            nullptr,
+            nullptr,
+            nullptr);
+        ASSERT_TRUE(saved.has_value()) << saved.error();
+
+        auto target_model = make_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        lfs::training::BilateralGrid target_bilateral(
+            1, 2, 3, 4, 100, bilateral, lfs::training::BilateralGridParameterization::ExposureChroma);
+        auto loaded_params = params;
+        const auto checkpoint = lfs::test::checkpoint_fixture_path(temp_dir.path());
+        const auto loaded = lfs::training::load_checkpoint(
+            checkpoint,
+            target_strategy,
+            loaded_params,
+            &target_bilateral,
+            nullptr,
+            nullptr,
+            nullptr);
+        ASSERT_FALSE(loaded.has_value());
+        EXPECT_NE(loaded.error().find("parameterization mismatch"), std::string::npos)
+            << loaded.error();
     }
 
 } // namespace

@@ -45,7 +45,7 @@ namespace lfs::core {
 
         [[nodiscard]] std::optional<std::filesystem::path> environmentPath(const char* const name) {
             if (const auto value = environment::value(name))
-                return utf8_to_path(std::string(*value));
+                return utf8_to_path(*value);
             return std::nullopt;
         }
 
@@ -275,8 +275,7 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
-                                                        {"working_directory", ""},
-                                                        {"asset_manager_directory", ""},
+                                                        {"project_location", ""},
                                                         {"mcp", {
                                                                     {"enabled", true},
                                                                     {"expose_network", false},

@@ -3,6 +3,8 @@
   <link type="text/rcss" href="components.rcss"/>
 </head>
 <body>
+<div id="window-shadow-ambient"></div>
+<div id="window-shadow-key"></div>
 <div id="window-frame">
   <div id="title-bar">
     <span id="title-text">{{panel_label}}</span>

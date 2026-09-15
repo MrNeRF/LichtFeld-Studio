@@ -147,11 +147,19 @@ namespace lfs::python {
         template <>
         struct PropTraits<core::prop::PropType::Mat4> {
             static nb::object to_python(const std::any& v) {
-                const auto arr = std::any_cast<std::array<float, 16>>(v);
                 nb::list rows;
-                for (int i = 0; i < 4; ++i) {
-                    rows.append(nb::make_tuple(arr[i * 4 + 0], arr[i * 4 + 1],
-                                               arr[i * 4 + 2], arr[i * 4 + 3]));
+                if (v.type() == typeid(glm::mat4)) {
+                    const auto& matrix = std::any_cast<const glm::mat4&>(v);
+                    for (int row = 0; row < 4; ++row) {
+                        rows.append(nb::make_tuple(matrix[0][row], matrix[1][row],
+                                                   matrix[2][row], matrix[3][row]));
+                    }
+                } else {
+                    const auto arr = std::any_cast<std::array<float, 16>>(v);
+                    for (int i = 0; i < 4; ++i) {
+                        rows.append(nb::make_tuple(arr[i * 4 + 0], arr[i * 4 + 1],
+                                                   arr[i * 4 + 2], arr[i * 4 + 3]));
+                    }
                 }
                 return rows;
             }

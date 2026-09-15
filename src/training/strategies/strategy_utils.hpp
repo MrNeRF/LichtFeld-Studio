@@ -6,6 +6,7 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/screen_share.cuh"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include <cstdint>
@@ -96,37 +97,29 @@ namespace lfs::training {
 
     /**
      * Grow-only N-row densify scratch for masks and weights.
-     * Sized once to max_cap so refine never re-driver-allocs as live N climbs.
+     * Initially sized to the model's reserved capacity so refine does not
+     * over-allocate against the configured max cap from iteration zero.
      */
     struct DensifyNScratch {
         lfs::core::Tensor f32_a;  // weights / scores
         lfs::core::Tensor bool_a; // masks
-        lfs::core::Tensor i64_a;  // indices (K, grows with K high-water)
-        lfs::core::Tensor i64_b;
         size_t n_capacity = 0;
-        size_t k_capacity = 0;
         size_t n_required = 0;
-        size_t k_required = 0;
 
         void ensure_n(size_t n, lfs::core::Device device);
-        void ensure_k(size_t k, lfs::core::Device device);
 
-        /// Resident capacity bytes (f32×1 + bool×1 + i64×2 at high-water).
+        /// Resident capacity bytes (f32×1 + bool×1 at high-water).
         [[nodiscard]] std::size_t resident_bytes() const noexcept {
             std::size_t bytes = 0;
             if (n_capacity > 0) {
                 bytes += n_capacity * (sizeof(float) + sizeof(bool));
-            }
-            if (k_capacity > 0) {
-                bytes += k_capacity * 2 * sizeof(std::int64_t);
             }
             return bytes;
         }
 
         /// Peak logical rows requested from the grow-only backing buffers.
         [[nodiscard]] std::size_t required_bytes() const noexcept {
-            return n_required * (sizeof(float) + sizeof(bool)) +
-                   k_required * 2 * sizeof(std::int64_t);
+            return n_required * (sizeof(float) + sizeof(bool));
         }
 
         // Drop all storage. Not process-static (lives on the strategy), but
@@ -135,18 +128,12 @@ namespace lfs::training {
         void release() noexcept {
             f32_a = {};
             bool_a = {};
-            i64_a = {};
-            i64_b = {};
             n_capacity = 0;
-            k_capacity = 0;
             n_required = 0;
-            k_required = 0;
         }
 
         [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
         [[nodiscard]] lfs::core::Tensor bool_a_view(size_t n) const;
-        [[nodiscard]] lfs::core::Tensor i64_a_view(size_t k) const;
-        [[nodiscard]] lfs::core::Tensor i64_b_view(size_t k) const;
     };
 
     /**
@@ -155,6 +142,8 @@ namespace lfs::training {
      * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
      */
     struct DensifyChildWorkspace {
+        ~DensifyChildWorkspace();
+
         lfs::core::Tensor means;     // [cap, 3]
         lfs::core::Tensor rotations; // [cap, 4]
         lfs::core::Tensor scales;    // [cap, 3]
@@ -200,6 +189,34 @@ namespace lfs::training {
         size_t n,
         lfs::core::Device device,
         size_t reserve_capacity = 0);
+
+    inline void ensure_max_screen_share_shape(
+        lfs::core::SplatData& splat,
+        const size_t n,
+        const size_t reserve_capacity = 0) {
+        ensure_score_buffer_inplace(
+            splat._max_screen_share, n, splat.means().device(), reserve_capacity);
+        splat._max_screen_share.set_name("splat.max_screen_share");
+    }
+
+    inline void publish_screen_share_cap(
+        AdamOptimizer* optimizer,
+        lfs::core::SplatData& splat,
+        const lfs::core::param::OptimizationParameters& params) {
+        if (!optimizer) {
+            return;
+        }
+        if (!screen_share_cap_active(params.max_screen_share) ||
+            !splat._max_screen_share.is_valid()) {
+            optimizer->set_screen_share_cap(nullptr, 0, 0.0f, 0.0f);
+            return;
+        }
+        optimizer->set_screen_share_cap(
+            splat._max_screen_share.ptr<float>(),
+            static_cast<int>(splat._max_screen_share.numel()),
+            params.max_screen_share,
+            params.screen_share_penalty);
+    }
 
     /// Collect leftover per-primitive Adam scale pointers from the removed
     /// legacy moment codec. Always returns 0 under joint-only Adam state.

@@ -23,6 +23,7 @@ namespace lfs::training::kernels {
     struct SSIMWorkspace {
         // Forward pass buffers
         lfs::core::Tensor ssim_map; // [N, C, H, W] fp32
+        lfs::core::Tensor cs_map;   // [N, C, H, W] contrast×structure (independent of arena)
         // dm_* partials stored fp16 (same proven path as fused L1+SSIM).
         lfs::core::Tensor dm_dmu1;       // [N, C, H, W] fp16
         lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] fp16
@@ -73,6 +74,7 @@ namespace lfs::training::kernels {
     // Per-pixel SSIM map result for masked loss computation
     struct SSIMMapResult {
         lfs::core::Tensor ssim_map;   // [N, C, H, W]
+        lfs::core::Tensor cs_map;     // [N, C, H, W] contrast×structure
         lfs::core::Tensor ssim_value; // Mean SSIM scalar
         SSIMContext ctx;
     };
@@ -80,11 +82,13 @@ namespace lfs::training::kernels {
     // Lightweight workspace when only the per-pixel SSIM map is needed.
     struct SSIMMapWorkspace {
         lfs::core::Tensor ssim_map; // [N, C, H, W]
+        lfs::core::Tensor cs_map;   // [N, C, H, W] contrast×structure
         std::vector<size_t> allocated_shape;
 
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+                cs_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
                 allocated_shape = shape;
             }
         }
@@ -101,7 +105,8 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
         SSIMMapWorkspace& workspace,
-        lfs::core::Tensor& error_map);
+        lfs::core::Tensor& error_map,
+        bool contrast_structure_only = false);
 
     // Manual SSIM backward (no autograd) - computes gradient w.r.t. img1
     lfs::core::Tensor ssim_backward(
@@ -126,6 +131,7 @@ namespace lfs::training::kernels {
     // Workspace for fused L1+SSIM (extends SSIMWorkspace)
     struct FusedL1SSIMWorkspace {
         lfs::core::Tensor ssim_map; // [N, 1, H, W] per-pixel channel-mean SSIM values
+        lfs::core::Tensor cs_map;   // [N, 1, H, W] channel-mean contrast×structure
         // SSIM partial derivatives, written by forward, read by backward only. Stored
         // fp16: C1/C2 floor A and B so these stay bounded (no overflow), and the ~0.1%
         // quantization is negligible at the typical 0.2 D-SSIM weight. Halves the bulk
@@ -184,6 +190,7 @@ namespace lfs::training::kernels {
 
     struct DecoupledFusedL1SSIMWorkspace {
         lfs::core::Tensor ssim_map; // [N, 1, H, W] channel-mean decoupled SSIM map
+        lfs::core::Tensor cs_map;   // [N, 1, H, W] channel-mean CS on the raw render
         // all dm_* partials fp16 (mirror fused path).
         lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] fp16 d(ssim_map)/d mu(corrected)
         lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] fp16 indirect mu(raw) via sigma terms
@@ -231,6 +238,7 @@ namespace lfs::training::kernels {
 
     struct MaskedFusedL1SSIMWorkspace {
         lfs::core::Tensor ssim_map; // [N, 1, H, W] per-pixel channel-mean SSIM values
+        lfs::core::Tensor cs_map;   // [N, 1, H, W] channel-mean contrast×structure
         // dm_* partials fp16.
         lfs::core::Tensor dm_dmu1;        // [N, C, H, W] fp16
         lfs::core::Tensor dm_dsigma1_sq;  // [N, C, H, W] fp16
@@ -273,6 +281,7 @@ namespace lfs::training::kernels {
 
     struct MaskedDecoupledFusedL1SSIMWorkspace {
         lfs::core::Tensor ssim_map; // [N, 1, H, W]
+        lfs::core::Tensor cs_map;   // [N, 1, H, W] channel-mean CS on the raw render
         // dm_* partials fp16.
         lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] fp16
         lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] fp16

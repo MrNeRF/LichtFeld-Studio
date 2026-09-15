@@ -854,7 +854,8 @@ required_features = []
         mock_uv.touch()
         mock_proc = self._mock_popen()
 
-        with patch.object(installer, "_find_uv", return_value=mock_uv), \
+        with patch.object(installer, "_require_bundled_python", return_value=Path(sys.executable)), \
+             patch.object(installer, "_find_uv", return_value=mock_uv), \
              patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
             installer.install_dependencies()
             cmd = mock_popen.call_args[0][0]
@@ -901,7 +902,8 @@ required_features = []
         mock_uv.touch()
         mock_proc = self._mock_popen()
 
-        with patch.object(installer, "_find_uv", return_value=mock_uv), \
+        with patch.object(installer, "_require_bundled_python", return_value=Path(sys.executable)), \
+             patch.object(installer, "_find_uv", return_value=mock_uv), \
              patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
             installer.install_dependencies()
             cmd = mock_popen.call_args[0][0]

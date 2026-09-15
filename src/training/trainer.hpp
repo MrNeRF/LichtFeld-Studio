@@ -17,6 +17,7 @@
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
@@ -32,6 +33,7 @@
 #include <filesystem>
 #include <functional>
 #include <istream>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -57,18 +59,21 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+    class VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+    class VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
     class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
     class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
     class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
-    class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
-    class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
-    class VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
-    class VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+    class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
+    class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
+    class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+    class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
     class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
 } // namespace lfs::vis
 
@@ -78,6 +83,7 @@ namespace lfs::vis::project {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct TrainerBilateralGridTestAccess;
     struct TrainerRetryTestAccess;
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
@@ -135,6 +141,21 @@ namespace lfs::training {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+        };
+
+        struct CameraMetricsInputCacheEntry {
+            int camera_uid = -1;
+            std::filesystem::path image_path;
+            std::filesystem::path mask_path;
+            GTLoadConfigSnapshot gt_config{};
+            int mask_mode = 0;
+            bool use_alpha_as_mask = false;
+            bool invert_masks = false;
+            float mask_threshold = 0.0f;
+            bool undistort_prepared = false;
+            lfs::core::Tensor gt_image;
+            lfs::core::Tensor mask;
+            std::uint64_t last_used = 0;
         };
 
         struct ProjectSnapshotRuntimeMetrics {
@@ -248,6 +269,7 @@ namespace lfs::training {
         float get_current_loss() const { return current_loss_.load(); }
         bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                   std::vector<std::array<float, 3>>& colors) const;
+        [[nodiscard]] std::uint64_t cameraLossColorGeneration() const;
 
         // just for viewer to get model
         const IStrategy& get_strategy() const { return *strategy_; }
@@ -289,6 +311,7 @@ namespace lfs::training {
             return params_;
         }
         void setParams(const lfs::core::param::TrainingParameters& params);
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
@@ -340,7 +363,7 @@ namespace lfs::training {
         /// Check if PPISP is enabled, initialized, and ready for rendering
         bool hasPPISP() const {
             const auto params = getParams();
-            return ppisp_ != nullptr && params.optimization.use_ppisp && ppisp_->isFinalized();
+            return ppisp_ != nullptr && params.optimization.ppisp_active() && ppisp_->isFinalized();
         }
 
         /// Held-out eval appearance hook is installed iff PPISP was enabled and finalized.
@@ -379,7 +402,8 @@ namespace lfs::training {
             std::optional<std::filesystem::path> path,
             std::function<std::optional<
                 ProjectSnapshotDocumentContext>()>
-                context_provider = {});
+                context_provider = {},
+            std::optional<std::filesystem::path> headless_source_path = std::nullopt);
         [[nodiscard]] bool can_flush_project_snapshot() const {
             return project_snapshot_service_ && strategy_ &&
                    scene_;
@@ -420,20 +444,24 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+        friend class lfs::vis::VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
-        friend class lfs::vis::VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
-        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
-        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
-        friend class lfs::vis::VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+        friend class lfs::vis::VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::project::ProjectLifecycle;
+        friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -485,6 +513,13 @@ namespace lfs::training {
         // Returns empty tensor if no background image is set
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
         void clearBackgroundImageCache();
+        lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image);
+        void clearEdgeWeightCache();
+
+        // Release GPU state that is only needed while a train step is active.
+        // The model, optimizer, and source background image remain resident so
+        // a finished/stopped trainer can be resumed without reinitialization.
+        void release_training_transient_state_at_boundary();
 
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
@@ -531,6 +566,7 @@ namespace lfs::training {
             lfs::core::Tensor grad_corrected;
             lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
+            lfs::core::Tensor normal_pixel_weight;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -591,12 +627,12 @@ namespace lfs::training {
             const std::filesystem::path& sidecar_path) const;
         [[nodiscard]] bool is_ppisp_frozen() const {
             const auto params = getParams();
-            return params.optimization.use_ppisp &&
+            return params.optimization.ppisp_active() &&
                    params.optimization.ppisp_freeze_from_sidecar;
         }
         [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
             const auto params = getParams();
-            return params.optimization.use_ppisp &&
+            return params.optimization.ppisp_active() &&
                    params.optimization.ppisp_freeze_from_sidecar &&
                    !params.resume_checkpoint.has_value() &&
                    !params.resume_project.has_value() &&
@@ -660,6 +696,7 @@ namespace lfs::training {
             lfs::core::Tensor ema_loss_stage_cpu;
             std::vector<std::array<float, 3>> published_colors;
             std::vector<uint8_t> published_valid;
+            std::uint64_t published_generation = 0;
             mutable std::shared_mutex snapshot_mutex;
             cudaStream_t copy_stream = nullptr;
             cudaEvent_t ready_event = nullptr;
@@ -678,7 +715,6 @@ namespace lfs::training {
             std::string_view reason);
 
         lfs::core::Scene* scene_ = nullptr;
-        std::shared_ptr<CameraDataset> base_dataset_;
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
@@ -689,7 +725,6 @@ namespace lfs::training {
         lfs::core::param::TrainingParameters params_;
         std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
-        std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
@@ -707,7 +742,6 @@ namespace lfs::training {
         lfs::core::Tensor random_bg_buffer_{}; // Reusable buffer for random background
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
-        size_t total_cameras_count_ = 0;
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
@@ -792,8 +826,12 @@ namespace lfs::training {
             project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;
         std::string last_project_writer_error_;
+        std::optional<lfs::Error>
+            last_project_writer_typed_error_;
         std::optional<std::filesystem::path>
             live_project_path_;
+        // Used only to seed a fresh headless destination; never a GUI context.
+        std::optional<std::filesystem::path> headless_project_source_path_;
         TrainerProjectSavePolicy trainer_project_save_policy_{};
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
@@ -856,9 +894,26 @@ namespace lfs::training {
 
         // Reusable buffer for Sobel edge map (lfs edge-importance densification)
         core::Tensor edge_map_buffer_;
+        struct EdgeWeightCacheEntry {
+            core::Tensor tensor;
+            size_t height = 0;
+            size_t width = 0;
+            size_t allocation_bytes = 0;
+            uint64_t preprocessing_generation = 0;
+            uint64_t last_used = 0;
+        };
+        static constexpr size_t EDGE_WEIGHT_CACHE_MAX_ENTRIES = 32;
+        static constexpr size_t EDGE_WEIGHT_CACHE_BUDGET_BYTES = 40ULL * 1024 * 1024;
+        std::unordered_map<int, EdgeWeightCacheEntry> edge_weight_cache_;
+        size_t edge_weight_cache_bytes_ = 0;
+        uint64_t edge_weight_cache_clock_ = 0;
+        uint64_t edge_weight_preprocessing_generation_ = 0;
+        bool edge_weight_scoring_active_ = false;
+        PositiveMedianScratch edge_weight_median_scratch_;
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
+        std::optional<std::filesystem::path> lpips_weights_path_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;
@@ -869,6 +924,9 @@ namespace lfs::training {
         mutable std::mutex active_image_loader_mutex_;
         mutable std::mutex camera_loss_heatmap_mutex_;
         mutable std::mutex gt_load_config_mutex_;
+        mutable std::mutex camera_metrics_input_cache_mutex_;
+        std::list<CameraMetricsInputCacheEntry> camera_metrics_input_cache_;
+        std::uint64_t camera_metrics_input_cache_clock_ = 0;
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};

@@ -4,7 +4,9 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -147,6 +149,25 @@ namespace lfs::vis {
         ThemeColor selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
     };
 
+    struct ThemeGradient {
+        ThemeColor start;
+        ThemeColor end;
+    };
+
+    struct ThemeGradients {
+        std::optional<ThemeGradient> window_body;
+        std::optional<ThemeGradient> panel_body;
+        std::optional<ThemeGradient> window_title;
+        std::optional<ThemeGradient> section_header;
+        std::optional<ThemeGradient> section_header_hover;
+        std::optional<ThemeGradient> progress;
+        std::optional<ThemeGradient> scrubber_track;
+        std::optional<ThemeGradient> scrubber_fill;
+        std::optional<ThemeGradient> histogram_header;
+        std::optional<ThemeGradient> histogram_fill;
+        std::optional<ThemeGradient> histogram_selection;
+    };
+
     // Complete theme
     struct LFS_VIS_API Theme {
         std::string name;
@@ -160,6 +181,7 @@ namespace lfs::vis {
         ThemeVignette vignette;
         ThemeButton button;
         ThemeOverlay overlay;
+        ThemeGradients gradients;
 
         // Toolbar
         [[nodiscard]] ThemeColor toolbar_background() const;
@@ -197,6 +219,9 @@ namespace lfs::vis {
         std::string name;
         std::string label_key;
         std::string mode;
+        std::string family_id;
+        std::string family_name;
+        std::string variant_name;
         int order = 0;
     };
     using ThemePresetInfoVisitor = std::function<void(const ThemePresetInfo& info)>;
@@ -208,7 +233,15 @@ namespace lfs::vis {
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
     LFS_VIS_API bool setThemeByName(const std::string& name);
+    LFS_VIS_API bool setThemeFamilySelection(const std::string& family_id, const std::string& mode);
+    [[nodiscard]] LFS_VIS_API const std::string& currentThemeFamilyId();
+    [[nodiscard]] LFS_VIS_API const std::string& currentThemeSelectionMode();
+    [[nodiscard]] LFS_VIS_API bool supportsSystemThemePreference();
     LFS_VIS_API bool checkThemeFileChanges(); // Call periodically to hot-reload; returns true when any preset changed
+    // Re-apply presentation derived from non-theme preferences while preserving
+    // the active theme family and variant selection.
+    LFS_VIS_API void refreshThemePresentation();
+    [[nodiscard]] LFS_VIS_API std::size_t themePresentationRevision();
 
     // Runtime vignette control (does not persist to theme file)
     LFS_VIS_API void setThemeVignetteEnabled(bool enabled);

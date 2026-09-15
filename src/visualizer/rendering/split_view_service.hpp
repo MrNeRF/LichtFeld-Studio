@@ -57,6 +57,7 @@ namespace lfs::vis {
         [[nodiscard]] ModeChangeResult handlePLYRemoved(RenderSettings& settings, SceneManager* scene_manager);
         void advanceSplitOffset(RenderSettings& settings);
         [[nodiscard]] SplitViewInfo getInfo() const;
+        [[nodiscard]] std::optional<SplitViewInfo> getInfoIfChanged(std::uint64_t& generation) const;
         // Focused panel and the secondary viewport are main-thread-owned state used by
         // input, frame planning, and rendering on the UI thread. Only current_info_ is
         // mutex-protected because it is read from UI/status-bar code outside that path.
@@ -82,6 +83,7 @@ namespace lfs::vis {
 
         mutable std::mutex info_mutex_;
         SplitViewInfo current_info_;
+        std::uint64_t info_generation_ = 0;
         std::optional<GTComparisonContext> gt_context_;
         bool pre_gt_equirectangular_ = false;
         bool pre_gt_show_camera_frustums_ = false;

@@ -188,7 +188,6 @@ namespace gsplat_lfs {
         const char* label_ = "rasterizer.gsplat.workspace";
     };
 
-    using DirectDeviceBuffer = ExactAsyncDeviceBuffer;
     using StreamOrderedDeviceBuffer = ExactAsyncDeviceBuffer;
 
     /// Grow-only CUB temp storage shared by gsplat scan/sort (thread-local).
@@ -201,8 +200,7 @@ namespace gsplat_lfs {
     [[nodiscard]] void* ensure_gsplat_color_grad_workspace(size_t bytes, cudaStream_t stream);
     bool release_gsplat_color_grad_workspace() noexcept;
 
-    /// Run a CUB query+execute pair against the pooled high-water workspace
-    /// instead of malloc/free every call (legacy CudaCubWorkspace path).
+    /// Run a CUB query+execute pair against the pooled grow-only workspace.
     template <typename Operation>
     void run_cub_operation(const std::string_view name,
                            const cudaStream_t stream,

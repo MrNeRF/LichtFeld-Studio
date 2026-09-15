@@ -50,8 +50,21 @@ namespace lfs::io {
 
         struct ValidatedTransformFrame {
             std::string file_path;
+            std::string mask_path;
             std::array<float, 16> matrix{};
         };
+
+        [[nodiscard]] std::string validated_frame_path(
+            const nlohmann::json& frame, const char* key, const size_t frame_index) {
+            if (!frame.is_object() || !frame.contains(key) || !frame[key].is_string())
+                throw std::runtime_error(std::format("Frame {} must contain a string {}", frame_index, key));
+            std::string path = frame[key].get<std::string>();
+            if (path.empty() || path.size() > MAX_TRANSFORMS_PATH_BYTES ||
+                path.find('\0') != std::string::npos) {
+                throw std::runtime_error(std::format("Frame {} {} is empty, too long or contains a null byte", frame_index, key));
+            }
+            return path;
+        }
 
         [[nodiscard]] float finite_json_float_value(
             const nlohmann::json& value,
@@ -148,17 +161,15 @@ namespace lfs::io {
                 if ((frame_index % 256) == 0)
                     throw_if_load_cancel_requested(options, "Transforms schema validation cancelled");
                 const auto& frame = frames[frame_index];
-                if (!frame.is_object() || !frame.contains("file_path") || !frame["file_path"].is_string())
-                    throw std::runtime_error(std::format("Frame {} must contain a string file_path", frame_index));
-                std::string file_path = frame["file_path"].get<std::string>();
-                if (file_path.empty() || file_path.size() > MAX_TRANSFORMS_PATH_BYTES ||
-                    file_path.find('\0') != std::string::npos) {
-                    throw std::runtime_error(std::format("Frame {} file_path is empty or too long", frame_index));
-                }
+                std::string file_path = validated_frame_path(frame, "file_path", frame_index);
+                std::string mask_path;
+                if (frame.contains("mask_path"))
+                    mask_path = validated_frame_path(frame, "mask_path", frame_index);
                 if (!frame.contains("transform_matrix"))
                     throw std::runtime_error(std::format("Frame {} is missing transform_matrix", frame_index));
                 result.push_back({
                     .file_path = std::move(file_path),
+                    .mask_path = std::move(mask_path),
                     .matrix = validated_transform_matrix(frame["transform_matrix"], frame_index),
                 });
             }
@@ -585,6 +596,8 @@ namespace lfs::io {
                 lfs::core::Tensor T = w2c.slice(0, 0, 3).slice(1, 3, 4).squeeze(1);
 
                 camdata._image_path = GetTransformImagePath(dir_path, frame.file_path);
+                if (!frame.mask_path.empty())
+                    camdata._mask_path = dir_path / lfs::core::utf8_to_path(frame.mask_path);
                 camdata._has_image = [&] {
                     std::error_code exists_error;
                     return std::filesystem::is_regular_file(camdata._image_path, exists_error);

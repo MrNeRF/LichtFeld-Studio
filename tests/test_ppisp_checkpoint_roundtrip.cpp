@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
 #include "tensor_hardening_test_utils.hpp"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <gtest/gtest.h>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -123,6 +125,65 @@ namespace {
         float loss = 0.0f;
         EXPECT_NO_THROW(loss = expect_loss_contract(restored));
         EXPECT_TRUE(std::isfinite(loss));
+    }
+
+    TEST_F(PPISPCheckpointRoundtripTest, ExposureChromaGridRoundTripAndMismatch) {
+        using lfs::training::BilateralGrid;
+        using lfs::training::BilateralGridParameterization;
+
+        BilateralGrid source(2, 2, 2, 2, 40, {}, BilateralGridParameterization::ExposureChroma);
+        std::stringstream checkpoint;
+        source.serialize(checkpoint);
+        checkpoint.seekg(0);
+
+        BilateralGrid loaded(1, 1, 1, 1, 1);
+        loaded.deserialize(checkpoint);
+        EXPECT_EQ(loaded.parameterization(), BilateralGridParameterization::ExposureChroma);
+        EXPECT_EQ(loaded.channels(), 9);
+
+        BilateralGrid live(2, 2, 2, 2, 40, {}, BilateralGridParameterization::ExposureChroma);
+        EXPECT_NO_THROW(live.adopt_checkpoint_state(loaded));
+        EXPECT_EQ(live.parameterization(), BilateralGridParameterization::ExposureChroma);
+
+        BilateralGrid affine(2, 2, 2, 2, 40);
+        std::stringstream affine_checkpoint;
+        affine.serialize(affine_checkpoint);
+        affine_checkpoint.seekg(0);
+        BilateralGrid affine_loaded(1, 1, 1, 1, 1);
+        affine_loaded.deserialize(affine_checkpoint);
+        BilateralGrid chroma_live(2, 2, 2, 2, 40, {}, BilateralGridParameterization::ExposureChroma);
+        EXPECT_THROW(chroma_live.adopt_checkpoint_state(affine_loaded), std::runtime_error);
+    }
+
+    TEST_F(PPISPCheckpointRoundtripTest, ExifExposureMeanRoundTripAndOldFilesDefaultAbsent) {
+        PPISPConfig config;
+        PPISP source(1000, config);
+        register_test_frames(source);
+        source.set_exif_exposure_mean(2.5f);
+
+        std::stringstream checkpoint;
+        source.serialize(checkpoint);
+        checkpoint.seekg(0);
+
+        PPISP loaded(1);
+        loaded.deserialize(checkpoint);
+        ASSERT_TRUE(loaded.exif_exposure_mean().has_value());
+        EXPECT_FLOAT_EQ(*loaded.exif_exposure_mean(), 2.5f);
+
+        PPISP live(1000, config);
+        register_test_frames(live);
+        live.adopt_checkpoint_state(loaded);
+        ASSERT_TRUE(live.exif_exposure_mean().has_value());
+        EXPECT_FLOAT_EQ(*live.exif_exposure_mean(), 2.5f);
+
+        PPISP absent_source(1000, config);
+        register_test_frames(absent_source);
+        std::stringstream absent_blob;
+        absent_source.serialize(absent_blob);
+        absent_blob.seekg(0);
+        PPISP absent_loaded(1);
+        absent_loaded.deserialize(absent_blob);
+        EXPECT_FALSE(absent_loaded.exif_exposure_mean().has_value());
     }
 
 } // namespace

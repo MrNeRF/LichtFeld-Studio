@@ -123,4 +123,10 @@ namespace lfs::core {
     [[nodiscard]] std::expected<bool, std::string>
     growExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size);
 
+    // Decommits whole exportable VMM chunks at or beyond new_size while keeping
+    // the virtual reservation and device pointer stable. Any Vulkan import of
+    // the affected chunks must be destroyed before this call.
+    [[nodiscard]] std::expected<bool, std::string>
+    shrinkExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size);
+
 } // namespace lfs::core

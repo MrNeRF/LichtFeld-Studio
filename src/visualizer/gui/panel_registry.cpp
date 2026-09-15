@@ -8,6 +8,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
+#include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -48,7 +49,7 @@ namespace lfs::vis::gui {
             interaction.user_height = 0.0f;
         }
 
-        std::string panelDirectTimerName(const std::string& panel_id, const char* stage) {
+        std::string panelDirectTimerName(const std::string_view panel_id, const char* stage) {
             std::string name = "gui_render.panel_direct.";
             if (panel_id.empty()) {
                 name += "unknown";
@@ -134,9 +135,21 @@ namespace lfs::vis::gui {
                                  clamped_radius, h - clamped_radius);
         }
 
-        FloatingPanelAnchor floatingAnchorRect(const PanelDrawContext& ctx) {
+        FloatingPanelAnchor floatingAnchorRect(const PanelDrawContext& ctx,
+                                               const bool in_viewport = false) {
             // Floating panels may overlap docked panels. Constraining them to
             // the viewport makes their usable area shrink with the docks.
+            // FLOAT_IN_VIEWPORT panels instead use the 3D viewport hole as their anchor.
+            if (in_viewport && ctx.viewport && ctx.viewport->size.x > 0.0f &&
+                ctx.viewport->size.y > 0.0f) {
+                return {
+                    .x = ctx.viewport->pos.x,
+                    .y = ctx.viewport->pos.y,
+                    .width = ctx.viewport->size.x,
+                    .height = ctx.viewport->size.y,
+                };
+            }
+
             if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
                 const auto& screen = *ctx.screen_bounds;
                 const float screen_bottom = screen.y + screen.height;
@@ -161,6 +174,100 @@ namespace lfs::vis::gui {
             }
 
             return {};
+        }
+
+        struct LayoutContextCache {
+            ViewportLayout viewport{};
+            PanelDrawBounds screen{};
+            bool has_viewport = false;
+            bool has_screen = false;
+        };
+
+        LayoutContextCache g_layout_cache;
+
+        void rememberLayoutContext(const PanelDrawContext& ctx) {
+            if (ctx.viewport && ctx.viewport->size.x > 0.0f && ctx.viewport->size.y > 0.0f) {
+                g_layout_cache.viewport = *ctx.viewport;
+                g_layout_cache.has_viewport = true;
+            }
+            if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
+                g_layout_cache.screen = *ctx.screen_bounds;
+                g_layout_cache.has_screen = true;
+            }
+        }
+
+        PanelDrawContext cachedLayoutDrawContext() {
+            PanelDrawContext ctx;
+            if (g_layout_cache.has_viewport)
+                ctx.viewport = &g_layout_cache.viewport;
+            if (g_layout_cache.has_screen)
+                ctx.screen_bounds = g_layout_cache.screen;
+            return ctx;
+        }
+
+        float clampedFloatingPanelWidth(const float initial_width, const float anchor_width,
+                                        const float dpi) {
+            const float min_panel_width = 320.0f * dpi;
+            const float max_panel_width = std::max(min_panel_width, anchor_width);
+            const float w = initial_width > 0.0f ? initial_width : 560.0f * dpi;
+            return std::clamp(w, min_panel_width, max_panel_width);
+        }
+
+        struct FloatingPanelBox {
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+        };
+
+        FloatingPanelBox resolveFloatingPanelBox(const FloatingPanelAnchor& anchor,
+                                                 const float initial_width,
+                                                 const float initial_height,
+                                                 const float stored_x,
+                                                 const float stored_y,
+                                                 const bool auto_center,
+                                                 const bool park_at_bottom,
+                                                 const float dpi,
+                                                 const float override_height = 0.0f) {
+            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi);
+            const float h = override_height > 0.0f
+                                ? override_height
+                                : (initial_height > 0.0f ? initial_height : 400.0f * dpi);
+            float px = stored_x;
+            float py = stored_y;
+            bool center = auto_center;
+            if (center && park_at_bottom) {
+                px = anchor.x + (anchor.width - w) * 0.5f;
+                py = anchor.y + anchor.height - h;
+                center = false;
+            }
+            const auto placement = computeFloatingPanelPlacement(
+                anchor, w, h, px, py, center, 30.0f * dpi, 0.1f);
+            return {placement.x, placement.y, w, h};
+        }
+
+        void writeProvisionalFloatingBounds(const PanelInfo& panel,
+                                            FloatingPanelInteraction& interaction) {
+            const auto seed = cachedLayoutDrawContext();
+            const bool in_viewport = panel.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            const auto anchor = floatingAnchorRect(seed, in_viewport);
+            if (anchor.width <= 0.0f || anchor.height <= 0.0f)
+                return;
+
+            const auto box = resolveFloatingPanelBox(anchor,
+                                                     panel.initial_width,
+                                                     panel.initial_height,
+                                                     interaction.x,
+                                                     interaction.y,
+                                                     interaction.auto_center,
+                                                     in_viewport,
+                                                     floatingUiScale(),
+                                                     interaction.last_height);
+            interaction.last_x = box.x;
+            interaction.last_y = box.y;
+            interaction.last_width = box.width;
+            interaction.last_height = box.height;
+            interaction.last_bounds_valid = true;
         }
     } // namespace
 
@@ -224,6 +331,9 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             assert(info.panel);
             assert(!info.id.empty());
+
+            info.id_storage = std::make_shared<const std::string>(info.id);
+            info.label_storage = std::make_shared<const std::string>(info.label);
 
             if (!validatePanelContract(info, info.space))
                 return false;
@@ -311,6 +421,7 @@ namespace lfs::vis::gui {
                 p = std::move(info);
                 instance = p.panel;
                 ++registration_revision_;
+                ++visibility_revision_;
                 goto apply_registered_chrome;
             }
 
@@ -347,6 +458,7 @@ namespace lfs::vis::gui {
                 return a.label < b.label;
             });
             ++registration_revision_;
+            ++visibility_revision_;
         }
 apply_registered_chrome:
         if (instance && !pending_payload.empty())
@@ -362,6 +474,7 @@ apply_registered_chrome:
                         return p.id == id;
                     }) != 0) {
                 ++registration_revision_;
+                ++visibility_revision_;
             }
             floating_interactions_.erase(id);
         }
@@ -383,8 +496,10 @@ apply_registered_chrome:
             std::erase_if(panels_, [](const PanelInfo& p) { return !p.is_native; });
             for (const auto& id : removed)
                 floating_interactions_.erase(id);
-            if (!removed.empty())
+            if (!removed.empty()) {
                 ++registration_revision_;
+                ++visibility_revision_;
+            }
             remaining.reserve(panels_.size());
             for (const auto& p : panels_)
                 remaining.push_back(p.id);
@@ -404,8 +519,10 @@ apply_registered_chrome:
             const bool changed = !panels_.empty() || !floating_interactions_.empty();
             panels_.clear();
             floating_interactions_.clear();
-            if (changed)
+            if (changed) {
                 ++registration_revision_;
+                ++visibility_revision_;
+            }
         }
         {
             std::lock_guard poll_lock(poll_mutex_);
@@ -432,8 +549,11 @@ apply_registered_chrome:
 
     bool PanelRegistry::check_poll(const PanelSnapshot& snap, const PanelDrawContext& ctx) {
         assert(snap.panel);
-        if (snap.is_native)
-            return snap.panel->poll(ctx);
+        if (snap.is_native) {
+            const bool result = snap.panel->poll(ctx);
+            snap.panel->setPollVisibility(result);
+            return result;
+        }
 
         const uint64_t gen = ctx.scene_generation;
         const bool has_sel = ctx.has_selection;
@@ -441,7 +561,7 @@ apply_registered_chrome:
 
         {
             std::lock_guard poll_lock(poll_mutex_);
-            auto cache_it = poll_cache_.find(snap.id);
+            auto cache_it = poll_cache_.find(*snap.id_storage);
             if (cache_it != poll_cache_.end()) {
                 const auto& e = cache_it->second;
                 bool valid = true;
@@ -451,16 +571,20 @@ apply_registered_chrome:
                     valid &= (e.has_selection == has_sel);
                 if ((snap.poll_dependencies & PollDependency::TRAINING) != PollDependency::NONE)
                     valid &= (e.is_training == training);
-                if (valid)
+                if (valid) {
+                    snap.panel->setPollVisibility(e.result);
                     return e.result;
+                }
             }
         }
 
         const bool result = snap.panel->poll(ctx);
+        snap.panel->setPollVisibility(result);
 
         {
             std::lock_guard poll_lock(poll_mutex_);
-            poll_cache_[snap.id] = {result, gen, has_sel, training, snap.poll_dependencies};
+            poll_cache_[*snap.id_storage] = {result, gen, has_sel, training,
+                                             snap.poll_dependencies};
         }
         return result;
     }
@@ -470,8 +594,10 @@ apply_registered_chrome:
         PanelSnapshot snapshot{
             index,
             panel.panel.get(),
-            panel.label,
-            panel.id,
+            panel.label_storage ? *panel.label_storage : panel.label,
+            panel.id_storage ? *panel.id_storage : panel.id,
+            panel.label_storage,
+            panel.id_storage,
             panel.space,
             panel.options,
             panel.is_native,
@@ -586,14 +712,12 @@ apply_registered_chrome:
                 snap.has_option(PanelOption::SELF_MANAGED))
                 return;
 
-            const auto anchor = floatingAnchorRect(ctx);
+            const bool in_viewport = snap.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            const auto anchor = floatingAnchorRect(ctx, in_viewport);
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            const float min_panel_width = 320.0f * dpi;
-            const float max_panel_width = std::max(min_panel_width, anchor.width);
-            float w = snap.initial_width > 0 ? snap.initial_width : 560.0f * dpi;
-            w = std::clamp(w, min_panel_width, max_panel_width);
+            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi);
             const float max_h = snap.initial_height > 0
                                     ? std::min(snap.initial_height, anchor.height)
                                     : anchor.height;
@@ -618,8 +742,7 @@ apply_registered_chrome:
 
                     const bool stable_height =
                         prev_h > 0.0f && std::abs(drawn_h - prev_h) <= 1.0f;
-                    if (drawn_h > 0.0f && stable_height &&
-                        !snap.panel->needsAnimationFrame())
+                    if (drawn_h > 0.0f && stable_height)
                         break;
 
                     prev_h = drawn_h;
@@ -632,7 +755,7 @@ apply_registered_chrome:
                 std::lock_guard lock(mutex_);
                 if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
                     panels_[snap.index].space == PanelSpace::Floating) {
-                    const auto interaction = floating_interactions_.find(snap.id);
+                    const auto interaction = floating_interactions_.find(*snap.id_storage);
                     if (interaction != floating_interactions_.end() &&
                         interaction->second.user_height > 0) {
                         h = interaction->second.user_height;
@@ -663,16 +786,25 @@ apply_registered_chrome:
                 std::lock_guard lock(mutex_);
                 if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
                     panels_[snap.index].space == PanelSpace::Floating) {
-                    if (const auto interaction = floating_interactions_.find(snap.id);
+                    if (const auto interaction = floating_interactions_.find(*snap.id_storage);
                         interaction != floating_interactions_.end()) {
                         auto_center = interaction->second.auto_center;
                     }
                 }
             }
-            const auto placement =
-                computeFloatingPanelPlacement(anchor, w, h, px, py, auto_center, kTitleH, kVisibleFrac);
-            px = placement.x;
-            py = placement.y;
+            const auto box = resolveFloatingPanelBox(anchor,
+                                                     snap.initial_width,
+                                                     snap.initial_height,
+                                                     px,
+                                                     py,
+                                                     auto_center,
+                                                     in_viewport,
+                                                     dpi,
+                                                     h);
+            w = box.width;
+            h = box.height;
+            px = box.x;
+            py = box.y;
 
             layout.valid = true;
             layout.width = w;
@@ -875,7 +1007,8 @@ apply_registered_chrome:
                                 }
                                 has_user_height = interaction.user_height > 0.0f;
 
-                                const auto anchor = floatingAnchorRect(ctx);
+                                const auto anchor = floatingAnchorRect(
+                                    ctx, snap.has_option(PanelOption::FLOAT_IN_VIEWPORT));
                                 const auto placement = computeFloatingPanelPlacement(
                                     anchor, w, h, px, py, false, kTitleH, kVisibleFrac);
                                 px = placement.x;
@@ -969,6 +1102,16 @@ apply_registered_chrome:
                 draw_succeeded = true;
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' draw error: {}", snap.label, e.what());
+                if (space == PanelSpace::Floating) {
+                    std::lock_guard lock(mutex_);
+                    if (const auto interaction = floating_interactions_.find(*snap.id_storage);
+                        interaction != floating_interactions_.end()) {
+                        interaction->second.dragging = false;
+                        interaction->second.resizing = false;
+                        interaction->second.resize_direction_x = 0;
+                        interaction->second.resize_direction_y = 0;
+                    }
+                }
             }
 
             track_draw_result(snap, draw_succeeded);
@@ -993,6 +1136,10 @@ apply_registered_chrome:
 
     float PanelRegistry::render_panels(const PanelRenderOptions& options,
                                        const PanelDrawContext& ctx) {
+        {
+            std::lock_guard lock(mutex_);
+            rememberLayoutContext(ctx);
+        }
         switch (options.mode) {
         case PanelRenderMode::Standard:
             if (options.target.kind == PanelRenderTargetKind::Space) {
@@ -1193,6 +1340,32 @@ apply_registered_chrome:
         return false;
     }
 
+    bool PanelRegistry::has_active_floating_drag() const {
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.space != PanelSpace::Floating || !panel.enabled || panel.error_disabled ||
+                !panel.parent_id.empty()) {
+                continue;
+            }
+            if (const auto interaction = floating_interactions_.find(panel.id);
+                interaction != floating_interactions_.end() && interaction->second.last_bounds_valid &&
+                interaction->second.dragging) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void PanelRegistry::cancel_floating_interactions() {
+        std::lock_guard lock(mutex_);
+        for (auto& [id, interaction] : floating_interactions_) {
+            interaction.dragging = false;
+            interaction.resizing = false;
+            interaction.resize_direction_x = 0;
+            interaction.resize_direction_y = 0;
+        }
+    }
+
     bool PanelRegistry::has_panels(PanelSpace space) const {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
@@ -1208,6 +1381,37 @@ apply_registered_chrome:
         for (const auto& p : panels_) {
             if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty())
                 result.push_back({p.label, p.id, p.space, p.order, p.enabled, p.tab_closeable});
+        }
+        std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
+            if (a.order != b.order)
+                return a.order < b.order;
+            return a.label < b.label;
+        });
+        return result;
+    }
+
+    std::vector<PanelSummary> PanelRegistry::get_panel_summaries_for_space(
+        const PanelSpace space, const PanelDrawContext& ctx, const bool apply_poll) {
+        std::vector<PanelSnapshot> snapshots;
+        {
+            std::lock_guard lock(mutex_);
+            snapshots = collect_snapshots_locked(PanelRenderTarget::for_space(space), ctx);
+        }
+
+        std::vector<PanelSummary> result;
+        result.reserve(snapshots.size());
+        for (const auto& snap : snapshots) {
+            if (apply_poll) {
+                try {
+                    if (!PanelRegistry::check_poll(snap, ctx))
+                        continue;
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
+                    continue;
+                }
+            }
+            result.push_back({std::string(snap.label), std::string(snap.id), snap.space,
+                              snap.order, true, false});
         }
         std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
             if (a.order != b.order)
@@ -1243,6 +1447,15 @@ apply_registered_chrome:
             }
         }
         return std::nullopt;
+    }
+
+    std::shared_ptr<IPanel> PanelRegistry::get_panel_instance(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.id == id)
+                return panel.panel;
+        }
+        return nullptr;
     }
 
     std::vector<PanelProjectState>
@@ -1353,6 +1566,8 @@ apply_registered_chrome:
                 if (saved.float_stack_order != 0)
                     interaction.stack_order =
                         saved.float_stack_order;
+                if (found->has_option(PanelOption::FLOAT_IN_VIEWPORT))
+                    writeProvisionalFloatingBounds(*found, interaction);
                 requested_project_floating_state_.insert_or_assign(
                     saved.id, saved);
                 next_float_stack_order_ = std::max(
@@ -1455,6 +1670,11 @@ apply_registered_chrome:
         return registration_revision_;
     }
 
+    uint64_t PanelRegistry::visibility_revision() const {
+        std::lock_guard lock(mutex_);
+        return visibility_revision_;
+    }
+
     std::vector<std::string> PanelRegistry::get_panel_names(PanelSpace space) const {
         std::lock_guard lock(mutex_);
         std::vector<std::string> names;
@@ -1467,6 +1687,7 @@ apply_registered_chrome:
 
     void PanelRegistry::set_panel_enabled(const std::string& id, bool enabled) {
         bool changed = false;
+        std::shared_ptr<IPanel> panel_to_notify;
         {
             std::lock_guard lock(mutex_);
             for (auto& p : panels_) {
@@ -1480,6 +1701,8 @@ apply_registered_chrome:
                         break;
 
                     p.enabled = enabled;
+                    panel_to_notify = p.panel;
+                    ++visibility_revision_;
                     if (enabled && p.space == PanelSpace::Floating) {
                         auto& interaction = ensure_floating_interaction_locked(p);
                         if (const auto requested =
@@ -1521,8 +1744,24 @@ apply_registered_chrome:
             }
         }
 
-        if (changed)
+        if (changed) {
             lfs::vis::publish_viewport_toolbar_generation();
+            lfs::python::request_redraw();
+        }
+        if (panel_to_notify) {
+            try {
+                panel_to_notify->on_visibility_changed(enabled);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel '{}' visibility change error: {}", id, e.what());
+                std::lock_guard lock(mutex_);
+                for (auto& panel : panels_) {
+                    if (panel.id == id) {
+                        panel.error_disabled = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     bool PanelRegistry::bring_panel_to_front(const std::string& id) {
@@ -1543,6 +1782,36 @@ apply_registered_chrome:
                 return p.enabled;
         }
         return false;
+    }
+
+    void PanelRegistry::preload_panel(const std::string& id) {
+        std::shared_ptr<IPanel> panel;
+        {
+            std::lock_guard lock(mutex_);
+            const auto found = std::find_if(
+                panels_.begin(), panels_.end(),
+                [&id](const PanelInfo& info) { return info.id == id; });
+            if (found == panels_.end() || found->error_disabled)
+                return;
+            panel = found->panel;
+        }
+
+        if (!panel)
+            return;
+
+        const auto ctx = cachedLayoutDrawContext();
+        try {
+            panel->preload(ctx);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Panel '{}' preload error: {}", id, e.what());
+            std::lock_guard lock(mutex_);
+            for (auto& panel_info : panels_) {
+                if (panel_info.id == id) {
+                    panel_info.error_disabled = true;
+                    break;
+                }
+            }
+        }
     }
 
     bool PanelRegistry::apply_floating_resize_cursor() const {
@@ -1629,6 +1898,9 @@ apply_registered_chrome:
         // Must stay in lockstep: a mismatch causes either pinned frames or stalled wakes.
         [[nodiscard]] bool isPanelVisibleForAnimation(
             const PanelInfo& p, const PanelAnimationVisibility& visibility) {
+            if (!p.panel->isVisibleForAnimation())
+                return false;
+
             if (!p.parent_id.empty()) {
                 return visibility.right_panel_visible &&
                        std::string_view(p.parent_id) == visibility.active_main_tab;
@@ -1722,6 +1994,39 @@ apply_registered_chrome:
         return animationDemandForVisiblePanels(visibility).any();
     }
 
+    std::string PanelRegistry::describeAnimationDemand(
+        const PanelAnimationVisibility visibility) const {
+        std::string result;
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (!p.enabled || p.error_disabled || !p.panel ||
+                !isPanelVisibleForAnimation(p, visibility) ||
+                !p.panel->needsAnimationFrame())
+                continue;
+
+            if (!result.empty())
+                result += ',';
+            result += p.id;
+            const auto detail = p.panel->animationDemandDescription();
+            if (!detail.empty()) {
+                result += '(';
+                result += detail;
+                result += ')';
+            }
+        }
+        return result;
+    }
+
+    bool PanelRegistry::needsImmediateAnimationFrameForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        std::lock_guard lock(mutex_);
+        return std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) {
+            return p.enabled && !p.error_disabled && p.panel &&
+                   isPanelVisibleForAnimation(p, visibility) &&
+                   p.panel->needsImmediateAnimationFrame();
+        });
+    }
+
     std::optional<double> PanelRegistry::nextScheduledAnimationDelayForVisiblePanels(
         const PanelAnimationVisibility visibility) const {
         std::optional<double> min_delay;
@@ -1741,6 +2046,7 @@ apply_registered_chrome:
         for (auto& p : panels_) {
             if (p.id == id) {
                 p.label = new_label;
+                p.label_storage = std::make_shared<const std::string>(p.label);
                 return true;
             }
         }
@@ -1752,6 +2058,7 @@ apply_registered_chrome:
         for (auto& p : panels_) {
             if (p.id == id) {
                 p.order = new_order;
+                ++visibility_revision_;
                 std::stable_sort(panels_.begin(), panels_.end(), [](const PanelInfo& a, const PanelInfo& b) {
                     if (a.order != b.order)
                         return a.order < b.order;
@@ -1772,12 +2079,14 @@ apply_registered_chrome:
                 const bool was_floating = p.space == PanelSpace::Floating;
                 requested_project_floating_state_.erase(p.id);
                 p.space = new_space;
+                ++visibility_revision_;
                 if (!was_floating && new_space == PanelSpace::Floating) {
                     auto& interaction = ensure_floating_interaction_locked(p);
                     interaction.x = NAN;
                     interaction.y = NAN;
                     interaction.auto_center = true;
                     resetFloatingPanelSize(p, interaction, floatingUiScale());
+                    writeProvisionalFloatingBounds(p, interaction);
                     bring_floating_panel_to_front_locked(p);
                 } else if (was_floating && new_space != PanelSpace::Floating) {
                     p.initial_width = p.original_width;
@@ -1812,6 +2121,7 @@ apply_registered_chrome:
                 if (!validatePanelContract(candidate, candidate.space))
                     return false;
                 p.parent_id = parent_id;
+                ++visibility_revision_;
                 return true;
             }
         }

@@ -85,6 +85,7 @@ namespace lfs::vis::gui {
                 }
             }
             snapshot.model_transforms = render_state.model_transforms;
+            snapshot.node_active_sh_degrees = render_state.node_active_sh_degrees;
             snapshot.transform_indices = cloneOptionalTensor(render_state.transform_indices);
             snapshot.selection_mask = cloneOptionalTensor(render_state.selection_mask);
             snapshot.selected_node_mask = render_state.selected_node_mask;

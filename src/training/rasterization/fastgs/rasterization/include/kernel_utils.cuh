@@ -9,6 +9,7 @@
 #include "helper_math.h"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
+#include "lfs/training/screen_share.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 
@@ -375,7 +376,17 @@ namespace fast_lfs::rasterization::kernels {
                 float m = mv.x;
                 float v = mv.y;
                 if (apply_step) {
-                    const float grad = (i < active) ? grads[i] : 0.0f;
+                    float grad = (i < active) ? grads[i] : 0.0f;
+                    if (i < active && param.screen_share_max != nullptr &&
+                        primitive_idx < static_cast<uint>(param.screen_share_n)) {
+                        grad += lfs::training::screen_share_hinge_extra_grad(
+                            param.screen_share_max[primitive_idx],
+                            param.screen_share_limit,
+                            param.screen_share_penalty,
+                            mv.y,
+                            param.bias_correction2_sqrt_rcp,
+                            eps);
+                    }
                     m = beta1 * mv.x + (1.0f - beta1) * grad;
                     v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
                     if (i < active) {
@@ -1035,12 +1046,13 @@ namespace fast_lfs::rasterization::kernels {
         const float3& position,
         const float3& cam_position,
         const uint primitive_idx,
+        const uint grad_color_idx,
         const uint sh_layout_slots,
         float* __restrict__ sh0_grads_out,
         const float2* __restrict__ sh_value_bounds = nullptr,
         const uint sh_value_n_cells = 0u,
         const uint sh_value_bits = 0u) {
-        const float3 grad_color = grad_color_helper[primitive_idx];
+        const float3 grad_color = grad_color_helper[grad_color_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
         sh0_grads_out[0] = dL_dsh0.x;
         sh0_grads_out[1] = dL_dsh0.y;

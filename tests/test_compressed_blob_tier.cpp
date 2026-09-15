@@ -5,6 +5,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "training/dataset.hpp"
 
@@ -63,6 +64,45 @@ TEST(CompressedBlobTier, HostCacheHit) {
     const auto stats = loader.get_stats();
     EXPECT_GT(stats.jpeg_cache_bytes, 0u);
     EXPECT_GT(stats.jpeg_cache_entries, 0u);
+}
+
+TEST(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
+    const auto source = bicycle_image("_DSC8739.JPG");
+    if (!std::filesystem::is_regular_file(source))
+        GTEST_SKIP() << "bicycle dataset is absent: " << source;
+    if (!lfs::io::NvCodecImageLoader::is_available())
+        GTEST_SKIP() << "nvImageCodec is unavailable";
+
+    const auto cached_source = std::filesystem::temp_directory_path() /
+                               ("lfs_pipelined_loader_16bit_" +
+                                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                                ".JPG");
+    ASSERT_TRUE(std::filesystem::copy_file(source, cached_source));
+
+    lfs::io::PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 2;
+    config.prefetch_count = 2;
+    config.output_queue_size = 1;
+    config.use_16bit_color = true;
+    lfs::io::PipelinedImageLoader loader(config);
+
+    const auto cold = load_one(loader, 1, cached_source);
+    ASSERT_TRUE(cold.error.empty()) << cold.error;
+    ASSERT_TRUE(cold.tensor.is_valid());
+    ASSERT_EQ(cold.tensor.dtype(), lfs::core::DataType::Float32);
+    ASSERT_GT(loader.get_stats().jpeg_cache_entries, 0u);
+
+    ASSERT_NO_THROW(std::filesystem::resize_file(cached_source, 0));
+    const auto hot = load_one(loader, 2, cached_source);
+    EXPECT_TRUE(hot.error.empty()) << hot.error;
+    ASSERT_TRUE(hot.tensor.is_valid());
+    EXPECT_EQ(hot.tensor.dtype(), lfs::core::DataType::Float32);
+    EXPECT_EQ(hot.tensor.shape(), cold.tensor.shape());
+
+    const auto stats = loader.get_stats();
+    EXPECT_GE(stats.hot_path_hits, 1u);
+    EXPECT_EQ(stats.cold_path_misses, 1u);
+    ASSERT_TRUE(std::filesystem::remove(cached_source));
 }
 
 TEST(CompressedBlobTier, CacheHitMatchesProcessedReferenceWithResizeAndUndistort) {

@@ -1,18 +1,68 @@
-/* Plugin marketplace theme overrides. */
+/* Plugin Marketplace theme overrides. */
 
-.mp-warning-text {
+/* ── Intro and controls ──────────────────────────────────── */
+
+.mp-title {
+    color: @{text};
+}
+
+.mp-warning-note {
     color: @{warning};
 }
 
-.mp-view-btn.selected {
-    color: @{text};
-    background-color: @{alpha(border,0.70)};
-    border-color: @{alpha(primary,0.55)};
+.mp-intro > .mp-warning-note {
+    background-color: @{alpha(warning,0.10)};
+    border-left-color: @{warning};
 }
 
+.mp-controls,
+.mp-manual-section,
+.mp-empty-state {
+    background-color: @{alpha(surface_bright,0.36)};
+    border-color: @{alpha(border,0.75)};
+}
+
+.mp-control-label,
+.mp-section-hint,
+.mp-empty-description,
+.card-description,
+.card-tags,
+.card-startup-label,
+.plugin-list-option-label {
+    color: @{text_dim};
+}
+
+.mp-select,
+.mp-select-sort,
+.mp-url-input {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.mp-select:hover,
+.mp-select-sort:hover,
+.mp-url-input:focus,
+.mp-url-input:focus-visible {
+    border-color: @{primary};
+}
+
+.mp-view-btn {
+    color: @{text_dim};
+    background-color: transparent;
+    border-color: @{border};
+}
+
+.mp-view-btn:hover {
+    color: @{text};
+    background-color: @{alpha(primary,0.10)};
+    border-color: @{alpha(primary,0.60)};
+}
+
+.mp-view-btn.selected,
 .mp-view-btn.selected:hover {
-    background-color: @{alpha(surface_bright,0.70)};
-    border-color: @{alpha(primary,0.70)};
+    color: @{text};
+    background-color: @{alpha(primary,0.22)};
+    border-color: @{primary};
 }
 
 .mp-icon-grid > span,
@@ -20,44 +70,207 @@
     background-color: @{text};
 }
 
-.card-grid.card-grid--list {
-    border-color: @{alpha(border,0.55)};
+.mp-formats-header {
+    border-top-color: @{alpha(border,0.75)};
 }
 
-.plugin-list-row:hover {
-    background-color: @{alpha(primary,0.09)};
+.mp-formats-header:hover,
+.mp-formats-header.is-expanded {
+    color: @{text};
+    background-color: @{alpha(primary,0.08)};
 }
 
-.plugin-list-row.card--in-progress {
-    border-color: @{primary};
+.mp-formats-label {
+    color: @{text_dim};
 }
 
-.plugin-list-row.card--success {
-    border-color: @{success};
-}
-
-.plugin-list-row.card--error {
-    border-color: @{error};
-}
-
-.plugin-list-row {
-    border-top-color: @{alpha(border,0.50)};
-}
-
-.card-name {
+.mp-formats-header:hover .mp-formats-label,
+.mp-formats-header.is-expanded .mp-formats-label {
     color: @{text};
 }
 
+.mp-format-item {
+    color: @{text_dim};
+}
+
+/* ── Empty state ──────────────────────────────────────────── */
+
+.mp-empty-mark {
+    color: @{primary};
+    border-color: @{alpha(primary,0.60)};
+    background-color: @{alpha(primary,0.08)};
+}
+
+.mp-empty-title {
+    color: @{text};
+}
+
+/* ── Result cards ─────────────────────────────────────────── */
+
+.plugin-card {
+    background-color: @{surface};
+    border-color: @{alpha(border,0.88)};
+}
+
+.plugin-card:hover {
+    background-color: @{surface_bright};
+    border-color: @{primary};
+}
+
+.plugin-card.card--in-progress {
+    border-color: @{primary};
+}
+
+.plugin-card.card--success {
+    border-color: @{success};
+}
+
+.plugin-card.card--error {
+    border-color: @{error};
+}
+
+.card-name,
+.plugin-list-name,
+.mp-section-title,
+.confirm-title {
+    color: @{text};
+}
+
+.card-version,
+.card-local,
+.plugin-list-version {
+    color: @{info};
+}
+
+.card-repo,
+.plugin-list-link {
+    color: @{text_dim};
+}
+
+.plugin-list-link:hover {
+    color: @{primary};
+    text-decoration: underline;
+}
+
+.card-metrics {
+    color: @{warning};
+}
+
+.card-info .separator {
+    background-color: @{alpha(border,0.65)};
+}
+
+.card-feedback {
+    background-color: @{alpha(surface_bright,0.55)};
+    border-color: @{alpha(border,0.78)};
+}
+
+.card-progress {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.card-progress-text {
+    color: @{text_dim};
+}
+
+/* ── List rows ────────────────────────────────────────────── */
+
+.plugin-list-row {
+    background-color: @{surface};
+    border-color: @{alpha(border,0.78)};
+}
+
+.plugin-list-row:hover {
+    background-color: @{surface_bright};
+    border-color: @{alpha(primary,0.70)};
+}
+
+.plugin-list-row.card--in-progress {
+    border-left-color: @{primary};
+}
+
+.plugin-list-row.card--success {
+    border-left-color: @{success};
+}
+
+.plugin-list-row.card--error {
+    border-left-color: @{error};
+}
+
+.plugin-list-details {
+    border-top-color: @{alpha(border,0.65)};
+}
+
+.plugin-list-disclosure,
+.plugin-list-name-btn {
+    color: @{text_dim};
+}
+
+.plugin-list-disclosure:hover,
+.plugin-list-name-btn:hover,
+.plugin-list-name-btn:focus-visible,
+.plugin-list-disclosure:focus-visible {
+    color: @{text};
+    background-color: @{alpha(primary,0.10)};
+}
+
+.plugin-list-summary-status.status-success {
+    color: @{success};
+}
+
+.plugin-list-summary-status.status-error {
+    color: @{error};
+}
+
+.plugin-list-summary-status.status-muted {
+    color: @{text_dim};
+}
+
+.plugin-list-marker--local {
+    color: @{text_dim};
+}
+
+.plugin-list-marker--remote {
+    color: @{primary};
+}
+
+/* ── Catalog status ───────────────────────────────────────── */
+
+#status-bar {
+    background-color: @{alpha(surface,0.78)};
+    border-top-color: @{border};
+}
+
+.mp-status-dot {
+    background-color: @{info};
+}
+
+.mp-status-dot.status-success {
+    background-color: @{success};
+}
+
+.mp-status-dot.status-warning {
+    background-color: @{warning};
+}
+
+/* ── Confirmation dialog ──────────────────────────────────── */
+
 .confirm-overlay {
-    background-color: @{alpha(background,0.48)};
+    background-color: @{alpha(background,0.60)};
 }
 
 .confirm-dialog {
     color: @{text};
     background-color: @{surface};
     border-color: @{border};
+    box-shadow: @{layered_shadow.3};
 }
 
-.confirm-buttons .btn--secondary:hover {
-    background-color: @{surface_bright};
+.confirm-message {
+    color: @{text};
+}
+
+.confirm-dialog .separator {
+    background-color: @{alpha(border,0.70)};
 }

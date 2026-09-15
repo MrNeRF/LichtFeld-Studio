@@ -28,10 +28,7 @@ target_link_libraries(lfs_preprocessing
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         CURL::libcurl
         OpenSSL::Crypto
-        lfs_oiio
 )
-
-set_property(SOURCE preprocess.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 target_compile_features(lfs_preprocessing PUBLIC cxx_std_23)
 

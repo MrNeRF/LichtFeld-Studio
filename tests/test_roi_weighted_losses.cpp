@@ -6,11 +6,14 @@
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
+#include "training/losses/mask_loss.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -113,6 +116,7 @@ namespace {
         Tensor grad_normal;
         Tensor grad_depth;
         Tensor grad_alpha;
+        Tensor diagnostics;
     };
 
     ConsistencyResult run_consistency_loss(
@@ -202,6 +206,7 @@ namespace {
             0.3f,
             stream,
             pixel_weight.is_valid() ? pixel_weight.ptr<float>() : nullptr);
+        result.diagnostics = partials;
         return result;
     }
 
@@ -367,4 +372,141 @@ TEST_F(RoiWeightedLossTest, NormalConsistencyUsesWeightedCentersAndOnesMatchBase
         prior_all_ones.grad_depth, prior_baseline.grad_depth, 1.0e-6f);
     expect_tensors_near(
         prior_all_ones.grad_alpha, prior_baseline.grad_alpha, 1.0e-6f);
+}
+
+TEST_F(RoiWeightedLossTest, PriorDepthRequiresMinimumCountAndWeight) {
+    using namespace lfs::training::kernels;
+    namespace slots = normal_consistency_slots;
+    constexpr int height = 16;
+    constexpr int width = 16;
+    constexpr size_t pixels = height * width;
+    const auto depth = Tensor::full({size_t{height}, size_t{width}}, 2.0f, Device::CUDA);
+    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+
+    // Only prior validity limits the count; every selected centre has a valid
+    // four-neighbour depth stencil. Include both unweighted and weighted gates.
+    for (const int count : {1, 63, 64}) {
+        for (const float pixel_weight : {1.0f, 0.25f, 0.24f}) {
+            SCOPED_TRACE(::testing::Message() << "count=" << count << " weight=" << pixel_weight);
+            std::vector<float> prior_values(3 * pixels, 0.0f);
+            int remaining = count;
+            for (int y = 1; y < height - 1 && remaining > 0; ++y) {
+                for (int x = 1; x < width - 1 && remaining > 0; ++x, --remaining) {
+                    const size_t idx = static_cast<size_t>(y) * width + x;
+                    prior_values[idx] = 0.6f;
+                    prior_values[2 * pixels + idx] = -0.8f;
+                }
+            }
+            const auto prior = Tensor::from_vector(
+                prior_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+            const auto weight = pixel_weight == 1.0f
+                                    ? Tensor{}
+                                    : Tensor::full({size_t{height}, size_t{width}}, pixel_weight, Device::CUDA);
+            const auto result = run_prior_depth_loss(prior, depth, alpha, weight);
+            const bool valid = count >= kNormalConsistencyMinValidCount &&
+                               count * pixel_weight >= kNormalConsistencyMinValidWeight;
+            const auto slot = [&](int index) {
+                return result.diagnostics.slice(0, index, index + 1).item<float>();
+            };
+            EXPECT_FLOAT_EQ(slot(slots::kCount), static_cast<float>(count));
+            EXPECT_FLOAT_EQ(slot(slots::kSumAlpha), count * pixel_weight);
+            EXPECT_FLOAT_EQ(slot(slots::kValid), valid ? 1.0f : 0.0f);
+            if (valid) {
+                EXPECT_GT(slot(slots::kInvNorm), 0.0f);
+                EXPECT_GT(result.loss.item<float>(), 0.0f);
+                EXPECT_GT(result.grad_depth.abs().max().item<float>(), 0.0f);
+                EXPECT_GT(result.grad_alpha.abs().max().item<float>(), 0.0f);
+            } else {
+                EXPECT_EQ(slot(slots::kInvNorm), 0.0f);
+                EXPECT_EQ(result.loss.item<float>(), 0.0f);
+                EXPECT_EQ(result.grad_depth.abs().max().item<float>(), 0.0f);
+                EXPECT_EQ(result.grad_alpha.abs().max().item<float>(), 0.0f);
+            }
+        }
+    }
+}
+
+TEST_F(RoiWeightedLossTest, ComposedUserMaskSuppressesAllNormalLossCenters) {
+    constexpr int height = 16;
+    constexpr int width = 16;
+    constexpr size_t pixels = height * width;
+    std::vector<float> rendered_values(3 * pixels, 0.0f);
+    std::vector<float> prior_values(3 * pixels, 0.0f);
+    std::fill(rendered_values.begin(), rendered_values.begin() + pixels, 0.6f);
+    std::fill(rendered_values.begin() + 2 * pixels, rendered_values.end(), -0.8f);
+    std::fill(prior_values.begin(), prior_values.begin() + pixels, -0.6f);
+    std::fill(prior_values.begin() + 2 * pixels, prior_values.end(), -0.8f);
+    const auto rendered = Tensor::from_vector(
+        rendered_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+    const auto prior = Tensor::from_vector(
+        prior_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+    const auto depth = Tensor::full({size_t{height}, size_t{width}}, 2.0f, Device::CUDA);
+    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+    // Independent oracle: invalidate normal loss centres instead of masking them.
+    const auto half_weight = make_half_weight(height, width);
+    const auto active_rendered = rendered * half_weight;
+    const auto active_prior = prior * half_weight;
+
+    for (const bool segment_and_ignore : {false, true}) {
+        for (const bool with_roi : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "segment_and_ignore=" << segment_and_ignore
+                                              << " roi=" << with_roi);
+            std::vector<uint8_t> mask_values(pixels, 255);
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width / 2; ++x) {
+                    // Segment/Ignore use binary inclusion; SegmentAndIgnore's
+                    // nonzero ignore band must become exactly zero.
+                    mask_values[static_cast<size_t>(y) * width + x] = segment_and_ignore ? 127 : 0;
+                }
+            }
+            const auto mask = Tensor::from_blob(
+                                  mask_values.data(), {size_t{height}, size_t{width}},
+                                  Device::CPU, lfs::core::DataType::UInt8)
+                                  .to(Device::CUDA);
+            ASSERT_EQ(mask.dtype(), lfs::core::DataType::UInt8);
+            ASSERT_EQ(mask.device(), Device::CUDA);
+            const auto roi = with_roi
+                                 ? Tensor::full({size_t{height}, size_t{width}}, 0.5f, Device::CUDA)
+                                 : Tensor{};
+            lfs::training::losses::MaskPreprocessWorkspace workspace;
+            const auto weight = lfs::training::losses::fuse_photometric_mask_weight(
+                workspace, mask, roi, segment_and_ignore, true);
+            ASSERT_EQ(weight.dtype(), lfs::core::DataType::Float32);
+            expect_tensors_near(weight, half_weight * (with_roi ? 0.5f : 1.0f), 0.0f);
+
+            const auto normal = run_normal_loss(rendered, alpha, prior, weight);
+            const auto normal_reference = run_normal_loss(rendered, alpha, active_prior, roi);
+            const float normal_loss = normal.loss.item<float>();
+            const float normal_grad_max = normal.grad_normal.abs().max().item<float>();
+            const float ignored_normal_grad_max =
+                normal.grad_normal.slice(2, 0, width / 2).abs().max().item<float>();
+            EXPECT_GT(normal_loss, 0.0f);
+            EXPECT_GT(normal_grad_max, 0.0f);
+            EXPECT_EQ(ignored_normal_grad_max, 0.0f);
+            expect_tensors_near(normal.loss, normal_reference.loss, 1.0e-6f);
+            expect_tensors_near(normal.grad_normal, normal_reference.grad_normal, 1.0e-6f);
+
+            const auto consistency = run_consistency_loss(rendered, depth, alpha, weight);
+            const auto consistency_reference = run_consistency_loss(active_rendered, depth, alpha, roi);
+            EXPECT_EQ(consistency.grad_normal.slice(2, 0, width / 2).abs().max().item<float>(), 0.0f);
+            expect_tensors_near(consistency.grad_normal, consistency_reference.grad_normal, 1.0e-6f);
+            const auto prior_depth = run_prior_depth_loss(prior, depth, alpha, weight);
+            const auto prior_depth_reference = run_prior_depth_loss(active_prior, depth, alpha, roi);
+            for (const auto& pair : {std::pair{consistency, consistency_reference},
+                                     std::pair{prior_depth, prior_depth_reference}}) {
+                const auto& actual = pair.first;
+                const auto& reference = pair.second;
+                EXPECT_GT(actual.loss.item<float>(), 0.0f);
+                EXPECT_GT(actual.grad_depth.abs().max().item<float>(), 0.0f);
+                EXPECT_GT(actual.grad_alpha.abs().max().item<float>(), 0.0f);
+                expect_tensors_near(actual.loss, reference.loss, 1.0e-6f);
+                expect_tensors_near(actual.grad_depth, reference.grad_depth, 1.0e-6f);
+                expect_tensors_near(actual.grad_alpha, reference.grad_alpha, 1.0e-6f);
+                // The stencil writes one pixel beyond an active centre. Only
+                // that boundary column can receive neighbouring contributions.
+                EXPECT_EQ(actual.grad_depth.slice(1, 0, width / 2 - 1).abs().max().item<float>(), 0.0f);
+                EXPECT_EQ(actual.grad_alpha.slice(1, 0, width / 2 - 1).abs().max().item<float>(), 0.0f);
+            }
+        }
+    }
 }

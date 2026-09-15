@@ -43,3 +43,36 @@ Play/Pause
 {error_prefix}: {detail}
 {tr('plugin_manager.status.unload_failed')}: {e}
 {group.name} ({group.count})
+
+# Tone-mapping algorithms keep their canonical names.
+Hejl
+ACES 2
+
+# Localization prefixes and a gallery wire-field identifier.
+gallery.transfer.
+action.
+replaceSceneId
+
+# Durable gallery diagnostics are localized by gallery_messages at the UI boundary.
+Ready to download
+Refresh to connect your gallery.
+Interrupted. Resume when ready.
+Gallery is up to date.
+Scene prepared. Resume when ready to upload.
+Ready to download. Resume when ready.
+Waiting for the portal
+Assembling upload
+Uploaded
+Upload complete. Review Story on portal after this content change.
+Upload complete.
+Downloading
+Uploading
+Downloaded. Open as a new project when ready.
+Paused (connection lost)
+Paused. Resume when ready.
+Keeping a recovery copy of your local project…
+Checking downloaded scene… {int(100 * done / max(1, total))}%
+Finished transfers cleared. Project links and recovery copies kept.
+Discarded
+Gallery details saved.
+Removed from gallery. Local projects are unchanged.

@@ -1,0 +1,34 @@
+<rml>
+<head>
+    <link type="text/rcss" href="bottom_dock.rcss"/>
+    <link type="text/rcss" href="panel_tabs.rcss"/>
+</head>
+<body id="bottom-dock-body" data-model="bottom_dock_tabs">
+    <div id="dock-grip">
+        <div class="dock-grip-bar"></div>
+    </div>
+    <div id="tab-bar" data-class-with-scroll="tabs_overflow">
+        <button id="tab-scroll-left" class="tab-nav"
+                data-class-hidden="!tabs_overflow"
+                data-class-disabled="!can_scroll_tabs_left"
+                data-event-click="scroll_tabs_left()">&lt;</button>
+        <div id="tab-strip-viewport">
+            <div data-for="tab : tabs" class="tab"
+                 data-attr-id="tab.dom_id"
+                 data-class-active="tab.id == active_tab"
+                 data-class-closeable="tab.closeable"
+                 data-event-click="tab_click(tab.id)">
+                <span class="tab-label">{{ tab.label }}</span>
+                <button class="tab-close" data-if="tab.closeable"
+                        data-tooltip="common.close"
+                        data-event-click="tab_close(tab.id)">&#215;</button>
+            </div>
+        </div>
+        <button id="tab-scroll-right" class="tab-nav"
+                data-class-hidden="!tabs_overflow"
+                data-class-disabled="!can_scroll_tabs_right"
+                data-event-click="scroll_tabs_right()">&gt;</button>
+    </div>
+    <div id="tab-separator"></div>
+</body>
+</rml>

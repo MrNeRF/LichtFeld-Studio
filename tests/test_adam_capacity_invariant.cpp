@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -184,4 +185,53 @@ TEST(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
     EXPECT_EQ(AdamOptimizer::slow_path_grow_count(), slow_before);
     EXPECT_LE(alloc_counter::delta_since(snap), 2u);
     EXPECT_GE(state->capacity, state->size);
+}
+
+TEST(AdamCapacityInvariant, SlowPathGrowPreservesPackedMoments) {
+    constexpr size_t n0 = 16;
+    constexpr size_t n_grow = 4;
+
+    auto splat = create_adam_test_splat(n0);
+    AdamConfig cfg;
+    cfg.growth_factor = 1.5f;
+    cfg.initial_capacity = 0;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+
+    auto* state = opt.get_state_mutable(ParamType::Means);
+    ASSERT_NE(state, nullptr);
+    ASSERT_TRUE(state->exp_avg.is_valid());
+    std::vector<std::uint8_t> packed_before(state->exp_avg.numel(), 0xA5);
+    packed_before[0] = 0x11;
+    packed_before[1] = 0x22;
+    packed_before.back() = 0xFE;
+    ASSERT_EQ(cudaMemcpy(state->exp_avg.data_ptr(), packed_before.data(),
+                         packed_before.size(), cudaMemcpyHostToDevice),
+              cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    force_zero_capacity(*state);
+    splat.means().reserve(n0 + 4 * n_grow);
+    splat.sh0().reserve(n0 + 4 * n_grow);
+    splat.scaling_raw().reserve(n0 + 4 * n_grow);
+    splat.rotation_raw().reserve(n0 + 4 * n_grow);
+    splat.opacity_raw().reserve(n0 + 4 * n_grow);
+    splat.means().append_zeros(n_grow);
+    splat.sh0().append_zeros(n_grow);
+    splat.scaling_raw().append_zeros(n_grow);
+    splat.rotation_raw().append_zeros(n_grow);
+    splat.opacity_raw().append_zeros(n_grow);
+    opt.extend_state_for_new_params(ParamType::Means, n_grow);
+
+    state = opt.get_state_mutable(ParamType::Means);
+    ASSERT_NE(state, nullptr);
+    ASSERT_TRUE(state->exp_avg.is_valid());
+    ASSERT_GE(state->exp_avg.numel(), packed_before.size());
+    std::vector<std::uint8_t> packed_after(packed_before.size());
+    ASSERT_EQ(cudaMemcpy(packed_after.data(), state->exp_avg.data_ptr(),
+                         packed_after.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(packed_after, packed_before)
+        << "slow-path realloc must copy existing packed moments";
 }

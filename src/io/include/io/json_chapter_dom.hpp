@@ -142,6 +142,8 @@ namespace lfs::io {
         }
         [[nodiscard]] static std::optional<Json> read_json(const Json& node,
                                                            std::string_view path);
+        [[nodiscard]] static const Json* read_json_ref(const Json& node,
+                                                       std::string_view path);
 
         template <typename T>
             requires json_chapter_detail::WritableScalar<T>
@@ -151,6 +153,7 @@ namespace lfs::io {
 
         [[nodiscard]] lfs::Result<bool> remove(std::string_view path);
         [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
+        [[nodiscard]] const Json* get_json_ref(std::string_view path) const;
         [[nodiscard]] lfs::Result<void> set_json(std::string_view path, Json value);
 
         // UUIDs use the exact canonical textual form
@@ -169,6 +172,8 @@ namespace lfs::io {
         // empty vector.
         [[nodiscard]] lfs::Result<std::vector<std::pair<std::string, Json>>>
         array_items(std::string_view path) const;
+        [[nodiscard]] lfs::Result<std::vector<std::pair<std::string, const Json*>>>
+        array_item_refs(std::string_view path) const;
 
         // Copy of one element's JSON, or nullopt when the array or element is absent
         // (same resolution semantics as const array_find).

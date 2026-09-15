@@ -128,6 +128,31 @@ namespace {
 
 #if !defined(LFS_FORMAT_TEST_TARGET)
     TEST(SelectionChapterTest,
+         SelectedNodeAbsentFromTopologyRequiresExtraOwner) {
+        const auto selected_uuid = fixed_uuid(81);
+        SelectionChapter chapter;
+        ASSERT_TRUE(chapter.set_selected_node_uuids({selected_uuid}));
+        Scene topology;
+        const auto missing = lfs::io::project::stage_selection_chapter(chapter, topology);
+        ASSERT_FALSE(missing);
+        EXPECT_EQ(missing.error().code(), lfs::ErrorCode::FailedPrecondition);
+
+        const std::array unrelated_owners{fixed_uuid(82)};
+        const auto unrelated = lfs::io::project::stage_selection_chapter(
+            chapter, topology, unrelated_owners);
+        ASSERT_FALSE(unrelated);
+        EXPECT_EQ(unrelated.error().code(), lfs::ErrorCode::FailedPrecondition);
+
+        const std::array extra_owners{selected_uuid};
+        const auto staged = lfs::io::project::stage_selection_chapter(
+            chapter, topology, extra_owners);
+        ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+        EXPECT_EQ(staged->report.selected_node_uuids,
+                  (std::vector<Uuid>{selected_uuid}));
+        EXPECT_EQ(topology.getNodeByUuid(selected_uuid), nullptr);
+    }
+
+    TEST(SelectionChapterTest,
          BothDomainsGroupsAndSelectedNodeOrderRoundTrip) {
         const Uuid splat_uuid = fixed_uuid(1);
         const Uuid point_uuid = fixed_uuid(2);

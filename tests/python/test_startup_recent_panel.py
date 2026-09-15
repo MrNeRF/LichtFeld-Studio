@@ -43,7 +43,7 @@ def _install_lf_stub(monkeypatch, tmp_path, *, recent_paths=None, dispositions=N
         template = ""
         height_mode = panel_height_mode.CONTENT
         size = None
-        update_policy = "interval"
+        update_policy = "dirty"
 
         def on_bind_model(self, ctx):
             del ctx

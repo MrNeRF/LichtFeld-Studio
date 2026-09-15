@@ -48,7 +48,7 @@ namespace lfs::io::project {
         friend constexpr auto operator<=>(const Version&, const Version&) = default;
     };
 
-    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 0};
+    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 1};
 
     struct LFS_IO_API Fourcc {
         std::array<std::uint8_t, 4> bytes{};
@@ -97,6 +97,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
+    inline constexpr Fourcc FOURCC_DSRC = make_fourcc('D', 'S', 'R', 'C');
 
     struct ChunkKey {
         Fourcc fourcc;
@@ -145,6 +146,7 @@ namespace lfs::io::project {
         // Byte-plane (f32-word) prefilter + zstd. Distinct wire encoding from
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
+        ENCODED_SCENE_ASSETS = 9,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -365,6 +367,33 @@ namespace lfs::io::project {
 
     class ProjectWriter;
 
+    class LFS_IO_API MaterializeRetirementSink {
+    public:
+        MaterializeRetirementSink() = default;
+        MaterializeRetirementSink(MaterializeRetirementSink&&) noexcept = default;
+        MaterializeRetirementSink& operator=(MaterializeRetirementSink&&) noexcept =
+            default;
+        MaterializeRetirementSink(const MaterializeRetirementSink&) = delete;
+        MaterializeRetirementSink& operator=(const MaterializeRetirementSink&) =
+            delete;
+
+        void adopt(std::unique_ptr<std::byte[]> storage) {
+            if (storage) {
+                buffers_.push_back(std::move(storage));
+            }
+        }
+        void adopt(std::vector<std::byte> bytes) {
+            if (!bytes.empty()) {
+                vectors_.push_back(std::move(bytes));
+            }
+        }
+        void retire_async();
+
+    private:
+        std::vector<std::unique_ptr<std::byte[]>> buffers_;
+        std::vector<std::vector<std::byte>> vectors_;
+    };
+
     class LFS_IO_API ProjectReader {
     public:
         [[nodiscard]] static lfs::Result<ProjectReader>
@@ -400,6 +429,9 @@ namespace lfs::io::project {
                    // from decompression worker threads.
                    std::function<void(std::size_t, std::size_t)> progress = {}) const;
         [[nodiscard]] lfs::Result<void>
+        read_logical_prefix(const ChunkInfo& chunk,
+                            std::span<std::byte> destination) const;
+        [[nodiscard]] lfs::Result<void>
         read_stored_at(const ChunkInfo& chunk, std::uint64_t relative_offset,
                        std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void> verify_chunk(const ChunkInfo& chunk) const;
@@ -416,9 +448,16 @@ namespace lfs::io::project {
 
     private:
         friend class ProjectWriter;
+        friend class LazyChunkValue;
         struct Impl;
         explicit ProjectReader(std::shared_ptr<Impl> impl);
         std::shared_ptr<Impl> impl_;
+
+        [[nodiscard]] lfs::Result<void> visit_materialized_chunk(
+            const ChunkInfo& chunk,
+            const std::function<lfs::Result<void>(std::span<const std::byte>)>&
+                visitor,
+            MaterializeRetirementSink* retirement = nullptr) const;
     };
 
     enum class IndexCompression {
@@ -514,8 +553,11 @@ namespace lfs::io::project {
         lfs::core::Uuid commit_uuid;
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t wallclock_unix_ns = 0;
-        Version min_reader_version = CURRENT_CONTAINER_VERSION;
-        Version min_safe_writer_version = CURRENT_CONTAINER_VERSION;
+        // The 1.1 container can still carry 1.0-compatible commits.  A
+        // producer raises these fields when it publishes a feature that an
+        // older reader cannot preserve, such as checkpoint history.
+        Version min_reader_version{1, 0};
+        Version min_safe_writer_version{1, 0};
         CapabilitySet extra_reader_capabilities;
         CapabilitySet extra_writer_capabilities;
     };
@@ -533,6 +575,10 @@ namespace lfs::io::project {
         std::uint64_t wallclock_unix_ns = 0;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
+        // Save As compaction writes a private intermediate file. The caller
+        // must complete the final append, full CRC verification, and durable
+        // publication before exposing it as the destination.
+        bool private_staging = false;
     };
 
     class LFS_IO_API ProjectWriter {
@@ -543,6 +589,18 @@ namespace lfs::io::project {
         append(const std::filesystem::path& path, const AppendOptions& options = {});
         [[nodiscard]] static lfs::Result<void>
         compact(const std::filesystem::path& path, const CompactionOptions& options = {});
+        // Compacts source_path into a new destination without first cloning
+        // the complete source file. Writer locks for both paths are held for
+        // the duration (one lock when the paths are equal). Normal compaction
+        // publishes the destination transactionally after full CRC validation
+        // and durability. With private_staging, the destination is a private
+        // intermediate: only its authority tuple is validated here; full CRC
+        // validation and durability are deferred to the caller's final commit
+        // before publication.
+        [[nodiscard]] static lfs::Result<void>
+        compact_to(const std::filesystem::path& source_path,
+                   const std::filesystem::path& destination_path,
+                   const CompactionOptions& options = {});
 
         ProjectWriter(ProjectWriter&&) noexcept;
         ProjectWriter& operator=(ProjectWriter&&) noexcept;

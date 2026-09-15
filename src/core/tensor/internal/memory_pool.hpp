@@ -9,12 +9,14 @@
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/training_churn_metrics.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
 #include "stream_lifetime.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cuda_runtime.h>
 #include <iomanip>
 #include <memory>
@@ -554,7 +556,15 @@ namespace lfs::core {
         }
 
         void trim_cached_memory() {
+            const auto trim_start = std::chrono::steady_clock::now();
+            const auto record_trim = [&trim_start]() noexcept {
+                TrainingChurnMetrics::instance().record_trim(static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - trim_start)
+                        .count()));
+            };
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                record_trim();
                 return;
             }
             const cudaError_t sync_status = cudaDeviceSynchronize();
@@ -562,6 +572,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool trim)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                record_trim();
                 return;
             }
             {
@@ -581,6 +592,33 @@ namespace lfs::core {
 #if CUDART_VERSION >= 12080
             trim_default_pool("cached-memory trim");
 #endif
+            record_trim();
+        }
+
+        // Used by the Morton reorder path: preserve the post-reorder trim when
+        // the CUDA pool has meaningful reclaimable slack, but avoid a device
+        // sync for small transient fluctuations.
+        void trim_cached_memory_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+#if CUDART_VERSION >= 12080
+            int device = -1;
+            cudaMemPool_t pool = nullptr;
+            if (!try_get_default_pool(device, pool, "conditional memory-pool trim")) {
+                return;
+            }
+            uint64_t used = 0;
+            uint64_t reserved = 0;
+            const cudaError_t used_status = cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrUsedMemCurrent, &used);
+            const cudaError_t reserved_status = cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrReservedMemCurrent, &reserved);
+            if (used_status != cudaSuccess || reserved_status != cudaSuccess ||
+                reserved <= used || reserved - used <= threshold_bytes) {
+                return;
+            }
+#else
+            (void)threshold_bytes;
+#endif
+            trim_cached_memory();
         }
 
         CudaMemoryPool(const CudaMemoryPool&) = delete;

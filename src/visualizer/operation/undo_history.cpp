@@ -8,6 +8,7 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -450,6 +451,10 @@ namespace lfs::vis::op {
             return;
         }
 
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
+        }
+
         const size_t entry_bytes = entryBytes(entry);
         bool changed = false;
         bool merged = false;
@@ -522,6 +527,31 @@ namespace lfs::vis::op {
                 .steps_performed = 0,
                 .error = {},
             };
+        }
+
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            try {
+                scene_manager->completePendingSelectionCounts();
+            } catch (const std::exception& e) {
+                LOG_ERROR("{} preflight failed: {}",
+                          undo_direction ? "Undo" : "Redo",
+                          e.what());
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = e.what(),
+                };
+            } catch (...) {
+                LOG_ERROR("{} preflight failed: unknown exception",
+                          undo_direction ? "Undo" : "Redo");
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = "unknown exception",
+                };
+            }
         }
 
         std::unique_lock playback_lock(playback_mutex_, std::try_to_lock);

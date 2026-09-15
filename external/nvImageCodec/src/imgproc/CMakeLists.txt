@@ -49,9 +49,6 @@ add_library(nvimgcodec_imgproc_static OBJECT
 )
 set_property(TARGET nvimgcodec_imgproc_static PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-# Add Boost include directories for CUDA compilation
-target_include_directories(nvimgcodec_imgproc_static PRIVATE ${Boost_INCLUDE_DIRS})
-
 if(WIN32)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compiler-options \" /Zc:preprocessor \"  -Xfatbin -compress-all")
 endif()

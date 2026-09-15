@@ -8,19 +8,20 @@
  * @brief Convert SplatData.shN between fp32 float4-swizzled and q16 pad-dropped storage.
  *
  * Call apply_shN_value_quant once after model load / before training when the flag is ON.
- * Densify entry points should call ensure_shN_fp32_for_mutation / commit_shN_after_mutation
- * around float-native densify ops.
  *
- * The exportable block holds pad-dropped q16
- * SH at all times. densify expands a float workspace under trainer render_mutex
- * exclusive, then commit re-encodes into the same live q16 region before the lock
- * drops. Passive viewport preview acquires the step-boundary lock at a bounded
- * cadence so it never projects concurrent with densify/re-encode.
+ * Refine / densify keeps the q16 region authoritative. Mutation helpers
+ * gather-decode only the source index set and re-encode only the touched
+ * 256-splat bound blocks (or 256-aligned dest chunks for compact/append).
+ * ensure_shN_fp32_for_mutation remains for non-refine callers that still
+ * need a full-model float workspace (GUI transform bake, IEEE-f16 expand,
+ * tests, Morton's fp32 fallback).
  */
 
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data.hpp"
 
+#include <cstddef>
+#include <memory>
 #include <string_view>
 
 namespace lfs::training::sh_value {
@@ -41,6 +42,63 @@ namespace lfs::training::sh_value {
     /// After densify mutated float shN, re-encode to u16 + bounds (if quant on).
     /// Uses the model tensor allocator so exportable/GUI lands codes in the live block.
     bool commit_shN_after_mutation(core::SplatData& splat);
+
+    /// Gather-decode selected source primitives into canonical [K, rest, 3] fp32.
+    /// q16: decode only those source splats. fp32: swizzled gather-to-linear.
+    /// n_src_primitives=0 uses splat.size(). Pass the encoded source N when
+    /// means have already grown past the q16 region.
+    void gather_shN_to_canonical(core::SplatData& splat,
+                                 const core::Tensor& src_indices,
+                                 core::Tensor& dest_canonical,
+                                 std::size_t n_src_primitives = 0);
+
+    /// Scatter canonical [K, rest, 3] into dest primitive indices.
+    /// q16: decode/replace/re-encode only the touched 256-splat bound blocks.
+    void scatter_canonical_into_shN(core::SplatData& splat,
+                                    const core::Tensor& dest_indices,
+                                    const core::Tensor& src_canonical);
+
+    /// Append canonical [K, rest, 3] at dest_offset (typically the pre-append N).
+    /// q16: grow cells/bounds then re-encode only blocks covering
+    /// [dest_offset, dest_offset+K).
+    void append_canonical_to_shN(core::SplatData& splat,
+                                 const core::Tensor& src_canonical,
+                                 std::size_t dest_offset);
+
+    /// Zero SH-rest at dest indices. q16: touched 256-splat blocks only.
+    void zero_shN_at_indices(core::SplatData& splat, const core::Tensor& dest_indices);
+
+    /// Accumulate dest writes from one refine event, then decode/overlay/encode
+    /// each touched 256-splat block once. Recorded tensors are held by reference
+    /// count until flush(). A single recorded op flushes through the matching
+    /// direct helper above.
+    class ShNMutationBatch final {
+    public:
+        explicit ShNMutationBatch(core::SplatData& splat);
+        ~ShNMutationBatch();
+
+        ShNMutationBatch(const ShNMutationBatch&) = delete;
+        ShNMutationBatch& operator=(const ShNMutationBatch&) = delete;
+        ShNMutationBatch(ShNMutationBatch&&) noexcept;
+        ShNMutationBatch& operator=(ShNMutationBatch&&) noexcept;
+
+        void scatter(const core::Tensor& dest_indices, const core::Tensor& src_canonical);
+        void zero(const core::Tensor& dest_indices);
+        void append(const core::Tensor& src_canonical, std::size_t dest_offset);
+        void flush();
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
+    /// Compact shN so dest[i] = src[keep[i]], sized to keep.numel().
+    /// n_src is the pre-compact primitive count (means may already be compacted).
+    /// dest_cap_prims is the reserved primitive capacity (0 = new N).
+    void compact_shN_gather(core::SplatData& splat,
+                            const core::Tensor& keep_indices,
+                            std::size_t n_src,
+                            std::size_t dest_cap_prims = 0);
 
     /// Scope-exit commit for densify helpers with early-return paths. Commit can
     /// allocate and throw; the destructor contains and logs failures so unwinding

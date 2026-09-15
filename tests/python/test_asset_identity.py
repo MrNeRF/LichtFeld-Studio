@@ -52,7 +52,29 @@ def _install_inspections(monkeypatch, inspections):
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
 
 
-def test_catalog_uses_project_uuid_and_persists_only_locator_fields(monkeypatch, tmp_path: Path):
+def _cached_record(path: Path, project_uuid: str, inspection=None):
+    inspection = inspection or _inspection(project_uuid)
+    return {
+        "name": path.stem,
+        "path": str(path),
+        "folder_id": "default",
+        "size": path.stat().st_size,
+        "mtime_ns": path.stat().st_mtime_ns,
+        "fallback_preview_path": "",
+        "file_uuid": inspection.file_uuid,
+        "commit_uuid": inspection.commit_uuid,
+        "generation": inspection.generation,
+        "created_at_unix_ns": inspection.created_at_unix_ns,
+        "saved_at_unix_ns": inspection.saved_at_unix_ns,
+        "file_size_bytes": inspection.physical_file_size,
+        "role": "MASTER",
+        "open_state": inspection.open_state.name,
+        "has_preview": inspection.has_preview,
+        "status": "AVAILABLE",
+    }
+
+
+def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, tmp_path: Path):
     first_path = tmp_path / "first.licht"
     copied_path = tmp_path / "copy.licht"
     first_path.write_bytes(b"first container")
@@ -82,13 +104,21 @@ def test_catalog_uses_project_uuid_and_persists_only_locator_fields(monkeypatch,
 
     catalog = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
     assert set(catalog) == {"schema_version", "folders", "projects"}
-    assert catalog["schema_version"] == 3
+    assert catalog["schema_version"] == 5
     assert catalog["folders"]["default"] == {"path": str(tmp_path)}
-    assert catalog["projects"][first.id] == {
-        "name": "My project",
-        "path": str(copied_path),
-        "folder_id": "default",
-    }
+    assert catalog["projects"][first.id] == duplicate.to_storage_dict()
+    assert {
+        "file_uuid",
+        "commit_uuid",
+        "generation",
+        "created_at_unix_ns",
+        "saved_at_unix_ns",
+        "file_size_bytes",
+        "role",
+        "open_state",
+        "has_preview",
+        "status",
+    }.issubset(catalog["projects"][first.id])
 
 
 def test_catalog_rejects_non_licht_paths(tmp_path: Path):
@@ -237,6 +267,9 @@ def test_project_commit_changes_do_not_change_catalog_identity(monkeypatch, tmp_
         commit_uuid=new_commit_uuid,
         generation=2,
     )
+    # A real project save changes the file metadata; the cache must not be
+    # bypassed merely because this test swapped its inspection stub.
+    project.write_bytes(b"project container updated")
     verified = index.verify_asset(licht_asset.id)
     assert verified.commit_uuid == new_commit_uuid
     assert verified.generation == 2
@@ -245,7 +278,8 @@ def test_project_commit_changes_do_not_change_catalog_identity(monkeypatch, tmp_
     assert [asset.id for asset in index.list_projects()] == [licht_asset.id]
     stored = json.loads(library_path.read_text(encoding="utf-8"))["projects"]
     assert set(stored) == {project_uuid}
-    assert "commit_uuid" not in stored[project_uuid]
+    assert stored[project_uuid]["commit_uuid"] == new_commit_uuid
+    assert stored[project_uuid]["generation"] == 2
 
 
 def test_v2_load_rewrites_records_to_the_exact_minimal_schema(monkeypatch, tmp_path: Path):
@@ -282,17 +316,10 @@ def test_v2_load_rewrites_records_to_the_exact_minimal_schema(monkeypatch, tmp_p
     index = AssetIndex(library_path=library_path)
     assert index.load() is True
 
-    assert json.loads(library_path.read_text(encoding="utf-8")) == {
-        "schema_version": 3,
-        "folders": {"default": {"path": str(tmp_path)}},
-        "projects": {
-            project_uuid: {
-                "name": "Project",
-                "path": str(project),
-                "folder_id": "default",
-            }
-        },
-    }
+    migrated = json.loads(library_path.read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 5
+    assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
+    assert migrated["projects"][project_uuid] == index.get_asset(project_uuid).to_storage_dict()
 
 
 def test_deleting_last_project_keeps_default_import_folder(monkeypatch, tmp_path: Path):
@@ -424,23 +451,20 @@ def test_legacy_catalog_migration_keeps_only_names_paths_folders_and_watch_roots
     assert index.load() is True
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
 
-    assert migrated["schema_version"] == 3
+    assert migrated["schema_version"] == 5
     assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
-    assert migrated["projects"][project_uuid] == {
-        "name": "Custom legacy name",
-        "path": str(project_path),
-        "folder_id": "default",
-    }
-    missing = next(
+    migrated_project = index.get_asset(project_uuid)
+    assert migrated_project is not None
+    assert migrated["projects"][project_uuid] == migrated_project.to_storage_dict()
+    missing_record = next(
         project
         for project in migrated["projects"].values()
         if project["path"] == str(missing_path)
     )
-    assert missing == {
-        "name": "Missing",
-        "path": str(missing_path),
-        "folder_id": "default",
-    }
+    missing_project = next(
+        project for project in index.list_projects() if project.path == str(missing_path)
+    )
+    assert missing_record == missing_project.to_storage_dict()
 
 
 def test_legacy_migration_preserves_original_backup(monkeypatch, tmp_path: Path):
@@ -562,7 +586,9 @@ def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Pa
     assert any(str(good_path) in issue and "duplicate" in issue.casefold() for issue in index.load_issues)
     assert any(empty_uuid in issue for issue in index.load_issues)
     assert any("not an object" in issue for issue in index.load_issues)
-    assert library_path.read_text(encoding="utf-8") == original
+    migrated = json.loads(library_path.read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 5
+    assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
 def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Path):
@@ -596,7 +622,9 @@ def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Pat
     assert [project.id for project in index.list_projects()] == [good_uuid]
     assert len(index.load_issues) == 1
     assert "not-a-uuid" in index.load_issues[0]
-    assert library_path.read_text(encoding="utf-8") == original
+    migrated = json.loads(library_path.read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 5
+    assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
 def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
@@ -653,6 +681,191 @@ def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
     unavailable, total = index.verify_projects()
     assert total == 1
     assert unavailable == 0
+
+
+def test_v4_full_cached_inspection_skips_batch_inspection(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "cached.licht"
+    project_path.write_bytes(b"cached project")
+    project_uuid = str(uuid.uuid4())
+    inspection = _inspection(project_uuid, commit_uuid="cached-commit")
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "folders": {"default": {"path": str(tmp_path)}},
+                "projects": {
+                    project_uuid: _cached_record(project_path, project_uuid, inspection)
+                },
+                "directory_mtimes": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    inspect_calls = []
+
+    def inspect(*_args):
+        inspect_calls.append(True)
+        raise AssertionError("matching full cache must skip inspection")
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+    assert "directory_mtimes" not in json.loads(library_path.read_text(encoding="utf-8"))
+
+    project = index.get_asset(project_uuid)
+    assert project is not None
+    assert project.inspection_restored is True
+    assert index.verify_projects_batch([project_uuid]) == 1
+    assert project.status == "AVAILABLE"
+    assert project.available is True
+    assert project.has_preview is True
+    assert project.commit_uuid == "cached-commit"
+    assert project.inspection_verified is True
+    assert inspect_calls == []
+
+
+def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "mismatch.licht"
+    project_path.write_bytes(b"small container")
+    project_uuid = str(uuid.uuid4())
+    mismatch = _inspection(str(uuid.uuid4()))
+    mismatch.physical_file_size = 500 * 1024 * 1024
+    inspections = [_inspection(project_uuid), mismatch]
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspections.pop(0)),
+    )
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path)
+    index.ensure_default_catalog()
+    project, _ = index.register_licht_asset(str(project_path))
+
+    project_path.write_bytes(b"changed container")
+    result = index.verify_asset(project.id)
+
+    assert result.status == "IDENTITY_MISMATCH"
+    assert result.file_size_bytes == mismatch.physical_file_size
+    assert result.path_size_bytes == 0
+    assert result.path_mtime_ns == 0
+    stored = json.loads(library_path.read_text(encoding="utf-8"))["projects"][project.id]
+    assert stored["file_size_bytes"] == mismatch.physical_file_size
+    assert stored["size"] == 0
+    assert stored["mtime_ns"] == 0
+
+
+@pytest.mark.parametrize("status", ["MISSING", "UNREADABLE", "IDENTITY_MISMATCH", "UNSUPPORTED"])
+def test_cleared_inspection_status_and_exists_round_trip(
+    monkeypatch, tmp_path: Path, status: str
+):
+    project_path = tmp_path / "cleared.licht"
+    project_path.write_bytes(b"container")
+    project_uuid = str(uuid.uuid4())
+    monkeypatch.setattr(
+        AssetIndex, "_inspect_path", staticmethod(lambda _path: _inspection(project_uuid))
+    )
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path)
+    index.ensure_default_catalog()
+    project, _ = index.register_licht_asset(str(project_path))
+    index._clear_runtime(project, status, "saved diagnostic")
+    assert index.save()
+
+    restored_index = AssetIndex(library_path=library_path)
+    assert restored_index.load()
+    restored = restored_index.get_asset(project.id)
+
+    assert restored.status == status
+    assert restored.exists is (status != "MISSING")
+    assert restored.available is False
+
+
+def test_v4_cached_inspection_with_changed_stat_refreshes_fields(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "changed.licht"
+    project_path.write_bytes(b"changed project")
+    project_uuid = str(uuid.uuid4())
+    old = _inspection(project_uuid, commit_uuid="old-commit")
+    refreshed = _inspection(project_uuid, commit_uuid="new-commit", generation=2)
+    record = _cached_record(project_path, project_uuid, old)
+    record["mtime_ns"] += 1
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "folders": {"default": {"path": str(tmp_path)}},
+                "projects": {project_uuid: record},
+                "directory_mtimes": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    inspect_calls = []
+
+    def inspect(_path, _resolve_fallback=True):
+        inspect_calls.append(True)
+        return refreshed
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+    assert index.verify_projects_batch([project_uuid]) == 1
+
+    project = index.get_asset(project_uuid)
+    assert project is not None
+    assert project.commit_uuid == "new-commit"
+    assert project.generation == 2
+    assert project.status == "AVAILABLE"
+    assert project.inspection_restored is False
+    assert project.inspection_verified is True
+    assert len(inspect_calls) == 1
+
+
+def test_v4_cached_inspection_missing_field_is_inspected(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "incomplete.licht"
+    project_path.write_bytes(b"incomplete project")
+    project_uuid = str(uuid.uuid4())
+    cached = _inspection(project_uuid, commit_uuid="cached-commit")
+    refreshed = _inspection(project_uuid, commit_uuid="refreshed-commit")
+    record = _cached_record(project_path, project_uuid, cached)
+    del record["commit_uuid"]
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "folders": {"default": {"path": str(tmp_path)}},
+                "projects": {project_uuid: record},
+                "directory_mtimes": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    inspect_calls = []
+
+    def inspect(_path, _resolve_fallback=True):
+        inspect_calls.append(True)
+        return refreshed
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+    assert index.verify_projects_batch([project_uuid]) == 1
+
+    project = index.get_asset(project_uuid)
+    assert project is not None
+    assert project.commit_uuid == "refreshed-commit"
+    assert project.inspection_verified is True
+    assert len(inspect_calls) == 1
 
 
 def test_malformed_v3_catalog_restores_previous_catalog(monkeypatch, tmp_path: Path):
@@ -941,11 +1154,35 @@ def test_inspection_maps_repair_only_and_unsupported_newer_status(
     assert other_project.status == "UNSUPPORTED"
     assert other_project.available is False
     stored = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
-    assert "status" not in stored["projects"][repair_uuid]
+    assert stored["projects"][repair_uuid]["status"] == "REPAIR_ONLY"
 
 
 def test_asset_library_binding_returns_canonical_path(lf):
     assert Path(lf.io.asset_library_dir()).name == "asset_library"
+
+
+def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypatch, tmp_path: Path):
+    project_path = tmp_path / "project.licht"
+    project_path.write_bytes(b"container")
+    project_uuid = str(uuid.uuid4())
+    calls = []
+
+    def inspect(_path):
+        calls.append(1)
+        return _inspection(project_uuid)
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    index = AssetIndex(library_path=tmp_path / "library.json")
+    index.ensure_default_catalog()
+    project, _ = index.register_licht_asset(str(project_path))
+    assert project is not None
+    snapshot = index.assets
+    assert index.assets is snapshot
+    calls_before_verify = len(calls)
+    index.verify_asset(project.id)
+    assert len(calls) == calls_before_verify
+    index.update_asset(project.id, save=False, name="Renamed")
+    assert index.assets is not snapshot
 
 
 def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
@@ -957,7 +1194,7 @@ def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
     ).read_text(encoding="utf-8")
 
     assert 'data-event-click="on_import_project"' in rml
-    assert 'data-asset-action="load"' in rml
+    assert 'data-asset-action="gallery"' in rml
     assert 'data-folder-action="menu"' in rml
     assert '"action": "watch_dirs"' not in panel_source
     assert '"action": "move_to_folder' not in panel_source
@@ -965,7 +1202,7 @@ def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
     assert rml.count('data-event-click="on_import_project"') == 1
 
 
-def test_fallback_preview_path_is_runtime_only(monkeypatch, tmp_path: Path):
+def test_fallback_preview_path_is_cached_in_catalog(monkeypatch, tmp_path: Path):
     project_path = tmp_path / "garden.licht"
     project_path.write_bytes(b"container")
     project_uuid = str(uuid.uuid4())
@@ -982,9 +1219,9 @@ def test_fallback_preview_path_is_runtime_only(monkeypatch, tmp_path: Path):
     assert created is True
     assert project.fallback_preview_path == fallback
     assert project.to_dict()["fallback_preview_path"] == fallback
-    assert "fallback_preview_path" not in project.to_storage_dict()
+    assert project.to_storage_dict()["fallback_preview_path"] == fallback
     stored = json.loads(library_path.read_text(encoding="utf-8"))
-    assert "fallback_preview_path" not in stored["projects"][project.id]
+    assert stored["projects"][project.id]["fallback_preview_path"] == fallback
 
     missing_field = Project(
         project_uuid=str(uuid.uuid4()),
@@ -1001,3 +1238,38 @@ def test_fallback_preview_path_is_runtime_only(monkeypatch, tmp_path: Path):
     cleared = index.verify_asset(project.id)
     assert cleared.fallback_preview_path == ""
     assert cleared.to_dict()["fallback_preview_path"] == ""
+
+
+def test_v5_gallery_projection_rebuild_never_creates_remote_projects(tmp_path):
+    from lfs_plugins.asset_index import AssetIndex, Project
+    import json
+    index=AssetIndex(library_path=tmp_path/"library.json", default_folder_path=tmp_path/"projects")
+    assert index.load()
+    identifier=str(uuid.uuid4())
+    project=Project(project_uuid=identifier,name='Local',path=str(tmp_path/'projects'/'Local.licht'),folder_id='default')
+    index._projects[identifier]=project
+    assert index.save()
+    before=(tmp_path/'library.json').read_bytes()
+    assert index.rebuild_gallery_projection({identifier:{'sceneId':'scene','state':'unknown','checkedAt':5},'remote:scene':{'sceneId':'scene'}})
+    data=json.loads((tmp_path/'library.json').read_text())
+    assert set(data['projects'])=={identifier}
+    assert data['projects'][identifier]['gallery']['state']=='unknown'
+    assert (tmp_path/'library.json.bak').read_bytes()==before
+
+
+def test_projection_preserves_project_added_by_another_index(tmp_path):
+    from lfs_plugins.asset_index import AssetIndex, Project
+    import json
+    library=tmp_path/'library.json'
+    projects=tmp_path/'projects'
+    first=AssetIndex(library_path=library,default_folder_path=projects)
+    assert first.load()
+    a,b=str(uuid.uuid4()),str(uuid.uuid4())
+    first._projects[a]=Project(project_uuid=a,name='A',path=str(projects/'A.licht'),folder_id='default')
+    assert first.save()
+    second=AssetIndex(library_path=library,default_folder_path=projects)
+    assert second.load()
+    second._projects[b]=Project(project_uuid=b,name='B',path=str(projects/'B.licht'),folder_id='default')
+    assert second.save()
+    assert first.rebuild_gallery_projection({a:{'sceneId':'scene','state':'equal','checkedAt':1}})
+    assert set(json.loads(library.read_text())['projects'])=={a,b}

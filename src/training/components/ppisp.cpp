@@ -12,8 +12,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -22,9 +26,10 @@ namespace lfs::training {
     namespace {
         constexpr uint32_t CHECKPOINT_MAGIC = 0x4C465050; // "LFPP"
         constexpr uint32_t CHECKPOINT_MIN_VERSION = 2;
-        constexpr uint32_t CHECKPOINT_VERSION = 3;
-        constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
+        constexpr uint32_t CHECKPOINT_VERSION = 4;
+        constexpr uint32_t CONFIG_SCHEMA_VERSION = 2;
         constexpr uint32_t CONFIG_SCHEMA_V1_BYTES = 76;
+        constexpr uint32_t CONFIG_SCHEMA_V2_BYTES = 80;
 
         struct LegacyConfigV2 {
             double lr;
@@ -48,7 +53,7 @@ namespace lfs::training {
             // Schema v1 is append-only. Bump the schema version and append fields;
             // payload size lets older readers skip the suffix and retain defaults.
             write_little_endian(os, CONFIG_SCHEMA_VERSION, "PPISP config schema");
-            write_little_endian(os, CONFIG_SCHEMA_V1_BYTES, "PPISP config size");
+            write_little_endian(os, CONFIG_SCHEMA_V2_BYTES, "PPISP config size");
             write_little_endian(os, config.lr, "PPISP config lr");
             write_little_endian(os, config.beta1, "PPISP config beta1");
             write_little_endian(os, config.beta2, "PPISP config beta2");
@@ -62,6 +67,7 @@ namespace lfs::training {
             write_little_endian(os, config.vig_non_pos, "PPISP config vig_non_pos");
             write_little_endian(os, config.color_mean, "PPISP config color_mean");
             write_little_endian(os, config.crf_channel, "PPISP config crf_channel");
+            write_little_endian(os, static_cast<int32_t>(config.train_crf ? 1 : 0), "PPISP config train_crf");
         }
 
         [[nodiscard]] PPISP::Config deserialize_config(std::istream& is) {
@@ -94,8 +100,14 @@ namespace lfs::training {
             config.vig_non_pos = read_little_endian<float>(is, "PPISP config vig_non_pos");
             config.color_mean = read_little_endian<float>(is, "PPISP config color_mean");
             config.crf_channel = read_little_endian<float>(is, "PPISP config crf_channel");
+            uint32_t consumed = CONFIG_SCHEMA_V1_BYTES;
+            if (payload_bytes >= CONFIG_SCHEMA_V2_BYTES) {
+                const int32_t train_crf = read_little_endian<int32_t>(is, "PPISP config train_crf");
+                config.train_crf = train_crf != 0;
+                consumed = CONFIG_SCHEMA_V2_BYTES;
+            }
             config_serialization_detail::skip_bytes(
-                is, payload_bytes - CONFIG_SCHEMA_V1_BYTES, "PPISP config");
+                is, payload_bytes - consumed, "PPISP config");
             return config;
         }
 
@@ -292,6 +304,7 @@ namespace lfs::training {
 
         override_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
         override_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
+        vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
 
         // Scratch buffers for backward_with_controller_params
         ctrl_bwd_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
@@ -366,6 +379,82 @@ namespace lfs::training {
         override_exposure_.fill_(clamped);
         return apply_forward(rgb, camera_idx, 0, override_exposure_.ptr<float>(), override_color_.ptr<float>(), 1,
                              region);
+    }
+
+    lfs::core::Tensor PPISP::apply_with_exposure_and_overrides(const lfs::core::Tensor& rgb, int camera_id,
+                                                               float exposure_ev,
+                                                               const PPISPRenderOverrides& ov,
+                                                               const PPISPRegion& region) {
+        assert(finalized_ && "Must call finalize() before apply_with_exposure_and_overrides()");
+        const int camera_idx = translate_camera(camera_id);
+
+        const auto& shape = rgb.shape();
+        assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
+
+        const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
+
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+
+        const float clamped = std::clamp(exposure_ev + ov.exposure_offset, -16.0f, 16.0f);
+        override_exposure_.fill_(clamped);
+
+        constexpr float COLOR_SCALE = 12.0f;
+        constexpr float WB_SCALE = 24.0f;
+        std::vector<float> color(8, 0.0f);
+        color[0] = ov.color_blue_x * COLOR_SCALE;
+        color[1] = ov.color_blue_y * COLOR_SCALE;
+        color[2] = ov.color_red_x * COLOR_SCALE;
+        color[3] = ov.color_red_y * COLOR_SCALE;
+        color[4] = ov.color_green_x * COLOR_SCALE;
+        color[5] = ov.color_green_y * COLOR_SCALE;
+        color[6] = ov.wb_temperature * WB_SCALE;
+        color[7] = ov.wb_tint * WB_SCALE;
+        LFS_CUDA_CHECK(cudaMemcpy(override_color_.ptr<float>(), color.data(), 8 * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+
+        auto vignetting_modified = vignetting_params_.clone();
+        {
+            auto vig_cpu = vignetting_modified.cpu();
+            float* vig_ptr = vig_cpu.ptr<float>();
+            const float mult = ov.vignette_enabled ? ov.vignette_strength : 0.0f;
+            for (int ch = 0; ch < 3; ++ch) {
+                const size_t base = static_cast<size_t>(camera_idx) * 15 + static_cast<size_t>(ch) * 5;
+                vig_ptr[base + 2] *= mult;
+                vig_ptr[base + 3] *= mult;
+                vig_ptr[base + 4] *= mult;
+            }
+            const size_t copy_offset = static_cast<size_t>(camera_idx) * 15;
+            LFS_CUDA_CHECK(cudaMemcpy(
+                vignetting_modified.ptr<float>() + copy_offset, vig_ptr + copy_offset, 15 * sizeof(float),
+                cudaMemcpyHostToDevice));
+        }
+
+        auto crf_modified = crf_params_.clone();
+        {
+            auto crf_cpu = crf_modified.cpu();
+            float* crf_ptr = crf_cpu.ptr<float>();
+            const float gamma_offsets[3] = {ov.gamma_red, ov.gamma_green, ov.gamma_blue};
+            const float log_gamma_mult = std::log(ov.gamma_multiplier);
+            for (int ch = 0; ch < 3; ++ch) {
+                const size_t base = static_cast<size_t>(camera_idx) * 12 + static_cast<size_t>(ch) * 4;
+                crf_ptr[base + 0] += ov.crf_toe;
+                crf_ptr[base + 1] += ov.crf_shoulder;
+                crf_ptr[base + 2] += log_gamma_mult + gamma_offsets[ch];
+            }
+            const size_t copy_offset = static_cast<size_t>(camera_idx) * 12;
+            LFS_CUDA_CHECK(cudaMemcpy(
+                crf_modified.ptr<float>() + copy_offset, crf_ptr + copy_offset, 12 * sizeof(float),
+                cudaMemcpyHostToDevice));
+        }
+
+        kernels::launch_ppisp_forward_chw_region(override_exposure_.ptr<float>(), vignetting_modified.ptr<float>(),
+                                                 override_color_.ptr<float>(), crf_modified.ptr<float>(),
+                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
+                                                 num_cameras_, 1, camera_idx, 0, nullptr);
+        return output;
     }
 
     lfs::core::Tensor PPISP::apply_with_controller_params(const lfs::core::Tensor& rgb,
@@ -678,6 +767,18 @@ namespace lfs::training {
     } // namespace
 
     lfs::core::Tensor PPISP::reg_loss_gpu() {
+        const bool skip_mean = config_.exposure_mean <= 0.0f && config_.color_mean <= 0.0f;
+        const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
+        if (skip_mean && skip_crf) {
+            LFS_CUDA_CHECK(cudaMemsetAsync(
+                vig_reg_loss_.ptr<float>(), 0, sizeof(float), nullptr));
+            kernels::launch_ppisp_vignetting_reg(
+                vignetting_params_.ptr<float>(), nullptr, vig_reg_loss_.ptr<float>(),
+                num_cameras_, config_.vig_center, config_.vig_channel, config_.vig_non_pos,
+                nullptr);
+            return vig_reg_loss_;
+        }
+
         // Compute regularization on CPU (small params, avoid kernel overhead)
         // Transfer to CPU, compute, return GPU scalar for gradient flow
         auto exposure_cpu = exposure_params_.cpu();
@@ -789,7 +890,7 @@ namespace lfs::training {
 
         // 6. CRF channel variance: mean(var(crf, dim=channel))
         // CRF layout: [num_cameras * 3 * 4] = [cam][channel][toe, shoulder, gamma, center]
-        if (config_.crf_channel > 0.0f) {
+        if (config_.train_crf && config_.crf_channel > 0.0f) {
             float crf_var_sum = 0.0f;
             for (int cam = 0; cam < num_cameras_; ++cam) {
                 // For each of the 4 param indices, compute variance across 3 channels
@@ -818,6 +919,16 @@ namespace lfs::training {
     }
 
     void PPISP::reg_backward() {
+        const bool skip_mean = config_.exposure_mean <= 0.0f && config_.color_mean <= 0.0f;
+        const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
+        if (skip_mean && skip_crf) {
+            kernels::launch_ppisp_vignetting_reg(
+                vignetting_params_.ptr<float>(), vignetting_grad_.ptr<float>(), nullptr,
+                num_cameras_, config_.vig_center, config_.vig_channel, config_.vig_non_pos,
+                nullptr);
+            return;
+        }
+
         // Compute regularization gradients on CPU (matching reg_loss_gpu)
         auto exposure_cpu = exposure_params_.cpu();
         auto vignetting_cpu = vignetting_params_.cpu();
@@ -935,7 +1046,7 @@ namespace lfs::training {
         }
 
         // 6. CRF channel variance gradient
-        if (config_.crf_channel > 0.0f) {
+        if (config_.train_crf && config_.crf_channel > 0.0f) {
             const float scale = config_.crf_channel / static_cast<float>(num_cameras_ * 4);
             for (int cam = 0; cam < num_cameras_; ++cam) {
                 for (int p = 0; p < 4; ++p) {
@@ -979,29 +1090,20 @@ namespace lfs::training {
         const float beta2 = static_cast<float>(config_.beta2);
         const float eps = static_cast<float>(config_.eps);
 
-        // Update exposure
-        kernels::launch_ppisp_adam_update(exposure_params_.ptr<float>(), exposure_exp_avg_.ptr<float>(),
-                                          exposure_exp_avg_sq_.ptr<float>(), exposure_grad_.ptr<float>(),
-                                          static_cast<int>(exposure_params_.numel()), lr, beta1, beta2, bc1_rcp,
-                                          bc2_sqrt_rcp, eps, nullptr);
-
-        // Update vignetting
-        kernels::launch_ppisp_adam_update(vignetting_params_.ptr<float>(), vignetting_exp_avg_.ptr<float>(),
-                                          vignetting_exp_avg_sq_.ptr<float>(), vignetting_grad_.ptr<float>(),
-                                          static_cast<int>(vignetting_params_.numel()), lr, beta1, beta2, bc1_rcp,
-                                          bc2_sqrt_rcp, eps, nullptr);
-
-        // Update color
-        kernels::launch_ppisp_adam_update(color_params_.ptr<float>(), color_exp_avg_.ptr<float>(),
-                                          color_exp_avg_sq_.ptr<float>(), color_grad_.ptr<float>(),
-                                          static_cast<int>(color_params_.numel()), lr, beta1, beta2, bc1_rcp,
-                                          bc2_sqrt_rcp, eps, nullptr);
-
-        // Update CRF
-        kernels::launch_ppisp_adam_update(crf_params_.ptr<float>(), crf_exp_avg_.ptr<float>(),
-                                          crf_exp_avg_sq_.ptr<float>(), crf_grad_.ptr<float>(),
-                                          static_cast<int>(crf_params_.numel()), lr, beta1, beta2, bc1_rcp,
-                                          bc2_sqrt_rcp, eps, nullptr);
+        kernels::PPISPAdamGroup crf_group{};
+        if (config_.train_crf) {
+            crf_group = {crf_params_.ptr<float>(), crf_exp_avg_.ptr<float>(), crf_exp_avg_sq_.ptr<float>(),
+                         crf_grad_.ptr<float>(), static_cast<int>(crf_params_.numel())};
+        }
+        kernels::launch_ppisp_adam_update_batched(
+            {exposure_params_.ptr<float>(), exposure_exp_avg_.ptr<float>(), exposure_exp_avg_sq_.ptr<float>(),
+             exposure_grad_.ptr<float>(), static_cast<int>(exposure_params_.numel())},
+            {vignetting_params_.ptr<float>(), vignetting_exp_avg_.ptr<float>(),
+             vignetting_exp_avg_sq_.ptr<float>(), vignetting_grad_.ptr<float>(),
+             static_cast<int>(vignetting_params_.numel())},
+            {color_params_.ptr<float>(), color_exp_avg_.ptr<float>(), color_exp_avg_sq_.ptr<float>(),
+             color_grad_.ptr<float>(), static_cast<int>(color_params_.numel())},
+            crf_group, lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps, nullptr);
     }
 
     void PPISP::zero_grad() {
@@ -1029,6 +1131,103 @@ namespace lfs::training {
         }
     }
 
+    void PPISP::project_mean() {
+        assert(finalized_);
+        assert(exposure_params_.is_valid());
+        assert(color_params_.is_valid());
+        assert(exposure_params_.ndim() == 1);
+        assert(static_cast<int>(exposure_params_.shape()[0]) == num_frames_);
+        assert(color_params_.numel() == static_cast<size_t>(num_frames_) * 8);
+        if (num_frames_ <= 0)
+            return;
+
+        kernels::launch_ppisp_project_mean(
+            exposure_params_.ptr<float>(), color_params_.ptr<float>(), num_frames_, nullptr);
+    }
+
+    float PPISP::mean_exposure_ev() const {
+        assert(finalized_);
+        if (num_frames_ <= 0)
+            return 0.0f;
+        auto exposure_cpu = exposure_params_.cpu();
+        const float* exp_ptr = exposure_cpu.ptr<float>();
+        float exp_sum = 0.0f;
+        for (int i = 0; i < num_frames_; ++i) {
+            exp_sum += exp_ptr[i];
+        }
+        return exp_sum / static_cast<float>(num_frames_);
+    }
+
+    float PPISP::max_abs_color_offset_mean() const {
+        assert(finalized_);
+        if (num_frames_ <= 0)
+            return 0.0f;
+        auto color_cpu = color_params_.cpu();
+        auto pinv_cpu = color_pinv_block_diag_.cpu();
+        const float* color_ptr = color_cpu.ptr<float>();
+        const float* pinv_ptr = pinv_cpu.ptr<float>();
+        float color_mean_offsets[8] = {0.0f};
+        for (int f = 0; f < num_frames_; ++f) {
+            for (int j = 0; j < 8; ++j) {
+                float dot = 0.0f;
+                for (int k = 0; k < 8; ++k) {
+                    dot += color_ptr[f * 8 + k] * pinv_ptr[k * 8 + j];
+                }
+                color_mean_offsets[j] += dot;
+            }
+        }
+        float max_abs = 0.0f;
+        for (int j = 0; j < 8; ++j) {
+            color_mean_offsets[j] /= static_cast<float>(num_frames_);
+            max_abs = std::max(max_abs, std::abs(color_mean_offsets[j]));
+        }
+        return max_abs;
+    }
+
+    void PPISP::log_eval_diagnostics() const {
+        if (!finalized_)
+            return;
+        LOG_INFO("PPISP drift: mean_exposure_ev={:.6f} max_abs_color_offset_mean={:.6f}",
+                 mean_exposure_ev(), max_abs_color_offset_mean());
+
+        auto vig_cpu = vignetting_params_.cpu();
+        auto crf_cpu = crf_params_.cpu();
+        const float* vig_ptr = vig_cpu.ptr<float>();
+        const float* crf_ptr = crf_cpu.ptr<float>();
+        auto bounded_positive = [](float raw, float min_value) {
+            const float value = std::min(32.0f, std::isfinite(raw) ? raw : 0.0f);
+            return min_value + std::max(value, 0.0f) + std::log(1.0f + std::exp(-std::fabs(value)));
+        };
+        auto decode_center = [](float raw) {
+            const float x = std::isfinite(raw) ? raw : 0.0f;
+            const float sig = (x >= 0.0f)
+                                  ? 1.0f / (1.0f + std::exp(-x))
+                                  : std::exp(x) / (1.0f + std::exp(x));
+            constexpr float eps = 1.0e-4f;
+            return std::min(1.0f - eps, std::max(eps, sig));
+        };
+        const auto camera_ids = ordered_camera_ids();
+        for (int cam = 0; cam < num_cameras_; ++cam) {
+            const int camera_id = camera_ids[static_cast<size_t>(cam)];
+            std::string vig_str;
+            std::string crf_str;
+            for (int ch = 0; ch < 3; ++ch) {
+                const size_t vbase = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5;
+                const size_t cbase = static_cast<size_t>(cam) * 12 + static_cast<size_t>(ch) * 4;
+                vig_str += std::format(" ch{}:(cx={:.4f},cy={:.4f},a0={:.4f},a1={:.4f},a2={:.4f})",
+                                       ch, vig_ptr[vbase + 0], vig_ptr[vbase + 1],
+                                       vig_ptr[vbase + 2], vig_ptr[vbase + 3], vig_ptr[vbase + 4]);
+                crf_str += std::format(" ch{}:(toe={:.4f},shoulder={:.4f},gamma={:.4f},center={:.4f})",
+                                       ch,
+                                       bounded_positive(crf_ptr[cbase + 0], 0.3f),
+                                       bounded_positive(crf_ptr[cbase + 1], 0.3f),
+                                       bounded_positive(crf_ptr[cbase + 2], 0.1f),
+                                       decode_center(crf_ptr[cbase + 3]));
+            }
+            LOG_INFO("PPISP camera {} vignetting{} CRF{}", camera_id, vig_str, crf_str);
+        }
+    }
+
     std::vector<int> PPISP::ordered_camera_ids() const {
         assert(finalized_ && "Must call finalize() before ordered_camera_ids()");
         std::vector<int> ordered(static_cast<size_t>(num_cameras_));
@@ -1037,6 +1236,25 @@ namespace lfs::training {
             ordered[static_cast<size_t>(idx)] = camera_id;
         }
         return ordered;
+    }
+
+    int PPISP::majority_camera_id() const {
+        assert(finalized_ && !camera_id_to_idx_.empty());
+        std::unordered_map<int, int> counts;
+        counts.reserve(camera_id_to_idx_.size());
+        for (const auto& [uid, camera_id] : uid_to_camera_id_) {
+            (void)uid;
+            ++counts[camera_id];
+        }
+        int best_id = camera_id_to_idx_.begin()->first;
+        int best_count = -1;
+        for (const auto& [camera_id, count] : counts) {
+            if (count > best_count || (count == best_count && camera_id < best_id)) {
+                best_count = count;
+                best_id = camera_id;
+            }
+        }
+        return best_id;
     }
 
     std::expected<void, std::string> PPISP::copy_inference_weights_from(
@@ -1142,6 +1360,13 @@ namespace lfs::training {
         serialize_int_map(os, camera_id_to_idx_);
         serialize_int_map(os, uid_to_frame_idx_);
         serialize_int_map(os, uid_to_camera_id_);
+
+        const uint8_t has_exif = exif_exposure_mean_.has_value() ? 1 : 0;
+        os.write(reinterpret_cast<const char*>(&has_exif), sizeof(has_exif));
+        if (has_exif) {
+            const float mean = *exif_exposure_mean_;
+            os.write(reinterpret_cast<const char*>(&mean), sizeof(mean));
+        }
     }
 
     void PPISP::deserialize(std::istream& is) {
@@ -1252,6 +1477,18 @@ namespace lfs::training {
         auto camera_id_to_idx = deserialize_int_map(is, static_cast<uint32_t>(num_cameras), "PPISP camera map");
         auto uid_to_frame_idx = deserialize_int_map(is, static_cast<uint32_t>(num_frames), "PPISP frame map");
         auto uid_to_camera_id = deserialize_int_map(is, static_cast<uint32_t>(num_frames), "PPISP frame-camera map");
+        std::optional<float> exif_mean;
+        if (version >= 4) {
+            uint8_t has_exif = 0;
+            lfs::core::serialization_detail::read_exact(is, &has_exif, sizeof(has_exif), "PPISP exif mean flag");
+            if (has_exif) {
+                float mean = 0.0f;
+                lfs::core::serialization_detail::read_exact(is, &mean, sizeof(mean), "PPISP exif mean");
+                if (std::isfinite(mean)) {
+                    exif_mean = mean;
+                }
+            }
+        }
         if (camera_id_to_idx.size() != static_cast<size_t>(num_cameras) ||
             uid_to_frame_idx.size() != static_cast<size_t>(num_frames) ||
             uid_to_camera_id.size() != static_cast<size_t>(num_frames)) {
@@ -1294,6 +1531,7 @@ namespace lfs::training {
         auto ctrl_bwd_vignetting = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
         auto ctrl_bwd_crf = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
         auto ctrl_bwd_output = lfs::core::Tensor::empty({9}, lfs::core::Device::CUDA);
+        auto vig_reg_loss = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
 
         num_cameras_ = num_cameras;
         num_frames_ = num_frames;
@@ -1317,6 +1555,7 @@ namespace lfs::training {
         camera_id_to_idx_ = std::move(camera_id_to_idx);
         uid_to_frame_idx_ = std::move(uid_to_frame_idx);
         uid_to_camera_id_ = std::move(uid_to_camera_id);
+        exif_exposure_mean_ = exif_mean;
         exposure_grad_ = std::move(exposure_grad);
         vignetting_grad_ = std::move(vignetting_grad);
         color_grad_ = std::move(color_grad);
@@ -1326,6 +1565,7 @@ namespace lfs::training {
         ctrl_bwd_vignetting_ = std::move(ctrl_bwd_vignetting);
         ctrl_bwd_crf_ = std::move(ctrl_bwd_crf);
         ctrl_bwd_output_ = std::move(ctrl_bwd_output);
+        vig_reg_loss_ = std::move(vig_reg_loss);
         ctrl_bwd_rgb_h_ = 0;
         ctrl_bwd_rgb_w_ = 0;
 
@@ -1358,6 +1598,7 @@ namespace lfs::training {
         std::swap(ctrl_bwd_output_, loaded.ctrl_bwd_output_);
         std::swap(ctrl_bwd_rgb_h_, loaded.ctrl_bwd_rgb_h_);
         std::swap(ctrl_bwd_rgb_w_, loaded.ctrl_bwd_rgb_w_);
+        std::swap(vig_reg_loss_, loaded.vig_reg_loss_);
         std::swap(config_, loaded.config_);
         std::swap(step_, loaded.step_);
         std::swap(current_lr_, loaded.current_lr_);
@@ -1369,6 +1610,7 @@ namespace lfs::training {
         uid_to_frame_idx_.swap(loaded.uid_to_frame_idx_);
         uid_to_camera_id_.swap(loaded.uid_to_camera_id_);
         std::swap(finalized_, loaded.finalized_);
+        std::swap(exif_exposure_mean_, loaded.exif_exposure_mean_);
     }
 
     void PPISP::serialize_inference(std::ostream& os) const {
@@ -1426,6 +1668,9 @@ namespace lfs::training {
             uid_to_camera_id_[i] = 0;
         }
         init_color_pinv_block_diag();
+        if (!vig_reg_loss_.is_valid()) {
+            vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        }
         finalized_ = true;
     }
 

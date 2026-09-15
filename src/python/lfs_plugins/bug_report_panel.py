@@ -10,9 +10,9 @@ from collections.abc import Callable
 import lichtfeld as lf
 
 from . import bug_report
-from .account_panel import _localized_error_message
 from .portal_account import get_portal_account_service
 from .types import Panel
+from .panels import panel_class
 from .ui.store import (
     PanelStateBinding,
     RuntimeState,
@@ -22,6 +22,27 @@ from .ui.store import (
 
 __lfs_panel_classes__ = ["BugReportPanel"]
 __lfs_panel_ids__ = ["lfs.bug_report"]
+
+_ERROR_TRANSLATION_KEYS = {
+    "unsafe_portal_url": "asset_manager.gallery.error.unsafe_url",
+    "access_denied": "account.error.access_denied",
+    "authorization_pending": "account.error.authorization_pending",
+    "expired_token": "account.error.expired_token",
+    "invalid_grant": "account.error.invalid_grant",
+    "invalid_token": "account.error.invalid_token",
+    "membership_required": "account.error.membership_required",
+    "portal_outdated": "account.error.portal_outdated",
+    "rate_limited": "account.error.rate_limited",
+    "report_invalid": "account.error.report_invalid",
+    "portal_origin_mismatch": "account.error.portal_origin_mismatch",
+    "sign_in_failed": "account.error.generic",
+    "sign_in_unavailable": "account.error.unavailable",
+    "slow_down": "account.error.slow_down",
+}
+
+
+def _localized_error_message(error: str) -> str:
+    return lf.ui.tr(_ERROR_TRANSLATION_KEYS.get(error, "account.error.generic")) if error else ""
 
 _SYSTEM_FIELDS = (
     ("app_version", "App version"),
@@ -59,17 +80,9 @@ def request_bug_report_open() -> None:
     _open_cycle_generation += 1
 
 
+@panel_class("bug_report")
 class BugReportPanel(Panel):
     """Collect, review, and submit a portal bug report."""
-
-    id = "lfs.bug_report"
-    label = "Report a bug"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 96
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/bug_report_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (520, 0)
 
     def __init__(self):
         super().__init__()
@@ -160,7 +173,6 @@ class BugReportPanel(Panel):
         model.bind_event("toggle_system", self._on_toggle_system)
         model.bind_event("toggle_training", self._on_toggle_training)
         model.bind_event("toggle_log", self._on_toggle_log)
-        model.bind_event("open_account", self._on_open_account)
         model.bind_event("submit_report", self._on_submit)
         model.bind_event("open_portal", self._on_open_portal)
         model.bind_record_list("system_rows")
@@ -371,11 +383,6 @@ class BugReportPanel(Panel):
 
     def _on_toggle_log(self, _handle, _event, _args) -> None:
         self._toggle("_log_expanded")
-
-    def _on_open_account(self, _handle, _event, _args) -> None:
-        self._mark_closed_cycle()
-        lf.ui.set_panel_enabled("lfs.account", True)
-        lf.ui.set_panel_enabled(self.id, False)
 
     def _mark_closed_cycle(self) -> None:
         self._open_cycle_generation = -1

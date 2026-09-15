@@ -22,6 +22,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -43,6 +44,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
@@ -53,11 +55,13 @@
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/operator/ops/align_ops.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
 #include <typeinfo>
 
@@ -77,15 +81,19 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stack>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #ifdef _WIN32
 #include <shellapi.h>
@@ -102,6 +110,43 @@ namespace lfs::python {
     using lfs::training::CommandCenter;
 
     namespace {
+
+        template <typename F>
+            requires(!std::is_void_v<std::invoke_result_t<F>>)
+        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return std::invoke(std::forward<F>(fn));
+            if (!viewer->acceptsPostedWork())
+                return fallback;
+
+            nb::gil_scoped_release release;
+            return lfs::vis::post_work_and_wait(
+                [viewer](lfs::vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn),
+                [fallback]() { return fallback; });
+        }
+
+        template <typename F>
+            requires(std::is_void_v<std::invoke_result_t<F>>)
+        void invoke_on_viewer(F&& fn) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                std::invoke(std::forward<F>(fn));
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            lfs::vis::post_work_and_wait(
+                [viewer](lfs::vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn), [] {});
+        }
 
         std::string get_class_id(nb::object cls) {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
@@ -252,7 +297,7 @@ namespace lfs::python {
 
         // Python event callbacks
         nb::object g_popup_draw_callback;
-        nb::object g_show_dataset_popup_callback;
+        nb::object g_show_new_project_callback;
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
         lfs::event::HandlerId g_request_exit_handler_id = 0;
@@ -2718,6 +2763,25 @@ namespace lfs::python {
         register_rml_bindings(m);
 
         m.def(
+            "get_panel_object",
+            [](const std::string& panel_id) {
+                return invoke_on_viewer(
+                    [panel_id]() -> nb::object {
+                        const nb::gil_scoped_acquire acquire;
+                        const auto panel = vis::gui::PanelRegistry::instance().get_panel_instance(panel_id);
+                        const auto retained_panel =
+                            std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
+                        if (!retained_panel)
+                            return nb::none();
+
+                        return retained_panel->panelInstance();
+                    },
+                    nb::none());
+            },
+            nb::arg("panel_id"),
+            "Get the Python object for a retained Python panel, or None if unavailable");
+
+        m.def(
             "begin_drag_payload",
             [](std::string type, std::string data, std::string label) {
                 auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
@@ -3404,6 +3468,15 @@ namespace lfs::python {
             "Open a save file dialog for SOG files. Returns empty string if cancelled.");
 
         m.def(
+            "save_ssog_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveSsogFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for SSOG files. Returns empty string if cancelled.");
+
+        m.def(
             "save_spz_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSpzFileDialog(default_name);
@@ -3642,22 +3715,22 @@ namespace lfs::python {
             nb::arg("callback"), "Unregister a legacy popup draw callback");
 
         m.def(
-            "on_show_dataset_load_popup",
+            "on_show_new_project_dialog",
             [](nb::object callback) {
-                g_show_dataset_popup_callback = callback;
-                lfs::core::events::cmd::ShowDatasetLoadPopup::when([](const auto& e) {
-                    if (g_show_dataset_popup_callback && !g_show_dataset_popup_callback.is_none()) {
+                g_show_new_project_callback = callback;
+                lfs::core::events::cmd::ShowNewProjectDialog::when([](const auto& e) {
+                    if (g_show_new_project_callback && !g_show_new_project_callback.is_none()) {
                         nb::gil_scoped_acquire guard;
                         try {
-                            g_show_dataset_popup_callback(lfs::core::path_to_utf8(e.dataset_path));
+                            g_show_new_project_callback(lfs::core::path_to_utf8(e.source_path));
                         } catch (const std::exception& ex) {
-                            LOG_ERROR("ShowDatasetLoadPopup callback error: {}", ex.what());
+                            LOG_ERROR("ShowNewProjectDialog callback error: {}", ex.what());
                         }
                     }
                 });
             },
             nb::arg("callback"),
-            "Register callback for ShowDatasetLoadPopup event");
+            "Register callback for ShowNewProjectDialog event");
 
         m.def(
             "on_show_resume_checkpoint_popup",
@@ -3736,7 +3809,9 @@ namespace lfs::python {
                                         lfs::core::
                                             path_to_utf8(
                                                 event.path),
-                                        event.keep_asset_manager_open);
+                                        event.keep_asset_manager_open,
+                                        lfs::core::path_to_utf8(event.create_path),
+                                        event.allow_existing_destination_replacement);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3810,7 +3885,9 @@ namespace lfs::python {
                                             path_to_utf8(
                                                 event.path),
                                         event.discard_changes,
-                                        event.keep_asset_manager_open);
+                                        event.keep_asset_manager_open,
+                                        lfs::core::path_to_utf8(event.create_path),
+                                        event.allow_existing_destination_replacement);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3914,10 +3991,12 @@ namespace lfs::python {
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
-                    if (auto* const editor = get_editor_context()) {
-                        editor->setActiveTool(it->second);
-                    }
-                    lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(it->second)}.emit();
+                    const auto tool = it->second;
+                    invoke_on_viewer([tool] {
+                        if (auto* const editor = get_editor_context())
+                            editor->setActiveTool(tool);
+                        lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                    });
                 }
             },
             nb::arg("id"), "Set the active tool via C++ event");
@@ -3925,10 +4004,11 @@ namespace lfs::python {
         m.def(
             "set_active_operator",
             [](const std::string& id, const std::string& gizmo_type) {
-                if (auto* const editor = get_editor_context()) {
-                    editor->setActiveOperator(id, gizmo_type);
-                }
-                vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                invoke_on_viewer([id, gizmo_type] {
+                    if (auto* const editor = get_editor_context())
+                        editor->setActiveOperator(id, gizmo_type);
+                    vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                });
             },
             nb::arg("id"), nb::arg("gizmo_type") = "", "Set active operator with optional gizmo type");
 
@@ -3948,11 +4028,11 @@ namespace lfs::python {
 
         m.def(
             "clear_active_operator", []() {
-                auto* editor = get_editor_context();
-                if (editor) {
-                    editor->clearActiveOperator();
-                }
-                vis::UnifiedToolRegistry::instance().clearActiveTool();
+                invoke_on_viewer([] {
+                    if (auto* const editor = get_editor_context())
+                        editor->clearActiveOperator();
+                    vis::UnifiedToolRegistry::instance().clearActiveTool();
+                });
             },
             "Clear the active operator");
 
@@ -4064,14 +4144,16 @@ namespace lfs::python {
 
         m.def(
             "get_active_submode",
-            []() { return vis::UnifiedToolRegistry::instance().getActiveSubmode(); },
+            []() {
+                return invoke_on_viewer(
+                    [] { return std::string{vis::UnifiedToolRegistry::instance().getActiveSubmode()}; },
+                    std::string{});
+            },
             "Get active selection submode");
 
         m.def(
             "set_selection_mode",
             [](const std::string& mode) {
-                vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
-
                 static const std::unordered_map<std::string, int> MODE_MAP = {
                     {"centers", static_cast<int>(lfs::vis::SelectionSubMode::Centers)},
                     {"rectangle", static_cast<int>(lfs::vis::SelectionSubMode::Rectangle)},
@@ -4081,9 +4163,14 @@ namespace lfs::python {
                     {"color", static_cast<int>(lfs::vis::SelectionSubMode::Color)},
                     {"box", static_cast<int>(lfs::vis::SelectionSubMode::Box)},
                     {"sphere", static_cast<int>(lfs::vis::SelectionSubMode::Sphere)}};
-                if (const auto it = MODE_MAP.find(mode); it != MODE_MAP.end()) {
-                    lfs::core::events::tools::SetSelectionSubMode{.selection_mode = it->second}.emit();
-                }
+                const auto it = MODE_MAP.find(mode);
+                const std::optional<int> selection_mode =
+                    it == MODE_MAP.end() ? std::nullopt : std::optional{it->second};
+                invoke_on_viewer([mode, selection_mode] {
+                    vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
+                    if (selection_mode)
+                        lfs::core::events::tools::SetSelectionSubMode{.selection_mode = *selection_mode}.emit();
+                });
             },
             nb::arg("mode"), "Set selection mode");
 
@@ -4127,7 +4214,7 @@ namespace lfs::python {
                 auto* rm = lfs::python::get_rendering_manager();
                 if (!rm)
                     return "rgb";
-                switch (rm->getSettings().gt_comparison_mode) {
+                switch (rm->getGTComparisonMode()) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
                 case vis::GTComparisonMode::RGB:
@@ -4489,7 +4576,7 @@ namespace lfs::python {
             "load_thumbnail",
             [](const std::string& path, int max_size) -> nb::tuple {
                 try {
-                    auto [data, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, max_size);
+                    auto [data, w, h, channels] = lfs::core::load_image_thumbnail(lfs::core::utf8_to_path(path), max_size);
                     if (!data)
                         return nb::make_tuple(0, 0, 0);
 
@@ -4672,6 +4759,9 @@ namespace lfs::python {
                 state["stage"] = export_state.stage;
                 state["outcome"] = export_state.outcome;
                 state["format"] = export_state.format;
+                state["path"] = export_state.path;
+                state["error"] = export_state.error;
+                state["commit_uuid"] = export_state.commit_uuid;
                 return state;
             },
             "Get current export progress state");
@@ -4701,6 +4791,11 @@ namespace lfs::python {
 
         m.def("dismiss_import", &dismiss_import,
               "Dismiss the import completion overlay");
+        m.def("cancel_gallery_import", [] { return invoke_on_viewer([] {
+                                                auto* gui = get_gui_manager();
+                                                return gui && gui->asyncTasks().requestGalleryImportCancel();
+                                            },
+                                                                    false); }, "Request gallery import cancellation without waiting for its worker");
 
         m.def(
             "get_video_export_state",
@@ -4740,6 +4835,11 @@ namespace lfs::python {
 
         m.def("has_keyframes", &has_keyframes,
               "Check if sequencer has any keyframes");
+
+        m.def("get_camera_path", []() { return nb::module_::import_("json").attr("loads")(get_camera_path_data()); }, "Get the native camera path with clip duration, loop mode and playback speed");
+        m.def("set_camera_path", [](nb::dict value) {
+            const auto json = nb::cast<std::string>(nb::module_::import_("json").attr("dumps")(value, nb::arg("allow_nan") = false));
+            return set_camera_path_data(json); }, nb::arg("value"), "Restore a native camera path including loop mode and playback speed");
 
         m.def("save_camera_path", &save_camera_path,
               nb::arg("path"),
@@ -4952,10 +5052,11 @@ namespace lfs::python {
         // Theme control (for Python-driven View menu)
         m.def(
             "set_theme",
-            [](const std::string& name) {
-                if (vis::setThemeByName(name)) {
-                    vis::saveThemePreferenceName(name);
-                }
+            [](std::string name) {
+                invoke_on_viewer([name = std::move(name)]() {
+                    if (vis::setThemeByName(name))
+                        vis::saveThemePreferenceName(name);
+                });
             },
             nb::arg("name"), "Set theme by stable theme id");
 
@@ -4963,6 +5064,34 @@ namespace lfs::python {
             "get_theme",
             []() -> std::string { return vis::currentThemeId(); },
             "Get current stable theme id");
+
+        m.def(
+            "set_theme_family",
+            [](std::string family_id, std::string mode) {
+                return invoke_on_viewer(
+                    [family_id = std::move(family_id), mode = std::move(mode)]() {
+                        return vis::setThemeFamilySelection(family_id, mode);
+                    },
+                    false);
+            },
+            nb::arg("family_id"),
+            nb::arg("mode"),
+            "Select a theme family using dark, light, or automatic system mode");
+
+        m.def(
+            "get_theme_family",
+            []() -> std::string { return vis::currentThemeFamilyId(); },
+            "Get the selected theme family id");
+
+        m.def(
+            "get_theme_mode",
+            []() -> std::string { return vis::currentThemeSelectionMode(); },
+            "Get the selected family mode: dark, light, or auto");
+
+        m.def(
+            "supports_system_theme",
+            []() { return vis::supportsSystemThemePreference(); },
+            "Return whether automatic OS light/dark detection is available in this session");
 
         m.def(
             "themes",
@@ -4974,6 +5103,9 @@ namespace lfs::python {
                     item["name"] = info.name;
                     item["label_key"] = info.label_key;
                     item["mode"] = info.mode;
+                    item["family_id"] = info.family_id;
+                    item["family_name"] = info.family_name;
+                    item["variant_name"] = info.variant_name;
                     item["order"] = info.order;
                     themes.append(item);
                 });
@@ -4998,6 +5130,42 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "set_zoom_speed_preference",
+            [](const float speed) {
+                vis::saveZoomSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+
+        m.def(
+            "get_zoom_speed_preference",
+            []() -> float { return vis::loadZoomSpeedPreference(); },
+            "Get the default camera zoom speed");
+
+        m.def(
+            "set_navigation_speed_preference",
+            [](const float speed) {
+                vis::saveNavigationSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+
+        m.def(
+            "get_navigation_speed_preference",
+            []() -> float { return vis::loadNavigationSpeedPreference(); },
+            "Get the default WASD navigation speed");
 
         m.def(
             "get_scene_reconstruction_options",
@@ -5103,44 +5271,36 @@ namespace lfs::python {
             "Persist and immediately apply MCP HTTP server preferences");
 
         m.def(
-            "get_working_directory",
+            "get_project_location",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::loadWorkingDirectoryPreference());
+                return lfs::core::path_to_utf8(vis::loadProjectLocationPreference());
             },
-            "Get the effective working folder (absolute). Empty preference uses the default root.");
+            "Get the effective project location.");
 
         m.def(
-            "get_working_directory_preference",
+            "get_project_location_preference",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::workingDirectoryPreferenceRaw());
+                return lfs::core::path_to_utf8(vis::projectLocationPreferenceRaw());
             },
-            "Get the raw working folder preference. Empty string means the default root.");
+            "Get the raw project location preference.");
 
         m.def(
-            "get_default_working_directory",
+            "get_default_project_location",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::defaultWorkingDirectory());
+                return lfs::core::path_to_utf8(vis::defaultProjectLocation());
             },
-            "Get the default working folder (UserPaths root).");
+            "Get the default project location.");
 
         m.def(
-            "get_temp_project_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::tempProjectDirectoryPreference());
-            },
-            "Get the temp project directory for the next untitled session (<working folder>/tmp).");
-
-        m.def(
-            "set_working_directory",
+            "set_project_location",
             [](const std::string& path) -> std::string {
                 lfs::Status result;
                 {
                     nb::gil_scoped_release release;
-                    result = vis::setWorkingDirectoryPreference(
+                    result = vis::setProjectLocationPreference(
                         lfs::core::utf8_to_path(path));
                 }
                 if (!result)
@@ -5148,63 +5308,39 @@ namespace lfs::python {
                 return {};
             },
             nb::arg("path"),
-            "Set the working folder. Returns an empty string on success, or a user-facing error.");
+            "Set the project location. Returns an empty string on success, or a user-facing error.");
 
         m.def(
-            "clear_working_directory",
+            "clear_project_location",
             [] {
                 nb::gil_scoped_release release;
-                vis::clearWorkingDirectoryPreference();
+                vis::clearProjectLocationPreference();
             },
-            "Clear the working folder preference so the default root is used.");
+            "Clear the project location preference so the default is used.");
 
         m.def(
-            "get_asset_manager_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::loadAssetManagerDirectoryPreference());
-            },
-            "Get the effective Asset Manager folder (absolute).");
-
-        m.def(
-            "get_asset_manager_directory_preference",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::assetManagerDirectoryPreferenceRaw());
-            },
-            "Get the raw Asset Manager folder preference. Empty means the default folder.");
-
-        m.def(
-            "get_default_asset_manager_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::defaultAssetManagerDirectory());
-            },
-            "Get the default Asset Manager folder under the LichtFeld user root.");
-
-        m.def(
-            "set_asset_manager_directory",
-            [](const std::string& path) -> std::string {
-                lfs::Status result;
-                {
-                    nb::gil_scoped_release release;
-                    result = vis::setAssetManagerDirectoryPreference(
-                        lfs::core::utf8_to_path(path));
+            "get_embed_dataset_by_default",
+            []() {
+                auto* const viewer = lfs::python::get_visualizer();
+                if (!viewer) {
+                    return false;
                 }
-                if (!result)
-                    return std::string(result.error().user_message());
-                return {};
+                auto info = viewer->projectGetMenuInfo();
+                return info && info->embed_dataset_by_default;
             },
-            nb::arg("path"),
-            "Set the Asset Manager folder. Returns empty on success or a user-facing error.");
+            "Get whether new projects copy datasets into the project by default.");
 
         m.def(
-            "clear_asset_manager_directory",
-            [] {
+            "set_embed_dataset_by_default",
+            [](const bool enabled) {
                 nb::gil_scoped_release release;
-                vis::clearAssetManagerDirectoryPreference();
+                lfs::core::events::cmd::SetEmbedDatasetByDefault{
+                    .enabled = enabled}
+                    .emit();
+                return true;
             },
-            "Clear the Asset Manager folder preference so the default is used.");
+            nb::arg("enabled"),
+            "Set whether new projects copy datasets into the project by default.");
 
         m.def(
             "get_mcp_status",
@@ -5437,7 +5573,7 @@ namespace lfs::python {
             g_cancel_operator_py_callback = nb::callable();
             g_modal_event_py_callback = nb::callable();
             g_popup_draw_callback = nb::object();
-            g_show_dataset_popup_callback = nb::object();
+            g_show_new_project_callback = nb::object();
             g_show_resume_popup_callback = nb::object();
             g_request_exit_callback = nb::object();
             if (g_request_exit_handler_id != 0) {
@@ -5712,7 +5848,7 @@ namespace lfs::python {
                 auto* rm = get_rendering_manager();
                 if (!rm)
                     return "none";
-                switch (rm->getSettings().split_view_mode) {
+                switch (rm->getSplitViewMode()) {
                 case vis::SplitViewMode::GTComparison: return "gt_comparison";
                 case vis::SplitViewMode::PLYComparison: return "ply_comparison";
                 case vis::SplitViewMode::IndependentDual: return "independent_dual";

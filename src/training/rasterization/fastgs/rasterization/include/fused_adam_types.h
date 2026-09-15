@@ -34,6 +34,10 @@ namespace fast_lfs::rasterization {
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
         bool enabled = false;
+        const float* screen_share_max = nullptr;
+        int screen_share_n = 0;
+        float screen_share_limit = 0.0f;
+        float screen_share_penalty = 0.0f;
     };
 
     struct FusedAdamSettings {

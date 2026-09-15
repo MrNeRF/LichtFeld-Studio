@@ -1,0 +1,11 @@
+#usda 1.0
+(
+    defaultPrim = "GaussianSplats"
+)
+
+def ParticleField3DGaussianSplat "GaussianSplats"
+{
+    point3h[] positionsh = [(0, 0, 0)]
+    normal3h[] normals = [(0, 1, 0)]
+    vector3h[] vectors = [(1, 0, 0)]
+}

@@ -165,6 +165,16 @@ namespace lfs::training::mrnf_strategy {
         float* ratio_max = nullptr,
         float ratio_pow = 0.0f);
 
+    // MRNF non-ratio path: row 0 is the persistent visibility count and must
+    // not be cleared. Fold row 1 into the persistent error maximum and clear
+    // only the row-1 per-iteration scratch. This is bit-equivalent for the
+    // integer visibility signal while eliminating a separate visibility array.
+    void launch_fold_densification_error_and_zero(
+        float* refine_weight_max,
+        float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
     void launch_project_visible_centers(
         const float* means,
         const float* w2c,

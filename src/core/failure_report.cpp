@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/failure_report.hpp"
+#include "core/crash_handler.hpp"
 
 #include "core/logger.hpp"
 
@@ -254,7 +255,10 @@ namespace lfs::core {
             const std::string stacktrace = report.capture_stack
                                                ? capture_host_stacktrace(report.stacktrace_skip_frames)
                                                : std::string{};
-            Logger::get().log_internal(level, report.location, format_failure_report(report, stacktrace));
+            const auto formatted = format_failure_report(report, stacktrace);
+            if (decision.count == 1)
+                write_crash_diagnostic(formatted);
+            Logger::get().log_internal(level, report.location, formatted);
         } else {
             emit_failure_repeat_notice(decision, report.location, level);
         }

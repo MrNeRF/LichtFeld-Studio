@@ -140,7 +140,7 @@ namespace lfs::rendering::pcraster {
                 const float dz = view_z / len;
                 const float pi = 3.14159265358979323846f;
                 const float u = 0.5f + atan2f(dx, -dz) / (2.0f * pi);
-                const float v = 0.5f + asinf(fminf(fmaxf(dy, -1.0f), 1.0f)) / pi;
+                const float v = 0.5f - asinf(fminf(fmaxf(dy, -1.0f), 1.0f)) / pi;
                 pixel_x = u * static_cast<float>(params.width - 1);
                 pixel_y = v * static_cast<float>(params.height - 1);
                 if (!isfinite(pixel_x) || !isfinite(pixel_y) ||
@@ -168,7 +168,7 @@ namespace lfs::rendering::pcraster {
                     return;
                 }
                 pixel_x = (ndc_x * 0.5f + 0.5f) * static_cast<float>(params.width - 1);
-                pixel_y = (ndc_y * 0.5f + 0.5f) * static_cast<float>(params.height - 1);
+                pixel_y = (0.5f - ndc_y * 0.5f) * static_cast<float>(params.height - 1);
                 depth = params.orthographic ? -view_z : fmaxf(-view_z, 0.0f);
                 if (depth <= 0.0f && !params.orthographic) {
                     return;

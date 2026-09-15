@@ -30,6 +30,9 @@ namespace lfs::vis {
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};
+        // Additional mapping from full-content UVs into a clipped render target.
+        glm::vec2 texcoord_scale{1.0f, 1.0f};
+        glm::vec2 texcoord_offset{0.0f, 0.0f};
         // Set only for a panel rendered at the reconstruction input resolution.
         // Reference and ground-truth panels must remain unfiltered.
         bool spatial_filter = false;

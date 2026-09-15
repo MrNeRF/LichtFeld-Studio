@@ -34,19 +34,99 @@ class ViewMenu:
 
     def menu_items(self):
         tr = lf.ui.tr
-        current_theme = lf.ui.get_theme()
         theme_catalog = sorted(
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
-        theme_items = [
-            menu_toggle(
-                tr(theme.get("label_key") or theme.get("name") or theme["id"]),
-                lambda theme_id=theme["id"]: lf.ui.set_theme(theme_id),
-                current_theme == theme["id"],
+        families = {}
+        for theme in theme_catalog:
+            family_id = theme.get("family_id") or theme["id"]
+            family = families.setdefault(
+                family_id,
+                {
+                    "id": family_id,
+                    "name": theme.get("family_name") or theme.get("name") or family_id,
+                    "order": theme.get("order", 0),
+                    "variants": [],
+                },
             )
-            for theme in theme_catalog
-        ]
+            family["order"] = min(family["order"], theme.get("order", 0))
+            family["variants"].append(theme)
+
+        current_family = lf.ui.get_theme_family()
+        current_mode = lf.ui.get_theme_mode()
+        theme_items = []
+        active_theme_label = current_family
+        for family in sorted(
+            families.values(), key=lambda item: (item["order"], item["name"])
+        ):
+            variants = sorted(
+                family["variants"],
+                key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
+            )
+            available_modes = {variant["mode"] for variant in variants}
+            family_label = family["name"]
+            if current_family == family["id"]:
+                if current_mode == "auto":
+                    active_variant_label = tr("menu.view.theme.auto")
+                else:
+                    active_variant = next(
+                        (variant for variant in variants if variant["mode"] == current_mode),
+                        None,
+                    )
+                    if active_variant:
+                        active_variant_label = (
+                            active_variant.get("variant_name")
+                            or active_variant.get("name")
+                            or current_mode.title()
+                        )
+                    else:
+                        active_variant_label = current_mode.title()
+                active_theme_label = f"{family['name']} · {active_variant_label}"
+                family_label = active_theme_label
+
+            if len(variants) == 1:
+                mode = variants[0]["mode"]
+                theme_items.append(
+                    menu_toggle(
+                        family["name"],
+                        lambda family_id=family["id"], variant_mode=mode: lf.ui.set_theme_family(
+                            family_id, variant_mode
+                        ),
+                        current_family == family["id"],
+                    )
+                )
+                continue
+
+            variant_items = []
+            for variant in variants:
+                mode = variant["mode"]
+                label = variant.get("variant_name") or variant.get("name") or mode.title()
+                variant_items.append(
+                    menu_toggle(
+                        label,
+                        lambda family_id=family["id"], variant_mode=mode: lf.ui.set_theme_family(
+                            family_id, variant_mode
+                        ),
+                        current_family == family["id"] and current_mode == mode,
+                    )
+                )
+
+            if (
+                {"dark", "light"}.issubset(available_modes)
+                and lf.ui.supports_system_theme()
+            ):
+                variant_items.append(
+                    menu_toggle(
+                        tr("menu.view.theme.auto"),
+                        lambda family_id=family["id"]: lf.ui.set_theme_family(
+                            family_id, "auto"
+                        ),
+                        current_family == family["id"] and current_mode == "auto",
+                    )
+                )
+
+            theme_items.append(menu_submenu(family_label, variant_items))
 
         pref = lf.ui.get_ui_scale_preference()
         scale_items = []
@@ -61,7 +141,7 @@ class ViewMenu:
             )
 
         return [
-            menu_submenu(tr("menu.view.theme"), theme_items),
+            menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
             menu_separator(),
             menu_toggle(

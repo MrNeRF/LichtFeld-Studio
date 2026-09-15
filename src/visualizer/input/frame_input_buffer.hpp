@@ -9,18 +9,31 @@
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
+#include <chrono>
 #include <string>
 #include <vector>
 
 namespace lfs::vis {
 
+    struct FrameMouseButtonEvent {
+        uint8_t button = 0;
+        bool down = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        uint64_t timestamp = 0;
+        uint8_t clicks = 0;
+    };
+
     struct FrameInputBuffer {
+        uint64_t serial = 0;
         float mouse_x = 0;
         float mouse_y = 0;
         bool mouse_down[3] = {};
         bool mouse_clicked[3] = {};
         bool mouse_released[3] = {};
         float mouse_wheel = 0;
+        float mouse_wheel_x = 0;
+        std::vector<FrameMouseButtonEvent> mouse_button_events;
         std::vector<SDL_Scancode> keys_pressed;
         std::vector<SDL_Scancode> keys_repeated;
         std::vector<SDL_Scancode> keys_released;
@@ -37,11 +50,15 @@ namespace lfs::vis {
         SDL_Keymod key_mods = SDL_KMOD_NONE;
         int window_w = 0;
         int window_h = 0;
+        std::chrono::steady_clock::time_point poll_time{};
 
         void beginFrame() {
+            ++serial;
             mouse_clicked[0] = mouse_clicked[1] = mouse_clicked[2] = false;
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
             mouse_wheel = 0;
+            mouse_wheel_x = 0;
+            mouse_button_events.clear();
             keys_pressed.clear();
             keys_repeated.clear();
             keys_released.clear();
@@ -75,6 +92,14 @@ namespace lfs::vis {
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 const int idx = buttonIndex(event.button.button);
                 if (idx >= 0) {
+                    mouse_button_events.push_back({
+                        .button = static_cast<uint8_t>(idx),
+                        .down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN,
+                        .x = event.button.x,
+                        .y = event.button.y,
+                        .timestamp = event.button.timestamp,
+                        .clicks = event.button.clicks,
+                    });
                     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
                         mouse_clicked[idx] = true;
                     else
@@ -84,6 +109,7 @@ namespace lfs::vis {
             }
             case SDL_EVENT_MOUSE_WHEEL:
                 mouse_wheel += event.wheel.y;
+                mouse_wheel_x += event.wheel.x;
                 break;
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.repeat)
@@ -112,6 +138,7 @@ namespace lfs::vis {
 
         void finalize(SDL_Window* window) {
             assert(window);
+            poll_time = std::chrono::steady_clock::now();
             const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
             mouse_down[0] = (buttons & SDL_BUTTON_LMASK) != 0;
             mouse_down[1] = (buttons & SDL_BUTTON_RMASK) != 0;

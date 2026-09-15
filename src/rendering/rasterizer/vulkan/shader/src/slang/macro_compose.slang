@@ -37,7 +37,7 @@ layout(binding=11) RWStructuredBuffer<int32_t> final_n_contributors;
 layout(binding=12) ByteAddressBuffer selection_mask;
 layout(binding=13) ByteAddressBuffer preview_mask;
 layout(binding=14) StructuredBuffer<float4> selection_colors;
-layout(binding=15) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=15) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
 layout(binding=17) StructuredBuffer<int32_t> orig_ids;
 #endif
@@ -59,6 +59,7 @@ void replay_batch(uint range_start,
                   uint range_end,
                   uint2 tile_origin,
                   float2 center_pix_coord,
+                  uint splat_render_profile,
                   bool spark_rad_opacity_path,
 #if LFS_RASTER_OVERLAYS
                   OverlayUniformState overlay_state,
@@ -76,7 +77,7 @@ void replay_batch(uint range_start,
 
         float4 gauss_rgba = spark_rad_opacity_path
                                 ? evaluate_splat_spark_rad(g, center_pix_coord)
-                                : evaluate_splat(g, center_pix_coord);
+                                : evaluate_splat_for_profile(g, center_pix_coord, splat_render_profile);
         if (gauss_rgba.a < ALPHA_THRESHOLD)
             continue;
         const float splat_depth = read_t1_float(slot, depths);
@@ -85,7 +86,7 @@ void replay_batch(uint range_start,
         // Replay streams from global (no cooperative stage). Hoisted uniforms
         // still remove overlay_params traffic from the per-splat path.
         // Flags are keyed by macro-sorted slot; selection masks by original id.
-        const uint flags = gaussian_overlay_flags[slot];
+        const uint flags = read_byte(gaussian_overlay_flags, slot);
         const uint sel_splat_id = uint(orig_ids[slot]);
         const uint selection_byte = overlay_state.selection_mask_enabled
             ? read_byte(selection_mask, sel_splat_id) : 0u;
@@ -227,6 +228,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                              range_end,
                              tile_origin,
                              center_pix_coord,
+                             uniforms.splat_render_profile,
                              spark_rad_opacity_path,
                           #if LFS_RASTER_OVERLAYS
                              overlay_state,

@@ -9,7 +9,11 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include "core/windows_console.hpp"
+#include <fcntl.h>
+#include <memory>
+#else
 #include <unistd.h>
 #endif
 
@@ -72,6 +76,91 @@ namespace {
 
 } // namespace
 
+#ifdef _WIN32
+TEST(LoggerWindowsConsoleTest, UnicodeUsesPrivateScreenBufferWithoutChangingConsoleSettings) {
+    // An inactive buffer exercises real WriteConsoleW without touching the user's
+    // visible output or changing the console code pages, modes or active buffer.
+    const HANDLE buffer = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+                                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                    nullptr, CONSOLE_TEXTMODE_BUFFER, nullptr);
+    if (buffer == INVALID_HANDLE_VALUE)
+        GTEST_SKIP() << "Requires an attached Windows console";
+    const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(buffer), _O_WRONLY | _O_TEXT);
+    if (fd < 0) {
+        CloseHandle(buffer);
+        FAIL() << "Cannot create console descriptor";
+    }
+    FILE* raw = _fdopen(fd, "w");
+    if (!raw) {
+        _close(fd);
+        FAIL() << "Cannot create console stream";
+    }
+    const std::unique_ptr<FILE, decltype(&std::fclose)> stream(raw, &std::fclose);
+    const auto input_cp = GetConsoleCP();
+    const auto output_cp = GetConsoleOutputCP();
+    DWORD mode_before = 0;
+    ASSERT_TRUE(GetConsoleMode(buffer, &mode_before));
+    EXPECT_EQ(lfs::core::detail::console_output_handle(stream.get()), buffer);
+
+    // Cross the writer's chunk boundary before the visible Unicode suffix.
+    std::string message(40'000, '\r');
+    message += "caf\xc3\xa9 \xe2\x80\x94 \xce\xa9 \xd0\x96\n";
+    ASSERT_TRUE(lfs::core::detail::write_console_utf8(buffer, message));
+    const std::wstring expected = L"caf\u00e9 \u2014 \u03a9 \u0416";
+    std::wstring actual(expected.size(), L'\0');
+    DWORD read = 0;
+    ASSERT_TRUE(ReadConsoleOutputCharacterW(buffer, actual.data(), static_cast<DWORD>(actual.size()),
+                                            COORD{0, 0}, &read));
+    EXPECT_EQ(read, expected.size());
+    EXPECT_EQ(actual, expected);
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    ASSERT_TRUE(GetConsoleScreenBufferInfo(buffer, &info));
+    EXPECT_EQ(info.dwCursorPosition.X, 0);
+    EXPECT_EQ(info.dwCursorPosition.Y, 1);
+    DWORD mode_after = 0;
+    ASSERT_TRUE(GetConsoleMode(buffer, &mode_after));
+    EXPECT_EQ(mode_after, mode_before);
+    EXPECT_EQ(GetConsoleCP(), input_cp);
+    EXPECT_EQ(GetConsoleOutputCP(), output_cp);
+}
+
+TEST(LoggerWindowsConsoleTest, RedirectedStdoutAndStderrRetainUtf8Bytes) {
+    LoggerInitGuard restore;
+    auto& logger = lfs::core::Logger::get();
+    const std::string message = "caf\xc3\xa9 \xe2\x80\x94 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x8c\x8d";
+    for (const bool use_stderr : {false, true}) {
+        logger.init(lfs::core::LogLevel::Info, "", "", use_stderr);
+        // Capture after init to guard against caching the old stream handle.
+        if (use_stderr)
+            testing::internal::CaptureStderr();
+        else
+            testing::internal::CaptureStdout();
+        const auto handle = lfs::core::detail::console_output_handle(use_stderr ? stderr : stdout);
+        logger.log(lfs::core::LogLevel::Info, LFS_SOURCE_SITE_CURRENT(), message);
+        const auto captured = use_stderr ? testing::internal::GetCapturedStderr()
+                                         : testing::internal::GetCapturedStdout();
+        EXPECT_EQ(handle, INVALID_HANDLE_VALUE);
+        EXPECT_EQ(count_occurrences(captured, message), 1);
+        EXPECT_NE(logger.buffered_logs_as_text().find(message), std::string::npos);
+    }
+}
+
+TEST(LoggerWindowsConsoleTest, InitializationWritesUnicodeProbeToLogFile) {
+    LoggerInitGuard restore;
+    const auto directory = unique_temp_dir("unicode_probe");
+    const auto log_file = directory / "startup.log";
+    std::filesystem::create_directories(directory);
+    lfs::core::Logger::get().init(lfs::core::LogLevel::Info, log_file.string());
+    lfs::core::Logger::get().flush();
+
+    const auto content = read_file(log_file);
+    EXPECT_NE(content.find("\xE2\x80\x94 UTF-8 console: \xE2\x9C\x93"), std::string::npos);
+    // Release the explicit rotating sink before deleting its Windows file.
+    lfs::core::Logger::get().init();
+    std::filesystem::remove_all(directory);
+}
+#endif
+
 TEST(LoggerTest, ScopedTimerThresholdSuppressesBelowThresholdPerfLog) {
     auto& logger = lfs::core::Logger::get();
     const auto previous_level = logger.level();
@@ -121,6 +210,29 @@ TEST(LoggerTest, ScopedTimerThresholdKeepsZeroThresholdCompatible) {
     EXPECT_NE(messages.front().find("logger.threshold.compat took"), std::string::npos);
 }
 
+TEST(LoggerTest, ScopedTimerDisabledPathDoesNotEmit) {
+    auto& logger = lfs::core::Logger::get();
+    const auto previous_level = logger.level();
+    logger.set_level(lfs::core::LogLevel::Info);
+
+    std::vector<std::string> messages;
+    LogHandlerGuard guard([&messages](lfs::core::LogLevel level,
+                                      const lfs::core::SourceSite&,
+                                      std::string_view message) {
+        if (level == lfs::core::LogLevel::Performance)
+            messages.emplace_back(message);
+    });
+
+    {
+        lfs::core::ScopedTimer timer(
+            "logger.disabled", lfs::core::LogLevel::Performance,
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    logger.set_level(previous_level);
+    EXPECT_TRUE(messages.empty());
+}
+
 TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     const std::filesystem::path resolved(lfs::core::Logger::default_log_file_path());
 
@@ -129,6 +241,53 @@ TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     EXPECT_EQ(resolved.parent_path().filename(), "logs");
     ASSERT_TRUE(resolved.parent_path().has_parent_path());
     EXPECT_EQ(resolved.parent_path().parent_path().filename(), ".lichtfeld");
+}
+
+TEST(LoggerTest, BufferedLogsSinceReturnsBoundedMonotonicRingTail) {
+    LoggerInitGuard reset_guard;
+    const auto temp_root = unique_temp_dir("incremental");
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, temp_root.string());
+
+    const auto initial_generation = logger.buffered_log_generation();
+    LOG_INFO("incremental-first");
+    LOG_INFO("incremental-second");
+    LOG_INFO("incremental-third");
+
+    const auto first_tail = logger.buffered_logs_since(initial_generation, 2);
+    ASSERT_EQ(first_tail.size(), 2u);
+    EXPECT_EQ(first_tail[0].message, "incremental-second");
+    EXPECT_EQ(first_tail[1].message, "incremental-third");
+    EXPECT_LT(first_tail[0].sequence, first_tail[1].sequence);
+
+    const auto seen_generation = logger.buffered_log_generation();
+    LOG_INFO("incremental-fourth");
+    const auto second_tail = logger.buffered_logs_since(seen_generation, 10);
+    ASSERT_EQ(second_tail.size(), 1u);
+    EXPECT_GT(second_tail.front().sequence, seen_generation);
+
+    for (size_t index = 0; index < 5005; ++index)
+        LOG_INFO("incremental-ring-{}", index);
+
+    const auto retained = logger.buffered_logs();
+    ASSERT_EQ(retained.size(), 5000u);
+    ASSERT_GT(retained.front().sequence, initial_generation);
+    const auto older_than_oldest = retained.front().sequence - 1;
+    const auto ring_tail = logger.buffered_logs_since(older_than_oldest, 5000);
+    ASSERT_EQ(ring_tail.size(), 5000u);
+    EXPECT_EQ(ring_tail.front().message, "incremental-ring-5");
+    EXPECT_EQ(ring_tail.back().message, "incremental-ring-5004");
+    for (size_t index = 1; index < ring_tail.size(); ++index)
+        EXPECT_LT(ring_tail[index - 1].sequence, ring_tail[index].sequence);
+
+    const auto bounded_ring_tail = logger.buffered_logs_since(older_than_oldest, 2);
+    ASSERT_EQ(bounded_ring_tail.size(), 2u);
+    EXPECT_EQ(bounded_ring_tail[0].message, "incremental-ring-5003");
+    EXPECT_EQ(bounded_ring_tail[1].message, "incremental-ring-5004");
+    EXPECT_LT(bounded_ring_tail[0].sequence, bounded_ring_tail[1].sequence);
+
+    std::error_code error;
+    std::filesystem::remove_all(temp_root, error);
 }
 
 TEST(LoggerTest, DefaultLogFilePathHonorsExplicitOverride) {

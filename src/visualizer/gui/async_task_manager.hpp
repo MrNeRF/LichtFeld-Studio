@@ -11,10 +11,12 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_simplify.hpp"
+#include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
@@ -56,7 +58,9 @@ namespace lfs::vis {
                                bool rad_flip_y = false,
                                bool rad_streamable = true,
                                int spz_version = 4,
-                               bool include_provenance = true);
+                               bool include_provenance = true,
+                               int lod_levels = 4, float lod_ratio = 0.5f, int chunk_count_k = 512,
+                               float chunk_extent = 16.0f, int chunk_min_k = 8, int kmeans_iterations = 10);
             [[nodiscard]] bool isExporting() const {
                 return jobs_.anyRunning(JobType::Export);
             }
@@ -80,6 +84,11 @@ namespace lfs::vis {
                 std::lock_guard lock(export_state_.mutex);
                 return export_state_.format;
             }
+            [[nodiscard]] std::string getExportCommitUuid() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.commit_uuid;
+            }
+            void startGalleryProjectExport(const GalleryProjectExportRequest& request);
             void cancelExport();
 
             // Import
@@ -128,7 +137,16 @@ namespace lfs::vis {
                 return std::chrono::duration<float>(elapsed).count();
             }
             void dismissImport();
-            void cancelImport();
+            void cancelImport(bool wait_for_worker = true);
+            [[nodiscard]] bool canCancelGalleryImport() const { return splat_load_state_.gallery.has_value() && isImporting(); }
+            bool requestGalleryImportCancel();
+
+            [[nodiscard]] bool startSplatLoad(
+                std::vector<std::filesystem::path> paths,
+                bool replace_first,
+                std::vector<std::string> name_hints = {},
+                std::vector<bool> visibility = {},
+                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt);
 
             // Video export
             [[nodiscard]] bool isExportingVideo() const {
@@ -212,10 +230,46 @@ namespace lfs::vis {
                                   bool rad_flip_y,
                                   bool rad_streamable,
                                   int spz_version,
-                                  lfs::core::ProvenanceStamp provenance);
+                                  lfs::core::ProvenanceStamp provenance,
+                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
             void startColmapExport(const std::filesystem::path& path);
+            void startGalleryPublicationExport(GalleryScenePublishRequest publication,
+                                               std::optional<GalleryProjectExportRequest> source = std::nullopt);
+            void startGallerySceneExport(const std::filesystem::path& path, core::ExportFormat format);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
+            struct SplatLoadRequest {
+                std::filesystem::path path;
+                std::string name_hint;
+                bool is_visible = true;
+                bool replace_scene = false;
+                glm::mat4 transform{1.0f};
+                int active_sh_degree = -1;
+            };
+            struct SplatLoadCompletion {
+                SplatLoadRequest request;
+                std::optional<lfs::io::LoadResult> result;
+                std::string error;
+                std::chrono::milliseconds stage_elapsed{};
+            };
+            struct SplatLoadState {
+                JobHandle job;
+                bool replace_first = false;
+                std::optional<core::events::cmd::LoadGalleryScene> gallery;
+                uint64_t scene_generation = 0;
+                std::optional<core::Uuid> gallery_group_uuid;
+                std::atomic<bool> worker_complete{false};
+                mutable std::mutex mutex;
+                std::deque<SplatLoadCompletion> completions;
+                std::vector<SplatLoadRequest> requests;
+                size_t loaded_count = 0;
+                size_t failed_count = 0;
+                bool consolidation_pending = false;
+                std::optional<std::jthread> thread;
+            };
+            SplatLoadState splat_load_state_;
+            uint64_t gallery_scene_epoch_ = 0;
+            void checkAsyncSplatLoadCompletion();
             void checkAsyncImportCompletion();
             void applyLoadedDataToScene();
             void applyAutoCropToLoadedScene();
@@ -250,6 +304,7 @@ namespace lfs::vis {
             JobRegistry& jobs_;
 
             struct ExportState {
+                std::string commit_uuid;
                 JobHandle job;
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
                 std::filesystem::path path;

@@ -93,14 +93,14 @@ namespace lfs::vis {
                              : ppisp.apply_with_overrides(
                                    input, camera_id, camera_uid, toRenderOverrides(overrides), region);
             } else {
-                // Keep manual overrides active on novel views by anchoring them to any valid learned PPISP
-                // frame/camera pair when no controller is available.
-                const int fallback_camera = ppisp.any_camera_id();
-                const int fallback_frame = ppisp.any_frame_uid();
+                // Eval convention: identity colour, 0 EV, camera-level vignetting/CRF
+                // (physical camera with the most registered frames). Manual overrides
+                // still apply on top.
+                const int fallback_camera = ppisp.majority_camera_id();
                 result = overrides.isIdentity()
-                             ? ppisp.apply(input, fallback_camera, fallback_frame, region)
-                             : ppisp.apply_with_overrides(
-                                   input, fallback_camera, fallback_frame, toRenderOverrides(overrides), region);
+                             ? ppisp.apply_with_exposure(input, fallback_camera, 0.0f, region)
+                             : ppisp.apply_with_exposure_and_overrides(
+                                   input, fallback_camera, 0.0f, toRenderOverrides(overrides), region);
             }
 
             return (was_hwc && result.is_valid()) ? result.permute({1, 2, 0}).contiguous() : result;

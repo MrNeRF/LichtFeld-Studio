@@ -99,6 +99,7 @@ namespace gsplat_lfs {
         pix.pixel_error = do_dens ? densification_error_map[pix.pix_id] : 0.f;
     }
 
+    template <bool kEdgeScoring>
     __device__ __forceinline__ bool contribute_pixel(
         PixelBwd& pix,
         const int32_t isect_idx,
@@ -120,6 +121,8 @@ namespace gsplat_lfs {
         float& v_opacity,
         float& dens_w,
         float& dens_e,
+        const float* edge_weight_map,
+        float& edge_score,
         mat3& R,
         bool& have_R) {
         bool valid = pix.active;
@@ -143,6 +146,13 @@ namespace gsplat_lfs {
         const float ra = 1.0f / (1.0f - alpha);
         pix.T *= ra;
         const float fac = alpha * pix.T;
+        if constexpr (kEdgeScoring) {
+            const float edge_weight = edge_weight_map[pix.pix_id];
+            const float edge_contribution = fac * edge_weight;
+            if (edge_weight > 0.0f && isfinite(edge_contribution)) {
+                edge_score += edge_contribution;
+            }
+        }
         v_rgb[0] += fac * pix.v_render_c[0];
         v_rgb[1] += fac * pix.v_render_c[1];
         v_rgb[2] += fac * pix.v_render_c[2];
@@ -184,7 +194,7 @@ namespace gsplat_lfs {
         return true;
     }
 
-    template <bool kSharedOrigin>
+    template <bool kSharedOrigin, bool kEdgeScoring>
     __device__ __forceinline__ void contribute_pixel_pair(
         PixelBwd& pix0,
         PixelBwd& pix1,
@@ -205,6 +215,8 @@ namespace gsplat_lfs {
         float& v_opacity,
         float& dens_w,
         float& dens_e,
+        const float* edge_weight_map,
+        float& edge_score,
         bool& hit0,
         bool& hit1) {
         const float opac = xyz_opac[3];
@@ -224,14 +236,14 @@ namespace gsplat_lfs {
         }
         mat3 R;
         bool have_R = false;
-        hit0 = contribute_pixel(
+        hit0 = contribute_pixel<kEdgeScoring>(
             pix0, isect_idx, opac, Mt, gro0, o_minus_mu0, scale_act, quat,
             rgb0, rgb1, rgb2, have_bg, do_dens, v_rgb, v_mean, v_scale, v_quat,
-            v_opacity, dens_w, dens_e, R, have_R);
-        hit1 = contribute_pixel(
+            v_opacity, dens_w, dens_e, edge_weight_map, edge_score, R, have_R);
+        hit1 = contribute_pixel<kEdgeScoring>(
             pix1, isect_idx, opac, Mt, gro1, o_minus_mu1, scale_act, quat,
             rgb0, rgb1, rgb2, have_bg, do_dens, v_rgb, v_mean, v_scale, v_quat,
-            v_opacity, dens_w, dens_e, R, have_R);
+            v_opacity, dens_w, dens_e, edge_weight_map, edge_score, R, have_R);
     }
 
     __device__ __forceinline__ float reduce_field(float v, const unsigned n_contrib, const int src_lane) {
@@ -288,7 +300,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <typename scalar_t, bool kSharedOrigin, bool kPerfectPinhole>
+    template <typename scalar_t, bool kSharedOrigin, bool kPerfectPinhole, bool kEdgeScoring>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -328,7 +340,9 @@ namespace gsplat_lfs {
         scalar_t* __restrict__ v_colors,
         scalar_t* __restrict__ v_opacities,
         float* __restrict__ densification_info,
-        const scalar_t* __restrict__ densification_error_map) {
+        const scalar_t* __restrict__ densification_error_map,
+        const float* __restrict__ edge_weight_map,
+        float* __restrict__ edge_score_out) {
         auto block = cg::this_thread_block();
         const uint32_t cid = block.group_index().x;
         const uint32_t tile_id =
@@ -352,6 +366,10 @@ namespace gsplat_lfs {
         }
         if (masks != nullptr) {
             masks += cid * tile_height * tile_width;
+        }
+        if constexpr (kEdgeScoring) {
+            edge_weight_map += cid * image_height * image_width;
+            edge_score_out += cid * N;
         }
         if (masks != nullptr && !masks[tile_id]) {
             return;
@@ -386,6 +404,10 @@ namespace gsplat_lfs {
         vec4* quat_batch = reinterpret_cast<vec4*>(&scale_batch[kBwdDualBatch]);
         mat3* mt_batch = reinterpret_cast<mat3*>(&quat_batch[kBwdDualBatch]);
         float* rgbs_batch = reinterpret_cast<float*>(&mt_batch[kBwdDualBatch]);
+        float* edge_score_batch = nullptr;
+        if constexpr (kEdgeScoring) {
+            edge_score_batch = reinterpret_cast<float*>(&rgbs_batch[kBwdDualBatch * 3u]);
+        }
 
         const uint32_t tr = block.thread_rank();
         cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -417,6 +439,12 @@ namespace gsplat_lfs {
 
         for (uint32_t b = 0; b < num_batches; ++b) {
             block.sync();
+            if constexpr (kEdgeScoring) {
+                for (uint32_t slot = tr; slot < kBwdDualBatch; slot += block.size()) {
+                    edge_score_batch[slot] = 0.f;
+                }
+                block.sync();
+            }
             const int32_t batch_end = range_end - 1 - static_cast<int32_t>(kBwdDualBatch * b);
             const int32_t batch_size = min(static_cast<int32_t>(kBwdDualBatch), batch_end + 1 - range_start);
             stage_splat(batch_end - static_cast<int32_t>(tr), tr);
@@ -440,50 +468,71 @@ namespace gsplat_lfs {
                 float v_opacity_local = 0.f;
                 float densification_weight_local = 0.f;
                 float densification_error_weighted_local = 0.f;
+                float edge_score_local = 0.f;
 
                 bool hit0 = false;
                 bool hit1 = false;
-                contribute_pixel_pair<kSharedOrigin>(
+                contribute_pixel_pair<kSharedOrigin, kEdgeScoring>(
                     pix0, pix1, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
                     have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
                     v_opacity_local, densification_weight_local, densification_error_weighted_local,
-                    hit0, hit1);
+                    edge_weight_map, edge_score_local, hit0, hit1);
 
                 const unsigned valid_mask = __ballot_sync(0xffffffffu, hit0 || hit1);
                 if (valid_mask == 0u) {
-                    continue;
+                    if constexpr (!kEdgeScoring) {
+                        continue;
+                    }
                 }
-                const unsigned n_contrib = __popc(valid_mask);
-                const int src_lane = __ffs(valid_mask) - 1;
-                v_rgb_local[0] = reduce_field(v_rgb_local[0], n_contrib, src_lane);
-                v_rgb_local[1] = reduce_field(v_rgb_local[1], n_contrib, src_lane);
-                v_rgb_local[2] = reduce_field(v_rgb_local[2], n_contrib, src_lane);
-                v_mean_local.x = reduce_field(v_mean_local.x, n_contrib, src_lane);
-                v_mean_local.y = reduce_field(v_mean_local.y, n_contrib, src_lane);
-                v_mean_local.z = reduce_field(v_mean_local.z, n_contrib, src_lane);
-                v_scale_local.x = reduce_field(v_scale_local.x, n_contrib, src_lane);
-                v_scale_local.y = reduce_field(v_scale_local.y, n_contrib, src_lane);
-                v_scale_local.z = reduce_field(v_scale_local.z, n_contrib, src_lane);
-                v_quat_local.x = reduce_field(v_quat_local.x, n_contrib, src_lane);
-                v_quat_local.y = reduce_field(v_quat_local.y, n_contrib, src_lane);
-                v_quat_local.z = reduce_field(v_quat_local.z, n_contrib, src_lane);
-                v_quat_local.w = reduce_field(v_quat_local.w, n_contrib, src_lane);
-                v_opacity_local = reduce_field(v_opacity_local, n_contrib, src_lane);
-                densification_weight_local = reduce_field(densification_weight_local, n_contrib, src_lane);
-                densification_error_weighted_local =
-                    reduce_field(densification_error_weighted_local, n_contrib, src_lane);
-                if (warp.thread_rank() == 0) {
-                    flush_splat_grads(
-                        id_batch[t], N, do_dens, v_rgb_local, v_mean_local, v_scale_local,
-                        v_quat_local, v_opacity_local, densification_weight_local,
-                        densification_error_weighted_local, scale_act, xyz_opac[3],
-                        v_means, v_quats, v_scales, v_colors, v_opacities, densification_info);
+                if (valid_mask != 0u) {
+                    const unsigned n_contrib = __popc(valid_mask);
+                    const int src_lane = __ffs(valid_mask) - 1;
+                    v_rgb_local[0] = reduce_field(v_rgb_local[0], n_contrib, src_lane);
+                    v_rgb_local[1] = reduce_field(v_rgb_local[1], n_contrib, src_lane);
+                    v_rgb_local[2] = reduce_field(v_rgb_local[2], n_contrib, src_lane);
+                    v_mean_local.x = reduce_field(v_mean_local.x, n_contrib, src_lane);
+                    v_mean_local.y = reduce_field(v_mean_local.y, n_contrib, src_lane);
+                    v_mean_local.z = reduce_field(v_mean_local.z, n_contrib, src_lane);
+                    v_scale_local.x = reduce_field(v_scale_local.x, n_contrib, src_lane);
+                    v_scale_local.y = reduce_field(v_scale_local.y, n_contrib, src_lane);
+                    v_scale_local.z = reduce_field(v_scale_local.z, n_contrib, src_lane);
+                    v_quat_local.x = reduce_field(v_quat_local.x, n_contrib, src_lane);
+                    v_quat_local.y = reduce_field(v_quat_local.y, n_contrib, src_lane);
+                    v_quat_local.z = reduce_field(v_quat_local.z, n_contrib, src_lane);
+                    v_quat_local.w = reduce_field(v_quat_local.w, n_contrib, src_lane);
+                    v_opacity_local = reduce_field(v_opacity_local, n_contrib, src_lane);
+                    densification_weight_local = reduce_field(densification_weight_local, n_contrib, src_lane);
+                    densification_error_weighted_local =
+                        reduce_field(densification_error_weighted_local, n_contrib, src_lane);
+                    if constexpr (kEdgeScoring) {
+                        edge_score_local = reduce_field(edge_score_local, n_contrib, src_lane);
+                    }
+                    if (warp.thread_rank() == 0) {
+                        flush_splat_grads(
+                            id_batch[t], N, do_dens, v_rgb_local, v_mean_local, v_scale_local,
+                            v_quat_local, v_opacity_local, densification_weight_local,
+                            densification_error_weighted_local, scale_act, xyz_opac[3],
+                            v_means, v_quats, v_scales, v_colors, v_opacities, densification_info);
+                    }
                 }
+                if constexpr (kEdgeScoring) {
+                    warpSum(edge_score_local, warp);
+                    if (warp.thread_rank() == 0) {
+                        gpuAtomicAdd(&edge_score_batch[t], edge_score_local);
+                    }
+                }
+            }
+            if constexpr (kEdgeScoring) {
+                block.sync();
+                for (uint32_t t = tr; t < static_cast<uint32_t>(batch_size); t += block.size()) {
+                    gpuAtomicAdd(&edge_score_out[id_batch[t]], edge_score_batch[t]);
+                }
+                block.sync();
             }
         }
     }
 
-    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kEdgeScoring>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -524,14 +573,15 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ v_render_colors, // [C, CDIM, image_height, image_width]
         const scalar_t* __restrict__ v_render_alphas, // [C, image_height, image_width, 1]
         // grad inputs
-        vec3* __restrict__ v_means,                          // [N, 3]
-        vec4* __restrict__ v_quats,                          // [N, 4]
-        vec3* __restrict__ v_scales,                         // [N, 3]
-        scalar_t* __restrict__ v_colors,                     // [C, N, CDIM] or [nnz, CDIM]
-        scalar_t* __restrict__ v_opacities,                  // [C, N] or [nnz]
-        float* __restrict__ densification_info,              // [2, N] flattened or nullptr
-        const scalar_t* __restrict__ densification_error_map // [H, W] or nullptr
-    ) {
+        vec3* __restrict__ v_means,                           // [N, 3]
+        vec4* __restrict__ v_quats,                           // [N, 4]
+        vec3* __restrict__ v_scales,                          // [N, 3]
+        scalar_t* __restrict__ v_colors,                      // [C, N, CDIM] or [nnz, CDIM]
+        scalar_t* __restrict__ v_opacities,                   // [C, N] or [nnz]
+        float* __restrict__ densification_info,               // [2, N] flattened or nullptr
+        const scalar_t* __restrict__ densification_error_map, // [H, W] or nullptr
+        const float* __restrict__ edge_weight_map,
+        float* __restrict__ edge_score_out) {
         auto block = cg::this_thread_block();
         uint32_t cid = block.group_index().x;
         uint32_t tile_id =
@@ -552,6 +602,10 @@ namespace gsplat_lfs {
         }
         if (masks != nullptr) {
             masks += cid * tile_height * tile_width;
+        }
+        if constexpr (kEdgeScoring) {
+            edge_weight_map += cid * image_height * image_width;
+            edge_score_out += cid * N;
         }
 
         // when the mask is provided, do nothing and return if
@@ -597,6 +651,10 @@ namespace gsplat_lfs {
             reinterpret_cast<mat3*>(&quat_batch[block_size]); // [block_size]
         float* rgbs_batch =
             reinterpret_cast<float*>(&mt_batch[block_size]); // [block_size * CDIM]
+        float* edge_score_batch = nullptr;
+        if constexpr (kEdgeScoring) {
+            edge_score_batch = reinterpret_cast<float*>(&rgbs_batch[block_size * CDIM]);
+        }
 
         // this is the T AFTER the last gaussian in this pixel
         float T_final = 1.0f - render_alphas[pix_id];
@@ -640,6 +698,12 @@ namespace gsplat_lfs {
         for (uint32_t b = 0; b < num_batches; ++b) {
             // resync all threads before writing next batch of shared mem
             block.sync();
+            if constexpr (kEdgeScoring) {
+                for (uint32_t slot = tr; slot < block_size; slot += block.size()) {
+                    edge_score_batch[slot] = 0.f;
+                }
+                block.sync();
+            }
 
             // each thread fetch 1 gaussian from back to front
             // 0 index will be furthest back in batch
@@ -706,9 +770,10 @@ namespace gsplat_lfs {
 
                 const unsigned valid_mask = __ballot_sync(0xffffffffu, valid);
                 if (valid_mask == 0u) {
-                    continue;
+                    if constexpr (!kEdgeScoring) {
+                        continue;
+                    }
                 }
-
                 float v_rgb_local[CDIM] = {0.f};
                 vec3 v_mean_local = {0.f, 0.f, 0.f};
                 vec3 v_scale_local = {0.f, 0.f, 0.f};
@@ -716,91 +781,114 @@ namespace gsplat_lfs {
                 float v_opacity_local = 0.f;
                 float densification_weight_local = 0.f;
                 float densification_error_weighted_local = 0.f;
-                if (valid) {
+                float edge_score_local = 0.f;
+                if (valid_mask != 0u) {
                     const float ra = 1.0f / (1.0f - alpha);
-                    T *= ra;
-                    const float fac = alpha * T;
+                    if (valid) {
+                        T *= ra;
+                        const float fac = alpha * T;
 #pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        v_rgb_local[k] = fac * v_render_c[k];
-                    }
-                    if (do_dens) {
-                        densification_weight_local = fac;
-                        densification_error_weighted_local = fac * pixel_error;
-                    }
-                    float v_alpha = 0.f;
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            v_rgb_local[k] = fac * v_render_c[k];
+                        }
+                        if (do_dens) {
+                            densification_weight_local = fac;
+                            densification_error_weighted_local = fac * pixel_error;
+                        }
+                        if constexpr (kEdgeScoring) {
+                            const float edge_weight = edge_weight_map[pix_id];
+                            const float edge_contribution = fac * edge_weight;
+                            if (edge_weight > 0.0f && isfinite(edge_contribution)) {
+                                edge_score_local = edge_contribution;
+                            }
+                        }
+                        float v_alpha = 0.f;
 #pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
-                                   v_render_c[k];
-                    }
-                    v_alpha += T_final * ra * v_render_a;
-                    if (have_bg) {
-                        v_alpha += -T_final * ra * bg_accum;
-                    }
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
+                                       v_render_c[k];
+                        }
+                        v_alpha += T_final * ra * v_render_a;
+                        if (have_bg) {
+                            v_alpha += -T_final * ra * bg_accum;
+                        }
 
-                    if (opac * vis <= 0.999f) {
-                        const float v_vis = opac * v_alpha;
-                        const float v_gradDist = -0.5f * vis * v_vis;
-                        const vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
-                        const vec3 v_grd_n = -glm::cross(v_gcrod, gro);
-                        const vec3 v_gro = glm::cross(v_gcrod, grd_n);
-                        const vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
-                        const mat3 v_Mt = glm::outerProduct(v_grd, ray_d) +
-                                          glm::outerProduct(v_gro, o_minus_mu);
-                        const vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
-                        v_mean_local += -v_o_minus_mu;
+                        if (opac * vis <= 0.999f) {
+                            const float v_vis = opac * v_alpha;
+                            const float v_gradDist = -0.5f * vis * v_vis;
+                            const vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
+                            const vec3 v_grd_n = -glm::cross(v_gcrod, gro);
+                            const vec3 v_gro = glm::cross(v_gcrod, grd_n);
+                            const vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
+                            const mat3 v_Mt = glm::outerProduct(v_grd, ray_d) +
+                                              glm::outerProduct(v_gro, o_minus_mu);
+                            const vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
+                            v_mean_local += -v_o_minus_mu;
+                            const vec3 scale_act = scale_batch[t];
+                            const vec4 quat = quat_batch[t];
+                            const mat3 R = quat_to_rotmat(quat);
+                            quat_scale_to_preci_half_vjp(
+                                quat, scale_act, R, glm::transpose(v_Mt), v_quat_local, v_scale_local);
+                            v_opacity_local = vis * v_alpha;
+                        }
+
+#pragma unroll
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            buffer[k] += rgbs_batch[t * CDIM + k] * fac;
+                        }
+                    }
+                    warpSum<CDIM>(v_rgb_local, warp);
+                    warpSum(v_mean_local, warp);
+                    warpSum(v_scale_local, warp);
+                    warpSum(v_quat_local, warp);
+                    warpSum(v_opacity_local, warp);
+                    warpSum(densification_weight_local, warp);
+                    warpSum(densification_error_weighted_local, warp);
+                    if (warp.thread_rank() == 0) {
+                        const int32_t g = id_batch[t];
+                        float* v_rgb_ptr = (float*)(v_colors) + CDIM * g;
+#pragma unroll
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                        }
+                        float* v_mean_ptr = (float*)(v_means) + 3 * g;
+                        gpuAtomicAdd(v_mean_ptr, v_mean_local.x);
+                        gpuAtomicAdd(v_mean_ptr + 1, v_mean_local.y);
+                        gpuAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
+
+                        float* v_scale_ptr = (float*)(v_scales) + 3 * g;
                         const vec3 scale_act = scale_batch[t];
-                        const vec4 quat = quat_batch[t];
-                        const mat3 R = quat_to_rotmat(quat);
-                        quat_scale_to_preci_half_vjp(
-                            quat, scale_act, R, glm::transpose(v_Mt), v_quat_local, v_scale_local);
-                        v_opacity_local = vis * v_alpha;
-                    }
+                        gpuAtomicAdd(v_scale_ptr, v_scale_local.x * scale_act.x);
+                        gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y * scale_act.y);
+                        gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z * scale_act.z);
 
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        buffer[k] += rgbs_batch[t * CDIM + k] * fac;
-                    }
-                }
-                warpSum<CDIM>(v_rgb_local, warp);
-                warpSum(v_mean_local, warp);
-                warpSum(v_scale_local, warp);
-                warpSum(v_quat_local, warp);
-                warpSum(v_opacity_local, warp);
-                warpSum(densification_weight_local, warp);
-                warpSum(densification_error_weighted_local, warp);
-                if (warp.thread_rank() == 0) {
-                    const int32_t g = id_batch[t];
-                    float* v_rgb_ptr = (float*)(v_colors) + CDIM * g;
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
-                    }
-                    float* v_mean_ptr = (float*)(v_means) + 3 * g;
-                    gpuAtomicAdd(v_mean_ptr, v_mean_local.x);
-                    gpuAtomicAdd(v_mean_ptr + 1, v_mean_local.y);
-                    gpuAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
+                        float* v_quat_ptr = (float*)(v_quats) + 4 * g;
+                        gpuAtomicAdd(v_quat_ptr, v_quat_local.x);
+                        gpuAtomicAdd(v_quat_ptr + 1, v_quat_local.y);
+                        gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
+                        gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
 
-                    float* v_scale_ptr = (float*)(v_scales) + 3 * g;
-                    const vec3 scale_act = scale_batch[t];
-                    gpuAtomicAdd(v_scale_ptr, v_scale_local.x * scale_act.x);
-                    gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y * scale_act.y);
-                    gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z * scale_act.z);
-
-                    float* v_quat_ptr = (float*)(v_quats) + 4 * g;
-                    gpuAtomicAdd(v_quat_ptr, v_quat_local.x);
-                    gpuAtomicAdd(v_quat_ptr + 1, v_quat_local.y);
-                    gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
-                    gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
-
-                    const float opac_act = xyz_opacity_batch[t][3];
-                    gpuAtomicAdd(v_opacities + g, v_opacity_local * opac_act * (1.0f - opac_act));
-                    if (do_dens) {
-                        gpuAtomicAdd(densification_info + g, densification_weight_local);
-                        gpuAtomicAdd(densification_info + N + g, densification_error_weighted_local);
+                        const float opac_act = xyz_opacity_batch[t][3];
+                        gpuAtomicAdd(v_opacities + g, v_opacity_local * opac_act * (1.0f - opac_act));
+                        if (do_dens) {
+                            gpuAtomicAdd(densification_info + g, densification_weight_local);
+                            gpuAtomicAdd(densification_info + N + g, densification_error_weighted_local);
+                        }
                     }
                 }
+                if constexpr (kEdgeScoring) {
+                    warpSum(edge_score_local, warp);
+                    if (warp.thread_rank() == 0) {
+                        gpuAtomicAdd(&edge_score_batch[t], edge_score_local);
+                    }
+                }
+            }
+            if constexpr (kEdgeScoring) {
+                block.sync();
+                for (uint32_t t = tr; t < static_cast<uint32_t>(batch_size); t += block.size()) {
+                    gpuAtomicAdd(edge_score_out + id_batch[t], edge_score_batch[t]);
+                }
+                block.sync();
             }
         }
     }
@@ -847,6 +935,8 @@ namespace gsplat_lfs {
         float* v_opacities,
         float* densification_info,
         const float* densification_error_map,
+        const float* edge_weight_map,
+        float* edge_score_out,
         cudaStream_t stream) {
         const bool packed = false; // Only support non-packed for now
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
@@ -903,7 +993,9 @@ namespace gsplat_lfs {
                 v_colors,
                 v_opacities,
                 densification_info,
-                densification_error_map);
+                densification_error_map,
+                edge_weight_map,
+                edge_score_out);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_bwd");
         };
 
@@ -915,21 +1007,41 @@ namespace gsplat_lfs {
                     int64_t(kBwdDualBatch) *
                     (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
                      sizeof(mat3) + sizeof(float) * CDIM);
+                const int64_t edge_shmem_size =
+                    shmem_size + int64_t(kBwdDualBatch) * sizeof(float);
                 if (global_shutter) {
                     if (perfect_pinhole) {
-                        launch_args(
-                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true>,
-                            grid, threads, shmem_size);
+                        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                            launch_args(
+                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, true>,
+                                grid, threads, edge_shmem_size);
+                        } else {
+                            launch_args(
+                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, false>,
+                                grid, threads, shmem_size);
+                        }
                     } else {
-                        launch_args(
-                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false>,
-                            grid, threads, shmem_size);
+                        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                            launch_args(
+                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, true>,
+                                grid, threads, edge_shmem_size);
+                        } else {
+                            launch_args(
+                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, false>,
+                                grid, threads, shmem_size);
+                        }
                     }
                     return;
                 }
-                launch_args(
-                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false>,
-                    grid, threads, shmem_size);
+                if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                    launch_args(
+                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, true>,
+                        grid, threads, edge_shmem_size);
+                } else {
+                    launch_args(
+                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, false>,
+                        grid, threads, shmem_size);
+                }
                 return;
             }
         }
@@ -946,17 +1058,30 @@ namespace gsplat_lfs {
                 shmem_size = kOccCapBytes;
             }
         }
+        const int64_t edge_shmem_size = shmem_size + tile_size * tile_size * sizeof(float);
         if constexpr (CDIM == 3) {
             if (global_shutter && perfect_pinhole) {
-                launch_args(
-                    rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true>,
-                    grid, threads, shmem_size);
+                if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                    launch_args(
+                        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, true>,
+                        grid, threads, edge_shmem_size);
+                } else {
+                    launch_args(
+                        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, false>,
+                        grid, threads, shmem_size);
+                }
                 return;
             }
         }
-        launch_args(
-            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false>,
-            grid, threads, shmem_size);
+        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+            launch_args(
+                rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, true>,
+                grid, threads, edge_shmem_size);
+        } else {
+            launch_args(
+                rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, false>,
+                grid, threads, shmem_size);
+        }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -1001,6 +1126,8 @@ namespace gsplat_lfs {
         float* v_opacities,                                                    \
         float* densification_info,                                             \
         const float* densification_error_map,                                  \
+        const float* edge_weight_map,                                          \
+        float* edge_score_out,                                                 \
         cudaStream_t stream);
 
     __INS__(1)

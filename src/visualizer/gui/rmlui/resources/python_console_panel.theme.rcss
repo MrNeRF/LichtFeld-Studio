@@ -3,18 +3,16 @@ body {
     color: @{text};
 }
 
-#window-frame,
-#python-editor-view,
-#python-output-terminal,
-#python-repl-terminal {
+#window-frame {
     background-color: @{background};
 }
 
 #python-editor-view {
+    background-color: @{surface};
     color: @{text};
 }
 
-#python-console-toolbar,
+#content #python-console-toolbar,
 #tabbar {
     background-color: @{surface};
     border-color: @{border};
@@ -42,14 +40,21 @@ button.disabled {
     color: @{text_dim};
 }
 
-.run-button {
-    background-color: @{alpha(success,0.35)};
-    border-color: @{success};
+#python-console-toolbar button {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
 }
 
-.stop-button {
-    background-color: @{alpha(error,0.35)};
-    border-color: @{error};
+#python-console-toolbar button:hover {
+    background-color: @{blend(surface_bright,primary,button.tint_hover)};
+    border-color: @{blend(border,primary,0.35)};
+}
+
+#python-console-toolbar button.disabled {
+    background-color: @{blend(surface,background,0.35)};
+    border-color: @{border};
+    color: @{text_dim};
 }
 
 #script-label,
@@ -96,7 +101,8 @@ button.disabled {
 }
 
 #python-splitter:hover {
-    background-color: @{primary_dim};
+    background-color: @{blend(surface,background,0.35)};
+    border-top-color: @{primary};
 }
 
 #tabbar button {
@@ -110,7 +116,20 @@ button.disabled {
 }
 
 #tabbar button.active {
+    background-color: @{blend(surface_bright,primary,button.tint_active)};
+    border-color: @{primary};
+    color: @{text};
+}
+
+#packages-panel {
+    background-color: @{surface};
+    color: @{text};
+}
+
+#packages-search {
     background-color: @{background};
+    border-color: @{border};
+    color: @{text};
 }
 
 .pkg-header,

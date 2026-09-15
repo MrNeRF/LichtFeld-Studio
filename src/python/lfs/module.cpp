@@ -104,6 +104,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -137,6 +138,19 @@ namespace {
     using lfs::training::SelectionKind;
     using lfs::training::TrainingPhase;
     using lfs::training::TrainingSnapshot;
+
+    using SafePyCallback = std::shared_ptr<nb::object>;
+
+    SafePyCallback make_safe_py_callback(nb::object callback) {
+        // Native hook queues copy callbacks without the GIL. Keep Python
+        // ownership behind a C++ shared pointer and acquire the GIL on deletion.
+        // The deleter may block on the GIL: never drop the last reference while
+        // holding a lock that a GIL-holding thread can also take.
+        return {new nb::object(std::move(callback)), [](nb::object* callback) {
+                    nb::gil_scoped_acquire gil;
+                    delete callback;
+                }};
+    }
 
     void warn_deprecated_python_api(const std::string_view old_name, const std::string_view replacement) {
         const std::string message = std::format(
@@ -234,6 +248,63 @@ namespace {
             }));
     }
 
+    lfs::Error python_viewer_shutdown_error();
+
+    lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+    post_project_license_get_to_viewer(lfs::vis::Visualizer& viewer) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectGetLicense();
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_get_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<
+            std::optional<lfs::io::project::ProjectLicense>>(
+            viewer, context,
+            [&viewer] { return viewer.projectGetLicense(); },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<void> post_project_license_set_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        lfs::io::project::ProjectLicense license) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectSetLicense(license);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_set_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer, license = std::move(license)]() mutable {
+                return viewer.projectSetLicense(license);
+            },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<void> post_project_license_clear_to_viewer(
+        lfs::vis::Visualizer& viewer) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectClearLicense();
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_clear_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer] { return viewer.projectClearLicense(); },
+            python_viewer_shutdown_error());
+    }
+
     lfs::Error python_viewer_shutdown_error() {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Cancelled,
@@ -263,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -460,19 +531,20 @@ namespace {
 
         void add(ControlHook hook, nb::callable fn) {
             nb::object fn_obj = std::move(fn);
-            auto cb = [fn_obj](const HookContext& ctx) {
+            auto callback = make_safe_py_callback(std::move(fn_obj));
+            auto cb = [callback](const HookContext& ctx) {
                 nb::gil_scoped_acquire gil;
                 HookInvocationGuard hook_guard(ctx);
-                fn_obj(ctx.iteration, ctx.loss, ctx.num_gaussians, ctx.is_refining);
+                (*callback)(ctx.iteration, ctx.loss, ctx.num_gaussians, ctx.is_refining);
             };
 
             const auto id = ControlBoundary::instance().register_callback(hook, std::move(cb));
             registrations_.push_back({hook, id});
-            owned_callbacks_.push_back(std::move(fn_obj));
+            owned_callbacks_.push_back(std::move(callback));
         }
 
         std::vector<RegistrationHandle> registrations_;
-        std::vector<nb::object> owned_callbacks_;
+        std::vector<SafePyCallback> owned_callbacks_;
     };
 
     class PyScopedHandler {
@@ -499,15 +571,16 @@ namespace {
     private:
         void add_hook(ControlHook hook, nb::callable cb) {
             nb::object fn = nb::cast<nb::object>(cb);
-            owned_callbacks_.push_back(fn);
+            auto callback = make_safe_py_callback(std::move(fn));
+            owned_callbacks_.push_back(callback);
 
-            handler_.subscribe_hook(hook, [fn, hook](const HookContext& ctx) {
-                invoke_python_dict_hook(fn, hook, ctx);
+            handler_.subscribe_hook(hook, [callback, hook](const HookContext& ctx) {
+                invoke_python_dict_hook(*callback, hook, ctx);
             });
         }
 
         lfs::event::ScopedHandler handler_;
-        std::vector<nb::object> owned_callbacks_;
+        std::vector<SafePyCallback> owned_callbacks_;
     };
 
     class PyContextView {
@@ -700,10 +773,10 @@ namespace {
     std::size_t register_hook(ControlHook hook, nb::callable cb) {
         if (!cb)
             return 0;
-        const nb::object ocb = nb::cast<nb::object>(cb);
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
         LOG_INFO("Python hook registered for hook {}", static_cast<int>(hook));
-        return ControlBoundary::instance().register_callback(hook, [ocb, hook](const HookContext& ctx) {
-            invoke_python_dict_hook(ocb, hook, ctx);
+        return ControlBoundary::instance().register_callback(hook, [callback, hook](const HookContext& ctx) {
+            invoke_python_dict_hook(*callback, hook, ctx);
         });
     }
 
@@ -874,7 +947,7 @@ NB_MODULE(lichtfeld, m) {
         "trainer_state",
         []() -> const char* {
             const auto* const tm = lfs::python::get_trainer_manager();
-            if (!tm || !tm->hasTrainer()) {
+            if (!tm || (!tm->hasTrainer() && !tm->isFinished())) {
                 const auto session = stored_training_session();
                 if (session.available) {
                     return session.completed ? "completed" : "paused";
@@ -884,6 +957,7 @@ NB_MODULE(lichtfeld, m) {
             switch (tm->getState()) {
             case lfs::vis::TrainingState::Idle: return "idle";
             case lfs::vis::TrainingState::Ready: return "ready";
+            case lfs::vis::TrainingState::Starting: return "starting";
             case lfs::vis::TrainingState::Running: return "running";
             case lfs::vis::TrainingState::Paused: return "paused";
             case lfs::vis::TrainingState::Stopping: return "stopping";
@@ -936,13 +1010,26 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const viewer = lfs::python::get_visualizer();
+            // Capture the caller's thread before marshalling the command. UI
+            // callbacks must return so initialization can post work back to
+            // the viewer; off-thread scripts retain the synchronous contract.
+            const bool called_on_viewer = viewer && viewer->isOnViewerThread();
+            auto* const trainer_manager = lfs::python::get_trainer_manager();
             emit_project_cmd_marshaled(
                 "python.start_training", [] {
                     lfs::core::events::cmd::StartTraining{}
                         .emit();
                 });
+            if (trainer_manager && !called_on_viewer) {
+                if (auto initialized = trainer_manager->waitForInitialization();
+                    !initialized) {
+                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                }
+            }
         },
-        "Start training with current parameters");
+        "Start training with current parameters. Returns after dispatch on the viewer thread; "
+        "other callers wait for initialization. Asynchronous failures are reported through training state.");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {
@@ -1057,7 +1144,7 @@ NB_MODULE(lichtfeld, m) {
             return trainer_manager &&
                    trainer_manager->isTrainingActive();
         },
-        "Whether training is running or paused");
+        "Whether training is starting, running, or paused");
     m.def(
         "new_project", [](const bool discard_changes, const bool stop_training) {
             nb::gil_scoped_release release;
@@ -1073,6 +1160,56 @@ NB_MODULE(lichtfeld, m) {
                 });
         },
         nb::arg("discard_changes") = false, nb::arg("stop_training") = false, "Clear all project state and start a new project");
+    m.def(
+        "project_create",
+        [](const std::string& path,
+           const bool discard_changes,
+           const bool stop_training,
+           const bool overwrite) {
+            nb::gil_scoped_release release;
+            const auto project_path = python_utf8_path(path);
+            auto* const viewer = lfs::python::get_visualizer();
+            bool created = false;
+            emit_project_cmd_marshaled(
+                "python.project_create",
+                [project_path, discard_changes, stop_training,
+                 overwrite, viewer, &created] {
+                    lfs::core::events::cmd::ProjectCreate{
+                        .path = project_path,
+                        .discard_changes = discard_changes,
+                        .stop_training = stop_training,
+                        .allow_existing_destination_replacement =
+                            overwrite}
+                        .emit();
+                    created = !viewer || viewer->consumeProjectCreateSucceeded();
+                });
+            return created;
+        },
+        nb::arg("path"), nb::arg("discard_changes") = false,
+        nb::arg("stop_training") = false,
+        nb::arg("overwrite") = false,
+        "Create and bind a new .licht project at path");
+    m.def(
+        "project_create_pending",
+        []() {
+            nb::gil_scoped_release release;
+            bool pending = false;
+            emit_project_cmd_marshaled("python.project_create_pending", [&pending] {
+                const auto* const viewer = lfs::python::get_visualizer();
+                pending = viewer && viewer->projectCreatePending();
+            });
+            return pending;
+        },
+        "Whether a stop-then-create is queued and has not bound yet");
+    m.def(
+        "project_embed_dataset",
+        []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.project_embed_dataset",
+                [] { lfs::core::events::cmd::ProjectEmbedDataset{}.emit(); });
+        },
+        "Embed the active project's external dataset verbatim");
     m.def(
         "project_save",
         [](const bool wait, const bool regenerate_preview) {
@@ -1131,6 +1268,70 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
+    m.def(
+        "project_get_license", []() -> std::optional<nb::dict> {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return std::nullopt;
+            }
+            auto license = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_get_to_viewer(*viewer);
+            }();
+            if (!license) {
+                throw std::runtime_error(std::format(
+                    "project_get_license failed: {}",
+                    lfs::format_for_developer(license.error())));
+            }
+            if (!license->has_value()) {
+                return std::nullopt;
+            }
+            nb::dict result;
+            result["identifier"] = (*license)->identifier;
+            result["notice"] = (*license)->notice;
+            return result;
+        },
+        "Return the license metadata for the active project, or None");
+    m.def(
+        "project_set_license",
+        [](const std::string& identifier, const std::string& notice) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_set_license failed: no visualizer is available");
+            }
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_set_to_viewer(
+                    *viewer,
+                    lfs::io::project::ProjectLicense{identifier, notice});
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_set_license failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+        },
+        nb::arg("identifier"), nb::arg("notice") = "",
+        "Set the license metadata for the active project");
+    m.def(
+        "project_clear_license", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_clear_license failed: no visualizer is available");
+            }
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_clear_to_viewer(*viewer);
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_clear_license failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+        },
+        "Clear the license metadata for the active project");
     m.def(
         "project_poll_write", []() {
             nb::dict result;
@@ -1264,6 +1465,18 @@ NB_MODULE(lichtfeld, m) {
         },
         "Return whether the active project has a bound .licht path");
     m.def(
+        "project_can_embed_dataset", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetInfo();
+            return info && info->path.has_value() &&
+                   info->dataset_external_available &&
+                   !info->embedded_dataset_complete;
+        },
+        "Return whether the active project can embed its external dataset");
+    m.def(
         "project_recent_files", []() {
             std::vector<std::string> paths;
             auto* const viewer =
@@ -1337,6 +1550,7 @@ NB_MODULE(lichtfeld, m) {
             if (master_path.empty()) {
                 return "none";
             }
+            nb::gil_scoped_release release;
             auto inspection =
                 lfs::io::project::
                     inspect_autosave_recovery(
@@ -1389,10 +1603,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_reopen_last",
         [](const bool enabled) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetReopenLastProject{
-                    .enabled = enabled}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_reopen_last",
+                [enabled] {
+                    lfs::core::events::cmd::SetReopenLastProject{
+                        .enabled = enabled}
+                        .emit();
+                });
         },
         nb::arg("enabled"),
         "Enable or disable reopening the last project at startup");
@@ -1418,13 +1635,44 @@ NB_MODULE(lichtfeld, m) {
         "project_set_auto_save_on_close",
         [](const bool enabled) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetAutoSaveOnClose{
-                    .enabled = enabled}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_auto_save_on_close",
+                [enabled] {
+                    lfs::core::events::cmd::SetAutoSaveOnClose{
+                        .enabled = enabled}
+                        .emit();
+                });
         },
         nb::arg("enabled"),
         "Enable or disable automatic project save on close");
+    m.def(
+        "project_embed_dataset_by_default_enabled", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(std::format(
+                    "project_embed_dataset_by_default_enabled failed: {}",
+                    lfs::format_for_developer(info.error())));
+            }
+            return info->embed_dataset_by_default;
+        });
+    m.def(
+        "project_set_embed_dataset_by_default",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.project_set_embed_dataset_by_default",
+                [enabled] {
+                    lfs::core::events::cmd::SetEmbedDatasetByDefault{
+                        .enabled = enabled}
+                        .emit();
+                });
+        },
+        nb::arg("enabled"),
+        "Set whether new projects copy datasets into the project by default");
     m.def(
         "project_autosave_interval_seconds", []() -> std::uint64_t {
             auto* const viewer =
@@ -1443,10 +1691,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_autosave_interval_seconds",
         [](const std::uint64_t seconds) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetProjectAutosaveInterval{
-                    .seconds = seconds}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_autosave_interval_seconds",
+                [seconds] {
+                    lfs::core::events::cmd::SetProjectAutosaveInterval{
+                        .seconds = seconds}
+                        .emit();
+                });
         },
         nb::arg("seconds"),
         "Set the timed project autosave interval in seconds; zero disables the timer trigger");
@@ -1459,7 +1710,12 @@ NB_MODULE(lichtfeld, m) {
         },
         "Remove all nodes from the scene");
     m.def(
-        "switch_to_edit_mode", []() { lfs::core::events::cmd::SwitchToEditMode{}.emit(); },
+        "switch_to_edit_mode", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.switch_to_edit_mode",
+                [] { lfs::core::events::cmd::SwitchToEditMode{}.emit(); });
+        },
         "Switch from training to edit mode");
 
     m.def(
@@ -1504,7 +1760,13 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "load_config_file",
         [](const std::string& path) {
-            lfs::core::events::cmd::LoadConfigFile{.path = python_utf8_path(path)}.emit();
+            nb::gil_scoped_release release;
+            const auto config_path = python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.load_config_file",
+                [config_path] {
+                    lfs::core::events::cmd::LoadConfigFile{.path = config_path}.emit();
+                });
         },
         nb::arg("path"), "Load a JSON configuration file.");
 
@@ -1594,18 +1856,112 @@ NB_MODULE(lichtfeld, m) {
         "Explicitly discard unsaved changes and exit.");
 
     m.def(
+        "load_gallery_scene",
+        [](const nb::list& nodes, const std::string& name, const bool hidden) {
+            if (nodes.size() == 0 || nodes.size() > 4096 || name.empty() || name.size() > 200)
+                throw std::invalid_argument("Invalid gallery scene import.");
+            lfs::core::events::cmd::LoadGalleryScene command;
+            command.group_name = name;
+            command.hidden = hidden;
+            for (const auto item : nodes) {
+                const auto node = nb::cast<nb::dict>(item);
+                const auto rows = nb::cast<std::vector<std::vector<float>>>(node["transform"]);
+                if (rows.size() != 4 || std::any_of(rows.begin(), rows.end(), [](const auto& row) { return row.size() != 4; }))
+                    throw std::invalid_argument("Invalid gallery node transform.");
+                glm::mat4 matrix{1.0f};
+                for (int row = 0; row < 4; ++row)
+                    for (int column = 0; column < 4; ++column) {
+                        if (!std::isfinite(rows[row][column]))
+                            throw std::invalid_argument("Invalid gallery node transform.");
+                        matrix[column][row] = rows[row][column];
+                    }
+                if (rows[3] != std::vector<float>{0, 0, 0, 1})
+                    throw std::invalid_argument("Gallery node transform must be affine.");
+                const int degree = nb::cast<int>(node["shDegree"]);
+                if (degree < 0 || degree > 3)
+                    throw std::invalid_argument("Invalid gallery SH degree.");
+                const auto node_name = node.contains("name") ? nb::cast<std::string>(node["name"]) : std::string{};
+                if (node_name.size() > 4096 || node_name.find('\0') != std::string::npos)
+                    throw std::invalid_argument("Invalid gallery node name.");
+                command.paths.push_back(python_utf8_path(nb::cast<std::string>(node["path"])));
+                command.names.push_back(node_name);
+                command.transforms.push_back(matrix);
+                command.sh_degrees.push_back(degree);
+            }
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_gallery_scene", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("nodes"), nb::arg("name"), nb::arg("hidden") = false,
+        "Load verified gallery nodes on the managed import worker, then attach a complete group. "
+        "Nodes contain path, affine transform and shDegree. A failed or canceled batch adds no group.");
+
+    m.def(
+        "prepare_gallery_scene",
+        [](const std::string& path, const std::string& payload_format) {
+            const int format = payload_format == "ply" ? 9 : payload_format == "sog" ? 10
+                                                         : payload_format == "ssog"  ? 11
+                                                         : payload_format == "spz"   ? 12
+                                                                                     : -1;
+            if (format < 0)
+                throw std::invalid_argument("Choose PLY, SOG, SSOG or SPZ compression.");
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_scene", [path, format] {
+                lfs::python::invoke_export(format, path, {}, 3, false, true, 4, false);
+            });
+        },
+        nb::arg("path"), nb::arg("payload_format") = "ply",
+        "Publish visible splats and appearance into a fresh native .licht file. "
+        "The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.");
+
+    m.def(
+        "prepare_gallery_project",
+        [](const std::string& source_path, const std::string& destination,
+           const std::string& payload_format, const std::string& expected_commit_uuid) {
+            using lfs::core::ExportFormat;
+            const auto format = (payload_format == "ply" || payload_format == "studio") ? ExportFormat::GALLERY_SCENE
+                                : payload_format == "sog"                               ? ExportFormat::GALLERY_SOG
+                                : payload_format == "ssog"                              ? ExportFormat::GALLERY_SSOG
+                                : payload_format == "spz"                               ? ExportFormat::GALLERY_SPZ
+                                                                                        : throw std::invalid_argument("Choose .licht, SOG, SSOG or SPZ.");
+            if (!expected_commit_uuid.empty() && !lfs::core::Uuid::from_string(expected_commit_uuid))
+                throw std::invalid_argument("Invalid expected project commit UUID.");
+            lfs::core::events::cmd::PrepareGalleryProject command{
+                .source_path = python_utf8_path(source_path),
+                .destination = python_utf8_path(destination),
+                .payload_format = format,
+                .expected_commit_uuid = expected_commit_uuid};
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_project", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("source_path"), nb::arg("destination"), nb::arg("payload_format") = "sog",
+        nb::arg("expected_commit_uuid") = "",
+        "Prepare a saved .licht project on the managed export worker without opening it in the editor. "
+        "Destination must be a fresh staging directory. Poll ui.get_export_state() for progress, errors and commit_uuid.");
+
+    m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
+           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+            if (format >= 9 && format <= 12)
+                throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance);
+                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        nb::kw_only(),
+        nb::arg("lod_levels") = 4,
+        nb::arg("lod_ratio") = 0.5f,
+        nb::arg("chunk_count_k") = 512,
+        nb::arg("chunk_extent") = 16.0f,
+        nb::arg("chunk_min_k") = 8,
+        nb::arg("kmeans_iterations") = 10,
+        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. "
+        "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");
@@ -2485,7 +2841,9 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("mode"), "Set depth-map visualization mode");
 
     m.def(
-        "set_orthographic", [](bool ortho) {
+        "set_orthographic", [](bool ortho, std::optional<double> extent_world) {
+            if (extent_world && (!ortho || !std::isfinite(*extent_world) || *extent_world <= 0.0))
+                throw nb::value_error("Orthographic extent must be positive and finite, with orthographic projection enabled");
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
@@ -2499,9 +2857,21 @@ NB_MODULE(lichtfeld, m) {
                 distance_to_pivot = glm::length(pivot - eye);
             }
 
-            rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+            if (extent_world) {
+                const float scale = static_cast<float>(viewport_height / *extent_world);
+                if (!std::isfinite(scale) || scale <= 0.0f)
+                    throw nb::value_error("Open a viewport with a representable orthographic extent");
+                auto settings = rm->getSettings();
+                settings.orthographic = true;
+                settings.ortho_scale = scale;
+                rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
+            } else {
+                rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
+            }
         },
-        nb::arg("ortho"), "Enable or disable orthographic projection");
+        nb::arg("ortho"), nb::arg("extent_world") = nb::none(), "Enable or disable orthographic projection, optionally setting its vertical world extent");
 
     // Hook registration functions (decorator-style)
     m.def(
@@ -2840,10 +3210,10 @@ NB_MODULE(lichtfeld, m) {
     // Frame callback for animations
     m.def(
         "on_frame", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_frame_callback([ocb](float dt) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_frame_callback([callback](float dt) {
                 try {
-                    ocb(dt);
+                    (*callback)(dt);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_frame_callback();
@@ -2865,10 +3235,10 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "on_scene_time", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_scene_time_callback([ocb](float clip_time) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_scene_time_callback([callback](float clip_time) {
                 try {
-                    ocb(clip_time);
+                    (*callback)(clip_time);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_scene_time_callback();
@@ -3078,11 +3448,19 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) { return lfs::io::detect_dataset_info(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::detect_dataset_info(native_path);
+        },
         nb::arg("path"), "Detect dataset information from a directory path");
     m.def(
         "is_dataset_path",
-        [](const std::string& path) { return lfs::io::Loader::isDatasetPath(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::Loader::isDatasetPath(native_path);
+        },
         nb::arg("path"), "Check whether a path can be treated as a dataset source");
 
     nb::class_<lfs::core::CheckpointHeader>(m, "CheckpointHeader", "Information from a checkpoint file header")

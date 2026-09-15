@@ -100,6 +100,16 @@ void main(
     float2 xy = read_t2_float2(primitive_idx, xy_vs);
     float4 inv_cov_opac = read_t4_float4(primitive_idx, inv_cov_vs_opacity);
 
+    if (uniforms.splat_render_profile == 1u &&
+        is_gut_projection_mode(uniforms.camera_model) && !(uniforms.lod_enabled & 4u)) {
+        // The vertex pass counts tiles using an ellipse enclosing the capped
+        // portal quad. Emit that same ellipse; the stored inverse covariance
+        // remains uncapped for the fragment shader's ray and quad evaluation.
+        const uint camera_height = uniforms.camera_height == 0 ? image_height : uniforms.camera_height;
+        const uint camera_width = uniforms.camera_width == 0 ? image_width : uniforms.camera_width;
+        inv_cov_opac.xyz = portal_gut_bin_inverse(inv_cov_opac.xyz, camera_width, camera_height);
+    }
+
     float extend = extend_from_opacity(inv_cov_opac.w);
     float3 inv_cov = inv_cov_opac.xyz / (extend*extend);
 #endif  // TILE_CULLING_MODE > 0

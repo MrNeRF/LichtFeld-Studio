@@ -6,11 +6,14 @@
 
 add_library(lfs_logger SHARED
     ../logger.cpp
+    ../environment.cpp
 )
 
 target_include_directories(lfs_logger
     PUBLIC
         ${CMAKE_SOURCE_DIR}/src/core/include
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(lfs_logger

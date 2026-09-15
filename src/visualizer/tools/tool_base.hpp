@@ -23,7 +23,8 @@ class Viewport;
 
 namespace lfs::vis::gui {
     struct UIContext;
-}
+    class GuiManager;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis {
 
@@ -51,17 +52,20 @@ namespace lfs::vis {
     // Concrete context passed to tools for accessing visualizer resources
     class ToolContext {
     public:
-        ToolContext(RenderingManager* rm, SceneManager* sm, const Viewport* vp, SDL_Window* win)
+        ToolContext(RenderingManager* rm, SceneManager* sm, const Viewport* vp, SDL_Window* win,
+                    gui::GuiManager* gm = nullptr)
             : rendering_manager(rm),
               scene_manager(sm),
               viewport(vp),
-              window(win) {}
+              window(win),
+              gui_manager(gm) {}
 
         // Direct access to components
         RenderingManager* getRenderingManager() const { return rendering_manager; }
         SceneManager* getSceneManager() const { return scene_manager; }
         const Viewport& getViewport() const { return *viewport; }
         SDL_Window* getWindow() const { return window; }
+        gui::GuiManager* getGuiManager() const { return gui_manager; }
         const ViewportBounds& getViewportBounds() const { return viewport_bounds_; }
 
         // Update viewport bounds (called by GUI manager)
@@ -83,6 +87,7 @@ namespace lfs::vis {
         SceneManager* scene_manager;
         const Viewport* viewport;
         SDL_Window* window;
+        gui::GuiManager* gui_manager;
         ViewportBounds viewport_bounds_;
     };
 

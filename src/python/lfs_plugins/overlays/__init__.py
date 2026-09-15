@@ -7,6 +7,7 @@ import lichtfeld as lf
 from ..ui import RuntimeState
 
 from .. import toolbar as viewport_toolbar
+from ..gallery_transfer_overlay import GalleryTransferOverlay
 
 try:
     from ..ui.store import native_value as _native_store_value
@@ -36,9 +37,13 @@ _GAP_LENGTH = 8.0
 _BORDER_THICKNESS = 2.0
 _ICON_SIZE = 48.0
 _ANIM_SPEED = 30.0
-_EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 15.0  # marching-ants pacing; ~2px/frame at _ANIM_SPEED=30
+_EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 60.0
+_EMPTY_STATE_ANIMATION_IDLE_TIMEOUT = 3.0
 _MIN_VIEWPORT_SIZE = 200.0
 _AUTO_DISMISS_DELAY = 3.0
+
+_empty_state_animation_until = 0.0
+_empty_state_last_mouse_pos = None
 
 _OVERLAY_FLAGS = (
     lf.ui.UILayout.WindowFlags.NoTitleBar
@@ -93,6 +98,7 @@ def _get_video_state():
 
 class _OverlayDocumentController:
     def __init__(self):
+        self.gallery_transfers = GalleryTransferOverlay()
         self.reset()
 
     def reset(self):
@@ -101,6 +107,7 @@ class _OverlayDocumentController:
         self._video_state = {}
         self._last_import_signature = None
         self._last_video_signature = None
+        self.gallery_transfers.reset()
         viewport_toolbar.reset_overlay_state()
 
     def update(self, doc=None):
@@ -174,6 +181,9 @@ class _OverlayDocumentController:
 
         toolbar_sources = viewport_toolbar.update_overlay(doc) or []
         dirty_sources.extend(f"toolbar.{source}" for source in toolbar_sources)
+        if self.gallery_transfers.update():
+            dirty_sources.append("gallery_transfers")
+            status_dirty = True
 
         if status_dirty:
             self._handle.dirty_all()
@@ -229,6 +239,7 @@ class _OverlayDocumentController:
         model.bind_func("video_cancel_label", lambda: lf.ui.tr("common.cancel"))
 
         viewport_toolbar.bind_overlay_model(model)
+        self.gallery_transfers.bind_model(model)
 
         model.bind_event("overlay_action", self._on_overlay_action)
         self._handle = model.get_handle()
@@ -328,10 +339,16 @@ class _OverlayDocumentController:
 
 
 def _draw_empty_state_overlay(layout):
+    global _empty_state_animation_until, _empty_state_last_mouse_pos
+
     if not lf.ui.is_scene_empty() or lf.ui.is_drag_hovering() or lf.ui.is_startup_visible():
+        _empty_state_animation_until = 0.0
+        _empty_state_last_mouse_pos = None
         return
     import_state = _get_import_state()
     if import_state.get("active", False) or import_state.get("show_completion", False):
+        _empty_state_animation_until = 0.0
+        _empty_state_last_mouse_pos = None
         return
 
     vp_x, vp_y = layout.get_viewport_pos()
@@ -360,7 +377,15 @@ def _draw_empty_state_overlay(layout):
     zone_max_x = vp_x + vp_w - _ZONE_PADDING
     zone_max_y = vp_y + vp_h - _viewport_bottom_inset(layout, _ZONE_PADDING)
 
-    dash_offset = (lf.ui.get_time() * _ANIM_SPEED) % (_DASH_LENGTH + _GAP_LENGTH)
+    now = lf.ui.get_time()
+    mouse_pos = lf.ui.get_mouse_screen_pos()
+    if (_empty_state_last_mouse_pos is not None and
+            (abs(mouse_pos[0] - _empty_state_last_mouse_pos[0]) > 0.5 or
+             abs(mouse_pos[1] - _empty_state_last_mouse_pos[1]) > 0.5)):
+        _empty_state_animation_until = now + _EMPTY_STATE_ANIMATION_IDLE_TIMEOUT
+    _empty_state_last_mouse_pos = mouse_pos
+    animating = now < _empty_state_animation_until
+    dash_offset = (now * _ANIM_SPEED) % (_DASH_LENGTH + _GAP_LENGTH) if animating else 0.0
 
     def draw_dashed_line(start_x, start_y, end_x, end_y):
         dx = end_x - start_x
@@ -436,7 +461,8 @@ def _draw_empty_state_overlay(layout):
     layout.draw_window_text(center_x - hint_w * 0.5, center_y + 70.0, hint, hint_color)
 
     layout.end_window()
-    lf.ui.request_redraw(delay=_EMPTY_STATE_REDRAW_INTERVAL)
+    if animating:
+        lf.ui.request_redraw(delay=_EMPTY_STATE_REDRAW_INTERVAL)
 
 
 def _draw_drag_drop_overlay(layout):
@@ -558,6 +584,11 @@ def sync_document(doc=None):
     if not _hook_registered:
         return False
     return _sync_viewport_overlay_document(doc)
+
+
+def show_gallery_transfers():
+    _sync_viewport_overlay_document()
+    _document_controller.gallery_transfers.show()
 
 
 def _draw_viewport_overlay(layout):

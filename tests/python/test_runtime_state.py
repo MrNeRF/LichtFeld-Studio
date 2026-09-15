@@ -118,6 +118,9 @@ class TestRuntimeState:
         RuntimeState.trainer_state.value = "running"
         assert RuntimeState.can_start_training.value is False
 
+        RuntimeState.trainer_state.value = "starting"
+        assert RuntimeState.can_start_training.value is False
+
 
 class TestRuntimeStateSubscription:
     """RuntimeState fields keep the signal subscription contract."""

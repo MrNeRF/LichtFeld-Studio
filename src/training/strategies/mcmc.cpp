@@ -4,13 +4,17 @@
 
 #include "mcmc.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -176,6 +180,10 @@ namespace lfs::training {
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
         ensure_densification_info_shape_inplace(
             _splat_data->_densification_info, n, _splat_data->means().device());
+        if (_params) {
+            ensure_max_screen_share_shape(*_splat_data, n, reserve);
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
 
         const size_t prev_n = _error_score_max.is_valid() ? _error_score_max.numel() : 0;
         ensure_score_buffer_inplace(
@@ -213,7 +221,9 @@ namespace lfs::training {
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::relocate_gs");
         using namespace lfs::core;
@@ -371,9 +381,8 @@ namespace lfs::training {
                 opacity_dim,
                 N);
 
-            // Swizzled shN gather: at each dst primitive (dead_indices[i]) write the
-            // shN slot of src primitive (sampled_idxs[i]). Use in-swizzled-domain copies
-            // so _shN's reserved capacity is preserved (no realloc).
+            // Copy sampled shN onto dead slots. q16 stays packed: gather-decode
+            // the source rows and re-encode only the dest 256-splat blocks.
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
                 _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
                 using namespace lfs::core;
@@ -381,19 +390,10 @@ namespace lfs::training {
                 const size_t n_pairs = dead_indices.numel();
                 Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
                                               _splat_data->shN().device());
-                shN_swizzled_gather_to_linear_i64(
-                    _splat_data->shN().ptr<float>(),
-                    sampled_idxs.ptr<int64_t>(),
-                    staged.ptr<float>(),
-                    n_pairs,
-                    layout_rest,
-                    layout_rest);
-                auto dead_i32 = dead_indices.dtype() == DataType::Int32
-                                    ? dead_indices
-                                    : dead_indices.to(DataType::Int32);
-                shN_swizzled_scatter_linear(
-                    _splat_data->shN().ptr<float>(), dead_i32.ptr<int>(),
-                    staged.ptr<float>(), n_pairs, layout_rest, layout_rest);
+                lfs::training::sh_value::gather_shN_to_canonical(
+                    *_splat_data, sampled_idxs, staged);
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, dead_indices, staged);
             }
         }
 
@@ -419,7 +419,9 @@ namespace lfs::training {
         LOG_TIMER("MCMC::add_new_gs");
         LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::add_new_gs");
 
@@ -579,7 +581,9 @@ namespace lfs::training {
     int MCMC::add_new_gs_with_indices_test(const lfs::core::Tensor& sampled_idxs) {
         LOG_TIMER("MCMC::add_new_gs_with_indices_test");
         using namespace lfs::core;
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::add_new_gs_with_indices_test");
 
@@ -731,6 +735,10 @@ namespace lfs::training {
 
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
+            _splat_data->_max_screen_share = lfs::core::Tensor::empty({0});
+            if (_params) {
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
             _error_score_max = lfs::core::Tensor::empty({0});
             _error_score_windows = 0;
         }
@@ -756,6 +764,35 @@ namespace lfs::training {
 
         // Refine Gaussians
         if (is_refining(iter)) {
+            if (_splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() > 0) {
+                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                                   "wait fused adam before screen-share mutate");
+            }
+            const size_t n_clip = static_cast<size_t>(_splat_data->size());
+            if (_params && screen_share_cap_active(_params->max_screen_share) &&
+                _splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() == n_clip) {
+                auto& log_scales = _splat_data->scaling_raw();
+                assert(log_scales.shape()[0] == n_clip && log_scales.shape()[1] == 3);
+                const bool* frozen = nullptr;
+                size_t frozen_n = 0;
+                if (_optimizer) {
+                    const auto& mask = _optimizer->frozen_mask();
+                    if (mask.is_valid()) {
+                        frozen = mask.ptr<bool>();
+                        frozen_n = mask.numel();
+                    }
+                }
+                kernels::launch_clip_log_scale_by_screen_share(
+                    log_scales.ptr<float>(),
+                    _splat_data->_max_screen_share.ptr<float>(),
+                    frozen,
+                    frozen_n,
+                    _params->max_screen_share,
+                    n_clip);
+            }
+
             const int n_relocated = relocate_gs();
             if (n_relocated > 0) {
                 LOG_DEBUG("MCMC: Relocated {} dead Gaussians at iteration {}", n_relocated, iter);
@@ -791,6 +828,12 @@ namespace lfs::training {
             ensure_densification_info_shape_inplace(
                 _splat_data->_densification_info, n, _splat_data->means().device());
             _splat_data->_densification_info.zero_();
+            if (_params) {
+                const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+                ensure_max_screen_share_shape(*_splat_data, n, cap);
+                _splat_data->_max_screen_share.zero_();
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
         }
 
         // Inject noise to positions every iteration
@@ -863,6 +906,13 @@ namespace lfs::training {
         LOG_DEBUG("MCMC: soft-deleted {} Gaussians (rotation and optimizer state zeroed)", n_remove);
     }
 
+    void MCMC::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        if (_splat_data) {
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
+    }
+
     void MCMC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         using namespace lfs::core;
 
@@ -885,6 +935,8 @@ namespace lfs::training {
                 // releases the freed chunk — so only replace if the param's capacity is actually
                 // below the target.
                 auto ensure_capacity_direct = [capacity](Tensor& param) {
+                    LFS_ASSERT_MSG(param.dtype() == DataType::Float32,
+                                   "MCMC training parameter must be Float32");
                     if (param.capacity() >= capacity)
                         return;
                     // GUI exportable tensors grow with live N.
@@ -896,17 +948,25 @@ namespace lfs::training {
                     param = std::move(new_param);
                 };
 
-                // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
                 const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
-                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
-                    if (param.capacity() >= cap_floats)
+                const bool shN_quantized = _splat_data->shN_value_quantized();
+                auto ensure_shN_capacity_direct = [capacity, layout_rest, shN_quantized](Tensor& param) {
+                    const auto expected_dtype = shN_quantized ? DataType::Float16 : DataType::Float32;
+                    LFS_ASSERT_MSG(param.dtype() == expected_dtype,
+                                   "MCMC shN dtype does not match its storage representation");
+                    const size_t required_capacity =
+                        shN_quantized
+                            ? lfs::core::sh_value_quant::sh_value_u16_count(capacity, layout_rest)
+                            : lfs::core::sh_swizzled_float_count(capacity, layout_rest);
+                    if (param.capacity() >= required_capacity)
                         return;
                     if (param.is_external_storage())
                         return;
-                    auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
-                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                               param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                    auto new_param = Tensor::zeros_direct(
+                        param.shape(), required_capacity, Device::CUDA, param.dtype());
+                    cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
+                               param.numel() * dtype_size(param.dtype()),
+                               cudaMemcpyDeviceToDevice);
                     param = std::move(new_param);
                 };
 

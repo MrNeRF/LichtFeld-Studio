@@ -24,11 +24,9 @@ using namespace lfs::core;
 
 namespace {
 
-    void require_cuda() {
+    [[nodiscard]] bool has_cuda_device() {
         int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count != 0;
     }
 
     Tensor retag_external(Tensor tensor, std::string kind) {
@@ -88,10 +86,8 @@ namespace {
         return std::filesystem::path(PROJECT_ROOT_PATH) / "gd.ply";
     }
 
-    void skip_if_missing_gd_ply() {
-        if (!std::filesystem::exists(gd_ply_path())) {
-            GTEST_SKIP() << "Missing test asset: " << gd_ply_path();
-        }
+    [[nodiscard]] bool gd_ply_exists() {
+        return std::filesystem::exists(gd_ply_path());
     }
 
     SplatData load_ply_q16(std::vector<AllocCall>& calls) {
@@ -146,8 +142,12 @@ namespace {
 } // namespace
 
 TEST(PlyQ16StreamedEncode, GdPlyMatchesSingleShotAndSkipsFloatShN) {
-    require_cuda();
-    skip_if_missing_gd_ply();
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    if (!gd_ply_exists()) {
+        GTEST_SKIP() << "Missing test asset: " << gd_ply_path();
+    }
 
     std::vector<AllocCall> calls_single_shot;
     SplatData single_shot = load_ply_then_quant(calls_single_shot);
@@ -164,8 +164,12 @@ TEST(PlyQ16StreamedEncode, GdPlyMatchesSingleShotAndSkipsFloatShN) {
 }
 
 TEST(PlyQ16StreamedEncode, BandBoundaryMatchesSingleShot) {
-    require_cuda();
-    skip_if_missing_gd_ply();
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    if (!gd_ply_exists()) {
+        GTEST_SKIP() << "Missing test asset: " << gd_ply_path();
+    }
 
     std::vector<AllocCall> calls_single_shot;
     SplatData single_shot = load_ply_then_quant(calls_single_shot);

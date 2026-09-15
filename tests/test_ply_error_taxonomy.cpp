@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/alloc_counter.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -798,3 +799,99 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(PlyErrorTaxonomyTest, ExportRepairsInfiniteOpacityWithoutChangingSourceOrAllocatingVram) {
+    using namespace lfs::core;
+    const float inf = std::numeric_limits<float>::infinity();
+    const std::vector<float> original{inf, -inf, 16.85f, -30.0f};
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        for (const bool binary : {true, false}) {
+            PointCloud pc;
+            pc.means = Tensor::zeros({4, 3}, device);
+            pc.opacity = Tensor::from_vector(original, {4, 1}, device);
+            const auto output = path("infinite_export.ply");
+            const auto allocations_before = alloc_counter::snapshot();
+            const auto saved = lfs::io::save_ply(pc, {.output_path = output, .binary = binary});
+            ASSERT_TRUE(saved.has_value()) << saved.error().format();
+            EXPECT_EQ(alloc_counter::delta_since(allocations_before), 0u)
+                << "Opacity repair must not allocate VRAM, including transient driver allocations";
+            const auto unchanged = pc.opacity.cpu().to_vector();
+            EXPECT_EQ(unchanged, original);
+            // Inspect the serialized values, without relying on the importer's repair.
+            std::ifstream stream(output, std::ios::binary);
+            std::string line;
+            size_t columns = 0, opacity_column = 0;
+            while (std::getline(stream, line) && line != "end_header") {
+                if (line.starts_with("property ")) {
+                    if (line == "property float opacity")
+                        opacity_column = columns;
+                    ++columns;
+                }
+            }
+            ASSERT_GT(columns, opacity_column);
+            for (size_t row = 0; row < original.size(); ++row) {
+                float value = 0.0f;
+                for (size_t col = 0; col < columns; ++col) {
+                    if (binary)
+                        stream.read(reinterpret_cast<char*>(&value), sizeof(value));
+                    else
+                        stream >> value;
+                    ASSERT_TRUE(stream.good());
+                    if (col == opacity_column) {
+                        ASSERT_TRUE(std::isfinite(value));
+                        EXPECT_NEAR(value, row < 2 ? std::copysign(20.0f, original[row]) : original[row], 1e-5f);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(PlyErrorTaxonomyTest, ExportStillRejectsNaNOpacityAndInfinitePositions) {
+    using namespace lfs::core;
+    for (const bool bad_opacity : {true, false}) {
+        PointCloud pc;
+        pc.means = Tensor::zeros({1, 3}, Device::CPU);
+        pc.opacity = Tensor::from_vector(std::vector<float>{std::numeric_limits<float>::infinity()}, {1, 1}, Device::CPU);
+        if (bad_opacity)
+            pc.opacity.ptr<float>()[0] = std::numeric_limits<float>::quiet_NaN();
+        else
+            pc.means.ptr<float>()[0] = std::numeric_limits<float>::infinity();
+        const auto output = path("invalid_export.ply");
+        const auto saved = lfs::io::save_ply(pc, {.output_path = output, .binary = true});
+        ASSERT_FALSE(saved.has_value());
+        EXPECT_NE(saved.error().format().find(bad_opacity ? "PointCloud.opacity" : "PointCloud.means"), std::string::npos);
+        EXPECT_FALSE(fs::exists(output));
+    }
+}
+
+TEST_F(PlyErrorTaxonomyTest, SplatExportRepairsOpacityAfterDeletedRowFiltering) {
+    using namespace lfs::core;
+    std::string body;
+    for (int i = 0; i < 4; ++i)
+        append_gaussian_row(body, float(i), -2.0f, 0.0f, 1.0f);
+    const auto input = path("splat_export_input.ply");
+    write_binary_file(input, make_binary_header(4, gaussian_properties_with_dc()), body);
+    auto loaded = lfs::io::load_ply(input, cpu_splat_load_options());
+    ASSERT_TRUE(loaded.has_value());
+    auto& splat = loaded->value;
+    const float inf = std::numeric_limits<float>::infinity();
+    const std::vector<float> original{inf, -inf, 16.85f, std::numeric_limits<float>::quiet_NaN()};
+    splat.opacity_raw() = Tensor::from_vector(original, {4, 1}, Device::CPU);
+    splat.deleted() = Tensor::from_vector(std::vector<bool>{false, false, false, true}, {4}, Device::CPU);
+    const auto output = path("splat_export_output.ply");
+    const auto saved = lfs::io::save_ply(splat, {.output_path = output, .binary = true});
+    ASSERT_TRUE(saved.has_value()) << saved.error().format();
+    auto roundtrip = lfs::io::load_ply(output, cpu_splat_load_options());
+    ASSERT_TRUE(roundtrip.has_value()) << lfs::format_for_developer(roundtrip.error());
+    const auto values = opacity_values(roundtrip->value);
+    ASSERT_EQ(values.size(), 3u);
+    EXPECT_NEAR(values[0], 20.0f, 1e-5f);
+    EXPECT_NEAR(values[1], -20.0f, 1e-5f);
+    EXPECT_NEAR(values[2], 16.85f, 1e-5f);
+    const auto unchanged = splat.opacity_raw().to_vector();
+    EXPECT_EQ(unchanged[0], inf);
+    EXPECT_EQ(unchanged[1], -inf);
+    EXPECT_FLOAT_EQ(unchanged[2], original[2]);
+    EXPECT_TRUE(std::isnan(unchanged[3]));
+}

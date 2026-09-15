@@ -1,52 +1,24 @@
 {
-  "schema_version": 1,
-  "themes": [
+  "schema_version": 2,
+  "families": [
     {
-      "id": "dark",
-      "file": "dark.json",
-      "fallback": "dark",
-      "label_key": "menu.view.theme.dark",
-      "mode": "dark",
+      "file": "lichtfeld.json",
       "order": 10
     },
     {
-      "id": "light",
-      "file": "light.json",
-      "fallback": "light",
-      "label_key": "menu.view.theme.light",
-      "mode": "light",
+      "file": "signal.json",
       "order": 20
     },
     {
-      "id": "gruvbox",
       "file": "gruvbox.json",
-      "fallback": "gruvbox",
-      "label_key": "menu.view.theme.gruvbox",
-      "mode": "dark",
       "order": 30
     },
     {
-      "id": "catppuccin_mocha",
-      "file": "catppuccin_mocha.json",
-      "fallback": "catppuccin_mocha",
-      "label_key": "menu.view.theme.catppuccin_mocha",
-      "mode": "dark",
+      "file": "catppuccin.json",
       "order": 40
     },
     {
-      "id": "catppuccin_latte",
-      "file": "catppuccin_latte.json",
-      "fallback": "catppuccin_latte",
-      "label_key": "menu.view.theme.catppuccin_latte",
-      "mode": "light",
-      "order": 50
-    },
-    {
-      "id": "nord",
       "file": "nord.json",
-      "fallback": "nord",
-      "label_key": "menu.view.theme.nord",
-      "mode": "dark",
       "order": 60
     }
   ]

@@ -5,6 +5,7 @@
 #include "core/session_breadcrumb.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "core/utc_time.hpp"
 
@@ -58,8 +59,8 @@ namespace lfs::core {
 
         std::optional<SessionBreadcrumb> decode_record(const fs::path& path) {
             try {
-                std::ifstream input(path);
-                if (!input)
+                std::ifstream input;
+                if (!open_file_for_read(path, input))
                     return std::nullopt;
                 json value;
                 input >> value;
@@ -92,8 +93,8 @@ namespace lfs::core {
         }
 
         std::string read_log_tail(const fs::path& path) {
-            std::ifstream input(path, std::ios::binary | std::ios::ate);
-            if (!input)
+            std::ifstream input;
+            if (!open_file_for_read(path, std::ios::binary | std::ios::ate, input))
                 return {};
             const auto end = input.tellg();
             if (end <= 0)
@@ -119,7 +120,7 @@ namespace lfs::core {
         bool snapshot_previous_log(const std::string& live_log_path) {
             if (live_log_path.empty())
                 return false;
-            const std::string tail = read_log_tail(fs::path(live_log_path));
+            const std::string tail = read_log_tail(utf8_to_path(live_log_path));
             if (tail.empty())
                 return false;
             return write_atomically(snapshot_path(), tail);
@@ -134,7 +135,7 @@ namespace lfs::core {
             if (previous_record && !previous_record->clean_exit) {
                 try {
                     if (snapshot_previous_log(previous_record->log_path))
-                        previous_record->log_path = snapshot_path().string();
+                        previous_record->log_path = path_to_utf8(snapshot_path());
                     else
                         previous_record->log_path.clear();
                 } catch (...) {
@@ -152,7 +153,7 @@ namespace lfs::core {
             current_record = SessionBreadcrumb{
                 .pid = process_id(),
                 .started_at = utc_now(),
-                .log_path = live_log_path.string(),
+                .log_path = path_to_utf8(live_log_path),
                 .clean_exit = false,
             };
             static_cast<void>(write_record(breadcrumb_path(), *current_record));

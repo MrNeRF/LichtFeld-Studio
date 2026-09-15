@@ -206,6 +206,23 @@ namespace lfs::vis {
         EXPECT_EQ(toggle_split_count, 1);
     }
 
+    TEST_F(InputControllerFocusTest, EscapeWithScenePanelFocusStaysWithGui) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        controller.handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        EXPECT_FALSE(router.isViewportKeyboardFocused());
+    }
+
     TEST_F(InputControllerFocusTest, ProgrammaticViewportFocusAllowsViewportHotkeys) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -1391,12 +1408,82 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 25"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 29"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
+        EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
+        EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
 
         persisted.close();
         std::filesystem::remove_all(root, filesystem_error);
+    }
+
+    TEST_F(InputControllerFocusTest, WindowProfileMigratesWithoutReusingWindowActionIds) {
+        const auto path = std::filesystem::temp_directory_path() / "lfs_keymap_v28.json";
+        {
+            std::ofstream file(path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({"name":"Legacy","version":28,"bindings":[
+                {"mode":1,"action":85,"trigger_type":"scroll","modifiers":5},
+                {"mode":1,"action":86,"trigger_type":"drag","button":0,"modifiers":5},
+                {"mode":0,"action":87,"trigger_type":"key","key":71,"modifiers":2},
+                {"mode":0,"action":88,"trigger_type":"key","key":71,"modifiers":3},
+                {"mode":0,"action":81,"trigger_type":"key","key":294,"modifiers":0}
+            ]})";
+        }
+        using namespace input;
+        InputBindings bindings;
+        ASSERT_TRUE(bindings.loadProfileFromFile(path));
+        EXPECT_TRUE(bindings.getBindingsForMode(ToolMode::SELECTION).empty());
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_G, MODIFIER_CTRL), Action::GROUP_SELECTED_SCENE_NODES);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_G, MODIFIER_CTRL | MODIFIER_SHIFT), Action::UNGROUP_SELECTED_SCENE_NODE);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::TOGGLE_GRID);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::ASSET_GALLERY_PRIMARY);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT), Action::ASSET_GALLERY_COPY_LINK);
+        bindings.clearBinding(ToolMode::GLOBAL, Action::ASSET_GALLERY_PRIMARY);
+        ASSERT_TRUE(bindings.saveProfileToFile(path));
+        ASSERT_TRUE(bindings.loadProfileFromFile(path));
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::NONE);
+        std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentySevenDistinguishesWindowAndGalleryProfiles) {
+        const auto path = std::filesystem::temp_directory_path() / "lfs_keymap_v27.json";
+        using namespace input;
+        InputBindings bindings;
+        {
+            std::ofstream file(path);
+            file << R"({"name":"Legacy","version":27,"bindings":[
+                {"mode":1,"action":85,"description":"Window size","trigger_type":"scroll","modifiers":5},
+                {"mode":1,"action":86,"description":"Window drag","trigger_type":"drag","button":0,"modifiers":5}
+            ]})";
+        }
+        ASSERT_TRUE(bindings.loadProfileFromFile(path));
+        EXPECT_TRUE(bindings.getBindingsForMode(ToolMode::SELECTION).empty());
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::ASSET_GALLERY_PRIMARY);
+        {
+            std::ofstream file(path);
+            file << R"({"name":"Unbound","version":27,"bindings":[]})";
+        }
+        ASSERT_TRUE(bindings.loadProfileFromFile(path));
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::NONE);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::NONE);
+        std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerFocusTest, GalleryActionsHaveRebindableNativeDefaults) {
+        using namespace input;
+        InputBindings bindings;
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::ASSET_GALLERY_PRIMARY);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT), Action::ASSET_GALLERY_COPY_LINK);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::ASSET_REFRESH);
+        EXPECT_EQ(actionFromName("asset_refresh"), Action::ASSET_REFRESH);
+        bindings.setBinding(ToolMode::GLOBAL, Action::ASSET_REFRESH, KeyTrigger{KEY_F6, MODIFIER_CTRL});
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F6, MODIFIER_CTRL), Action::ASSET_REFRESH);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::NONE);
+        bindings.clearBinding(ToolMode::GLOBAL, Action::ASSET_REFRESH);
+        EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F6, MODIFIER_CTRL), Action::NONE);
     }
 
     TEST_F(InputControllerFocusTest, McpRuntimeShortcutsDispatchDuringPythonCapture) {
@@ -1850,6 +1937,48 @@ namespace lfs::vis {
         EXPECT_NEAR(glm::distance(viewport.camera.t, start_t), 0.0f, 1e-6f);
         for (int col = 0; col < 3; ++col) {
             EXPECT_NEAR(glm::distance(viewport.camera.R[col], start_r[col]), 0.0f, 1e-6f);
+        }
+    }
+
+    TEST_F(InputControllerFocusTest, SetPivotCentersSharedComparisonCamera) {
+        for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::PLYComparison,
+                                SplitViewMode::IndependentDual}) {
+            for (const double click_x : {60.0, 160.0}) {
+                SCOPED_TRACE(static_cast<int>(mode));
+                SCOPED_TRACE(click_x);
+                Viewport primary(200, 200);
+                InputController controller(nullptr, primary);
+                RenderingManager rendering;
+                services().set(&rendering);
+                controller.updateViewportBounds(0, 0, 200, 200);
+                rendering.restoreSplitViewMode(mode, primary);
+                auto& target = rendering.resolvePanelViewport(
+                    primary, mode == SplitViewMode::IndependentDual && click_x > 100
+                                 ? SplitViewPanelId::Right
+                                 : SplitViewPanelId::Left);
+                target.camera.R = glm::mat3(1.0f);
+                target.camera.t = glm::vec3(0.0f, 0.0f, -5.0f);
+                target.camera.pivot = glm::vec3(0.0f);
+                // Exercise the normal right-button double click binding.
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_PRESS, click_x, 80.0);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_RELEASE, click_x, 80.0);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_PRESS, click_x, 80.0);
+                ASSERT_TRUE(target.camera.isGliding());
+                target.camera.finishGlide();
+                // Centering a perspective orbit pivot puts it on the camera's
+                // forward axis, regardless of which side of the wipe was clicked.
+                const auto direction = glm::transpose(target.camera.R) *
+                                       (target.camera.pivot - target.camera.t);
+                EXPECT_NEAR(direction.x, 0.0f, 1e-5f);
+                EXPECT_NEAR(direction.y, 0.0f, 1e-5f);
+                EXPECT_NEAR(glm::length(direction), 5.0f, 1e-5f);
+                controller.handleMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                             input::ACTION_RELEASE, click_x, 80.0);
+                services().clear();
+            }
         }
     }
 

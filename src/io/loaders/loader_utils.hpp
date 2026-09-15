@@ -13,13 +13,38 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <format>
 #include <glm/glm.hpp>
+#include <map>
 #include <memory>
 #include <random>
 #include <span>
 #include <vector>
 
 namespace lfs::io {
+
+    // Collected from admission probes. Source/image sizes do not depend on
+    // training resize settings; COLMAP merges its per-camera records serially.
+    struct PriorResolutionSummary {
+        std::map<std::array<int, 4>, std::array<size_t, 2>> counts;
+
+        void add(const std::array<int, 4>& sizes, const bool normal) {
+            if (sizes[0] > 0 && (sizes[0] != sizes[2] || sizes[1] != sizes[3]))
+                ++counts[sizes][normal ? 1 : 0];
+        }
+
+        void log() const {
+            std::string summary;
+            for (const auto& [sizes, count] : counts) {
+                if (!summary.empty())
+                    summary += "; ";
+                summary += std::format("{} depth maps / {} normal maps are {}x{} while the images are {}x{}; resampled to the training size",
+                                       count[0], count[1], sizes[0], sizes[1], sizes[2], sizes[3]);
+            }
+            if (!summary.empty())
+                LOG_INFO("{}", summary);
+        }
+    };
 
     inline bool detect_camera_alpha(const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
                                     const CancelCallback& cancel_requested = nullptr) {

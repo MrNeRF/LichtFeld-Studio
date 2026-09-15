@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
 
@@ -74,6 +75,56 @@ namespace {
     }
 
 } // namespace
+
+TEST(SelectionMaskNormalizationTest, MatchesReferenceForSoftDeletedGroupedMillionRowScene) {
+    constexpr size_t kRows = 1'000'000;
+    lfs::core::Scene scene;
+    auto model = make_test_splat(std::vector<float>(kRows * 3, 0.0f));
+    ASSERT_NE(scene.addSplat("synthetic", std::move(model)), lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addSelectionGroup("Group 2", glm::vec3(0.0f)), 0);
+
+    auto mask_cpu = Tensor::zeros({kRows}, Device::CPU, DataType::UInt8);
+    auto deleted_cpu = Tensor::zeros({kRows}, Device::CPU, DataType::Bool);
+    auto* const mask_data = mask_cpu.ptr<uint8_t>();
+    auto* const deleted_data = deleted_cpu.ptr<bool>();
+    for (size_t i = 0; i < kRows; ++i) {
+        mask_data[i] = (i % 3 == 0) ? 1 : ((i % 3 == 1) ? 2 : 0);
+        deleted_data[i] = (i % 7 == 0);
+    }
+
+    auto* const node = scene.getNode("synthetic");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.cuda()).is_valid());
+
+    const auto input = mask_cpu.cuda();
+    const auto live = node->model->deleted().logical_not().to(Device::CUDA).to(DataType::UInt8);
+    const auto expected = input.where(
+        live.ne(0), Tensor::zeros({kRows}, Device::CUDA, DataType::UInt8));
+    const auto expected_count = expected.count_nonzero();
+
+    scene.setSelectionMask(std::make_shared<Tensor>(input));
+    const auto actual = scene.getSelectionMask();
+    ASSERT_NE(actual, nullptr);
+    EXPECT_EQ(actual->cpu().to_vector_uint8(), expected.cpu().to_vector_uint8());
+    EXPECT_EQ(scene.selectedCount(), expected_count);
+
+    scene.updateSelectionGroupCounts();
+    size_t expected_group_one = 0;
+    size_t expected_group_two = 0;
+    for (size_t i = 0; i < kRows; ++i) {
+        if (deleted_data[i]) {
+            continue;
+        }
+        if (mask_data[i] == 1) {
+            ++expected_group_one;
+        } else if (mask_data[i] == 2) {
+            ++expected_group_two;
+        }
+    }
+    EXPECT_EQ(scene.getSelectionGroup(1)->count, expected_group_one);
+    EXPECT_EQ(scene.getSelectionGroup(2)->count, expected_group_two);
+}
 
 class SelectionServiceInteractionsTest : public ::testing::Test {
 protected:
@@ -481,4 +532,49 @@ TEST_F(SelectionServiceInteractionsTest, CommandRingSelectionUsesHoveredGaussian
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.affected_count, 1u);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillAppliesDepthFilter) {
+    ASSERT_NE(scene_manager_->getScene().addSplat(
+                  "right",
+                  make_test_splat({
+                      5.0f,
+                      0.0f,
+                      0.0f,
+                  })),
+              lfs::core::NULL_NODE);
+    EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
+
+    auto settings = rendering_manager_->getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    settings.crop_filter_for_selection = false;
+    settings.depth_filter_enabled = true;
+    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
+    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
+    rendering_manager_->updateSettings(settings);
+    ASSERT_TRUE(rendering_manager_->isPLYComparisonActive());
+
+    const auto result = service_->selectAllFiltered();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.affected_count, 1u);
+    // A silent comparison no-op would keep every gaussian. The depth window
+    // only contains the origin point of the first node.
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 0}));
+    EXPECT_TRUE(scene_manager_->getScene().hasPreparedCombinedModel());
+}
+
+TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {
+    scene_manager_->getScene().addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
+    auto settings = rendering_manager_->getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    rendering_manager_->updateSettings(settings);
+    const auto positions = service_->getScreenPositions();
+    ASSERT_NE(positions, nullptr);
+    ASSERT_EQ(positions->numel(), 6u);
+    const auto values = positions->cpu().to_vector();
+    EXPECT_GT(values[0], -1.0e7f);
+    EXPECT_GT(values[1], -1.0e7f);
+    EXPECT_LT(values[4], -1.0e7f);
+    EXPECT_LT(values[5], -1.0e7f);
+    EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
 }

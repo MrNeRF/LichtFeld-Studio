@@ -20,10 +20,27 @@ logger = logging.getLogger(__name__)
 DEFAULT_ACCOUNT_STATE: dict[str, object] = {
     "signed_in": False,
     "linking": False,
+    "disconnecting": False,
+    "error": "",
     "membership_required": False,
     "label": "",
     "tier": "",
     "tooltip": "",
+}
+
+DEFAULT_GALLERY_STATE: dict[str, object] = {
+    "signed_in": False,
+    "relink_required": False,
+    "active_uploads": 0,
+    "active_downloads": 0,
+    "paused": 0,
+    "attention": 0,
+    "percent": -1,
+    "label": "",
+    "detail": "",
+    "tooltip": "",
+    "tone": "idle",
+    "epoch": 0,
 }
 
 DEFAULT_BUG_REPORT_STATE: dict[str, object] = {
@@ -203,22 +220,41 @@ class PanelStateBinding:
     def watch(
         self,
         *signals: StateSignal[object] | Signal[object] | ComputedSignal[object],
-        refresh: Callable[[], None] | None = None,
+        refresh: Callable[[], bool | None] | None = None,
         dirty: DirtySpec = None,
         immediate: bool = False,
     ) -> PanelStateBinding:
-        """Refresh and invalidate the panel when any runtime-state signal changes."""
+        """Refresh and invalidate on signal changes unless refresh returns False."""
 
-        def on_change(_value: object) -> None:
-            if refresh is not None:
-                refresh()
-            invalidate_panel(self._handle, dirty)
+        def make_on_change():
+            last_value = None
+            has_last_value = False
+
+            def on_change(value: object) -> None:
+                nonlocal has_last_value, last_value
+                if has_last_value and value == last_value:
+                    return
+                has_last_value = True
+                last_value = value
+
+                refresh_result = None
+                if refresh is not None:
+                    refresh_result = refresh()
+                if refresh_result is False:
+                    return
+                invalidate_panel(self._handle, dirty)
+
+            return on_change
 
         for signal in signals:
-            self._unsubscribers.append(signal.subscribe(on_change))
+            self._unsubscribers.append(signal.subscribe(make_on_change()))
 
         if immediate:
-            on_change(None)
+            refresh_result = None
+            if refresh is not None:
+                refresh_result = refresh()
+            if refresh_result is not False:
+                invalidate_panel(self._handle, dirty)
 
         return self
 
@@ -250,6 +286,7 @@ class RuntimeState:
     trainer_loaded = StateSignal[bool]("trainer_loaded", False)
     eval_psnr = StateSignal[float | None]("eval_psnr", None)
     eval_ssim = StateSignal[float | None]("eval_ssim", None)
+    eval_lpips = StateSignal[float | None]("eval_lpips", None)
     scene_generation = StateSignal[int]("scene_generation", 0)
     selection_generation = StateSignal[int]("selection_generation", 0)
     fps = StateSignal[float]("fps", 0.0)
@@ -264,6 +301,11 @@ class RuntimeState:
         "account_state",
         DEFAULT_ACCOUNT_STATE.copy(),
     )
+    gallery_state = StateSignal[dict[str, object]](
+        "gallery_state",
+        DEFAULT_GALLERY_STATE.copy(),
+    )
+    gallery_transfers = Signal({}, "gallery_transfers")
     bug_report_state = Signal(new_bug_report_state(), "bug_report_state")
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",
@@ -325,6 +367,7 @@ class RuntimeState:
         cls.max_gaussians.value = 0
         cls.eval_psnr.value = None
         cls.eval_ssim.value = None
+        cls.eval_lpips.value = None
         cls.scene_generation.value = 0
         cls.selection_generation.value = 0
         cls.fps.value = 0.0
@@ -335,6 +378,8 @@ class RuntimeState:
         cls.pivot_mode.value = 0
         cls.import_overlay_state.value = {}
         cls.account_state.value = DEFAULT_ACCOUNT_STATE.copy()
+        cls.gallery_transfers.value = {}
+        cls.gallery_state.value = DEFAULT_GALLERY_STATE.copy()
         cls.bug_report_state.value = new_bug_report_state()
         cls.video_export_overlay_state.value = {}
         cls.export_progress_state.value = {}

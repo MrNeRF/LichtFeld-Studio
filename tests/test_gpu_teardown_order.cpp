@@ -30,17 +30,13 @@ namespace {
 
         DensifyNScratch scratch;
         scratch.ensure_n(128, Device::CUDA);
-        scratch.ensure_k(16, Device::CUDA);
         ASSERT_GT(scratch.n_capacity, 0u);
-        ASSERT_GT(scratch.k_capacity, 0u);
         ASSERT_TRUE(scratch.f32_a.is_valid());
-        ASSERT_TRUE(scratch.i64_a.is_valid());
 
         scratch.release();
         EXPECT_EQ(scratch.n_capacity, 0u);
-        EXPECT_EQ(scratch.k_capacity, 0u);
         EXPECT_FALSE(scratch.f32_a.is_valid());
-        EXPECT_FALSE(scratch.i64_a.is_valid());
+        EXPECT_EQ(scratch.resident_bytes(), 0u);
     }
 
     TEST(GpuTeardownOrderTest, DensifyNScratchReleasesAfterPoolTouch) {
@@ -52,7 +48,6 @@ namespace {
 
         DensifyNScratch scratch;
         scratch.ensure_n(4096, Device::CUDA);
-        scratch.ensure_k(256, Device::CUDA);
         Tensor pooled = Tensor::empty({1024}, Device::CUDA);
         ASSERT_TRUE(pooled.is_valid());
 

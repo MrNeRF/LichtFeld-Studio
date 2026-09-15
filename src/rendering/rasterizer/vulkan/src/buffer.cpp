@@ -25,7 +25,6 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
@@ -48,6 +47,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
     ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_block_counts);
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);
@@ -107,7 +107,6 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
@@ -130,6 +129,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
     ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_block_counts);
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);

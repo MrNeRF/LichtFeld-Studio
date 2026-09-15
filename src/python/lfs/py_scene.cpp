@@ -148,6 +148,7 @@ namespace lfs::python {
             .mode = vis::op::SceneGraphCaptureMode::FULL,
             .include_selected_nodes = include_selected_nodes,
             .include_scene_context = include_scene_context,
+            .payload_uuids = std::vector<core::Uuid>{},
         };
     }
 
@@ -174,6 +175,10 @@ namespace lfs::python {
     // PySceneNode implementation
     void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
+    }
+
+    nb::tuple PySceneNode::local_transform() const {
+        return mat4_to_tuple(node_->local_transform.get());
     }
 
     nb::tuple PySceneNode::world_transform() const {
@@ -221,8 +226,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 
@@ -243,8 +250,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 
@@ -703,6 +712,14 @@ namespace lfs::python {
         return result;
     }
 
+    std::vector<PySceneSplatSnapshot> PyScene::snapshot_visible_splats() {
+        std::vector<PySceneSplatSnapshot> result;
+        for (auto& snapshot : scene_->snapshotVisibleSplats()) {
+            result.emplace_back(std::move(snapshot));
+        }
+        return result;
+    }
+
     std::vector<PySceneNode> PyScene::get_active_cameras() {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getNodes()) {
@@ -1028,6 +1045,20 @@ namespace lfs::python {
     }
 
     void register_scene(nb::module_& m) {
+        nb::class_<PySceneSplatSnapshot>(m, "SceneSplatSnapshot")
+            .def_prop_ro("transform", [](const PySceneSplatSnapshot& value) {
+                return mat4_to_tuple(value.snapshot().world_transform);
+            })
+            .def_prop_ro("sh_degree", [](const PySceneSplatSnapshot& value) {
+                return value.snapshot().active_sh_degree;
+            })
+            .def("splat_data", [](const PySceneSplatSnapshot& value) {
+                std::shared_ptr<core::SplatData> data;
+                {
+                    nb::gil_scoped_release release;
+                    data = value.snapshot().materialize();
+                }
+                return PySplatData(std::move(data)); }, "Materialize this owned node's local geometry. May run on an export worker.");
         register_scene_node_properties();
         register_cropbox_properties();
         register_ellipsoid_properties();
@@ -1155,6 +1186,7 @@ namespace lfs::python {
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
             // Transform (special conversion to tuple/ndarray)
+            .def_prop_ro("local_transform", &PySceneNode::local_transform, "Local transform as 4x4 row-major tuple")
             .def_prop_ro("world_transform", &PySceneNode::world_transform, "World-space transform as 4x4 row-major tuple")
             .def("set_local_transform", &PySceneNode::set_local_transform, "Set local transform from a [4, 4] ndarray")
             // Metadata (read-only)
@@ -1345,6 +1377,7 @@ Returns:
                 },
                 nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
             .def("get_visible_nodes", &PyScene::get_visible_nodes, "Get all visible nodes in the scene")
+            .def("snapshot_visible_splats", &PyScene::snapshot_visible_splats, "Copy visible splats and world transforms at a UI safe point. Returned data owns its storage and supports worker-side export after scene edits or deletion.")
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")

@@ -72,6 +72,11 @@ namespace lfs::vis {
         inline constexpr float TIMELINE_HEIGHT = 24.0f;
         inline constexpr float KEYFRAME_RADIUS = 6.0f;
         inline constexpr float PLAYHEAD_WIDTH = 2.0f;
+        // Drawn #playhead-handle is a 14dp circle; X-clamp span must match so the
+        // dot stays fully inside the timeline at the clip edges.
+        inline constexpr float PLAYHEAD_HANDLE_WIDTH = 14.0f;
+        inline constexpr float PLAYHEAD_HIT_RADIUS = 8.0f;
+        inline constexpr float SCROLLBAR_HEIGHT = 6.0f;
         inline constexpr float BUTTON_SIZE = 20.0f;
         inline constexpr float BUTTON_SPACING = 4.0f;
 
@@ -168,6 +173,7 @@ namespace lfs::vis {
         void cacheElements();
         void updateButtonStates();
         void updatePlayhead();
+        void updateTimelineScrollbar();
         void updateTimeDisplay();
         void updateTransportSettings();
         void rebuildKeyframes();
@@ -238,6 +244,15 @@ namespace lfs::vis {
         void enterSequenceFpsEdit();
         void exitSequenceFpsEdit(bool commit);
 
+        struct ResolutionEditListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        void syncResolutionDisplay();
+        void enterResolutionEdit();
+        void exitResolutionEdit(bool commit);
+
         struct RenderSignature {
             int width = 0;
             int height = 0;
@@ -296,6 +311,7 @@ namespace lfs::vis {
         QualityScrubListener quality_scrub_listener_;
         DurationEditListener duration_listener_;
         SequenceFpsEditListener sequence_fps_listener_;
+        ResolutionEditListener resolution_listener_;
 
         bool quality_scrub_active_ = false;
         bool quality_scrub_dragging_ = false;
@@ -303,6 +319,7 @@ namespace lfs::vis {
         float quality_scrub_start_x_ = 0.0f;
         bool duration_editing_ = false;
         bool sequence_fps_editing_ = false;
+        bool resolution_editing_ = false;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -323,6 +340,8 @@ namespace lfs::vis {
         Rml::Element* el_keyframes_ = nullptr;
         Rml::Element* el_playhead_ = nullptr;
         Rml::Element* el_playhead_handle_ = nullptr;
+        Rml::Element* el_timeline_scrollbar_ = nullptr;
+        Rml::Element* el_timeline_scrollbar_thumb_ = nullptr;
         Rml::Element* el_hint_ = nullptr;
         Rml::Element* el_current_time_ = nullptr;
         Rml::Element* el_duration_ = nullptr;
@@ -361,7 +380,9 @@ namespace lfs::vis {
         Rml::Element* el_sequence_fps_display_ = nullptr;
         Rml::Element* el_sequence_fps_input_ = nullptr;
         Rml::Element* el_format_label_ = nullptr;
+        Rml::Element* el_resolution_field_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
+        Rml::Element* el_resolution_input_ = nullptr;
         Rml::Element* el_quality_scrub_ = nullptr;
         Rml::Element* el_quality_fill_ = nullptr;
         Rml::Element* el_quality_display_ = nullptr;
@@ -413,10 +434,13 @@ namespace lfs::vis {
         // Interaction state
         bool dragging_playhead_ = false;
         bool dragging_keyframe_ = false;
+        bool dragging_scrollbar_ = false;
         bool dragged_keyframe_changed_ = false;
         bool film_strip_scrubbing_ = false;
         sequencer::KeyframeId dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
         float drag_start_mouse_x_ = 0.0f;
+        float scrollbar_drag_origin_x_ = 0.0f;
+        float scrollbar_drag_origin_pan_ = 0.0f;
         std::optional<size_t> hovered_keyframe_;
         std::vector<sequencer::KeyframeId> selected_keyframes_;
 
@@ -463,6 +487,9 @@ namespace lfs::vis {
         bool hovered_ = false;
         bool wants_keyboard_ = false;
         bool last_hovered_ = false;
+        float last_render_mouse_x_ = 0.0f;
+        float last_render_mouse_y_ = 0.0f;
+        bool last_render_mouse_over_panel_ = false;
         std::string last_language_;
     };
 
