@@ -17,6 +17,7 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "project_container_internal.hpp"
 #include "span_streambuf.hpp"
 
 #include <stb_image_write.h>
@@ -90,9 +91,20 @@ namespace lfs::io::project {
         }
 
         thread_local const WriterLockLease* active_operation_lease = nullptr;
+        thread_local const detail::ProjectPathIdentity* active_operation_identity = nullptr;
 
         lfs::Result<WriterLockLease>
         acquire_operation_lock(const std::filesystem::path& path) {
+            if (active_operation_identity) {
+                if (auto identity = active_operation_identity->validate(); !identity)
+                    return std::move(identity).error();
+                std::error_code error;
+                if (active_operation_lease && !active_operation_lease->owns(path) &&
+                    std::filesystem::exists(path, error))
+                    return fail<WriterLockLease>(lfs::ErrorCode::FailedPrecondition, path,
+                                                 "The project path changed before writing. Refresh Projects and try again.",
+                                                 "the operation tried to edit a different existing file", "operation.path");
+            }
             if (active_operation_lease && active_operation_lease->owns(path))
                 return *active_operation_lease;
             auto lease = WriterLockLease::acquire(path);
@@ -855,9 +867,8 @@ namespace lfs::io::project {
                 return lhs.second > rhs.second;
             });
             for (const auto& [candidate_offset, generation] : candidates) {
-                const auto temporary = path.parent_path() /
-                                       ("." + path.filename().string() + ".repair-" +
-                                        lfs::core::generate_uuid_v4().to_string() + ".tmp");
+                auto temporary = path;
+                temporary += ".repair-" + lfs::core::generate_uuid_v4().to_string() + ".tmp";
                 std::error_code copy_error;
                 if (!std::filesystem::copy_file(path, temporary,
                                                 std::filesystem::copy_options::none,
@@ -941,6 +952,9 @@ namespace lfs::io::project {
         auto lease = acquire_operation_lock(path);
         if (!lease)
             return lfs::Result<void>::failure(std::move(lease).error());
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return lfs::Result<void>::failure(std::move(identity).error());
         auto reader = ProjectReader::open(path);
         if (!reader)
             return lfs::Result<void>::failure(std::move(reader).error());
@@ -949,11 +963,18 @@ namespace lfs::io::project {
             return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
                               "The project changed before the operation started. Refresh Projects and try again.",
                               "selected project or commit identity does not match the locked file", "operation.identity");
+        if (auto checked = identity->validate(); !checked)
+            return checked;
         struct RestoreLease {
             const WriterLockLease* previous;
-            ~RestoreLease() { active_operation_lease = previous; }
-        } restore{active_operation_lease};
+            const detail::ProjectPathIdentity* previous_identity;
+            ~RestoreLease() {
+                active_operation_lease = previous;
+                active_operation_identity = previous_identity;
+            }
+        } restore{active_operation_lease, active_operation_identity};
         active_operation_lease = &*lease;
+        active_operation_identity = &*identity;
         operation();
         return {};
     }
@@ -1013,6 +1034,9 @@ namespace lfs::io::project {
         auto lease = acquire_operation_lock(path);
         if (!lease)
             return lfs::Result<void>::failure(std::move(lease).error());
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return lfs::Result<void>::failure(std::move(identity).error());
         auto current = ProjectReader::open(path);
         auto recovery = ProjectReader::open(backup);
         if (!current)
@@ -1035,7 +1059,11 @@ namespace lfs::io::project {
             return fail<void>(lfs::ErrorCode::PermissionDenied, path,
                               "The recovery copy could not be restored.", reason, "recovery.copy");
         }
-        auto restored = lfs::io::replace_atomic_output_file(temporary, path, lfs::io::AtomicOutputDurability::Durable);
+        if (auto checked = identity->validate(); !checked) {
+            std::filesystem::remove(temporary, error);
+            return checked;
+        }
+        auto restored = lfs::io::replace_atomic_output_file(temporary, identity->canonical_path, lfs::io::AtomicOutputDurability::Durable);
         if (!restored) {
             std::filesystem::remove(temporary, error);
             return fail<void>(lfs::ErrorCode::PermissionDenied, path,
@@ -1049,9 +1077,14 @@ namespace lfs::io::project {
                  const std::uint64_t generation,
                  const std::filesystem::path& requested_destination) {
         const bool replace_source = same_path(path, requested_destination);
-        const auto destination = replace_source
-                                     ? path.parent_path() / (path.filename().string() + ".restore-" + lfs::core::generate_uuid_v4().to_string() + ".tmp")
-                                     : requested_destination;
+        auto destination = requested_destination;
+        if (replace_source) {
+            destination = path;
+            destination += ".restore-" + lfs::core::generate_uuid_v4().to_string() + ".tmp";
+        }
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         if (path.empty() || requested_destination.empty()) {
             return fail<ProjectInspectorCard>(
                 lfs::ErrorCode::InvalidArgument, destination,
@@ -1071,6 +1104,9 @@ namespace lfs::io::project {
             !available) {
             return std::move(available).error();
         }
+        auto destination_identity = detail::ProjectPathIdentity::capture(destination);
+        if (!destination_identity)
+            return std::move(destination_identity).error();
         auto reader = ProjectReader::open(path);
         if (!reader) {
             return std::move(reader).error();
@@ -1177,6 +1213,10 @@ namespace lfs::io::project {
             }
             planned_bytes += bytes;
         }
+        if (auto checked = identity->validate(); !checked)
+            return std::move(checked).error();
+        if (auto checked = destination_identity->validate(); !checked)
+            return std::move(checked).error();
         auto created = ProjectWriter::create(
             destination,
             CreateOptions{
@@ -1280,7 +1320,9 @@ namespace lfs::io::project {
             auto recovery = backup_locked_project_file(path);
             if (!recovery)
                 return std::move(recovery).error();
-            if (auto replaced = lfs::io::replace_atomic_output_file(destination, path, lfs::io::AtomicOutputDurability::Durable); !replaced)
+            if (auto checked = identity->validate(); !checked)
+                return std::move(checked).error();
+            if (auto replaced = lfs::io::replace_atomic_output_file(destination, identity->canonical_path, lfs::io::AtomicOutputDurability::Durable); !replaced)
                 return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, path,
                                                   "The restored save could not replace the project.", replaced.error().message, "restore.replace");
             return inspect_after_save(path);
@@ -2121,6 +2163,12 @@ namespace lfs::io::project {
     repair_project(const std::filesystem::path& path,
                    const std::filesystem::path& destination,
                    const lfs::core::Uuid& expected_project) {
+        auto source_identity = detail::ProjectPathIdentity::capture(path);
+        auto destination_identity = detail::ProjectPathIdentity::capture(destination);
+        if (!source_identity)
+            return std::move(source_identity).error();
+        if (!destination_identity)
+            return std::move(destination_identity).error();
         if (path.empty() || destination.empty() || same_path(path, destination)) {
             return fail<ProjectRepairResult>(
                 lfs::ErrorCode::InvalidArgument, destination,
@@ -2176,6 +2224,10 @@ namespace lfs::io::project {
                 planned_bytes += row.stored_bytes;
             }
         }
+        if (auto checked = source_identity->validate(); !checked)
+            return std::move(checked).error();
+        if (auto checked = destination_identity->validate(); !checked)
+            return std::move(checked).error();
         auto writer = ProjectWriter::create(
             destination,
             CreateOptions{

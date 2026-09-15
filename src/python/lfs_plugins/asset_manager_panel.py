@@ -2430,6 +2430,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not asset.get("path"):
             self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
             return
+        asset["operation_path"] = str(Path(asset["path"]).resolve())
         operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
         self._project_operations[operation_id] = {

@@ -64,7 +64,9 @@ class ProjectOperations:
                 {"version": 1, "operations": rows}, ensure_ascii=False).encode("utf-8"))
 
     def run(self, identifier, asset, title, operation, *, backup=True):
-        path = str(Path(asset["path"]).resolve())
+        path = str(Path(asset["path"]).expanduser().absolute())
+        if asset.get("operation_path", str(Path(path).resolve())) != str(Path(path).resolve()):
+            raise ValueError("The project path changed. Refresh Projects and try again.")
         if not backup:
             if asset.get("status") != "REPAIR_ONLY":
                 card = self.io.inspect_project_card(path)

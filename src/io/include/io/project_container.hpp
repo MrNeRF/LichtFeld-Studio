@@ -545,6 +545,7 @@ namespace lfs::io::project {
         // Writers that must not lose their generation to a transient
         // in-process lock holder wait instead of failing immediately.
         std::chrono::milliseconds writer_lock_wait{0};
+        lfs::core::Uuid expected_project_uuid;
     };
 
     struct ChunkWriteOptions {

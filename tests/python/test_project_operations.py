@@ -4,9 +4,136 @@ from __future__ import annotations
 
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def identity_project(native_io, tmp_path, monkeypatch):
+    monkeypatch.setenv("LFS_HOME", str(tmp_path))
+    path = tmp_path / "项目-é.licht"
+    shutil.copyfile(Path(__file__).parents[1] / "data" / "portable-sog.licht", path)
+    return path, native_io.inspect_project_card(path)
+
+
+@pytest.mark.parametrize("operation", [
+    "restore", "rebind", "reduce", "embed", "thumbnail", "license", "clear_license",
+    "compact", "rename", "dataset_reference",
+])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_path, monkeypatch, operation, swap):
+    from lfs_plugins.project_operations import ProjectOperations, ProjectOperationFailure
+
+    path, card = identity_project
+    replacement = tmp_path / "replacement.licht"
+    native_io.restore_save(path, 1, replacement)
+    selected = path
+    if swap == "path":
+        selected = tmp_path / "别名.licht"
+        selected.symlink_to(path)
+        shutil.copyfile(path, replacement)  # Even an identical project at another target is refused.
+    before = replacement.read_bytes()
+    store = ProjectOperations(native_io, tmp_path / "records")
+    put = store._put
+
+    def swap_after_backup(row):
+        put(row)
+        if row["status"] == "running":
+            if swap == "identity":
+                os.replace(replacement, selected)
+            else:
+                selected.unlink()
+                selected.symlink_to(replacement)
+
+    monkeypatch.setattr(store, "_put", swap_after_backup)
+    operations = {
+        "restore": lambda: native_io.restore_save(selected, 1, selected),
+        "rebind": lambda: native_io.rebind_checkpoint(selected, str(uuid.uuid4())),
+        "reduce": lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}),
+        "embed": lambda: native_io.embed_dataset_file(selected),
+        "thumbnail": lambda: native_io.set_project_preview(selected, b"\x89PNG\r\n\x1a\n"),
+        "license": lambda: native_io.set_project_license(selected, "CC0-1.0", "Changed"),
+        "clear_license": lambda: native_io.clear_project_license(selected),
+        "compact": lambda: native_io.compact_project_file(selected),
+        "rename": lambda: native_io.set_project_title(selected, "Changed"),
+        "dataset_reference": lambda: native_io.set_dataset_reference(selected, tmp_path),
+    }
+    with pytest.raises(ProjectOperationFailure, match="(identity|path).*changed") as failure:
+        store.run("guarded", {"path": str(selected), "id": str(card.project_uuid),
+                  "commit_uuid": str(card.commit_uuid)}, operation, operations[operation])
+    assert failure.value.record["status"] == "failed"
+    assert "changed" in store.recover()["guarded"]["reason"]
+    assert selected.read_bytes() == before
+
+
+def test_contents_refuses_callback_for_another_existing_path(native_io, identity_project, tmp_path):
+    path, card = identity_project
+    other = tmp_path / "other.licht"
+    shutil.copyfile(path, other)
+    before = other.read_bytes()
+    with pytest.raises(Exception, match="path changed"):
+        native_io.run_project_operation(path, str(card.project_uuid), str(card.commit_uuid),
+                                       lambda: native_io.set_project_title(other, "Wrong file"))
+    assert other.read_bytes() == before
+
+
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_compact_rechecks_destination_after_progress(native_io, identity_project, tmp_path, swap):
+    path, _ = identity_project
+    other = tmp_path / "other.licht"
+    native_io.restore_save(path, 1, other)
+    selected = path
+    if swap == "path":
+        selected = tmp_path / "alias.licht"
+        selected.symlink_to(path)
+    before = other.read_bytes()
+    swapped = False
+
+    def progress(*_args):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            if swap == "identity":
+                os.replace(other, path)
+            else:
+                selected.unlink()
+                selected.symlink_to(other)
+
+    with pytest.raises(Exception, match="(identity|path).*changed"):
+        native_io.compact_project_file(selected, progress=progress)
+    assert swapped and selected.read_bytes() == before
+
+
+def test_repair_refuses_changed_id_without_creating_destination(native_io, identity_project, tmp_path):
+    path, card = identity_project
+    other = tmp_path / "other.licht"
+    native_io.restore_save(path, 1, other)
+    damaged = bytearray(other.read_bytes())
+    damaged[4096] ^= 1
+    damaged[8192] ^= 1
+    path.write_bytes(damaged)
+    destination = tmp_path / "修复.licht"
+    with pytest.raises(Exception, match="identity changed"):
+        native_io.repair_project(path, destination, str(card.project_uuid))
+    assert not destination.exists() and path.read_bytes() == damaged
+
+
+def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_project, tmp_path):
+    path, card = identity_project
+    alias = tmp_path / "别名-é.licht"
+    alias.symlink_to(path)
+
+    def edit():
+        native_io.set_project_title(alias, "项目")
+        native_io.set_project_license(alias, "CC0-1.0", "作者")
+        native_io.compact_project_file(alias)
+
+    native_io.run_project_operation(path, str(card.project_uuid), str(card.commit_uuid), edit)
+    assert alias.is_symlink() and native_io.inspect_project_card(path).title == "项目"
+    result = native_io.restore_save(alias, 1, alias)
+    assert alias.is_symlink() and result.project_uuid != card.project_uuid
 
 
 def _fixture() -> Path:

@@ -151,7 +151,7 @@ namespace lfs::io::project {
                     "project.path");
             }
             std::error_code error;
-            auto absolute = std::filesystem::absolute(path, error);
+            auto absolute = std::filesystem::weakly_canonical(path, error);
             if (error) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
@@ -3950,6 +3950,7 @@ namespace lfs::io::project {
                         options.writer_lock_lease,
                     .writer_lock_wait =
                         options.writer_lock_wait,
+                    .expected_project_uuid = impl_->project_uuid,
                 });
             if (!result) {
                 return std::move(result).error();

@@ -996,6 +996,7 @@ namespace lfs::io::project {
         Mode mode = Mode::Append;
         std::filesystem::path destination_path;
         std::filesystem::path active_path;
+        std::optional<detail::ProjectPathIdentity> destination_identity;
         std::optional<detail::WriterLock> lock;
         std::optional<WriterLockLease> lock_lease;
         std::shared_ptr<detail::NativeFile> file;
@@ -1088,6 +1089,10 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<void> require_ready() const {
+            if (destination_identity) {
+                if (auto identity = destination_identity->validate(); !identity)
+                    return identity;
+            }
             if (committed) {
                 return status_failure(writer_error(
                     lfs::ErrorCode::FailedPrecondition, destination_path,
@@ -1515,6 +1520,9 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::create(const std::filesystem::path& path,
                           const CreateOptions& options) {
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         if (path.empty()) {
             return writer_error(lfs::ErrorCode::InvalidArgument, path,
                                 "The project path is empty.",
@@ -1690,9 +1698,10 @@ namespace lfs::io::project {
 
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Create;
-        impl->destination_path = path;
+        impl->destination_path = identity->canonical_path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path =
-            detail::make_sibling_temp_path(path, "project-write");
+            detail::make_sibling_temp_path(impl->destination_path, "project-write");
         impl->lock = std::move(held_lock);
         impl->lock_lease =
             std::move(held_lease);
@@ -1747,6 +1756,9 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::append(const std::filesystem::path& path,
                           const AppendOptions& options) {
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         if (path.empty()) {
             return writer_error(lfs::ErrorCode::InvalidArgument, path,
                                 "The project path is empty.",
@@ -1782,6 +1794,11 @@ namespace lfs::io::project {
         if (!reader_result) {
             return std::move(reader_result).error();
         }
+        if (!options.expected_project_uuid.is_nil() &&
+            reader_result->superblock().project_uuid != options.expected_project_uuid)
+            return writer_error(lfs::ErrorCode::FailedPrecondition, path,
+                                "The project identity changed before writing. Refresh Projects and try again.",
+                                "the opened document no longer owns this destination", "project.identity");
         if (reader_result->open_state() != OpenState::Open) {
             return writer_error(
                 lfs::ErrorCode::Unsupported, path,
@@ -1838,6 +1855,7 @@ namespace lfs::io::project {
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Append;
         impl->destination_path = path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path = path;
         impl->lock = std::move(held_lock);
         impl->lock_lease =
@@ -3059,6 +3077,10 @@ namespace lfs::io::project {
                 !boundary) {
                 return boundary;
             }
+            if (impl_->destination_identity) {
+                if (auto identity = impl_->destination_identity->validate(); !identity)
+                    return identity;
+            }
             auto replacement =
                 detail::atomic_replace(impl_->active_path,
                                        impl_->destination_path);
@@ -3142,6 +3164,9 @@ namespace lfs::io::project {
                 "project.path"));
         }
         const auto& path = source_path;
+        auto identity = detail::ProjectPathIdentity::capture(destination_path);
+        if (!identity)
+            return status_failure(std::move(identity).error());
         std::optional<detail::WriterLock> source_lock;
         std::optional<detail::WriterLock> destination_lock;
         const auto acquire_lock =
@@ -3256,10 +3281,14 @@ namespace lfs::io::project {
 
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Create;
-        impl->destination_path = destination_path;
+        impl->destination_path = identity->canonical_path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path =
-            detail::make_sibling_temp_path(destination_path, "compact");
-        impl->lock.emplace(std::move(*destination_lock));
+            detail::make_sibling_temp_path(impl->destination_path, "compact");
+        if (destination_lock)
+            impl->lock.emplace(std::move(*destination_lock));
+        else
+            impl->lock_lease = options.writer_lock_lease;
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
             .role = ContainerRole::Master,
