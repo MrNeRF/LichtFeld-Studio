@@ -966,6 +966,9 @@ def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery)
     processing = dict(facts, activity="processing", active=True, job={"needsAttention": True})
     assert [a["id"] for a in gallery_actions(asset, processing)] == ["keep_waiting", "cancel"]
     assert gallery_actions(asset, dict(facts, activity="applying", active=True)) == []
+    completed = dict(facts, job={"id": "done", "status": "completed"}, undoAvailable=True)
+    assert [a["id"] for a in gallery_actions(asset, completed)] == ["undo"]
+    assert not gallery_actions(asset, dict(completed, signed_in=False))[0]["enabled"]
     assert gallery_actions(asset, dict(facts, viewingCopy=True, state="equal"))[0]["id"] == "publish_new"
     assert gallery_actions(asset, dict(facts, viewingCopy=True, state="remote"))[0]["id"] == "publish_new"
     queued = dict(facts, activity="queued", active=True, job={"id": "j", "status": "queued"})

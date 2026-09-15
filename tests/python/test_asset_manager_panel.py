@@ -2411,6 +2411,16 @@ def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module
     panel._gallery_state['signed_in'] = True
     assert panel._gallery_notice_text() == 'Sign in'
 
+
+def test_finished_transfers_keep_the_history_tray_reachable(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    panel._gallery_state["jobs"] = [dict(id="done", project="project", status="completed", kind="upload")]
+    assert model.func_bindings["has_gallery_transfers"]()
+    panel._gallery_state["jobs"] = []
+    assert not model.func_bindings["has_gallery_transfers"]()
+
 def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path):
     panel, local, remote = _gallery_fixture(panel_module)
     poster = _write_png(tmp_path / "portal poster.png")

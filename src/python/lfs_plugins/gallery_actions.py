@@ -102,6 +102,9 @@ def gallery_actions(entry, facts):
         return actions
     if activity == "applying":
         return actions
+    if job.get("status") == "completed" and facts.get("undoAvailable"):
+        add("undo", enabled=not busy)
+        return actions
     if job and activity == "processing" and job.get("needsAttention"):
         add("keep_waiting", enabled=not busy)
         add("cancel", enabled=not busy)

@@ -102,7 +102,7 @@ def transfer_rows(snapshot, history_limit=30):
             phase_label = gallery_tr("gallery.status.progress", prefix="", stage=phase_label, percent=int(progress))
         row = {"id": job["id"], "title": job.get("metadata", {}).get("title", "") or tr("title"),
                "direction": "↓" if job.get("kind") == "download" else "↑", "status": status,
-               "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
+               "bytes": ("" if job.get("settingsOnly") else format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else "" if job.get("batchQueued") else tr("bytes", done=format_size(done), total=format_size(total))),
                "phase": phase_label,
                "reason": localize_message(job.get("message", "")) if phase in ("error", "conflict", "paused", "interrupted") else "",
@@ -115,6 +115,7 @@ def transfer_rows(snapshot, history_limit=30):
                "can_cancel": status not in ("completed", "canceled")}
         facts = dict(snapshot, job=job, activity=phase, freshness="diverged" if status == "conflict" else "unknown",
                      relationship="replaced" if job.get("handoffIntent") else "linked",
+                     undoAvailable=job["id"] in snapshot.get("undoHistory", {}),
                      active=phase in ("uploading", "downloading", "preparing", "applying", "processing"),
                      state="completed" if status == "completed" else phase)
         actions = gallery_actions({}, facts)
@@ -123,7 +124,7 @@ def transfer_rows(snapshot, history_limit=30):
         row.update(project=job.get("project", ""), can_pause="pause" in verbs,
                    can_resume=bool(verbs & {"resume", "retry", "keep_waiting", "replace_review"}), can_cancel="cancel" in verbs,
                    action=primary.get("id", ""), action_label=primary.get("label", ""),
-                   can_resolve="resolve" in verbs, can_recover="open_recovery" in verbs, can_undo=False)
+                   can_resolve="resolve" in verbs, can_recover="open_recovery" in verbs, can_undo="undo" in verbs)
         (history if status in ("completed", "canceled") and phase not in ("applying", "interrupted", "error", "downloading") else pending).append(row)
     pending.sort(key=lambda row: {"running": 0, "queued": 1}.get(row["status"], 2))
     if snapshot.get("phase", "idle") != "idle":

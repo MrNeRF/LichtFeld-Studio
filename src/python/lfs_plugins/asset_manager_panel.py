@@ -552,7 +552,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         )
         model.bind_func(
             "has_gallery_transfers",
-            lambda: self._tray_show_all or any(row.get("can_undo") or row["status"] not in ("completed", "canceled") for row in self._all_transfer_rows()),
+            lambda: self._tray_show_all or bool(self._all_transfer_rows()),
         )
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
@@ -1219,7 +1219,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return " · ".join(part for part in parts if part)
 
     def _all_transfer_rows(self) -> List[Dict[str, Any]]:
-        rows = list(transfer_rows(self._gallery_state, self._transfer_history_limit))
+        undo_history = self._gallery_controller.undo_records() if self._gallery_controller else {}
+        rows = list(transfer_rows(dict(self._gallery_state, undoHistory=undo_history), self._transfer_history_limit))
         projects_by_job = {job["id"]: job.get("project") or "remote:" + job.get("sceneId", "") for job in self._gallery_state.get("jobs", ())}
         for row in rows:
             row["project"] = row.get("project") or projects_by_job.get(row["id"], self._gallery_state.get("operationProject", ""))
@@ -1244,10 +1245,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "can_cancel": False,
             })
         projects = self._all_display_assets()
-        undo_history = self._gallery_controller.undo_records() if self._gallery_controller else {}
         for row in rows:
             row["can_select"] = row["project"] in projects
-            row["can_undo"] = row["id"] in undo_history
+            row.setdefault("can_undo", False)
             row.setdefault("can_resolve", False)
             row.setdefault("can_recover", False)
             row.setdefault("action_label", "")

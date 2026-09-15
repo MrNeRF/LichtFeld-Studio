@@ -429,7 +429,7 @@
               <span class="asset-tray-direction">{{transfer.direction}}</span>
               <span class="asset-tray-title" data-class-hidden="transfer.can_select" data-attr-title="transfer.title">{{transfer.title}}</span>
               <button class="asset-button asset-button--text asset-tray-title asset-tray-project" data-class-hidden="!transfer.can_select" data-event-click="transfer_project(transfer.project)" data-attr-title="transfer.title"><span>{{transfer.title}}</span></button>
-              <span class="asset-tray-bytes">{{transfer.bytes}}</span>
+              <span class="asset-tray-bytes" data-attr-title="transfer.bytes">{{transfer.bytes}}</span>
             </div>
             <div class="asset-tray-status-row">
               <span class="asset-tray-phase" data-attr-title="transfer.phase">{{transfer.phase}}</span>
@@ -443,8 +443,8 @@
               </div>
             </div>
             <div class="asset-tray-progress"><span data-style-width="transfer.progress_width"></span></div>
-            <span class="asset-tray-reason status-error" data-class-hidden="transfer.reason == ''">{{transfer.reason}}</span>
-            <span class="asset-tray-reason text-muted" data-class-hidden="transfer.detail == ''">{{transfer.detail}}</span>
+            <span class="asset-tray-reason status-error" data-class-hidden="transfer.reason == ''" data-attr-title="transfer.reason">{{transfer.reason}}</span>
+            <span class="asset-tray-reason text-muted" data-class-hidden="transfer.detail == ''" data-attr-title="transfer.detail">{{transfer.detail}}</span>
           </div>
         </div>
         <div id="asset-tray-resize-handle" class="asset-resize-handle asset-resize-handle--horizontal" data-if="tray_expanded" data-resize="tray" tabindex="0" aria-label="{{resize_transfers_tray_label}}"></div>
