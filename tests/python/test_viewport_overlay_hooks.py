@@ -225,3 +225,25 @@ def test_document_sync_binds_toolbar_model_without_task_progress(overlays_module
     assert "show_import_overlay" not in document.model.bound_funcs
     assert "show_video_overlay" not in document.model.bound_funcs
     assert "overlay_action" not in document.model.bound_events
+
+
+def test_multiple_documents_keep_independent_controllers_and_unload_one(overlays_module):
+    module, *_rest, first = overlays_module
+    second = _DocumentStub()
+    module._hook_registered = True
+
+    assert module.sync_document(first) is True
+    assert module.sync_document(second) is True
+
+    assert len(module._document_controllers) == 2
+    assert module._document_controllers[
+        first.body.get_attribute("data-viewport-toolbar-doc-key")
+    ] is not module._document_controllers[
+        second.body.get_attribute("data-viewport-toolbar-doc-key")
+    ]
+
+    module.on_document_unloaded(first)
+
+    assert len(module._document_controllers) == 1
+    assert second.body.get_attribute("data-viewport-overlay-status-bound", "") == "1"
+    assert module._document_controller._handle is not None

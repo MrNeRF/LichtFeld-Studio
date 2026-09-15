@@ -66,6 +66,17 @@ namespace lfs::vis::gui {
         }
     }
 
+    std::shared_ptr<IPanel> RmlImModePanelAdapter::createAreaInstance(
+        const std::string_view instance_id) const {
+        (void)instance_id; // ensureHost assigns a unique retained context to every instance.
+        if (!lfs::python::can_acquire_gil())
+            return nullptr;
+        nb::gil_scoped_acquire gil;
+        nb::object panel_class = nb::borrow(panel_instance_.type());
+        return std::make_shared<RmlImModePanelAdapter>(
+            manager_, panel_class(), has_poll_, rml_path_);
+    }
+
     void RmlImModePanelAdapter::ensureHost() {
         if (host_)
             return;

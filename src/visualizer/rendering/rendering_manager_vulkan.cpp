@@ -837,17 +837,33 @@ namespace lfs::vis {
             return metadata;
         }
 
-        // Per-frame mesh-pass payload (without depth blit). The Vulkan splat path
-        // publishes this every frame so the viewport pass sees the current camera;
-        // otherwise the mesh stays anchored to whichever frame last set it.
+        // Publish the current camera with the mesh payload. An explicit FrameView
+        // supplies clip planes; legacy modes retain ViewportData defaults.
         [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
             const FrameContext& frame_ctx,
             const RenderSettings& settings,
-            const VulkanSplitViewParams& split_view_params) {
+            const VulkanSplitViewParams& split_view_params,
+            const lfs::rendering::FrameView* explicit_view = nullptr) {
             RenderingManager::VulkanMeshFrame frame;
-            const auto vp_data = frame_ctx.makeViewportData();
-            frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
-            frame.camera_position = vp_data.translation;
+            const auto vp_data = explicit_view
+                                     ? lfs::rendering::ViewportData{
+                                           .rotation = explicit_view->rotation,
+                                           .translation = explicit_view->translation,
+                                           .size = explicit_view->size,
+                                           .focal_length_mm = explicit_view->focal_length_mm,
+                                           .orthographic = explicit_view->orthographic,
+                                           .ortho_scale = explicit_view->ortho_scale}
+                                     : frame_ctx.makeViewportData();
+            if (explicit_view) {
+                frame.view_projection =
+                    explicit_view->getProjectionMatrix(explicit_view->near_plane,
+                                                       explicit_view->far_plane) *
+                    explicit_view->getViewMatrix();
+                frame.camera_position = explicit_view->translation;
+            } else {
+                frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
+                frame.camera_position = vp_data.translation;
+            }
             frame.items.reserve(frame_ctx.scene_state.meshes.size());
 
             const bool any_selected_mesh = std::any_of(
@@ -887,7 +903,7 @@ namespace lfs::vis {
                 frame.items.push_back(item);
             }
 
-            const auto frame_view = frame_ctx.makeFrameView();
+            const auto frame_view = explicit_view ? *explicit_view : frame_ctx.makeFrameView();
             frame.environment.enabled = environmentBackgroundEnabled(settings);
             frame.environment.map_path = settings.environment_map_path;
             frame.environment.camera_to_world = vp_data.rotation;
@@ -912,6 +928,13 @@ namespace lfs::vis {
             return frame;
         }
     } // namespace
+
+    RenderingManager::VulkanMeshFrame RenderingManager::makePaneMeshFrame(
+        const FrameContext& frame_ctx,
+        const RenderSettings& settings,
+        const lfs::rendering::FrameView& view) const {
+        return populateMeshFrame(frame_ctx, settings, {}, &view);
+    }
 
     bool RenderingManager::gtRequestMatches(const GTComparisonImageJobRequest& lhs,
                                             const GTComparisonImageJobRequest& rhs) {
@@ -4036,8 +4059,8 @@ namespace lfs::vis {
                     // matching Spark's runtime computation.
                     {
                         const auto& fv = request.frame_view;
+                        params.pixel_scale_limit = lodPixelScaleLimit(fv);
                         if (fv.orthographic) {
-                            params.pixel_scale_limit = fv.ortho_scale / static_cast<float>(fv.size.y);
                             if (fv.ortho_scale > 0.0f) {
                                 params.ortho_half_width =
                                     static_cast<float>(fv.size.x) / (2.0f * fv.ortho_scale);
@@ -4047,7 +4070,6 @@ namespace lfs::vis {
                         } else {
                             float vfov = lfs::rendering::focalLengthToVFov(fv.focal_length_mm);
                             float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
-                            params.pixel_scale_limit = (2.0f * half_tan_fov) / static_cast<float>(fv.size.y);
                             params.viewport_half_tan_y = half_tan_fov;
                             params.viewport_half_tan_x =
                                 half_tan_fov * (static_cast<float>(fv.size.x) / static_cast<float>(fv.size.y));

@@ -26,6 +26,7 @@
 #include <RmlUi/Core/StringUtilities.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_scancode.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -33,6 +34,7 @@
 #include <exception>
 #include <fstream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -58,12 +60,8 @@ namespace {
     lfs::vis::gui::panels::PythonConsoleState* g_python_console_state = nullptr;
 
     bool should_block_editor_input(const lfs::vis::editor::PythonEditor* editor,
-                                   lfs::vis::gui::panels::PythonConsoleState& state) {
-        bool block_editor_input = false;
-
-        if (const auto* terminal = state.getTerminal()) {
-            block_editor_input |= terminal->isFocused();
-        }
+                                   const bool terminal_focused) {
+        bool block_editor_input = terminal_focused;
 
         // Ignore the editor's own capture state; only external text widgets should lock it out.
         if (!editor || !editor->isFocused()) {
@@ -73,8 +71,9 @@ namespace {
         return block_editor_input;
     }
 
-    void format_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
-        auto* editor = state.getEditor();
+    void format_editor_script(lfs::vis::gui::panels::PythonConsoleState& state,
+                              lfs::vis::editor::PythonEditor* editor_override = nullptr) {
+        auto* editor = editor_override ? editor_override : state.getEditor();
         if (!editor) {
             return;
         }
@@ -97,8 +96,9 @@ namespace {
         editor->focus();
     }
 
-    void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
-        auto* editor = state.getEditor();
+    void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state,
+                             lfs::vis::editor::PythonEditor* editor_override = nullptr) {
+        auto* editor = editor_override ? editor_override : state.getEditor();
         if (!editor) {
             return;
         }
@@ -169,10 +169,17 @@ namespace {
     };
 
     struct RmlPythonConsolePane {
-        RmlPythonConsolePane() { listener.owner = this; }
+        explicit RmlPythonConsolePane(std::string context = "python_console_panel",
+                                      bool independent_view_state = false)
+            : context_name(std::move(context)),
+              independent_view_state(independent_view_state) {
+            listener.owner = this;
+        }
 
         std::unique_ptr<lfs::vis::gui::RmlPanelHost> host;
         lfs::vis::gui::RmlUIManager* manager = nullptr;
+        std::string context_name;
+        bool independent_view_state = false;
         Rml::ElementDocument* document = nullptr;
         lfs::vis::gui::PythonEditorElement* editor_view = nullptr;
         lfs::vis::gui::TerminalElement* output_view = nullptr;
@@ -212,6 +219,13 @@ namespace {
         ConsolePaneListener listener;
         bool listeners_attached = false;
         bool splitter_dragging = false;
+        bool terminal_focused = false;
+        int output_scroll_offset = 0;
+        int repl_scroll_offset = 0;
+        int active_tab = -1;
+        float splitter_ratio = 0.6f;
+        std::unique_ptr<lfs::vis::editor::PythonEditor> area_editor;
+        std::string last_synced_editor_text;
         ConsolePopover active_popover = ConsolePopover::None;
         std::vector<PendingConsoleAction> pending_actions;
         float panel_x = 0.0f;
@@ -279,6 +293,12 @@ namespace {
         pane.packages_empty_el = nullptr;
         pane.listeners_attached = false;
         pane.splitter_dragging = false;
+        pane.terminal_focused = false;
+        pane.output_scroll_offset = 0;
+        pane.repl_scroll_offset = 0;
+        pane.active_tab = -1;
+        pane.splitter_ratio = g_splitter_ratio;
+        pane.last_synced_editor_text.clear();
         pane.active_popover = ConsolePopover::None;
         pane.pending_actions.clear();
         pane.last_editor_h = -1.0f;
@@ -642,7 +662,7 @@ namespace {
 
         if (!pane.host) {
             pane.host = std::make_unique<lfs::vis::gui::RmlPanelHost>(
-                manager, "python_console_panel", "rmlui/python_console_panel.rml");
+                manager, pane.context_name, "rmlui/python_console_panel.rml");
         }
 
         if (!pane.host->ensureDocumentLoaded())
@@ -678,7 +698,9 @@ namespace {
         if (action.empty())
             return;
 
-        auto* editor = state.getEditor();
+        auto* editor = pane.independent_view_state && pane.area_editor
+                           ? pane.area_editor.get()
+                           : state.getEditor();
         const auto close_popover = [&] {
             pane.active_popover = ConsolePopover::None;
             mark_dirty(pane);
@@ -696,9 +718,9 @@ namespace {
         } else if (action == "save-as") {
             save_script_dialog(state);
         } else if (action == "format") {
-            format_editor_script(state);
+            format_editor_script(state, editor);
         } else if (action == "clean") {
-            clean_editor_script(state);
+            clean_editor_script(state, editor);
         } else if (action == "toggle-vim") {
             if (editor) {
                 editor->setVimModeEnabled(!editor->isVimModeEnabled());
@@ -714,15 +736,27 @@ namespace {
         } else if (action == "clear") {
             state.clear();
         } else if (action == "tab-output") {
-            state.setActiveTab(0);
-            if (auto* terminal = state.getTerminal())
-                terminal->setFocused(false);
+            pane.active_tab = 0;
+            if (!pane.independent_view_state)
+                state.setActiveTab(0);
+            pane.terminal_focused = false;
+            if (!pane.independent_view_state) {
+                if (auto* terminal = state.getTerminal())
+                    terminal->setFocused(false);
+            }
         } else if (action == "tab-terminal") {
-            state.setActiveTab(1);
+            pane.active_tab = 1;
+            if (!pane.independent_view_state)
+                state.setActiveTab(1);
         } else if (action == "tab-packages") {
-            state.setActiveTab(2);
-            if (auto* terminal = state.getTerminal())
-                terminal->setFocused(false);
+            pane.active_tab = 2;
+            if (!pane.independent_view_state)
+                state.setActiveTab(2);
+            pane.terminal_focused = false;
+            if (!pane.independent_view_state) {
+                if (auto* terminal = state.getTerminal())
+                    terminal->setFocused(false);
+            }
         } else if (action == "font-inc") {
             state.increaseFontScale();
         } else if (action == "font-dec") {
@@ -842,14 +876,26 @@ namespace {
         return true;
     }
 
-    void process_rml_terminal_input(lfs::vis::terminal::TerminalWidget& terminal,
+    void process_rml_terminal_input(RmlPythonConsolePane& pane,
+                                    lfs::vis::terminal::TerminalWidget& terminal,
                                     const lfs::vis::gui::PanelInputState* input,
                                     const ElementBounds& bounds,
                                     float char_w,
-                                    float char_h) {
+                                    float char_h,
+                                    int* local_scroll_offset) {
         if (!input || bounds.width <= 0.0f || bounds.height <= 0.0f ||
             char_w <= 0.0f || char_h <= 0.0f)
             return;
+
+        const auto terminal_is_focused = [&]() {
+            return pane.independent_view_state ? pane.terminal_focused : terminal.isFocused();
+        };
+        const auto set_terminal_focus = [&](const bool focused) {
+            if (pane.independent_view_state)
+                pane.terminal_focused = focused;
+            else
+                terminal.setFocused(focused);
+        };
 
         const bool hovered =
             input->mouse_x >= bounds.x && input->mouse_x < bounds.x + bounds.width &&
@@ -862,7 +908,7 @@ namespace {
         };
 
         if (input->mouse_clicked[0]) {
-            terminal.setFocused(hovered);
+            set_terminal_focus(hovered);
             if (hovered) {
                 const auto [row, col] = mouse_cell();
                 terminal.beginSelection(row, col);
@@ -870,12 +916,12 @@ namespace {
         }
 
         if (hovered && input->mouse_clicked[1]) {
-            terminal.setFocused(true);
+            set_terminal_focus(true);
             show_terminal_context_menu(terminal, input->mouse_x, input->mouse_y);
             return;
         }
 
-        if (terminal.isFocused() && input->mouse_down[0]) {
+        if (terminal_is_focused() && input->mouse_down[0]) {
             const auto [row, col] = mouse_cell();
             terminal.updateSelection(row, col);
         }
@@ -890,13 +936,17 @@ namespace {
         }
 
         if (hovered && input->mouse_wheel != 0.0f) {
-            if (input->mouse_wheel > 0.0f)
+            if (local_scroll_offset) {
+                *local_scroll_offset = std::clamp(
+                    *local_scroll_offset + (input->mouse_wheel > 0.0f ? 3 : -3), 0, 1'000'000);
+            } else if (input->mouse_wheel > 0.0f) {
                 terminal.scrollUp(3);
-            else
+            } else {
                 terminal.scrollDown(3);
+            }
         }
 
-        if (!terminal.isFocused() || terminal.isReadOnly())
+        if (!terminal_is_focused() || terminal.isReadOnly())
             return;
 
         auto& focus = lfs::vis::gui::guiFocusState();
@@ -938,13 +988,37 @@ namespace {
         }
     }
 
+    lfs::vis::terminal::TerminalSnapshot shape_terminal_snapshot(
+        lfs::vis::terminal::TerminalSnapshot snapshot, const int cols, const int rows) {
+        snapshot.cols = std::max(1, cols);
+        snapshot.rows = std::max(1, rows);
+        snapshot.cursor_col = std::clamp(snapshot.cursor_col, 0, snapshot.cols - 1);
+        snapshot.cursor_row = std::clamp(snapshot.cursor_row, 0, snapshot.rows - 1);
+
+        std::vector<lfs::vis::terminal::TerminalRowSnapshot> shaped_rows(
+            static_cast<std::size_t>(snapshot.rows));
+        for (int row = 0; row < snapshot.rows; ++row) {
+            auto& destination = shaped_rows[static_cast<std::size_t>(row)].cells;
+            destination.resize(static_cast<std::size_t>(snapshot.cols));
+            if (row >= static_cast<int>(snapshot.visible_rows.size()))
+                continue;
+
+            const auto& source = snapshot.visible_rows[static_cast<std::size_t>(row)].cells;
+            const auto copied = std::min(source.size(), destination.size());
+            std::copy_n(source.begin(), copied, destination.begin());
+        }
+        snapshot.visible_rows = std::move(shaped_rows);
+        return snapshot;
+    }
+
     void sync_terminal_view(RmlPythonConsolePane& pane,
                             lfs::vis::terminal::TerminalWidget& terminal,
                             lfs::vis::gui::TerminalElement* view,
                             Rml::Element* view_el,
                             const lfs::vis::gui::PanelInputState* input,
                             const float font_size,
-                            const bool process_input) {
+                            const bool process_input,
+                            int* local_scroll_offset) {
         terminal.update();
         if (!view || !view_el)
             return;
@@ -958,21 +1032,47 @@ namespace {
         const int cols = std::max(1, static_cast<int>(bounds.width / char_w));
         const int rows = std::max(1, static_cast<int>(bounds.height / char_h));
 
-        terminal.resize(cols, rows);
+        // Only the dock resizes the shared PTY. Area instances shape a copy of its output.
+        if (!pane.independent_view_state)
+            terminal.resize(cols, rows);
         terminal.update();
         if (process_input)
-            process_rml_terminal_input(terminal, input, bounds, char_w, char_h);
+            process_rml_terminal_input(pane, terminal, input, bounds, char_w, char_h,
+                                       local_scroll_offset);
 
         const bool dirty = terminal.needsRedraw();
-        const uint64_t redraw_generation = terminal.redrawGeneration();
         set_cached_property(pane, view, "font-size", std::format("{:.0f}px", font_size),
                             "data-lfs-font-size");
         set_cached_property(pane, view, "line-height", std::format("{:.0f}px", char_h),
                             "data-lfs-line-height");
-        if (dirty) {
-            view->setSnapshot(terminal.snapshot());
-            mark_dirty(pane);
-            terminal.markRendered(redraw_generation);
+        if (dirty || pane.independent_view_state) {
+            auto snapshot = terminal.snapshot();
+            const int service_scroll_offset = snapshot.scroll_offset;
+            if (pane.independent_view_state && local_scroll_offset) {
+                const int requested_scroll_offset = std::clamp(*local_scroll_offset, 0, 1'000'000);
+                if (requested_scroll_offset > service_scroll_offset)
+                    terminal.scrollUp(requested_scroll_offset - service_scroll_offset);
+                else if (requested_scroll_offset < service_scroll_offset)
+                    terminal.scrollDown(service_scroll_offset - requested_scroll_offset);
+                snapshot = terminal.snapshot();
+                *local_scroll_offset = snapshot.scroll_offset;
+
+                // Keep the shared service's scroll position owned by the
+                // legacy pane/MCP. The area receives the copied view below.
+                if (snapshot.scroll_offset > service_scroll_offset)
+                    terminal.scrollDown(snapshot.scroll_offset - service_scroll_offset);
+                else if (snapshot.scroll_offset < service_scroll_offset)
+                    terminal.scrollUp(service_scroll_offset - snapshot.scroll_offset);
+            }
+            if (pane.independent_view_state) {
+                snapshot = shape_terminal_snapshot(std::move(snapshot), cols, rows);
+                snapshot.focused = pane.terminal_focused;
+            }
+            view->setSnapshot(snapshot);
+            if (dirty || terminal.needsRedraw()) {
+                mark_dirty(pane);
+                terminal.markRendered(terminal.redrawGeneration());
+            }
         }
     }
 
@@ -994,8 +1094,9 @@ namespace {
     }
 
     void sync_syntax_menus(RmlPythonConsolePane& pane,
-                           lfs::vis::gui::panels::PythonConsoleState& state) {
-        auto* editor = state.getEditor();
+                           lfs::vis::gui::panels::PythonConsoleState& state,
+                           lfs::vis::editor::PythonEditor* editor_override = nullptr) {
+        auto* editor = editor_override ? editor_override : state.getEditor();
         const auto symbols = editor ? editor->syntaxSymbols()
                                     : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
         const auto breadcrumbs = editor ? editor->syntaxBreadcrumbs()
@@ -1129,7 +1230,8 @@ namespace {
 
     void sync_console_dom(RmlPythonConsolePane& pane,
                           lfs::vis::gui::panels::PythonConsoleState& state,
-                          const float panel_h) {
+                          const float panel_h,
+                          lfs::vis::editor::PythonEditor* editor_override = nullptr) {
         if (pane.document) {
             const auto set_label = [&](const char* id, const char* key) {
                 set_text(pane, pane.document->GetElementById(id), LOC(key));
@@ -1161,10 +1263,14 @@ namespace {
                 search->SetAttribute("placeholder", LOC(lichtfeld::Strings::PythonConsole::SEARCH_PACKAGES));
             set_label("packages-empty", lichtfeld::Strings::PythonConsole::NO_PACKAGES);
         }
-        auto* editor = state.getEditor();
+        auto* editor = editor_override ? editor_override : state.getEditor();
         const bool has_script = !state.getScriptPath().empty();
         const bool can_stop = can_stop_python_work(state);
-        const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        if (!pane.independent_view_state)
+            pane.active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        else if (pane.active_tab < 0)
+            pane.active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        const int active_tab = std::clamp(pane.active_tab, 0, 2);
 
         set_disabled(pane, pane.reload_button_el, !has_script);
         set_disabled(pane, pane.stop_button_el, !can_stop);
@@ -1186,7 +1292,7 @@ namespace {
         if (active_tab == 2 && !pane.packages_loaded_once)
             request_packages_refresh(pane);
         if (pane.active_popover != ConsolePopover::None)
-            sync_syntax_menus(pane, state);
+            sync_syntax_menus(pane, state, editor_override);
         if (active_tab == 2 || pane.packages_loading)
             sync_packages(pane);
 
@@ -1196,7 +1302,9 @@ namespace {
         const float available_h = std::max(0.0f, panel_h - toolbar_h - SPLITTER_THICKNESS);
         const float min_h = std::min(MIN_PANE_HEIGHT, available_h * 0.45f);
         const float bottom_h = available_h > 0.0f
-                                   ? std::clamp(available_h * (1.0f - g_splitter_ratio),
+                                   ? std::clamp(available_h * (1.0f - (pane.independent_view_state
+                                                                           ? pane.splitter_ratio
+                                                                           : g_splitter_ratio)),
                                                 min_h, std::max(min_h, available_h - min_h))
                                    : 0.0f;
         const float editor_h = std::max(0.0f, available_h - bottom_h);
@@ -1239,22 +1347,30 @@ namespace {
         const float local_y = std::clamp(input->mouse_y - pane.panel_y - toolbar_h,
                                          0.0f, available_h);
         const float next_ratio = std::clamp(local_y / available_h, 0.2f, 0.8f);
-        if (std::abs(next_ratio - g_splitter_ratio) < 0.001f)
+        const float current_ratio = pane.independent_view_state ? pane.splitter_ratio : g_splitter_ratio;
+        if (std::abs(next_ratio - current_ratio) < 0.001f)
             return false;
-        g_splitter_ratio = next_ratio;
+        if (pane.independent_view_state)
+            pane.splitter_ratio = next_ratio;
+        else
+            g_splitter_ratio = next_ratio;
         mark_dirty(pane);
         return true;
     }
 
-    void process_console_shortcuts(lfs::vis::gui::panels::PythonConsoleState& state,
+    void process_console_shortcuts(RmlPythonConsolePane& pane,
+                                   lfs::vis::gui::panels::PythonConsoleState& state,
                                    const lfs::vis::gui::PanelInputState* input) {
         if (!input)
             return;
 
-        const bool terminal_focused =
-            (state.getTerminal() && state.getTerminal()->isFocused()) ||
-            (state.getOutputTerminal() && state.getOutputTerminal()->isFocused());
-        auto* editor = state.getEditor();
+        const bool terminal_focused = pane.independent_view_state
+                                          ? pane.terminal_focused
+                                          : ((state.getTerminal() && state.getTerminal()->isFocused()) ||
+                                             (state.getOutputTerminal() && state.getOutputTerminal()->isFocused()));
+        auto* editor = pane.independent_view_state && pane.area_editor
+                           ? pane.area_editor.get()
+                           : state.getEditor();
 
         if (!terminal_focused && has_key(*input, SDL_SCANCODE_F5) && editor) {
             execute_python_code(editor->getTextStripped(), state);
@@ -1277,9 +1393,9 @@ namespace {
         } else if (has_key(*input, SDL_SCANCODE_O)) {
             open_script_dialog(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
-            format_editor_script(state);
+            format_editor_script(state, editor);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {
-            clean_editor_script(state);
+            clean_editor_script(state, editor);
         } else if (has_key(*input, SDL_SCANCODE_EQUALS) ||
                    has_key(*input, SDL_SCANCODE_KP_PLUS)) {
             state.increaseFontScale();
@@ -1679,30 +1795,49 @@ namespace lfs::vis::gui::panels {
         return output_terminal_->getAllText();
     }
 
-    void ShutdownPythonConsoleRml() {
-        reset_rml_python_console_pane(g_console_pane);
-    }
-
-    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
-                                 const PanelInputState* input) {
+    bool render_console_pane(const UIContext& ctx, RmlPythonConsolePane& pane,
+                             float x, float y, float w, float h,
+                             const PanelInputState* input) {
         (void)lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
         setup_console_output_capture();
 
         auto& state = PythonConsoleState::getInstance();
-        auto& pane = g_console_pane;
         if (!ensure_console_pane(pane, ctx.rml_manager))
-            return;
+            return false;
 
         pane.panel_x = x;
         pane.panel_y = y;
         pane.panel_w = w;
         pane.panel_h = h;
 
+        auto* editor = state.getEditor();
+        if (pane.independent_view_state) {
+            const std::string shared_editor_text = state.getEditorText();
+            if (!pane.area_editor) {
+                pane.area_editor = std::make_unique<lfs::vis::editor::PythonEditor>();
+                pane.area_editor->setText(shared_editor_text);
+                pane.area_editor->consumeTextChanged();
+                pane.last_synced_editor_text = shared_editor_text;
+                pane.area_editor->setVimModeEnabled(editor && editor->isVimModeEnabled());
+            } else if (shared_editor_text != pane.last_synced_editor_text &&
+                       pane.area_editor->getText() == pane.last_synced_editor_text) {
+                // A different area or the shared service changed the document.
+                // Preserve local edits until they have been published below.
+                pane.area_editor->setText(shared_editor_text);
+                pane.area_editor->consumeTextChanged();
+                pane.last_synced_editor_text = shared_editor_text;
+            }
+            editor = pane.area_editor.get();
+        }
+
         const float font_size = console_font_size(state);
-        if (auto* editor = state.getEditor()) {
-            editor->setReadOnly(should_block_editor_input(editor, state));
+        if (editor) {
+            const bool terminal_focused = pane.independent_view_state
+                                              ? pane.terminal_focused
+                                              : (state.getTerminal() && state.getTerminal()->isFocused());
+            editor->setReadOnly(should_block_editor_input(editor, terminal_focused));
             pane.editor_view->setEditor(editor);
             pane.editor_view->setFontSizePx(font_size);
             set_cached_property(pane, pane.editor_view, "font-size",
@@ -1710,19 +1845,26 @@ namespace lfs::vis::gui::panels {
                                 "data-lfs-font-size");
         }
 
-        sync_console_dom(pane, state, h);
+        sync_console_dom(pane, state, h, editor);
         pane.host->syncDirectLayout(w, h);
         if (process_splitter(pane, input)) {
-            sync_console_dom(pane, state, h);
+            sync_console_dom(pane, state, h, editor);
             pane.host->syncDirectLayout(w, h);
         }
 
-        const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        if (!pane.independent_view_state)
+            pane.active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        else if (pane.active_tab < 0)
+            pane.active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        const int active_tab = std::clamp(pane.active_tab, 0, 2);
+        if (pane.independent_view_state && active_tab != 1 && input && input->mouse_clicked[0])
+            pane.terminal_focused = false;
         if (auto* output = state.getOutputTerminal()) {
             output->setReadOnly(true);
             if (active_tab == 0) {
                 sync_terminal_view(pane, *output, pane.output_view, pane.output_view, input,
-                                   font_size, true);
+                                   font_size, true,
+                                   pane.independent_view_state ? &pane.output_scroll_offset : nullptr);
             } else {
                 output->update();
             }
@@ -1737,17 +1879,23 @@ namespace lfs::vis::gui::panels {
                         lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
                 }
                 sync_terminal_view(pane, *terminal, pane.repl_view, pane.repl_view, input,
-                                   font_size, true);
+                                   font_size, true,
+                                   pane.independent_view_state ? &pane.repl_scroll_offset : nullptr);
             } else {
                 terminal->update();
-                terminal->setFocused(false);
+                // The legacy pane owns the singleton terminal focus. Area
+                // panes receive filtered input, so an inactive area must not
+                // clear focus held by the focused console area.
+                if (!pane.independent_view_state)
+                    terminal->setFocused(false);
             }
-            state.setTerminalFocused(active_tab == 1 && terminal->isFocused());
+            if (!pane.independent_view_state)
+                state.setTerminalFocused(active_tab == 1 && terminal->isFocused());
         }
 
-        process_console_shortcuts(state, input);
+        process_console_shortcuts(pane, state, input);
 
-        if (auto* editor = state.getEditor(); editor && editor->needsRmlFrame())
+        if (editor && editor->needsRmlFrame())
             mark_dirty(pane);
 
         pane.host->setInput(input);
@@ -1757,14 +1905,85 @@ namespace lfs::vis::gui::panels {
             pane.host->prepareDirect(w, h);
         pane.host->setInput(nullptr);
 
+        if (pane.independent_view_state && editor && editor->consumeTextChanged()) {
+            state.setEditorText(editor->getText());
+            pane.last_synced_editor_text = editor->getText();
+            state.setModified(true);
+        }
         process_pending_console_actions(pane, state);
 
-        if (auto* editor = state.getEditor()) {
-            if (editor->consumeExecuteRequested())
-                execute_python_code(editor->getTextStripped(), state);
-            if (editor->consumeTextChanged())
-                state.setModified(true);
+        if (!pane.independent_view_state && editor && editor->consumeTextChanged())
+            state.setModified(true);
+        if (editor && editor->consumeExecuteRequested())
+            execute_python_code(editor->getTextStripped(), state);
+        return true;
+    }
+
+    PythonConsolePane::PythonConsolePane(RmlUIManager* manager, std::string context_name)
+        : impl_(new RmlPythonConsolePane(std::move(context_name), true)) {
+        static_cast<RmlPythonConsolePane*>(impl_)->manager = manager;
+    }
+
+    PythonConsolePane::~PythonConsolePane() {
+        if (!impl_)
+            return;
+        auto* const pane = static_cast<RmlPythonConsolePane*>(impl_);
+        reset_rml_python_console_pane(*pane);
+        delete pane;
+        impl_ = nullptr;
+    }
+
+    bool PythonConsolePane::render(const UIContext& ctx, const float x, const float y,
+                                   const float w, const float h,
+                                   const PanelInputState* input) {
+        auto* const pane = static_cast<RmlPythonConsolePane*>(impl_);
+        return pane && render_console_pane(ctx, *pane, x, y, w, h, input);
+    }
+
+    std::string PythonConsolePane::captureChromeJson() const {
+        const auto* const pane = static_cast<const RmlPythonConsolePane*>(impl_);
+        if (!pane)
+            return {};
+        return nlohmann::json{
+            {"active_tab", pane->active_tab},
+            {"splitter_ratio", pane->splitter_ratio},
         }
+            .dump();
+    }
+
+    void PythonConsolePane::applyChromeJson(const std::string_view json) {
+        auto* const pane = static_cast<RmlPythonConsolePane*>(impl_);
+        if (!pane || json.empty())
+            return;
+        try {
+            const auto value = nlohmann::json::parse(json);
+            if (value.contains("active_tab") && value["active_tab"].is_number_integer())
+                pane->active_tab = std::clamp(value["active_tab"].get<int>(), 0, 2);
+            if (value.contains("splitter_ratio") && value["splitter_ratio"].is_number())
+                pane->splitter_ratio = std::clamp(value["splitter_ratio"].get<float>(), 0.2f, 0.8f);
+        } catch (const std::exception&) {
+            // Chrome is opaque project data. A malformed payload keeps defaults.
+        }
+    }
+
+    bool PythonConsolePane::needsAnimationFrame() const {
+        const auto* const pane = static_cast<const RmlPythonConsolePane*>(impl_);
+        return pane && pane->host && pane->host->needsAnimationFrame();
+    }
+
+    void PythonConsolePane::releaseRendererResources() {
+        auto* const pane = static_cast<RmlPythonConsolePane*>(impl_);
+        if (pane && pane->host)
+            pane->host->releaseRendererResources();
+    }
+
+    void ShutdownPythonConsoleRml() {
+        reset_rml_python_console_pane(g_console_pane);
+    }
+
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
+                                 const PanelInputState* input) {
+        (void)render_console_pane(ctx, g_console_pane, x, y, w, h, input);
     }
 
 } // namespace lfs::vis::gui::panels

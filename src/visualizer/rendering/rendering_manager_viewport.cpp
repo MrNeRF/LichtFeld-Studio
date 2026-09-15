@@ -4,13 +4,16 @@
 
 #include "core/logger.hpp"
 #include "model_renderability.hpp"
+#include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/image_layout.hpp"
 #include "rendering/viewport_request_builder.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "view_output_key.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
@@ -103,6 +106,17 @@ namespace lfs::vis {
                 .center_x = static_cast<float>(full_width) * 0.5f,
                 .center_y = static_cast<float>(full_height) * 0.5f,
             };
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> asHwcImage(
+            lfs::core::Tensor image) {
+            if (!image.is_valid() || image.ndim() != 3) {
+                return std::make_shared<lfs::core::Tensor>(std::move(image));
+            }
+            if (lfs::rendering::detectImageLayout(image) == lfs::rendering::ImageLayout::CHW) {
+                image = image.permute({1, 2, 0});
+            }
+            return std::make_shared<lfs::core::Tensor>(image.cpu().contiguous());
         }
 
     } // namespace
@@ -298,10 +312,116 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::getViewportImageIfAvailable() const {
+        // Independent workspace rendering publishes one image per stable ViewId.
+        // The legacy artifact service is only updated by the single-view path,
+        // so prefer the focused workspace frame whenever one is retained.
+        if (workspace_focused_view_ != kInvalidViewId &&
+            !splitViewUsesComparisonPanels(getSplitViewMode())) {
+            if (const auto frame = getWorkspaceVulkanFrame(workspace_focused_view_);
+                frame && frame->color.image && frame->color.image->is_valid()) {
+                return std::const_pointer_cast<lfs::core::Tensor>(frame->color.image);
+            }
+        }
         return viewport_artifact_service_.getCapturedImageIfCurrent();
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
+        const bool comparison_mode = splitViewUsesComparisonPanels(getSplitViewMode());
+        if (workspace_focused_view_ != kInvalidViewId && !comparison_mode) {
+            const auto frame = getWorkspaceVulkanFrame(workspace_focused_view_);
+            // A valid workspace focus makes the workspace frame authoritative.
+            // Do not return an image from the legacy artifact service when this
+            // pane has not produced a readable image yet.
+            if (!frame || frame->source == WorkspaceVulkanFrame::Source::None ||
+                frame->color.size.x <= 0 || frame->color.size.y <= 0) {
+                return {};
+            }
+            const bool point_cloud_image =
+                frame->source == WorkspaceVulkanFrame::Source::PointCloud;
+            const auto& environment = frame->geometry.environment;
+            const bool transparent =
+                frame->source == WorkspaceVulkanFrame::Source::Gaussian &&
+                environment.enabled;
+            const auto composite_capture = [&](std::shared_ptr<lfs::core::Tensor> image,
+                                               const bool point_cloud_image) {
+                if (!image || !image->is_valid() || !transparent || point_cloud_image) {
+                    return image;
+                }
+
+                auto* const engine = engine_ ? engine_.get() : getRenderingEngine();
+                if (!engine) {
+                    return image;
+                }
+
+                // Composite HDRI for capture without replacing the published alpha-bearing image.
+                const auto& view = frame->unjittered_view;
+                lfs::rendering::FrameMetadata metadata{
+                    .valid = true,
+                    .flip_y = frame->color.flip_y,
+                    .near_plane = view.near_plane,
+                    .far_plane = view.far_plane,
+                    .orthographic = view.orthographic};
+                auto materialized = engine->materializeGpuFrame(
+                    image, metadata, frame->color.size);
+                if (!materialized || !materialized->valid()) {
+                    LOG_WARN("Focused workspace HDRI capture could not materialize its "
+                             "render; returning the alpha-bearing image");
+                    return image;
+                }
+                lfs::rendering::VideoCompositeFrameRequest composite{
+                    .viewport =
+                        {.rotation = view.rotation,
+                         .translation = view.translation,
+                         .size = view.size,
+                         .focal_length_mm = view.focal_length_mm,
+                         .orthographic = view.orthographic,
+                         .ortho_scale = view.ortho_scale},
+                    .frame_view = view,
+                    .background_color = view.background_color,
+                    .environment =
+                        {.enabled = environment.enabled,
+                         .map_path = environment.map_path,
+                         .exposure = environment.exposure,
+                         .rotation_degrees = glm::degrees(environment.rotation_radians),
+                         .equirectangular = environment.equirectangular_view}};
+                if (auto composited = engine->renderVideoCompositeFrame(
+                        *materialized, composite);
+                    composited) {
+                    return asHwcImage(std::move(*composited));
+                }
+                LOG_WARN("Focused workspace HDRI capture could not be composited; "
+                         "returning the alpha-bearing image");
+                return image;
+            };
+            if (frame->color.image && frame->color.image->is_valid()) {
+                return composite_capture(
+                    std::const_pointer_cast<lfs::core::Tensor>(frame->color.image),
+                    point_cloud_image);
+            }
+            if (last_vulkan_context_) {
+                std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> image =
+                    std::unexpected("workspace renderer unavailable");
+                if (frame->source == WorkspaceVulkanFrame::Source::Gaussian &&
+                    vksplat_viewport_renderer_) {
+                    image = transparent
+                                ? vksplat_viewport_renderer_->readOutputImageRgba(
+                                      *last_vulkan_context_, sceneOutputKey(workspace_focused_view_))
+                                : vksplat_viewport_renderer_->readOutputImage(
+                                      *last_vulkan_context_, sceneOutputKey(workspace_focused_view_));
+                } else if (frame->source == WorkspaceVulkanFrame::Source::PointCloud &&
+                           point_cloud_vulkan_renderer_) {
+                    // Point-cloud output has the same keyed lifetime but its
+                    // renderer owns the readback format and alpha behavior.
+                    image = point_cloud_vulkan_renderer_->readOutputImage(
+                        *last_vulkan_context_, sceneOutputKey(workspace_focused_view_));
+                }
+                if (image && *image && (*image)->is_valid()) {
+                    return composite_capture(std::move(*image), point_cloud_image);
+                }
+            }
+            return {};
+        }
+
         if (viewport_artifact_service_.hasLazyCapture()) {
             return viewport_artifact_service_.resolveLazyCapture();
         }

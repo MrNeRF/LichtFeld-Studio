@@ -38,6 +38,7 @@
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
+#include "py_workspace.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
@@ -2783,6 +2784,7 @@ namespace lfs::python {
         register_ui_context_menu(m);
         register_ui_operators(m);
         register_ui_modals(m);
+        register_workspace(m);
         register_rml_bindings(m);
 
         m.def(
@@ -4728,15 +4730,14 @@ namespace lfs::python {
             },
             "Clear all pending preloads");
 
-        m.def("is_sequencer_visible", &is_sequencer_visible, "Check if sequencer panel is visible");
+        m.def("is_sequencer_visible", [] { return invoke_on_viewer([] { return is_sequencer_visible(); }, false); }, "Check if sequencer panel is visible");
 
         m.def(
             "section_header",
             [](const std::string&) {},
             nb::arg("text"), "Draw a section header with text and separator");
 
-        m.def("set_sequencer_visible", &set_sequencer_visible, nb::arg("visible"),
-              "Set sequencer panel visibility");
+        m.def("set_sequencer_visible", [](bool visible) { invoke_on_viewer([visible] { set_sequencer_visible(visible); }); }, nb::arg("visible"), "Set sequencer panel visibility");
 
         // Overlay state functions for Python overlay panels
         m.def("is_drag_hovering", &is_drag_hovering,

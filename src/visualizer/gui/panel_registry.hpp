@@ -162,6 +162,15 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        // A screen area owns its editor instance. Registry panels are prototypes;
+        // a retained document, data model, and input state cannot be drawn into
+        // multiple areas by sharing the same panel object.
+        [[nodiscard]] virtual bool supportsAreaInstances() const { return false; }
+        [[nodiscard]] virtual std::shared_ptr<IPanel> createAreaInstance(
+            std::string_view instance_id) const {
+            (void)instance_id;
+            return nullptr;
+        }
         // Called on the GUI thread only after a native viewport drop hit test.
         virtual bool onViewportDrop(const std::string& type, const std::string& data) {
             (void)type;
@@ -388,6 +397,8 @@ namespace lfs::vis::gui {
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
+        [[nodiscard]] std::shared_ptr<IPanel> create_area_instance(
+            const std::string& panel_id, std::string_view instance_id) const;
         [[nodiscard]] std::vector<PanelProjectState>
         capture_project_state() const;
         void apply_project_state(

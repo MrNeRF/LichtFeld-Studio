@@ -32,6 +32,9 @@ namespace lfs::vis::gui {
         ~RmlPythonPanelAdapter() override;
 
         bool onViewportDrop(const std::string& type, const std::string& data) override;
+        [[nodiscard]] bool supportsAreaInstances() const override { return true; }
+        [[nodiscard]] std::shared_ptr<IPanel> createAreaInstance(
+            std::string_view instance_id) const override;
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         void setPollVisibility(bool visible) override;

@@ -527,7 +527,10 @@ namespace lfs::vis {
         }
 
         const float radius = std::max(node.size * traversal.object_scale, 1.0e-6f);
-        float distance_for_scale = radial_dist;
+        // Orthographic projection has no perspective depth term: the projected
+        // radius is measured directly in world units and compared with the
+        // world-units-per-pixel threshold (1 / ortho_scale).
+        float distance_for_scale = traversal.orthographic ? 1.0f : radial_dist;
         const float discovery_floor =
             node.child_count > 0 && node.lod_level <= 2 ? 0.05f : 0.0f;
 

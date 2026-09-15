@@ -976,6 +976,30 @@ def modal_press(label: str) -> bool:
     Press an enabled modal button by label. Returns False if no matching enabled button.
     """
 
+def workspace_state() -> dict:
+    """Inspect stable view IDs, cameras and workspace layout."""
+
+def workspace_set_editor(view_id: int, editor_id: str) -> None:
+    """Choose an area's editor while retaining its identity and camera state."""
+
+def workspace_set_layout(layout: str) -> None:
+    """Set the workspace layout while retaining surviving view identities."""
+
+def workspace_split(view_id: int, axis: str = 'horizontal', ratio: float = 0.5) -> int: ...
+
+def workspace_close(view_id: int) -> None: ...
+
+def workspace_focus(view_id: int) -> None: ...
+
+def workspace_maximize(view_id: int | None = None) -> None:
+    """Maximize a view, or restore the layout with None."""
+
+def workspace_resize(split_id: int, ratio: float) -> None: ...
+
+def workspace_set_camera(view_id: int, eye: Sequence[float], target: Sequence[float], up: Sequence[float] = [0.0, 1.0, 0.0]) -> None: ...
+
+def workspace_set_projection(view_id: int, orthographic: bool, focal_length_mm: float | None = None, ortho_scale: float | None = None) -> None: ...
+
 def get_panel_object(panel_id: str) -> object:
     """
     Get the Python object for a retained Python panel, or None if unavailable

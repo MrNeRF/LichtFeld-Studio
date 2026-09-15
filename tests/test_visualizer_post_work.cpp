@@ -15306,4 +15306,97 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.hasPendingRenderWork());
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
+
+    TEST_F(VisualizerImplResetTest, RenderWorkPhasesKeepResourceMutationsOutOfActiveFrame) {
+        VisualizerImpl viewer(projectOptions());
+        std::vector<std::string> events;
+        bool posted_during_active_phase = false;
+        bool posted_late_capture = false;
+
+        viewer.render_work_queue_.push_back({
+            .run = [&] { events.emplace_back("mutation-a"); },
+            .cancel = [&] { events.emplace_back("cancel-a"); },
+        });
+        viewer.render_work_queue_.push_back({
+            .run = [&] {
+                events.emplace_back("capture");
+                posted_during_active_phase = viewer.postRenderWork({
+                    .run = [&] { events.emplace_back("mutation-c"); },
+                    .cancel = [&] { events.emplace_back("cancel-c"); },
+                });
+                posted_late_capture = viewer.postRenderWork({
+                    .run = [&] { events.emplace_back("late-capture"); },
+                    .cancel = [&] { events.emplace_back("cancel-late-capture"); },
+                    .requires_active_frame = true,
+                }); },
+            .cancel = [&] { events.emplace_back("cancel-capture"); },
+            .requires_active_frame = true,
+        });
+        viewer.render_work_queue_.push_back({
+            .run = [&] { events.emplace_back("mutation-b"); },
+            .cancel = [&] { events.emplace_back("cancel-b"); },
+        });
+        viewer.render_work_queue_.push_back({
+            .run = [&] { events.emplace_back("capture-b"); },
+            .cancel = [&] { events.emplace_back("cancel-capture-b"); },
+            .requires_active_frame = true,
+        });
+
+        // The active-frame phase executes capture only. Ordinary work remains
+        // queued while the command buffer is still recording.
+        viewer.processRenderWorkQueue(true);
+        ASSERT_EQ(events, std::vector<std::string>{"capture"});
+        ASSERT_TRUE(viewer.hasPendingRenderWork());
+
+        // The post-submit phase drains ordinary work exactly once and keeps its
+        // original FIFO order, even though active capture ran first. A capture
+        // posted too late is retained for the next active phase.
+        viewer.processRenderWorkQueue();
+        EXPECT_EQ(events,
+                  (std::vector<std::string>{"capture", "mutation-a", "mutation-b", "mutation-c"}));
+        EXPECT_TRUE(posted_during_active_phase);
+        EXPECT_TRUE(posted_late_capture);
+        ASSERT_TRUE(viewer.hasPendingRenderWork());
+
+        // Each capture consumes its frame; a second request waits for the next
+        // frame, retaining order with the capture posted during the first drain.
+        viewer.processRenderWorkQueue(true);
+        EXPECT_EQ(events,
+                  (std::vector<std::string>{"capture", "mutation-a", "mutation-b", "mutation-c",
+                                            "capture-b"}));
+        ASSERT_TRUE(viewer.hasPendingRenderWork());
+        viewer.processRenderWorkQueue();
+        ASSERT_EQ(events.size(), 5u);
+        viewer.processRenderWorkQueue(true);
+        EXPECT_EQ(events,
+                  (std::vector<std::string>{"capture", "mutation-a", "mutation-b", "mutation-c", "capture-b",
+                                            "late-capture"}));
+        EXPECT_FALSE(viewer.hasPendingRenderWork());
+    }
+
+    TEST_F(VisualizerImplResetTest, RenderWorkPhasesCancelDeferredAndActiveWorkOnShutdown) {
+        VisualizerImpl viewer(projectOptions());
+        (void)viewer.frame_state_.on_fault(FrameFault::DeviceLost);
+        int ran = 0;
+        int cancelled = 0;
+        viewer.render_work_queue_.push_back({
+            .run = [&] { ++ran; },
+            .cancel = [&] { ++cancelled; },
+        });
+        viewer.render_work_queue_.push_back({
+            .run = [&] { ++ran; },
+            .cancel = [&] { ++cancelled; },
+            .requires_active_frame = true,
+        });
+
+        // Renderer-dead state settles every queued item before phase filtering.
+        viewer.processRenderWorkQueue(true);
+        EXPECT_EQ(ran, 0);
+        EXPECT_EQ(cancelled, 2);
+        EXPECT_FALSE(viewer.hasPendingRenderWork());
+
+        // A second drain cannot settle either item again.
+        viewer.processRenderWorkQueue();
+        EXPECT_EQ(cancelled, 2);
+    }
 } // namespace lfs::vis

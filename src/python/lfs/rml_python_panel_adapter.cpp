@@ -497,6 +497,17 @@ namespace lfs::vis::gui {
         ops.destroy(host_);
     }
 
+    std::shared_ptr<IPanel> RmlPythonPanelAdapter::createAreaInstance(
+        const std::string_view instance_id) const {
+        if (!lfs::python::can_acquire_gil())
+            return nullptr;
+        nb::gil_scoped_acquire gil;
+        nb::object panel_class = nb::borrow(panel_instance_.type());
+        return std::make_shared<RmlPythonPanelAdapter>(
+            manager_, panel_class(), std::string(instance_id), rml_path_, style_,
+            has_poll_, height_mode_, has_draw_);
+    }
+
     void RmlPythonPanelAdapter::draw(const PanelDrawContext& ctx) {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         assert(ops.create && ops.draw && ops.get_document && ops.is_loaded);

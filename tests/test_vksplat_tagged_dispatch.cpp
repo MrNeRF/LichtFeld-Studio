@@ -1046,13 +1046,13 @@ namespace {
                 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap;
             const VkDeviceSize readback_bytes =
                 (3 + kPayloadWords) * sizeof(std::uint32_t);
-            lod_selection_readback_buffer_ = makeBuffer(0xF001, readback_bytes);
-            lod_selection_readback_mapped_ = reinterpret_cast<std::uint32_t*>(
+            lod_selection_readback_slots_[0].buffer = makeBuffer(0xF001, readback_bytes);
+            lod_selection_readback_slots_[0].mapped = reinterpret_cast<std::uint32_t*>(
                 static_cast<std::uintptr_t>(0xBEEF0000));
-            lod_selection_readback_initialized_ = true;
-            lod_selection_readback_pending_ = false;
+            lod_selection_readback_slots_[0].initialized = true;
+            lod_selection_readback_slots_[0].pending = false;
             lod_selection_readback_chunk_capacity_ = kPayloadWords;
-            lod_selection_readback_capacity_ = 0;
+            lod_selection_readback_slots_[0].capacity = 0;
 
             // Visible-count readback (two words) for sort-chain audits.
             visible_count_readback_buffer_ = makeBuffer(0xF002, 2 * sizeof(std::uint32_t));
@@ -1118,9 +1118,9 @@ namespace {
             current_vram = 0;
 
             // Skip vmaDestroy on forged readbacks.
-            lod_selection_readback_initialized_ = false;
-            lod_selection_readback_buffer_ = {};
-            lod_selection_readback_mapped_ = nullptr;
+            lod_selection_readback_slots_[0].initialized = false;
+            lod_selection_readback_slots_[0].buffer = {};
+            lod_selection_readback_slots_[0].mapped = nullptr;
             visible_count_readback_initialized_ = false;
             visible_count_readback_buffer_ = {};
             instance_count_readback_initialized_ = false;
@@ -1145,7 +1145,7 @@ namespace {
         }
 
         [[nodiscard]] _VulkanBuffer& lod_readback() noexcept {
-            return lod_selection_readback_buffer_;
+            return lod_selection_readback_slots_[0].buffer;
         }
 
         // Drop GPU timestamp bookkeeping so endCommandBatch does not call

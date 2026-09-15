@@ -156,11 +156,14 @@ namespace lfs::vis {
     using gui::rml_theme::colorToRmlAlpha;
     using namespace panel_config;
 
-    RmlSequencerPanel::RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
-                                         gui::RmlUIManager* rml_manager)
+    RmlSequencerPanel::RmlSequencerPanel(SequencerController& controller,
+                                         gui::panels::SequencerUIState& ui_state,
+                                         gui::RmlUIManager* rml_manager,
+                                         std::string context_name)
         : controller_(controller),
           ui_state_(ui_state),
-          rml_manager_(rml_manager) {
+          rml_manager_(rml_manager),
+          context_name_(std::move(context_name)) {
         assert(rml_manager_);
         transport_listener_.panel = this;
         quality_scrub_listener_.panel = this;
@@ -169,7 +172,12 @@ namespace lfs::vis {
         resolution_listener_.panel = this;
     }
 
-    RmlSequencerPanel::~RmlSequencerPanel() = default;
+    RmlSequencerPanel::~RmlSequencerPanel() {
+        // Release cached textures and film strips before destroying a retired Rml context.
+        destroyGraphicsResources();
+        if (rml_manager_ && rml_context_)
+            rml_manager_->destroyContext(context_name_);
+    }
 
     void RmlSequencerPanel::TransportClickListener::ProcessEvent(Rml::Event& event) {
         assert(panel);
@@ -461,6 +469,7 @@ namespace lfs::vis {
             .height = height,
             .dp_milli = milli(cached_dp_ratio_),
             .floating = floating_,
+            .area_hosted = area_hosted_,
             .film_strip_attached = film_strip_attached_,
             .theme_signature = theme_signature,
             .language = std::move(language),
@@ -558,7 +567,7 @@ namespace lfs::vis {
             return;
 
         cached_dp_ratio_ = rml_manager_->getDpRatio();
-        rml_context_ = rml_manager_->createContext("sequencer", width, height);
+        rml_context_ = rml_manager_->createContext(context_name_, width, height);
         if (!rml_context_)
             return;
 
@@ -1084,24 +1093,33 @@ namespace lfs::vis {
             el_panel_->SetClass("is-floating", floating_);
             el_panel_->SetClass("film-strip-attached", film_strip_attached_);
         }
-        if (el_floating_header_)
-            el_floating_header_->SetClass("hidden", !floating_);
+        // ID selectors and responsive rules can override the generic hidden
+        // class. Hide inline, then restore the stylesheet's own display mode.
+        const auto set_control_visible = [](Rml::Element* element, const bool visible) {
+            if (!element)
+                return;
+            element->SetClass("hidden", !visible);
+            if (visible)
+                element->RemoveProperty("display");
+            else
+                element->SetProperty("display", "none");
+        };
+        set_control_visible(el_floating_header_, floating_ && !area_hosted_);
         if (el_film_strip_panel_)
             el_film_strip_panel_->SetProperty("display", film_strip_attached_ ? "block" : "none");
-        if (el_transport_dock_sep_)
-            el_transport_dock_sep_->SetClass("hidden", false);
+        set_control_visible(el_transport_dock_sep_, !area_hosted_);
         if (el_btn_dock_toggle_) {
             el_btn_dock_toggle_->SetAttribute("data-tooltip",
                                               floating_ ? "tooltip.seq_dock" : "tooltip.seq_undock");
             el_btn_dock_toggle_->SetClass("active", false);
-            el_btn_dock_toggle_->SetClass("hidden", false);
+            set_control_visible(el_btn_dock_toggle_, !area_hosted_);
         }
         if (el_dock_toggle_label_)
             el_dock_toggle_label_->SetInnerRML(
                 lfs::event::LocalizationManager::getInstance().get(floating_ ? "ui.dock" : "ui.undock"));
         if (el_btn_close_panel_) {
             el_btn_close_panel_->SetAttribute("data-tooltip", "common.close");
-            el_btn_close_panel_->SetClass("hidden", !floating_);
+            set_control_visible(el_btn_close_panel_, !area_hosted_ && floating_);
         }
         if (el_close_panel_label_)
             el_close_panel_label_->SetInnerRML(lfs::event::LocalizationManager::getInstance().get("common.close"));

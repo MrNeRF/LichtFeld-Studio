@@ -93,6 +93,9 @@ namespace lfs::vis {
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
         [[nodiscard]] InputController* inputController() { return input_controller_; }
+        // Area grips overlap the borderless resize hit region at the client
+        // edge and must remain available to the workspace gesture.
+        [[nodiscard]] bool workspaceCornerAt(int x, int y) const;
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 

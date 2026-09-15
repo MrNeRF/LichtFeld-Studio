@@ -10,9 +10,11 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/workspace_render_request.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include "workspace/viewport_workspace.hpp"
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_set>
@@ -133,6 +135,42 @@ namespace lfs::vis::op {
                 return enabled;
             });
         }
+
+        struct WorkspacePanelProjection {
+            ViewRect rect{};
+            lfs::rendering::FrameView view{};
+
+            [[nodiscard]] bool valid() const {
+                return rect.width > 0 && rect.height > 0 &&
+                       view.size.x > 0 && view.size.y > 0;
+            }
+        };
+
+        [[nodiscard]] std::optional<WorkspacePanelProjection>
+        resolveWorkspacePanelProjection(const ViewId view_id,
+                                        const lfs::vis::gui::GuiManager& gui,
+                                        const RenderingManager& rendering) {
+            if (view_id == kInvalidViewId)
+                return std::nullopt;
+            const auto snapshot = gui.workspaceSnapshot();
+            const auto pane = std::ranges::find(snapshot.panes, view_id, &PaneSnapshot::id);
+            if (pane == snapshot.panes.end() || pane->rect.empty())
+                return std::nullopt;
+
+            if (const auto frame = rendering.getWorkspaceVulkanFrame(view_id)) {
+                WorkspacePanelProjection projection{pane->rect, frame->unjittered_view};
+                return projection.valid() ? std::optional(projection) : std::nullopt;
+            }
+
+            const int width = pane->framebuffer_size.x > 0 ? pane->framebuffer_size.x : pane->window_size.x;
+            const int height = pane->framebuffer_size.y > 0 ? pane->framebuffer_size.y : pane->window_size.y;
+            if (width <= 0 || height <= 0)
+                return std::nullopt;
+            WorkspacePanelProjection projection{
+                pane->rect,
+                makeWorkspaceFrameView(*pane, {width, height}, rendering.getSettings().background_color)};
+            return projection.valid() ? std::optional(projection) : std::nullopt;
+        }
     } // namespace
 
     const OperatorDescriptor AlignPickPointOperator::DESCRIPTOR = {
@@ -160,7 +198,9 @@ namespace lfs::vis::op {
         const auto x = props.get_or<double>("x", 0.0);
         const auto y = props.get_or<double>("y", 0.0);
 
-        const glm::vec3 world_pos = unprojectScreenPoint(ctx, x, y);
+        const auto workspace_view_id = props.get_or<ViewId>("workspace_view_id", kInvalidViewId);
+        const glm::vec3 world_pos = unprojectScreenPoint(
+            ctx, x, y, workspace_view_id != kInvalidViewId ? std::optional<ViewId>(workspace_view_id) : std::nullopt);
         if (!Viewport::isValidWorldPosition(world_pos)) {
             return OperatorResult::CANCELLED;
         }
@@ -175,7 +215,7 @@ namespace lfs::vis::op {
         return OperatorResult::RUNNING_MODAL;
     }
 
-    OperatorResult AlignPickPointOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
+    OperatorResult AlignPickPointOperator::modal(OperatorContext& ctx, OperatorProperties& props) {
         const auto* event = ctx.event();
         if (!event) {
             return OperatorResult::RUNNING_MODAL;
@@ -193,7 +233,12 @@ namespace lfs::vis::op {
             }
 
             if (mb->button == pick_button_) {
-                const glm::vec3 world_pos = unprojectScreenPoint(ctx, mb->position.x, mb->position.y);
+                const auto workspace_view_id = props.get_or<ViewId>("workspace_view_id", kInvalidViewId);
+                const glm::vec3 world_pos = unprojectScreenPoint(
+                    ctx, mb->position.x, mb->position.y,
+                    workspace_view_id != kInvalidViewId
+                        ? std::optional<ViewId>(workspace_view_id)
+                        : std::nullopt);
                 if (!Viewport::isValidWorldPosition(world_pos)) {
                     return OperatorResult::RUNNING_MODAL;
                 }
@@ -233,11 +278,64 @@ namespace lfs::vis::op {
 
     glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const OperatorContext& ctx,
                                                            const double x,
-                                                           const double y) const {
+                                                           const double y,
+                                                           const std::optional<ViewId> workspace_view_id) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
             return glm::vec3(Viewport::INVALID_WORLD_POS);
+        }
+
+        if (workspace_view_id) {
+            const auto projection = resolveWorkspacePanelProjection(
+                *workspace_view_id, *gm, *rm);
+            if (!projection)
+                return glm::vec3(Viewport::INVALID_WORLD_POS);
+
+            const auto& view = projection->view;
+            const float scale_x = static_cast<float>(view.size.x) /
+                                  static_cast<float>(projection->rect.width);
+            const float scale_y = static_cast<float>(view.size.y) /
+                                  static_cast<float>(projection->rect.height);
+            const float render_x =
+                (static_cast<float>(x) - static_cast<float>(projection->rect.x)) * scale_x;
+            const float render_y =
+                (static_cast<float>(y) - static_cast<float>(projection->rect.y)) * scale_y;
+            if (render_x < 0.0f || render_y < 0.0f ||
+                render_x >= static_cast<float>(view.size.x) ||
+                render_y >= static_cast<float>(view.size.y)) {
+                return glm::vec3(Viewport::INVALID_WORLD_POS);
+            }
+
+            Viewport projection_viewport(view.size.x, view.size.y);
+            projection_viewport.setViewMatrix(view.rotation, view.translation);
+            projection_viewport.frameBufferSize = view.size;
+            projection_viewport.ortho_scale_override = view.ortho_scale;
+
+            float depth = -1.0f;
+            if (ctx.hasSelection()) {
+                const auto target_ids = resolveAlignmentTargets(ctx);
+                const auto target_mask = buildAlignmentTargetNodeMask(ctx.scene().getScene(), target_ids);
+                if (!hasVisibleAlignmentTarget(target_mask))
+                    return glm::vec3(Viewport::INVALID_WORLD_POS);
+                depth = rm->renderDepthAtPixelForNodeMask(
+                    &ctx.scene(), projection_viewport, view.size,
+                    static_cast<int>(render_x), static_cast<int>(render_y), target_mask);
+            } else {
+                depth = rm->renderExpectedDepthAtPixel({.scene_manager = gm->getViewer()->getSceneManager(),
+                                                        .viewport = &projection_viewport,
+                                                        .render_size = view.size,
+                                                        .pixel = {static_cast<int>(render_x), static_cast<int>(render_y)},
+                                                        .focal_length_mm = view.focal_length_mm,
+                                                        .orthographic = view.orthographic,
+                                                        .ortho_scale = view.ortho_scale,
+                                                        .panel = std::nullopt});
+            }
+            if (depth <= 0.0f)
+                return glm::vec3(Viewport::INVALID_WORLD_POS);
+            return projection_viewport.unprojectPixel(
+                render_x, render_y, depth, view.focal_length_mm,
+                view.orthographic, view.ortho_scale);
         }
 
         const auto viewport_pos = gm->getViewportPos();

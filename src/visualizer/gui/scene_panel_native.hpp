@@ -31,7 +31,11 @@ namespace lfs::vis::gui {
 
     class NativeScenePanel : public IPanel {
     public:
-        explicit NativeScenePanel(RmlUIManager* manager);
+        explicit NativeScenePanel(RmlUIManager* manager,
+                                  std::string context_name = "scene_panel_native");
+        [[nodiscard]] bool supportsAreaInstances() const override { return true; }
+        [[nodiscard]] std::shared_ptr<IPanel> createAreaInstance(
+            std::string_view instance_id) const override;
         ~NativeScenePanel() override;
 
         void draw(const PanelDrawContext& ctx) override;

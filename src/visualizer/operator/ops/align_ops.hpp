@@ -5,7 +5,9 @@
 #pragma once
 
 #include "operator/operator.hpp"
+#include "workspace/view_id.hpp"
 #include <glm/glm.hpp>
+#include <optional>
 #include <vector>
 
 namespace lfs::vis::op {
@@ -24,7 +26,8 @@ namespace lfs::vis::op {
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
 
-        glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y) const;
+        glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
+                                       std::optional<ViewId> workspace_view_id) const;
         void applyAlignment(OperatorContext& ctx);
     };
 

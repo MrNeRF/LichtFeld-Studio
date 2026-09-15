@@ -99,3 +99,47 @@ TEST_F(PanelRegistryDefaultClosedTest,
     EXPECT_TRUE(after_reset->enabled);
     EXPECT_TRUE(PanelRegistry::instance().is_panel_enabled("test.default_open"));
 }
+
+namespace {
+    class AreaFactoryPanel final : public lfs::vis::gui::IPanel {
+    public:
+        std::string state;
+        void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+        bool supportsAreaInstances() const override { return true; }
+        std::shared_ptr<IPanel> createAreaInstance(std::string_view instance_id) const override {
+            // A plugin constructor may inspect its own registration. This must
+            // not deadlock against create_area_instance's registry lookup.
+            EXPECT_TRUE(lfs::vis::gui::PanelRegistry::instance().get_panel("test.area_factory"));
+            auto instance = std::make_shared<AreaFactoryPanel>();
+            instance->state = instance_id;
+            return instance;
+        }
+    };
+} // namespace
+
+TEST_F(PanelRegistryDefaultClosedTest, AreaInstancesOwnStateAndMayReenterRegistry) {
+    using namespace lfs::vis::gui;
+    auto prototype = std::make_shared<AreaFactoryPanel>();
+    PanelInfo info;
+    info.id = "test.area_factory";
+    info.label = "Area factory";
+    info.space = lfs::vis::gui::PanelSpace::MainPanelTab;
+    info.is_native = false;
+    info.panel = prototype;
+    auto& registry = PanelRegistry::instance();
+    ASSERT_TRUE(registry.register_panel(std::move(info)));
+    const auto first = std::dynamic_pointer_cast<AreaFactoryPanel>(
+        registry.create_area_instance("test.area_factory", "area.1"));
+    const auto second = std::dynamic_pointer_cast<AreaFactoryPanel>(
+        registry.create_area_instance("test.area_factory", "area.2"));
+    ASSERT_TRUE(first);
+    ASSERT_TRUE(second);
+    EXPECT_NE(first, second);
+    EXPECT_NE(first, prototype);
+    first->state = "scrolled";
+    EXPECT_EQ(second->state, "area.2");
+    EXPECT_TRUE(prototype->state.empty());
+    registry.unregister_panel("test.area_factory");
+    EXPECT_EQ(first->state, "scrolled");
+    EXPECT_FALSE(registry.create_area_instance("test.area_factory", "area.3"));
+}

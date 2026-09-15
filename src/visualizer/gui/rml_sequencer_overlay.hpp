@@ -70,6 +70,8 @@ namespace lfs::vis::gui {
 
         void showTimeEdit(size_t index, float current_time);
         void showFocalEdit(size_t index, float current_focal_mm);
+        // Cancel controls and queued results when their editor area retires.
+        void cancelTransientEditing();
 
         void updateEditOverlay(size_t selected, float pos_delta, float rot_delta,
                                float right_x, float top_y);

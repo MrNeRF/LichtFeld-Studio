@@ -28,11 +28,6 @@ namespace lfs::vis {
             return static_cast<std::size_t>(view);
         }
 
-        [[nodiscard]] constexpr std::uint32_t pluginView(
-            const TemporalViewId view) noexcept {
-            return static_cast<std::uint32_t>(viewIndex(view));
-        }
-
         [[nodiscard]] constexpr std::uint32_t pluginQuality(
             const SceneTemporalQuality quality) noexcept {
             switch (quality) {
@@ -60,6 +55,7 @@ namespace lfs::vis {
 
         struct ViewState {
             LfsSceneUpscalerFeatureConfigV1 feature{};
+            std::uint32_t plugin_identity = LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID;
             bool feature_configured = false;
             std::uint32_t pending_reset_flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED;
             std::chrono::steady_clock::time_point previous_evaluation{};
@@ -129,10 +125,7 @@ namespace lfs::vis {
         }
 
         void destroy() {
-            for (std::size_t index = 0; index < views.size(); ++index) {
-                NvidiaDlssPlugin::instance().releaseFeature(
-                    pluginView(static_cast<TemporalViewId>(index)));
-            }
+            releaseViewIdentities();
             destroyOutputs();
             motion.shutdown();
             motion_initialized = false;
@@ -226,9 +219,30 @@ namespace lfs::vis {
                                          const PreparedSceneTemporalFrame& prepared,
                                          const SceneTemporalQuality quality) {
             auto& view = views.at(viewIndex(prepared.view));
+            const bool changed = !view.feature_configured ||
+                                 view.feature.quality != pluginQuality(quality) ||
+                                 view.feature.render_width !=
+                                     static_cast<std::uint32_t>(prepared.plan.render_extent.x) ||
+                                 view.feature.render_height !=
+                                     static_cast<std::uint32_t>(prepared.plan.render_extent.y) ||
+                                 view.feature.output_width !=
+                                     static_cast<std::uint32_t>(prepared.plan.output_extent.x) ||
+                                 view.feature.output_height !=
+                                     static_cast<std::uint32_t>(prepared.plan.output_extent.y);
+            if (changed && view.feature_configured && !context->waitForSubmittedFrames())
+                return false;
+
+            bool acquired_identity = false;
+            if (view.plugin_identity == LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID) {
+                const auto identity = NvidiaDlssPlugin::instance().acquireViewIdentity();
+                if (!identity)
+                    return false;
+                view.plugin_identity = *identity;
+                acquired_identity = true;
+            }
             const LfsSceneUpscalerFeatureConfigV1 feature{
                 .struct_size = sizeof(LfsSceneUpscalerFeatureConfigV1),
-                .view = pluginView(prepared.view),
+                .view = view.plugin_identity,
                 .quality = pluginQuality(quality),
                 .render_width = static_cast<std::uint32_t>(prepared.plan.render_extent.x),
                 .render_height = static_cast<std::uint32_t>(prepared.plan.render_extent.y),
@@ -236,16 +250,13 @@ namespace lfs::vis {
                 .output_height = static_cast<std::uint32_t>(prepared.plan.output_extent.y),
                 .motion_vectors_include_jitter = 0,
             };
-            const bool changed = !view.feature_configured ||
-                                 view.feature.quality != feature.quality ||
-                                 view.feature.render_width != feature.render_width ||
-                                 view.feature.render_height != feature.render_height ||
-                                 view.feature.output_width != feature.output_width ||
-                                 view.feature.output_height != feature.output_height;
-            if (changed && view.feature_configured && !context->waitForSubmittedFrames())
+            if (!NvidiaDlssPlugin::instance().createFeature(command_buffer, feature)) {
+                if (acquired_identity) {
+                    NvidiaDlssPlugin::instance().releaseViewIdentity(view.plugin_identity);
+                    view.plugin_identity = LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID;
+                }
                 return false;
-            if (!NvidiaDlssPlugin::instance().createFeature(command_buffer, feature))
-                return false;
+            }
             if (changed)
                 view.pending_reset_flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_QUALITY |
                                             LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE |
@@ -336,6 +347,7 @@ namespace lfs::vis {
                 return fail(prepared,
                             VulkanSceneDlssPipelineStatus::FeatureFailure,
                             TemporalResetReason::RuntimeUnavailable);
+            auto& view = views.at(viewIndex(prepared.view));
 
             cmdImageBarrier2(command_buffer,
                              output->image,
@@ -355,14 +367,13 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-            auto& view = views.at(viewIndex(prepared.view));
             const glm::vec2 jitter_pixels = sceneTemporalJitterPixels(
                 prepared.frame.current_jitter,
                 prepared.plan.render_extent,
                 request.temporal.motion.flip_y);
             const LfsSceneUpscalerEvaluateV1 evaluation{
                 .struct_size = sizeof(LfsSceneUpscalerEvaluateV1),
-                .view = pluginView(prepared.view),
+                .view = view.plugin_identity,
                 .command_buffer = command_buffer,
                 .color = {
                     .struct_size = sizeof(LfsSceneUpscalerImageV1),
@@ -481,17 +492,23 @@ namespace lfs::vis {
 
         void releaseResources(const TemporalResetReason reason) {
             resetAll(reason);
-            for (std::size_t index = 0; index < views.size(); ++index) {
-                NvidiaDlssPlugin::instance().releaseFeature(
-                    pluginView(static_cast<TemporalViewId>(index)));
-                views[index].feature = {};
-                views[index].feature_configured = false;
-            }
+            releaseViewIdentities();
             destroyOutputs();
             motion.shutdown();
             motion_initialized = false;
             depth.shutdown();
             depth_initialized = false;
+        }
+
+        void releaseViewIdentities() {
+            for (auto& view : views) {
+                if (view.plugin_identity == LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID)
+                    continue;
+                NvidiaDlssPlugin::instance().releaseViewIdentity(view.plugin_identity);
+                view.plugin_identity = LFS_SCENE_UPSCALER_PLUGIN_VIEW_INVALID;
+                view.feature = {};
+                view.feature_configured = false;
+            }
         }
     };
 

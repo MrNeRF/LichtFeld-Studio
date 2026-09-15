@@ -22,6 +22,7 @@
 #include "visualizer/visualizer.hpp"
 #include "visualizer_impl.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -117,6 +118,43 @@ namespace lfs::vis {
 #endif
             }
         };
+
+        class AreaEditorTestPanel final : public gui::IPanel {
+        public:
+            void draw(const gui::PanelDrawContext&) override {}
+
+            gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+            [[nodiscard]] bool supportsAreaInstances() const override { return true; }
+
+            [[nodiscard]] std::shared_ptr<gui::IPanel> createAreaInstance(
+                const std::string_view) const override {
+                return std::make_shared<AreaEditorTestPanel>();
+            }
+        };
+
+        class RegisteredAreaEditorTestPanel {
+        public:
+            RegisteredAreaEditorTestPanel(std::string id, const gui::PanelSpace space)
+                : id_(std::move(id)) {
+                gui::PanelInfo info;
+                info.id = id_;
+                info.label = id_;
+                info.space = space;
+                info.panel = std::make_shared<AreaEditorTestPanel>();
+                registered_ = gui::PanelRegistry::instance().register_panel(std::move(info));
+            }
+
+            ~RegisteredAreaEditorTestPanel() {
+                if (registered_)
+                    gui::PanelRegistry::instance().unregister_panel(id_);
+            }
+
+            [[nodiscard]] bool registered() const { return registered_; }
+
+        private:
+            std::string id_;
+            bool registered_ = false;
+        };
     } // namespace
 
     TEST_F(InputControllerFocusTest, CameraViewHotkeysDoNotBypassGuiKeyboardCapture) {
@@ -137,6 +175,283 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_RIGHT, input::ACTION_PRESS, input::KEYMOD_NONE);
 
         EXPECT_EQ(goto_cam_view_count, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, WorkspacePointerCaptureRetainsInitiatingView) {
+        Viewport viewport(200, 100);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({200, 100});
+        const ViewId first = workspace.primaryView();
+        const auto second_result = workspace.split(first, SplitAxis::Horizontal);
+        ASSERT_TRUE(second_result.has_value());
+        const ViewId second = *second_result;
+
+        controller.bindWorkspace(&workspace);
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 200, 100}, 1, 4));
+        ASSERT_EQ(controller.workspaceInteractionView(10.0, 10.0), first);
+        ASSERT_EQ(controller.workspaceInteractionView(190.0, 10.0), second);
+        EXPECT_FALSE(controller.workspaceInteractionView(100.0, 50.0).has_value());
+
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 10.0, 10.0);
+        EXPECT_EQ(controller.workspaceInteractionView(190.0, 10.0), first);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 190.0, 10.0);
+        EXPECT_EQ(controller.workspaceInteractionView(190.0, 10.0), second);
+    }
+
+    TEST_F(InputControllerFocusTest, WorkspaceSplitterDragChangesOnlyItsLayoutRatio) {
+        Viewport viewport(200, 100);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({200, 100});
+        const ViewId first = workspace.primaryView();
+        const auto second_result = workspace.split(first, SplitAxis::Horizontal);
+        ASSERT_TRUE(second_result.has_value());
+        const auto split = workspace.layout().root();
+        const auto initial_ratio = workspace.layout().splitRatio(split);
+        ASSERT_TRUE(initial_ratio.has_value());
+
+        controller.bindWorkspace(&workspace);
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 200, 100}, 1, 4));
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, 100.0, 50.0);
+        controller.handleMouseMove(140.0, 50.0);
+
+        const auto moved_ratio = workspace.layout().splitRatio(split);
+        ASSERT_TRUE(moved_ratio.has_value());
+        EXPECT_GT(*moved_ratio, *initial_ratio);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE, 140.0, 50.0);
+    }
+
+    TEST_F(InputControllerFocusTest, CornerSplitDragCreatesHorizontalAndVerticalAreas) {
+        Viewport viewport(800, 600);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({800, 600});
+        controller.bindWorkspace(&workspace);
+
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 800, 600}));
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, 790.0, 590.0);
+        controller.handleMouseMove(620.0, 580.0);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE, 620.0, 580.0);
+        ASSERT_EQ(workspace.layout().leafCount(), 2u);
+
+        const ViewId owner = workspace.layout().focused().value_or(workspace.primaryView());
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 800, 600}));
+        const auto snapshot = controller.workspaceFrameSnapshot();
+        ASSERT_NE(snapshot, nullptr);
+        const auto pane = std::ranges::find_if(snapshot->panes,
+                                               [owner](const PaneSnapshot& item) {
+                                                   return item.id == owner;
+                                               });
+        ASSERT_NE(pane, snapshot->panes.end());
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS,
+                                     pane->rect.right() - 8.0,
+                                     pane->rect.bottom() - 8.0);
+        controller.handleMouseMove(pane->rect.right() - 10.0,
+                                   pane->rect.bottom() - 160.0);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE,
+                                     pane->rect.right() - 10.0,
+                                     pane->rect.bottom() - 160.0);
+        ASSERT_EQ(workspace.layout().leafCount(), 3u);
+        const auto final_snapshot = workspace.snapshot({0, 0, 800, 600});
+        ASSERT_EQ(final_snapshot.areas.size(), 3u);
+        EXPECT_EQ(final_snapshot.panes.size(), 3u);
+        const auto horizontal_split = std::ranges::find_if(
+            final_snapshot.splitters, [](const SplitterRect& splitter) {
+                return splitter.axis == SplitAxis::Horizontal;
+            });
+        const auto vertical_split = std::ranges::find_if(
+            final_snapshot.splitters, [](const SplitterRect& splitter) {
+                return splitter.axis == SplitAxis::Vertical;
+            });
+        EXPECT_NE(horizontal_split, final_snapshot.splitters.end());
+        EXPECT_NE(vertical_split, final_snapshot.splitters.end());
+    }
+
+    TEST_F(InputControllerFocusTest, CornerSplitUsesPhysicalMinimumAndContainingAreaExtent) {
+        Viewport viewport(2400, 900);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({2400, 900});
+        controller.bindWorkspace(&workspace);
+
+        // A 70px first area is below the old 5% policy but above the 64px
+        // physical minimum. The split must follow the pointer at this scale.
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 2400, 900}));
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, 2392.0, 892.0);
+        controller.handleMouseMove(70.0, 882.0);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE, 70.0, 882.0);
+
+        ASSERT_EQ(workspace.layout().leafCount(), 2u);
+        const auto first_snapshot = workspace.snapshot({0, 0, 2400, 900});
+        const auto horizontal = std::ranges::find_if(
+            first_snapshot.splitters,
+            [](const SplitterRect& splitter) {
+                return splitter.axis == SplitAxis::Horizontal;
+            });
+        ASSERT_NE(horizontal, first_snapshot.splitters.end());
+        EXPECT_LT(*workspace.layout().splitRatio(horizontal->split), 0.05f);
+        EXPECT_GE(first_snapshot.panes.front().rect.width, 64);
+
+        const ViewId source = workspace.layout().focused().value_or(workspace.primaryView());
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 2400, 900}));
+        const auto nested_snapshot = controller.workspaceFrameSnapshot();
+        ASSERT_NE(nested_snapshot, nullptr);
+        const auto pane = std::ranges::find_if(
+            nested_snapshot->panes,
+            [source](const PaneSnapshot& candidate) { return candidate.id == source; });
+        ASSERT_NE(pane, nested_snapshot->panes.end());
+
+        // The second gesture is vertical and must normalize against the
+        // selected leaf's 900px height, rather than the outer workspace.
+        const double start_x = pane->rect.right() - 8.0;
+        const double start_y = pane->rect.bottom() - 8.0;
+        const double release_x = start_x - 10.0;
+        const double release_y = pane->rect.y + 72.0;
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, start_x, start_y);
+        controller.handleMouseMove(release_x, release_y);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE, release_x, release_y);
+
+        ASSERT_EQ(workspace.layout().leafCount(), 3u);
+        const auto final_snapshot = workspace.snapshot({0, 0, 2400, 900});
+        const auto vertical = std::ranges::find_if(
+            final_snapshot.splitters,
+            [](const SplitterRect& splitter) {
+                return splitter.axis == SplitAxis::Vertical;
+            });
+        ASSERT_NE(vertical, final_snapshot.splitters.end());
+        EXPECT_EQ(vertical->parent, pane->rect);
+        EXPECT_NEAR(*workspace.layout().splitRatio(vertical->split), 68.0f / 896.0f, 0.01f);
+    }
+
+    TEST_F(InputControllerFocusTest, CornerSplitCanCreateMoreThanFourAreasAndEscapeCancels) {
+        Viewport viewport(1600, 1200);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({1600, 1200});
+        controller.bindWorkspace(&workspace);
+        ViewId source = workspace.primaryView();
+        for (int index = 0; index < 5; ++index) {
+            controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 1600, 1200}));
+            const auto snapshot = controller.workspaceFrameSnapshot();
+            ASSERT_NE(snapshot, nullptr);
+            const auto pane = std::ranges::find_if(snapshot->panes,
+                                                   [source](const PaneSnapshot& item) {
+                                                       return item.id == source;
+                                                   });
+            ASSERT_NE(pane, snapshot->panes.end());
+            const double x = pane->rect.right() - 8.0;
+            const double y = pane->rect.bottom() - 8.0;
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                         input::ACTION_PRESS, x, y);
+            // Keep splitting the newly focused child, but place the divider
+            // near its midpoint.  Reusing a fixed 100px drag makes the
+            // focused child progressively thinner until the physical 64px
+            // minimum quite correctly rejects a later split.
+            const bool horizontal = index % 2 == 0;
+            const double release_x = horizontal ? x - pane->rect.width * 0.5 : x - 10.0;
+            const double release_y = horizontal ? y - 10.0 : y - pane->rect.height * 0.5;
+            controller.handleMouseMove(release_x, release_y);
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                         input::ACTION_RELEASE,
+                                         release_x, release_y);
+            ASSERT_EQ(workspace.layout().leafCount(), static_cast<std::size_t>(index + 2));
+            source = workspace.layout().focused().value_or(source);
+        }
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 1600, 1200}));
+        const auto before = workspace.layout().leafCount();
+        const auto snapshot = controller.workspaceFrameSnapshot();
+        ASSERT_NE(snapshot, nullptr);
+        const auto pane = std::ranges::find_if(snapshot->panes,
+                                               [source](const PaneSnapshot& item) {
+                                                   return item.id == source;
+                                               });
+        ASSERT_NE(pane, snapshot->panes.end());
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS,
+                                     pane->rect.right() - 8.0,
+                                     pane->rect.bottom() - 8.0);
+        controller.handleMouseMove(pane->rect.right() - 100.0,
+                                   pane->rect.bottom() - 10.0);
+        controller.handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(workspace.layout().leafCount(), before);
+        EXPECT_FALSE(controller.workspaceCornerSplitPreview().has_value());
+    }
+
+    TEST_F(InputControllerFocusTest, NestedWorkspaceSplitterUsesItsParentExtent) {
+        Viewport viewport(400, 200);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({400, 200});
+        const ViewId first = workspace.primaryView();
+        const auto second_result = workspace.split(first, SplitAxis::Horizontal);
+        ASSERT_TRUE(second_result.has_value());
+        const auto third_result = workspace.split(first, SplitAxis::Horizontal);
+        ASSERT_TRUE(third_result.has_value());
+
+        const auto snapshot = workspace.snapshot({0, 0, 400, 200}, 1, 4);
+        const auto nested_splitter = std::ranges::find_if(
+            snapshot.splitters, [](const SplitterRect& splitter) {
+                return splitter.axis == SplitAxis::Horizontal && splitter.parent.width < 400;
+            });
+        ASSERT_NE(nested_splitter, snapshot.splitters.end());
+        ASSERT_GT(nested_splitter->parent.width, 0);
+        const auto initial_ratio = workspace.layout().splitRatio(nested_splitter->split);
+        ASSERT_TRUE(initial_ratio.has_value());
+
+        controller.bindWorkspace(&workspace);
+        controller.setWorkspaceFrameSnapshot(snapshot);
+        const double splitter_x = nested_splitter->rect.x + nested_splitter->rect.width * 0.5;
+        const double splitter_y = nested_splitter->rect.y + nested_splitter->rect.height * 0.5;
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, splitter_x, splitter_y);
+        controller.handleMouseMove(splitter_x + 20.0, splitter_y);
+
+        const auto moved_ratio = workspace.layout().splitRatio(nested_splitter->split);
+        ASSERT_TRUE(moved_ratio.has_value());
+        const float expected_delta = 20.0f / static_cast<float>(nested_splitter->parent.width);
+        EXPECT_NEAR(*moved_ratio - *initial_ratio, expected_delta, 0.02f);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE, splitter_x + 20.0, splitter_y);
+    }
+
+    TEST_F(InputControllerFocusTest, WorkspaceDividerStopsAtPhysicalMinimumPixels) {
+        Viewport viewport(1000, 400);
+        InputController controller(nullptr, viewport);
+        ViewportWorkspace workspace({1000, 400});
+        ASSERT_TRUE(workspace.split(workspace.primaryView(), SplitAxis::Horizontal, 0.5f));
+
+        const auto initial = workspace.snapshot({0, 0, 1000, 400}, 64, 4);
+        ASSERT_EQ(initial.splitters.size(), 1u);
+        const auto& splitter = initial.splitters.front();
+        const double splitter_x = splitter.rect.x + splitter.rect.width * 0.5;
+        const double splitter_y = splitter.rect.y + splitter.rect.height * 0.5;
+        const float available = static_cast<float>(splitter.parent.width - splitter.rect.width);
+        const float minimum = 64.0f / available;
+
+        controller.bindWorkspace(&workspace);
+        controller.setWorkspaceFrameSnapshot(initial);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_PRESS, splitter_x, splitter_y);
+        controller.handleMouseMove(splitter.parent.x - 1000.0, splitter_y);
+        EXPECT_NEAR(*workspace.layout().splitRatio(splitter.split), minimum, 1e-5f);
+
+        controller.handleMouseMove(splitter.parent.right() + 1000.0, splitter_y);
+        EXPECT_NEAR(*workspace.layout().splitRatio(splitter.split), 1.0f - minimum, 1e-5f);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT),
+                                     input::ACTION_RELEASE,
+                                     splitter.parent.right() + 1000.0, splitter_y);
+
+        const auto final = workspace.snapshot({0, 0, 1000, 400}, 64, 4);
+        ASSERT_EQ(final.panes.size(), 2u);
+        EXPECT_GE(final.panes[0].rect.width, 64);
+        EXPECT_GE(final.panes[1].rect.width, 64);
     }
 
     TEST_F(InputControllerFocusTest, RebindingKeyCaptureBypassesPythonKeyboardCapture) {
@@ -614,6 +929,120 @@ namespace lfs::vis {
         EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::None);
     }
 
+    TEST_F(InputControllerFocusTest, AreaPanelOpenFocusesExistingAreaWithoutDuplicatingIt) {
+        constexpr std::string_view panel_id = "test.input.focus.area-open";
+        RegisteredAreaEditorTestPanel registered(std::string(panel_id), gui::PanelSpace::MainPanelTab);
+        ASSERT_TRUE(registered.registered());
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.safe_mode = true;
+        VisualizerImpl viewer(options);
+        auto& manager = *viewer.getGuiManager();
+        auto* const workspace = viewer.getViewportWorkspace();
+        ASSERT_NE(workspace, nullptr);
+        ASSERT_TRUE(manager.showPanelInArea(std::string(panel_id), true));
+        ASSERT_TRUE(manager.isPanelAreaOpen(std::string(panel_id)));
+
+        const auto matching = [&] {
+            std::vector<ViewId> result;
+            for (const auto id : workspace->layout().leafIds()) {
+                if (const auto* record = workspace->findView(id);
+                    record != nullptr && record->editor_id == panel_id)
+                    result.push_back(id);
+            }
+            return result;
+        }();
+        ASSERT_EQ(matching.size(), 1u);
+        const auto first_focus = workspace->layout().focused();
+        ASSERT_EQ(first_focus, std::optional<ViewId>(matching.front()));
+
+        const auto leaf_count = workspace->layout().leafCount();
+        ASSERT_TRUE(manager.showPanelInArea(std::string(panel_id), true));
+        EXPECT_EQ(workspace->layout().leafCount(), leaf_count);
+        EXPECT_EQ(workspace->layout().focused(), first_focus);
+        EXPECT_EQ(manager.isPanelAreaOpen(std::string(panel_id)), true);
+        const auto after_ids = workspace->layout().leafIds();
+        EXPECT_EQ(std::count_if(after_ids.begin(), after_ids.end(),
+                                [&](const ViewId id) {
+                                    const auto* record = workspace->findView(id);
+                                    return record != nullptr && record->editor_id == panel_id;
+                                }),
+                  1);
+    }
+
+    TEST_F(InputControllerFocusTest, ClosingAreaPanelRemovesEveryMatchingArea) {
+        constexpr std::string_view panel_id = "test.input.focus.area-close-all";
+        RegisteredAreaEditorTestPanel registered(std::string(panel_id), gui::PanelSpace::MainPanelTab);
+        ASSERT_TRUE(registered.registered());
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.safe_mode = true;
+        VisualizerImpl viewer(options);
+        auto& manager = *viewer.getGuiManager();
+        auto* const workspace = viewer.getViewportWorkspace();
+        ASSERT_NE(workspace, nullptr);
+        ASSERT_TRUE(manager.showPanelInArea(std::string(panel_id), true));
+
+        // Make all current leaves instances of this editor so the close path
+        // has to remove several entries from one captured ID list.
+        for (const auto id : workspace->layout().leafIds())
+            ASSERT_TRUE(workspace->setAreaEditor(id, std::string(panel_id)));
+        ASSERT_TRUE(manager.isPanelAreaOpen(std::string(panel_id)));
+        ASSERT_TRUE(manager.showPanelInArea(std::string(panel_id), false));
+
+        EXPECT_FALSE(manager.isPanelAreaOpen(std::string(panel_id)));
+        ASSERT_EQ(workspace->layout().leafCount(), 1u);
+        const auto only = workspace->layout().leafIds().front();
+        ASSERT_NE(workspace->findView(only), nullptr);
+        EXPECT_EQ(workspace->findView(only)->editor_id, "viewport");
+    }
+
+    TEST_F(InputControllerFocusTest, ClosingLastAreaPanelRestoresViewportEditor) {
+        constexpr std::string_view panel_id = "test.input.focus.area-last";
+        RegisteredAreaEditorTestPanel registered(std::string(panel_id), gui::PanelSpace::MainPanelTab);
+        ASSERT_TRUE(registered.registered());
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.safe_mode = true;
+        VisualizerImpl viewer(options);
+        auto& manager = *viewer.getGuiManager();
+        auto* const workspace = viewer.getViewportWorkspace();
+        ASSERT_NE(workspace, nullptr);
+        while (workspace->layout().leafCount() > 1) {
+            const auto ids = workspace->layout().leafIds();
+            ASSERT_TRUE(workspace->close(ids.back()));
+        }
+        const auto only = workspace->layout().leafIds().front();
+        ASSERT_TRUE(workspace->setAreaEditor(only, std::string(panel_id)));
+        ASSERT_TRUE(manager.showPanelInArea(std::string(panel_id), false));
+
+        EXPECT_FALSE(manager.isPanelAreaOpen(std::string(panel_id)));
+        ASSERT_EQ(workspace->layout().leafCount(), 1u);
+        ASSERT_NE(workspace->findView(only), nullptr);
+        EXPECT_EQ(workspace->findView(only)->editor_id, "viewport");
+    }
+
+    TEST_F(InputControllerFocusTest, FloatingPanelIsRejectedByAreaEditorGlue) {
+        constexpr std::string_view panel_id = "test.input.focus.floating";
+        RegisteredAreaEditorTestPanel registered(std::string(panel_id), gui::PanelSpace::Floating);
+        ASSERT_TRUE(registered.registered());
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.safe_mode = true;
+        VisualizerImpl viewer(options);
+        auto& manager = *viewer.getGuiManager();
+        auto* const workspace = viewer.getViewportWorkspace();
+        ASSERT_NE(workspace, nullptr);
+        const auto before = workspace->layout().leafIds();
+        ASSERT_FALSE(manager.showPanelInArea(std::string(panel_id), true));
+        EXPECT_EQ(workspace->layout().leafIds(), before);
+        EXPECT_FALSE(manager.isPanelAreaOpen(std::string(panel_id)));
+    }
+
     TEST_F(InputControllerFocusTest, FreshLeftDockEdgePressUsesOneOwnershipVerdict) {
         struct DockPanel final : gui::IPanel {
             void draw(const gui::PanelDrawContext&) override {}
@@ -645,6 +1074,15 @@ namespace lfs::vis {
         VisualizerImpl viewer(options);
         RegisteredDockPanel registered_panel;
         auto& gui = *viewer.getGuiManager();
+        auto* const rendering = viewer.getRenderingManager();
+        ASSERT_NE(rendering, nullptr);
+        // This test targets the retained legacy dock path.  A fresh viewer
+        // otherwise starts in the area workspace, where the dock edge is not
+        // part of the active layout and the old ownership verdict is
+        // irrelevant.
+        rendering->restoreSplitViewMode(SplitViewMode::PLYComparison,
+                                        viewer.getViewport());
+        ASSERT_EQ(rendering->getSplitViewMode(), SplitViewMode::PLYComparison);
         // This fixture does not initialize the GUI, where the startup option is applied.
         gui.dismissStartupOverlay();
         ASSERT_FALSE(gui.isStartupBlockingInput());

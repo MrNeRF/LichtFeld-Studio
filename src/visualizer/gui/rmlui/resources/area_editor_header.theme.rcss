@@ -1,0 +1,40 @@
+/* Area editor header palette follows the active application theme. */
+#area-header {
+    background-color: transparent;
+}
+
+.area-header {
+    background-color: @{surface};
+    border-bottom-color: @{border};
+}
+
+.editor-select {
+    color: @{text};
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+.area-action {
+    background-color: transparent;
+}
+
+.area-action:hover {
+    background-color: @{alpha(primary,0.14)};
+}
+
+.area-action:active {
+    background-color: @{alpha(primary,0.28)};
+}
+
+.area-action:focus-visible {
+    border-color: @{primary};
+    box-shadow: 0 0 0 1dp @{alpha(primary,0.60)};
+}
+
+.area-action img {
+    image-color: @{text_dim};
+}
+
+.area-close img {
+    image-color: @{error};
+}

@@ -325,6 +325,52 @@ namespace lfs::vis {
         EXPECT_EQ(right_before, right_after);
     }
 
+    TEST_F(DepthWindowPanelsInteractionTest, WorkspaceDepthDragWritesCapturedViewOnly) {
+        auto* const workspace = viewer_->getViewportWorkspace();
+        ASSERT_NE(workspace, nullptr);
+        const ViewId first = workspace->primaryView();
+        const auto second_result = workspace->split(first, SplitAxis::Horizontal);
+        ASSERT_TRUE(second_result.has_value());
+        const ViewId second = *second_result;
+        workspace->syncExtents({0, 0, kViewerWidth, kViewerHeight});
+
+        const auto first_before = workspace->findView(first)->depth;
+        const auto second_before = workspace->findView(second)->depth;
+        const auto manager_before = rendering_manager_->getSettings();
+        auto props = depthDragProps(260.0, 100.0);
+        props.set("workspace_view_id", second);
+        ASSERT_EQ(lfs::vis::op::operators().invoke(
+                                               lfs::vis::op::BuiltinOp::DepthWindowDrag, &props)
+                      .status,
+                  OperatorResult::RUNNING_MODAL);
+        ASSERT_EQ(lfs::vis::op::depthWindowOverlayState().workspace_view_id, second);
+        ASSERT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(280.0, 120.0)),
+                  OperatorResult::RUNNING_MODAL);
+        ASSERT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_release(280.0, 120.0)),
+                  OperatorResult::FINISHED);
+
+        EXPECT_EQ(workspace->findView(first)->depth, first_before);
+        EXPECT_NE(workspace->findView(second)->depth, second_before);
+        const auto manager_after = rendering_manager_->getSettings();
+        EXPECT_FLOAT_EQ(manager_after.depth_filter_scale_x, manager_before.depth_filter_scale_x);
+        EXPECT_FLOAT_EQ(manager_after.depth_filter_scale_y, manager_before.depth_filter_scale_y);
+        EXPECT_FLOAT_EQ(manager_after.depth_filter_offset_x, manager_before.depth_filter_offset_x);
+        EXPECT_FLOAT_EQ(manager_after.depth_filter_offset_y, manager_before.depth_filter_offset_y);
+
+        ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(workspace->findView(second)->depth, second_before);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_NE(workspace->findView(second)->depth, second_before);
+
+        ASSERT_TRUE(workspace->close(second));
+        ASSERT_EQ(workspace->findView(second), nullptr);
+        ASSERT_FALSE(lfs::vis::op::undoHistory().undoItems().empty());
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoItems().front().metadata.label,
+                  LOC(lichtfeld::Strings::Selection::HISTORY_DEPTH_WINDOW_EXPIRED));
+        EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    }
+
     // Exercise real focus and sync setters in both directions with distinct values in
     // every field. An other-over-focused copy or swapped slot mapping fails the
     // Right-focused case. This pins focused-wins copying independently of the upstream

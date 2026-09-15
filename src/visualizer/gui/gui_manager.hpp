@@ -24,6 +24,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/rml_workspace_chrome.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/selection_cursor.hpp"
@@ -35,6 +36,8 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+#include "workspace/view_id.hpp"
+#include "workspace/viewport_workspace.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -81,6 +84,7 @@ namespace lfs::vis {
 
     namespace gui {
         class NativeScenePanel;
+        class AreaEditorHost;
 
         LFS_VIS_API void openPreferencesPanel(std::string section = {});
         [[nodiscard]] LFS_VIS_API std::string consumePreferencesSectionRequest();
@@ -99,6 +103,13 @@ namespace lfs::vis {
 
         class LFS_VIS_API GuiManager {
         public:
+            struct WorkspacePanePresentation {
+                ViewId view = kInvalidViewId;
+                VulkanViewportPassParams params;
+                VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+                std::uint64_t completion_value = 0;
+            };
+
             GuiManager(VisualizerImpl* viewer);
             ~GuiManager();
 
@@ -108,6 +119,15 @@ namespace lfs::vis {
             // Drop viewport-pass GPU objects (descriptor sets that sample external
             // scene image views) while the Vulkan context is still alive.
             void shutdownVulkanViewportPass();
+            // Called on the viewer thread with the same solved layout used by
+            // input and raster scheduling. Hidden live views retain their history.
+            void setWorkspacePresentation(std::vector<WorkspacePanePresentation> panes,
+                                          const std::vector<ViewId>& live_views,
+                                          std::optional<ViewId> focused_view);
+            void clearWorkspacePresentation();
+            void captureAreaEditorState() const;
+            void resetAreaEditors();
+            void updateWorkspacePresentation(const WorkspaceFrameSnapshot& snapshot);
             [[nodiscard]] bool render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
@@ -149,10 +169,15 @@ namespace lfs::vis {
 
             // Window visibility
             void showWindow(const std::string& name, bool show = true);
+            bool showPanelInArea(const std::string& id, bool show = true);
+            [[nodiscard]] bool isPanelAreaOpen(const std::string& id) const;
 
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
+            [[nodiscard]] WorkspaceFrameSnapshot workspaceSnapshot() const;
+            [[nodiscard]] bool usesAreaWorkspace() const;
+            [[nodiscard]] int workspaceHeaderHeight() const;
             glm::vec2 getSceneRenderViewportPos() const;
             glm::vec2 getSceneRenderViewportSize() const;
             void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
@@ -267,9 +292,6 @@ namespace lfs::vis {
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
-            void recordVulkanViewport(VkCommandBuffer command_buffer,
-                                      VkExtent2D extent,
-                                      const VulkanViewportPassParams& params);
             void setupEventHandlers();
             void applyDefaultStyle();
             void initMenuBar();
@@ -444,6 +466,14 @@ namespace lfs::vis {
             RmlRightPanel rml_right_panel_;
             RmlBottomDock rml_bottom_dock_;
             RmlViewportOverlay rml_viewport_overlay_;
+            std::unordered_map<ViewId, std::unique_ptr<RmlViewportOverlay>> viewport_overlays_;
+            std::vector<std::unique_ptr<RmlViewportOverlay>> retired_viewport_overlays_;
+            std::vector<RmlViewportOverlay*> visible_viewport_overlays_;
+            uint64_t viewport_overlay_generation_ = 0;
+            std::optional<WorkspaceFrameSnapshot> viewport_ui_snapshot_;
+            RmlWorkspaceChrome rml_workspace_chrome_;
+            std::unique_ptr<AreaEditorHost> area_editor_host_;
+            std::optional<ViewId> area_pointer_owner_;
             RmlMenuBar rml_menu_bar_;
             bool menu_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
@@ -468,6 +498,11 @@ namespace lfs::vis {
             // RmlUI integration
             RmlUIManager rmlui_manager_;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            std::shared_ptr<lfs::vis::SharedViewportGpuAssets> viewport_gpu_assets_;
+            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::VulkanViewportPass>> workspace_viewport_passes_;
+            std::vector<WorkspacePanePresentation> workspace_presentations_;
+            std::optional<ViewId> workspace_focused_view_;
+            bool workspace_presentation_active_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
             SDL_Cursor* selection_add_cursor_ = nullptr;

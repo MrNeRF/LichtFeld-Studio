@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "view_output_key.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
@@ -13,7 +14,11 @@
 #include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
+#include <optional>
+#include <span>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -40,12 +45,21 @@ namespace lfs::vis {
         std::uint64_t completion_value = 0;
     };
 
-    // Host bookkeeping for the 3-deep frame ring × 4 logical output slots.
-    // GPU-free: timeline complete/wait are injected; no Vulkan/CUDA calls.
+    // Host bookkeeping for the 3-deep frame ring and dynamically registered
+    // logical output columns. GPU-free: timeline complete/wait are injected;
+    // no Vulkan/CUDA calls are made here.
     class LFS_VIS_API OutputSlotRing {
     public:
+        // Kept for source compatibility with the renderer's numeric adapter.
+        // New code should use logicalCount(), registerKey(), and findKey().
         static constexpr std::size_t kOutputSlotCount = 4;
         static constexpr std::size_t kFrameRingSize = 3;
+        using LogicalIndex = std::size_t;
+        using Column = std::array<OutputImageSlot, kFrameRingSize>;
+        using Table = std::span<Column>;
+        using ConstTable = std::span<const Column>;
+
+        OutputSlotRing();
 
         // Poll whether a timeline value has already retired. May throw.
         using TimelineCompleteFn = std::function<bool(std::uint64_t value)>;
@@ -54,6 +68,32 @@ namespace lfs::vis {
         using TimelineWaitFn = std::function<lfs::Status(std::uint64_t value)>;
         // Renderer-side pool release + barrier forget for one slot cell.
         using PerSlotFn = std::function<void(OutputImageSlot&)>;
+
+        // Registering an existing key is idempotent and returns its original
+        // dense index. A new key uses a cleared retired column when possible,
+        // otherwise appends one column. Key zero is invalid.
+        [[nodiscard]] LogicalIndex registerKey(ViewOutputKey key);
+        [[nodiscard]] LogicalIndex registerSceneView(ViewId view_id);
+
+        // Key lookup never allocates. The returned index remains stable while
+        // the key is live. A retired index is not moved when a neighbor is
+        // removed, so an old numeric index cannot silently name that neighbor.
+        [[nodiscard]] std::optional<LogicalIndex> findKey(ViewOutputKey key) const noexcept;
+        [[nodiscard]] std::optional<ViewOutputKey> keyAt(LogicalIndex logical) const noexcept;
+
+        // Number of allocated logical columns, including cleared retired
+        // holes. This is the bound for table()/numeric-index iteration.
+        [[nodiscard]] std::size_t logicalCount() const noexcept { return slots_.size(); }
+        [[nodiscard]] std::size_t activeLogicalCount() const noexcept {
+            return active_logical_count_;
+        }
+
+        // Call the producer/consumer-safe callback before clearing each cell.
+        // Reject unknown or legacy keys and empty callbacks; retired columns can be reused.
+        [[nodiscard]] bool retireKey(ViewOutputKey key, const PerSlotFn& per_slot_fn);
+        [[nodiscard]] bool unregisterKey(ViewOutputKey key, const PerSlotFn& per_slot_fn) {
+            return retireKey(key, per_slot_fn);
+        }
 
         // Round-robin acquire of the next ring index.
         [[nodiscard]] std::size_t acquire() noexcept;
@@ -94,31 +134,35 @@ namespace lfs::vis {
         // zero those cells and the latest/generation for that logical index.
         void clearLogical(std::size_t logical, const PerSlotFn& per_slot_fn);
 
-        // Zero every table, cursor, and watermark.
+        // Zero every column, generation, cursor, and watermark while
+        // preserving the key registry and each stable logical index.
+        // Retired holes remain available for a later registerKey() call.
         void reset() noexcept;
 
         [[nodiscard]] std::uint64_t ringCompletionValue(std::size_t ring_slot) const noexcept;
         [[nodiscard]] std::uint64_t generation(std::size_t logical) const noexcept;
         [[nodiscard]] std::size_t nextRingSlot() const noexcept { return next_ring_slot_; }
 
-        [[nodiscard]] const std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount>&
-        table() const noexcept {
-            return slots_;
+        [[nodiscard]] ConstTable table() const noexcept {
+            return {slots_.data(), slots_.size()};
         }
-        [[nodiscard]] std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount>&
-        table() noexcept {
-            return slots_;
+        [[nodiscard]] Table table() noexcept {
+            return {slots_.data(), slots_.size()};
         }
 
     private:
         void checkLogical(std::size_t logical, std::string_view what) const;
         void checkRing(std::size_t ring, std::string_view what) const;
 
-        std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount> slots_{};
+        std::vector<Column> slots_{};
         std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
         std::size_t next_ring_slot_ = 0;
-        std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
-        std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
+        std::vector<std::size_t> latest_output_ring_slot_{};
+        std::vector<std::uint64_t> output_generations_{};
+        std::vector<ViewOutputKey> keys_by_logical_{};
+        std::vector<std::size_t> free_logical_indices_{};
+        std::unordered_map<ViewOutputKey, std::size_t, ViewOutputKeyHash> logical_by_key_{};
+        std::size_t active_logical_count_ = 0;
     };
 
 } // namespace lfs::vis

@@ -1,0 +1,21 @@
+/* Workspace chrome uses the shared theme color aliases. */
+.workspace-grip__line {
+    background-color: @{alpha(text_dim,0.85)};
+}
+
+.workspace-splitter {
+    background-color: @{alpha(border,0.42)};
+}
+
+.workspace-preview-first {
+    background-color: @{alpha(primary,0.04)};
+}
+
+.workspace-preview-second {
+    background-color: @{alpha(primary,0.14)};
+    border-color: @{alpha(primary,0.72)};
+}
+
+.workspace-preview-splitter {
+    background-color: @{alpha(primary,0.95)};
+}

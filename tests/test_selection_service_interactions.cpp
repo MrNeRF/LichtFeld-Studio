@@ -1209,3 +1209,85 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositions
     EXPECT_LT(values[5], -1.0e7f);
     EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
 }
+
+TEST_F(SelectionServiceInteractionsTest, WorkspaceCommandsUseFocusedCameraAndRejectRetiredView) {
+    // Both panes show the same two splats. Moving only the second camera by
+    // one unit puts the other splat under the same rectangle in render pixels.
+    int focused = 0;
+    service_->setWorkspaceProjectionResolver(
+        [&focused](std::optional<glm::vec2>, std::optional<lfs::vis::ViewId>)
+            -> std::optional<lfs::vis::SelectionProjectionContext> {
+            if (focused < 0)
+                return std::nullopt;
+            lfs::vis::SelectionProjectionContext context;
+            context.workspace_view_id = static_cast<lfs::vis::ViewId>(focused + 1);
+            context.viewport.rotation = glm::mat3(1.0f);
+            context.viewport.translation = {focused == 0 ? 0.0f : 1.0f, 0.0f, 5.0f};
+            context.viewport.size = {100, 100};
+            context.viewport.focal_length_mm = 22.0f;
+            context.viewer_layout = lfs::vis::SelectionProjectionContext::ViewerLayout{
+                .x = focused == 0 ? 0.0f : 100.0f,
+                .y = 0.0f,
+                .width = 100.0f,
+                .height = 100.0f,
+                .render_width = 100,
+                .render_height = 100};
+            return context;
+        });
+    const auto first = service_->selectRect(48, 48, 52, 52, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(first.success) << first.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+    focused = 1;
+    const auto second = service_->selectRect(48, 48, 52, 52, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(second.success) << second.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+    focused = -1;
+    const auto retired = service_->selectRect(48, 48, 52, 52, lfs::vis::SelectionMode::Replace);
+    EXPECT_FALSE(retired.success);
+    // Missing workspace views must not fall through to a stale legacy camera.
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, WorkspaceSelectionKeepsOwnerWhenFocusChangesAndRejectsClosedOwner) {
+    lfs::vis::ViewId focused = 1;
+    bool first_live = true;
+    service_->setTestingScreenPositions(make_screen_positions({50, 50, 80, 80}));
+    service_->setWorkspaceProjectionResolver(
+        [&](std::optional<glm::vec2>, std::optional<lfs::vis::ViewId> captured)
+            -> std::optional<lfs::vis::SelectionProjectionContext> {
+            const auto owner = captured.value_or(focused);
+            if (owner == 1 && !first_live)
+                return std::nullopt;
+            lfs::vis::SelectionProjectionContext context;
+            context.workspace_view_id = owner;
+            context.viewport.rotation = glm::mat3(1.0f);
+            context.viewport.translation = {0, 0, 5};
+            context.viewport.size = {100, 100};
+            context.viewer_layout = lfs::vis::SelectionProjectionContext::ViewerLayout{
+                .x = owner == 1 ? 0.0f : 100.0f,
+                .y = 0,
+                .width = 100,
+                .height = 100,
+                .render_width = 100,
+                .render_height = 100};
+            return context;
+        });
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace, {45, 45}, 0));
+    service_->updateInteractiveSelection({55, 55});
+    focused = 2;
+    const auto committed = service_->finishInteractiveSelection();
+    ASSERT_TRUE(committed.success) << committed.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+
+    focused = 1;
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace, {75, 75}, 0));
+    service_->updateInteractiveSelection({85, 85});
+    focused = 2;
+    first_live = false;
+    const auto closed = service_->finishInteractiveSelection();
+    EXPECT_FALSE(closed.success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+    service_->cancelInteractiveSelection();
+}

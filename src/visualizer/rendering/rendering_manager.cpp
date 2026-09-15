@@ -432,7 +432,10 @@ namespace lfs::vis {
         }
 
         if (gpu_selection_eligible && vksplat_viewport_renderer_) {
-            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus();
+            const auto gpu = workspace_focused_view_ != kInvalidViewId &&
+                                     !splitViewUsesComparisonPanels(getSplitViewMode())
+                                 ? vksplat_viewport_renderer_->gpuLodSelectionStatus(sceneOutputKey(workspace_focused_view_))
+                                 : vksplat_viewport_renderer_->gpuLodSelectionStatus();
             if (gpu.active) {
                 // The CPU controller is frozen at its bootstrap cut in GPU
                 // mode; report the selector's live numbers instead.
@@ -477,6 +480,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneModelResources() {
+        clearWorkspacePublishedFrames();
         clearVulkanMeshFrame();
 
         point_cloud_colors_cache_ = {};
@@ -510,6 +514,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneRenderResources() {
+        clearWorkspacePublishedFrames();
         vksplat_stale_frame_guard_.onSuccess();
         viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();

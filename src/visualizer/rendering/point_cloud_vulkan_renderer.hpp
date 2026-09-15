@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
+#include "view_output_key.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
@@ -39,7 +40,12 @@ namespace lfs::vis {
             VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
+            glm::ivec2 alloc_size{0, 0};
             bool flip_y = false;
+            ViewOutputKey output_key{};
+            // Point-cloud submits are graphics-queue ordered and fence-serialized.
+            // There is no completion semaphore; present must follow this submit on
+            // the same graphics queue (the existing single-view contract).
         };
 
         struct CropBox {
@@ -109,6 +115,8 @@ namespace lfs::vis {
                 lfs::rendering::DepthVisualizationMode::Palette;
         };
 
+        // Comparison/preview adapters. Scene columns use ViewOutputKey; these
+        // reserved slots never alias a workspace ViewId.
         enum class OutputSlot : std::size_t {
             Main = 0,
             SplitLeft = 1,
@@ -121,19 +129,62 @@ namespace lfs::vis {
         PointCloudVulkanRenderer(const PointCloudVulkanRenderer&) = delete;
         PointCloudVulkanRenderer& operator=(const PointCloudVulkanRenderer&) = delete;
 
+        // Scene output columns are keyed by workspace ViewId. Geometry buffers
+        // stay shared; only color/depth attachments are per key. Reserved
+        // Legacy columns cannot be released.
+        [[nodiscard]] std::expected<ViewOutputKey, std::string> registerViewOutput(ViewId view_id);
+        [[nodiscard]] std::expected<void, std::string> releaseViewOutput(ViewId view_id);
+
+        [[nodiscard]] std::expected<RenderResult, std::string> render(
+            VulkanContext& context,
+            const RenderRequest& request,
+            ViewOutputKey output_key);
         [[nodiscard]] std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const RenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
+            ViewOutputKey output_key);
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+            VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main);
+        [[nodiscard]] bool nextOutputImagesNeedResize(
+            glm::ivec2 size,
+            ViewOutputKey output_key) const;
+        [[nodiscard]] bool nextOutputImagesNeedResize(
+            glm::ivec2 size,
+            OutputSlot output_slot = OutputSlot::Main) const;
 
         void reset();
+
+        friend struct PointCloudOutputOwnershipTestAccess;
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
+    };
+
+    // GPU-free ownership probes for contract tests. Images are null until a
+    // successful render; identity is the per-key resource record.
+    struct PointCloudOutputOwnershipTestAccess {
+        [[nodiscard]] static std::expected<ViewOutputKey, std::string> legacyKey(
+            PointCloudVulkanRenderer::OutputSlot output_slot);
+        [[nodiscard]] static std::vector<ViewOutputKey> registeredKeys(
+            const PointCloudVulkanRenderer& renderer);
+        [[nodiscard]] static const void* resourceIdentity(
+            const PointCloudVulkanRenderer& renderer,
+            ViewOutputKey key);
+        [[nodiscard]] static VkImage colorImage(
+            const PointCloudVulkanRenderer& renderer,
+            ViewOutputKey key);
+        [[nodiscard]] static VkImage depthImage(
+            const PointCloudVulkanRenderer& renderer,
+            ViewOutputKey key);
+        [[nodiscard]] static bool outputsAlias(
+            const PointCloudVulkanRenderer& renderer,
+            ViewOutputKey a,
+            ViewOutputKey b);
     };
 
 } // namespace lfs::vis

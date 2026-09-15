@@ -42,6 +42,13 @@ namespace lfs::vis {
 
         class LFS_VIS_API SequencerUIManager {
         public:
+            struct AreaOverlayOwner {
+                RmlSequencerPanel* panel = nullptr;
+                panels::SequencerUIState* ui_state = nullptr;
+                bool alive = true;
+            };
+            using AreaOverlayOwnerPtr = std::shared_ptr<AreaOverlayOwner>;
+
             SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state,
                                gui::RmlUIManager* rml_manager);
             ~SequencerUIManager();
@@ -54,10 +61,30 @@ namespace lfs::vis {
             void reloadRmlResources();
 
             void destroyGraphicsResources();
+            // Destroy RML-owned objects before GuiManager tears down its RML
+            // manager. The member declaration order otherwise destroys the
+            // manager before this value object is destructed.
+            void shutdown();
             void tickPlaybackBeforeSceneRender();
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
+            // Area editor instances retain their own RML/UI state while sharing
+            // this controller as the single camera-path model.
+            [[nodiscard]] panels::SequencerUIState& uiState() { return ui_state_; }
+            [[nodiscard]] const panels::SequencerUIState& uiState() const { return ui_state_; }
+            [[nodiscard]] gui::RmlUIManager* rmlManager() const { return rml_manager_; }
+            [[nodiscard]] VisualizerImpl* viewer() const { return viewer_; }
+            [[nodiscard]] AreaOverlayOwnerPtr createAreaOverlayOwner(
+                RmlSequencerPanel* panel, panels::SequencerUIState* ui_state);
+            void releaseAreaOverlayOwner(const AreaOverlayOwnerPtr& owner);
+            void processAreaPanelRequests(RmlSequencerPanel& panel,
+                                          panels::SequencerUIState& ui_state,
+                                          AreaOverlayOwnerPtr owner = {},
+                                          float mouse_x = 0.0f,
+                                          float mouse_y = 0.0f);
+            // Process the shared transient overlay after all area editors have rendered.
+            void processAreaOverlay(const lfs::vis::PanelInputState& input);
             void syncKeyframesToSceneGraph() { scene_sync_->syncToSceneGraph(); }
             void setFloating(bool floating);
             [[nodiscard]] bool blocksPointer(double x, double y) const;
@@ -78,6 +105,10 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
+            void processTransportContextMenu(
+                const TransportContextMenuRequest& request,
+                panels::SequencerUIState& ui_state,
+                const AreaOverlayOwnerPtr& owner = {});
             void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
             void applyPlySequenceFrame();
             void startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
@@ -129,9 +160,11 @@ namespace lfs::vis {
 
             VisualizerImpl* viewer_;
             panels::SequencerUIState& ui_state_;
+            gui::RmlUIManager* rml_manager_ = nullptr;
             SequencerController controller_;
             std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<gui::RmlSequencerOverlay> overlay_;
+            AreaOverlayOwnerPtr active_area_overlay_owner_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;
             LineRenderer line_renderer_;
             FilmStripRenderer film_strip_;

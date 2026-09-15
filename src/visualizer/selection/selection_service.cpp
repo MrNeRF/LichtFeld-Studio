@@ -197,6 +197,16 @@ namespace lfs::vis {
 
         [[nodiscard]] std::size_t projectionContextSignature(const SelectionProjectionContext& context) {
             std::size_t seed = 0;
+            hashCombine(seed, context.workspace_view_id.value_or(kInvalidViewId));
+            if (context.depth_window) {
+                const auto& depth = *context.depth_window;
+                hashFloat(seed, depth.near_plane);
+                hashFloat(seed, depth.far_plane);
+                hashFloat(seed, depth.scale_x);
+                hashFloat(seed, depth.scale_y);
+                hashFloat(seed, depth.offset_x);
+                hashFloat(seed, depth.offset_y);
+            }
             hashMat3(seed, context.viewport.rotation);
             hashVec3(seed, context.viewport.translation);
             hashCombine(seed, std::hash<int>{}(context.viewport.size.x));
@@ -1946,6 +1956,12 @@ namespace lfs::vis {
         testing_viewport_ = std::move(viewport);
     }
 
+    void SelectionService::setWorkspaceProjectionResolver(WorkspaceProjectionResolver resolver) {
+        workspace_projection_resolver_ = std::move(resolver);
+        if (!workspace_projection_resolver_)
+            workspace_viewport_cache_.reset();
+    }
+
     void SelectionService::setTestingContainmentIntrinsics(
         std::optional<rendering::CameraIntrinsics> intrinsics) {
         testing_containment_intrinsics_ = std::move(intrinsics);
@@ -1979,6 +1995,8 @@ namespace lfs::vis {
         if (!context.valid() || !rendering_manager_) {
             return std::nullopt;
         }
+        if (context.workspace_context)
+            return context.workspace_context;
         const auto settings = rendering_manager_->getSettings();
         Viewport projection_viewport = *context.viewport;
         projection_viewport.windowSize = {context.info.render_width, context.info.render_height};
@@ -2203,7 +2221,12 @@ namespace lfs::vis {
         }
 
         scene_state = scene_manager_->buildRenderState();
-        if (!hasRenderableGaussians(scene_state.combined_model)) {
+        // Before the first content transition, render state omits combined_model.
+        // Selection still needs the live scene model with the resolved workspace camera.
+        const auto* const fallback_model = scene_state.combined_model
+                                               ? scene_state.combined_model
+                                               : scene_manager_->getModelForRendering();
+        if (!hasRenderableGaussians(fallback_model)) {
             if (viewer_derived) {
                 const size_t panel_index = projection_context.panel.has_value()
                                                ? splitViewPanelIndex(*projection_context.panel)
@@ -2234,7 +2257,7 @@ namespace lfs::vis {
             }
 
             screen_positions = projectGaussianScreenPositions(
-                *scene_state.combined_model,
+                *fallback_model,
                 projection_context.viewport,
                 projection_context.equirectangular,
                 {.model_transforms = &scene_state.model_transforms,
@@ -2248,7 +2271,7 @@ namespace lfs::vis {
         }
 
         return projectGaussianScreenPositions(
-            *scene_state.combined_model,
+            *fallback_model,
             projection_context.viewport,
             projection_context.equirectangular,
             {.model_transforms = &scene_state.model_transforms,
@@ -2281,18 +2304,59 @@ namespace lfs::vis {
             return std::nullopt;
         }
         const auto panel = session.viewport_context->panel;
-        const auto context = resolveViewerViewportContext(screen_point, panel);
+        const auto owner = session.viewport_context->workspace_context
+                               ? session.viewport_context->workspace_context->workspace_view_id
+                               : std::nullopt;
+        const auto context = resolveViewerViewportContext(screen_point, panel, owner);
         if (!context || context->panel != panel) {
             return std::nullopt;
         }
+        const auto workspace_id = [](const ViewerViewportContext& view) {
+            return view.workspace_context ? view.workspace_context->workspace_view_id : std::nullopt;
+        };
+        if (workspace_id(*context) != workspace_id(*session.viewport_context))
+            return std::nullopt;
         return context;
     }
 
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
         const std::optional<glm::vec2> screen_point,
-        const std::optional<SplitViewPanelId> panel_override) const {
+        const std::optional<SplitViewPanelId> panel_override,
+        const std::optional<ViewId> workspace_override) const {
         ViewerViewportContext context;
         context.panel = panel_override.value_or(SplitViewPanelId::Left);
+
+        const auto workspace_projection = workspace_projection_resolver_
+                                              ? workspace_projection_resolver_(screen_point, workspace_override)
+                                              : std::nullopt;
+        if (workspace_projection_resolver_ && !workspace_projection)
+            return std::nullopt;
+        if (workspace_projection) {
+            const auto& projection = *workspace_projection;
+            const auto size = glm::max(projection.viewport.size, glm::ivec2(1));
+            if (!workspace_viewport_cache_ || workspace_viewport_cache_->windowSize != size)
+                workspace_viewport_cache_ = std::make_unique<Viewport>(size.x, size.y);
+            workspace_viewport_cache_->setViewMatrix(projection.viewport.rotation,
+                                                     projection.viewport.translation);
+            workspace_viewport_cache_->frameBufferSize = size;
+            workspace_viewport_cache_->ortho_scale_override = projection.viewport.ortho_scale;
+            if (projection.viewer_layout) {
+                context.info = viewportInfoFromLayout(*projection.viewer_layout);
+            } else {
+                context.info = ViewportInfo{
+                    .width = static_cast<float>(projection.viewport.size.x),
+                    .height = static_cast<float>(projection.viewport.size.y),
+                    .render_width = projection.viewport.size.x,
+                    .render_height = projection.viewport.size.y,
+                };
+            }
+            context.viewport = workspace_viewport_cache_.get();
+            context.workspace_context = projection;
+            context.panel = SplitViewPanelId::Left;
+            return context.info.valid()
+                       ? std::optional<ViewerViewportContext>(std::move(context))
+                       : std::nullopt;
+        }
 
         if (testing_viewport_ && testing_viewport_->valid()) {
             static Viewport testing_viewport_source(1, 1);
@@ -4398,16 +4462,22 @@ namespace lfs::vis {
                 (std::isfinite(viewport.ortho_scale) && viewport.ortho_scale > 1.0e-5f)
                     ? viewport.ortho_scale
                     : lfs::rendering::DEFAULT_ORTHO_SCALE;
-            const bool use_panel_depth_window =
-                settings.split_view_mode == SplitViewMode::IndependentDual &&
-                projection_context.panel.has_value();
             float depth_near = -settings.depth_filter_max.z;
             float depth_far = -settings.depth_filter_min.z;
             float scale_x = settings.depth_filter_scale_x;
             float scale_y = settings.depth_filter_scale_y;
             float offset_x = settings.depth_filter_offset_x;
             float offset_y = settings.depth_filter_offset_y;
-            if (use_panel_depth_window) {
+            if (projection_context.depth_window) {
+                const auto& window = *projection_context.depth_window;
+                depth_near = window.near_plane;
+                depth_far = window.far_plane;
+                scale_x = window.scale_x;
+                scale_y = window.scale_y;
+                offset_x = window.offset_x;
+                offset_y = window.offset_y;
+            } else if (settings.split_view_mode == SplitViewMode::IndependentDual &&
+                       projection_context.panel.has_value()) {
                 const auto panel_window =
                     rendering_manager_->getDepthWindowForPanel(*projection_context.panel);
                 depth_near = panel_window.near_plane;
