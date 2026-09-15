@@ -353,7 +353,7 @@ class GallerySync:
                 "reservedBytes": self._reserved_bytes if same else None,
                 "hdrBackgrounds": self._hdr_backgrounds if same else None,
                 "changeSequence": self._change_sequence if same else None,
-                "established": bool(same and self._owner),
+                "established": bool(same and self._owner and self._checked_at),
                 "completion": self._completion if same else None,
                 "revisionDomains": self._revision_domains if same else 0,
                 "checkedAt": self._checked_at if same else 0,
@@ -480,6 +480,8 @@ class GallerySync:
                 cached = self.scenes if same else copy.deepcopy(cache.get("scenes", []))
                 sequence = self._change_sequence if same else cache.get("changeSequence")
                 if not same:
+                    etag = cache.get("ownerEtag") if type(sequence) is int else None
+                if not same:
                     self.scenes = cached
                     self._checked_at = cache.get("checkedAt", 0)
                 self.version += 1
@@ -497,10 +499,22 @@ class GallerySync:
                 except PortalHTTPError as exc:
                     if not (exc.status in (404, 405) or exc.status == 409 and exc.error == "resync_required"):
                         raise
+                    if exc.status in (404, 405) and etag:
+                        # Only a previous changeSequence response proves that
+                        # this ETag covers the whole owner listing.
+                        scenes = client.list_scenes(etag=etag, owner_wide=True)
+                        if scenes is None:
+                            scenes = cached
+                            client.change_sequence = sequence
             if scenes is None:
                 # This also handles an old portal whose first-page ETag does
                 # not describe the later pages.
                 scenes = client.list_scenes()
+            # The changes feed may contain compact scene summaries. Resolve
+            # them before comparing or applying authored view settings. This
+            # also repairs a cache written by an earlier client.
+            scenes = [client.scene(scene["id"]) if scene.get("status") == "ready"
+                      and "viewerSettings" not in scene else scene for scene in scenes]
             with self._lock:
                 current = self.account.snapshot()
                 if not current.signed_in or (current.email, current.connected_since) != session or self.account.base_url != origin:
@@ -518,7 +532,7 @@ class GallerySync:
                 self._change_sequence = getattr(client, "change_sequence", None)
                 version = capabilities.get("revisionDomains", 0)
                 self._revision_domains = version if type(version) is int else 0
-                self._list_etag = getattr(client, "list_etag", None) or (etag if scenes is None else None)
+                self._list_etag = getattr(client, "list_etag", None) or (etag if self._change_sequence == sequence else None)
                 self._checked_at = time.time()
                 if scenes is not None:
                     self.scenes = scenes
@@ -529,7 +543,8 @@ class GallerySync:
                 self._unsupported_identity = None
                 self.message = "Gallery is up to date."
                 cache = dict(scenes=copy.deepcopy(self.scenes), checkedAt=self._checked_at,
-                             changeSequence=self._change_sequence, origin=origin, owner=self._owner)
+                             changeSequence=self._change_sequence, ownerEtag=self._list_etag,
+                             origin=origin, owner=self._owner)
             cache_file.write(json.dumps(cache, allow_nan=False).encode())
             self._cache_posters(client, self.scenes, (origin, *session, True))
             # Recovered jobs are persisted by the next actual mutation.
