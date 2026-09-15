@@ -109,7 +109,7 @@ __lfs_panel_ids__ = ["lfs.asset_manager"]
 class AssetManagerPanel(GalleryAssetMixin, Panel):
     """Dockable `.licht` project catalog."""
 
-    SORT_MODES = ("name", "size", "iteration")
+    SORT_MODES = ("name", "size", "iteration", "saved", "opened", "published")
     STORAGE_PATH: Optional[Path] = None
 
     def __init__(self):
@@ -126,6 +126,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._selection_type = "none"
         self._view_mode = "list"
         self._sort_mode = "name"
+        self._sort_descending = False
         self._search_query = ""
         self._active_filter = "all"
 
@@ -247,11 +248,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "list_column_overrides": dict(self._list_column_overrides),
             "inspector_sections": dict(self._inspector_sections),
             "operations_expanded": self._operations_expanded,
+            "sort_mode": self._sort_mode,
+            "sort_descending": self._sort_descending,
             "selected_folder_id": folder_id,
         }
 
     def apply_chrome(self, payload: Any) -> None:
         if isinstance(payload, dict):
+            if payload.get("sort_mode") in self.SORT_MODES:
+                self._sort_mode = payload["sort_mode"]
+                self._sort_descending = bool(payload.get("sort_descending", self._sort_mode != "name"))
             sections = payload.get("inspector_sections", {})
             if isinstance(sections, dict):
                 for section in self._inspector_sections:
@@ -400,11 +406,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         self._bind_gallery_model(model)
         model.bind("search_query", self.get_search_query, self.set_search_query)
+        model.bind_func("search_is_empty", lambda: not self._search_query)
         model.bind("selected_folder_id", lambda: self._selected_folder_id or SCOPE_ALL, self._set_scope_value)
         model.bind("thumbnail_size", self.get_thumbnail_size, self.set_thumbnail_size)
         model.bind_func("is_gallery_view", lambda: self._view_mode == "gallery")
         model.bind_func("is_list_view", lambda: self._view_mode == "list")
         model.bind_func("sort_label", self.get_sort_label)
+        model.bind_func("sort_tooltip", self.get_sort_tooltip)
+        model.bind_func("filter_menu_label", lambda: tr("projects.toolbar.filter"))
         model.bind_func("active_filter_label", self.get_filter_label)
         model.bind_func("folders_collapsed", lambda: self._folders_collapsed)
         model.bind_func("folders_expanded", lambda: not self._folders_collapsed)
@@ -736,6 +745,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("on_load_asset", self.on_load_asset),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
+            ("open_sort_menu", self.open_sort_menu),
             ("close_quick_look", self.close_quick_look),
             ("open_view_menu", self.open_view_menu),
             ("open_filter_menu", self.open_filter_menu),
@@ -826,6 +836,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def set_search_query(self, value: str) -> None:
         self._search_query = str(value or "")
+        self._dirty_fields("search_is_empty")
         visible_ids = {
             str(asset.get("id") or asset.get("project_uuid") or "")
             for asset in self._filtered_assets()
@@ -839,14 +850,48 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_selection()
 
     def get_sort_label(self) -> str:
-        key = (
-            "projects.toolbar.sort_by_size"
-            if self._sort_mode == "size"
-            else "projects.toolbar.sort_by_iteration"
-            if self._sort_mode == "iteration"
-            else "projects.toolbar.sort_by_name"
-        )
-        return tr(key)
+        return tr("projects.toolbar.sort")
+
+    def _sort_field_label(self, field: str) -> str:
+        return tr({
+            "name": "projects.property.name", "saved": "projects.property.saved",
+            "opened": "projects.property.opened", "size": "projects.property.size",
+            "iteration": "projects.sort.iteration", "published": "projects.gallery.sidebar.published",
+        }[field])
+
+    def get_sort_tooltip(self) -> str:
+        direction = tr("projects.sort.descending" if self._sort_descending else "projects.sort.ascending")
+        return f"{self._sort_field_label(self._sort_mode)} · {direction}"
+
+    def _sort_menu_items(self) -> List[Dict[str, Any]]:
+        fields = ["name", "saved", "opened", "size"]
+        if any(self._cached_iteration(asset) is not None for asset in self._asset_index_assets().values()):
+            fields.append("iteration")
+        fields.append("published")
+        items = [{"label": self._sort_field_label(field), "action": "sort:" + field,
+                  "is_active": self._sort_mode == field} for field in fields]
+        items.extend([
+            {"label": tr("projects.sort.ascending"), "action": "order:ascending", "separator_before": True,
+             "is_active": not self._sort_descending},
+            {"label": tr("projects.sort.descending"), "action": "order:descending", "is_active": self._sort_descending},
+        ])
+        return items
+
+    def _choose_sort(self, action: str) -> None:
+        kind, _, value = action.partition(":")
+        if kind == "sort" and value in self.SORT_MODES:
+            self._sort_mode = value
+            self._sort_descending = value != "name"
+        elif kind == "order" and value in ("ascending", "descending"):
+            self._sort_descending = value == "descending"
+        else:
+            return
+        self._reset_scroll()
+        self._refresh_records(assets=True)
+        self._dirty_fields("sort_label", "sort_tooltip")
+
+    def open_sort_menu(self, _handle=None, _event=None, _args=None) -> None:
+        self._show_shared_context_menu(self._sort_menu_items(), self._choose_sort)
 
     def get_filter_label(self) -> str:
         return tr({
@@ -1034,14 +1079,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return max(values) if values else None
 
     def _cache_iteration(self, asset_id: str, iteration: int) -> None:
-        if not self._asset_index:
-            return
-        try:
-            self._library_command("update_asset", asset_id, save=False, iteration=int(iteration))
-        except (AttributeError, TypeError, RuntimeError):
-            # Test doubles and older catalogs can still display the runtime
-            # cache; the native result remains authoritative for the Inspector.
-            pass
+        self._inspection_by_asset.setdefault(asset_id, {})["iteration"] = int(iteration)
+
+    def _cached_iteration(self, asset: Dict[str, Any]) -> Optional[int]:
+        cached = self._inspection_by_asset.get(asset.get("id"), {})
+        value = cached.get("iteration", asset.get("iteration"))
+        return int(value) if value is not None else None
 
     def _selected_inspection(self) -> Dict[str, Any]:
         return self._inspection_by_asset.get(self.get_selected_asset_id(), {})
@@ -1426,17 +1469,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             rows = [asset for asset in rows if Path(asset.get("path") or "") in order]
             rows.sort(key=lambda asset: order[Path(asset["path"])])
             rows = rows[:10]
-        elif self._sort_mode == "size":
-            rows.sort(
-                key=lambda asset: (
-                    -int(asset.get("file_size_bytes") or 0),
-                    self._sort_text(asset.get("name")),
-                )
-            )
-        elif self._sort_mode == "iteration":
-            rows.sort(key=lambda asset: (-int(asset.get("iteration") or 0), self._sort_text(asset.get("name") or asset.get("path"))))
         else:
-            rows.sort(key=lambda asset: self._sort_text(asset.get("name") or asset.get("path")))
+            recent = {str(Path(path)): -rank for rank, path in enumerate(
+                getattr(lf, "project_recent_files", lambda: [])())} if self._sort_mode == "opened" else {}
+            links = self._gallery_state.get("links", {})
+            def sort_value(asset):
+                name = self._sort_text(self._get_asset_display_name(asset))
+                value = {
+                    "name": name,
+                    "saved": int(asset.get("saved_at_unix_ns") or asset.get("mtime_ns") or 0),
+                    "size": int(asset.get("file_size_bytes") or 0),
+                    "iteration": self._cached_iteration(asset) or 0,
+                    "opened": recent.get(str(Path(asset.get("path") or "")), -len(recent) - 1),
+                    "published": float(links.get(asset.get("id"), {}).get("exchangedAt") or 0),
+                }[self._sort_mode]
+                return value, name
+            rows.sort(key=sort_value, reverse=self._sort_descending)
         self._last_asset_match_count = len(rows)
         return rows
 
@@ -1728,10 +1776,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def cycle_sort_mode(self, _handle=None, _ev=None, _args=None):
         index = (self.SORT_MODES.index(self._sort_mode) + 1) % len(self.SORT_MODES)
-        self._sort_mode = self.SORT_MODES[index]
-        self._reset_scroll()
-        self._refresh_records(assets=True)
-        self._dirty_fields("sort_label")
+        self._choose_sort("sort:" + self.SORT_MODES[index])
 
     def open_view_menu(self, _handle=None, _ev=None, _args=None):
         items = [
@@ -1745,9 +1790,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             {"label": tr("projects.filter.gallery"), "action": "filter:gallery"},
             {"label": tr("projects.gallery.action.grid"), "action": "gallery"},
             {"label": tr("projects.gallery.action.list"), "action": "list"},
-            {"label": tr("projects.toolbar.sort_by_name"), "action": "sort_name", "separator_before": True},
-            {"label": tr("projects.toolbar.sort_by_size"), "action": "sort_size"},
-            {"label": tr("projects.toolbar.sort_by_iteration"), "action": "sort_iteration"},
+            *self._sort_menu_items(),
             {"label": f"{tr('projects.toolbar.thumbnail_size')} 112", "action": "thumbnail:112", "separator_before": True},
             {"label": f"{tr('projects.toolbar.thumbnail_size')} 208", "action": "thumbnail:208"},
             {"label": f"{tr('projects.toolbar.thumbnail_size')} 320", "action": "thumbnail:320"},
@@ -1759,11 +1802,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._set_filter(action.partition(":")[2])
             elif action in ("gallery", "list"):
                 self.set_view_mode(None, None, [action])
-            elif action in ("sort_name", "sort_size", "sort_iteration"):
-                self._sort_mode = action.removeprefix("sort_")
-                self._reset_scroll()
-                self._refresh_records(assets=True)
-                self._dirty_fields("sort_label")
+            elif action.startswith(("sort:", "order:")):
+                self._choose_sort(action)
             elif action.startswith("thumbnail:"):
                 self.set_thumbnail_size(action.partition(":")[2])
             elif action == "check_gallery":
@@ -3343,7 +3383,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         container = event.current_target()
         target = event.target()
-        if getattr(target, "id", "") == "asset-thumbnail-slider":
+        if rml_widgets.find_ancestor_with_attribute(target, "data-thumbnail-size", container) is not None:
             self.set_thumbnail_size({
                 "compact": 112.0, "narrow": 136.0,
                 "medium": 168.0, "wide": 168.0,

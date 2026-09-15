@@ -25,13 +25,13 @@
       <div id="asset-popup-toolbar">
         <div class="toolbar-row toolbar-row-primary">
           <div class="asset-search-box">
-            <span class="asset-search-icon">{{search_icon_label}}</span>
-            <input id="asset-search-input" type="text" data-attr-placeholder="search_placeholder" data-value="search_query"/>
+            <input id="asset-search-input" type="text" data-attr-aria-label="search_placeholder" data-value="search_query"/>
+            <span class="asset-search-placeholder text-muted" data-if="search_is_empty">{{search_placeholder}}</span>
           </div>
-          <button class="asset-button asset-button--text asset-toolbar-filter" data-event-click="open_filter_menu">
-            <span class="asset-button-text">{{active_filter_label}}</span>
+          <button class="asset-button asset-button--text asset-toolbar-filter" data-event-click="open_filter_menu" data-attr-title="active_filter_label">
+            <span class="asset-button-text">{{filter_menu_label}}</span>
           </button>
-          <button class="asset-button asset-button--text asset-sort-button" data-event-click="cycle_sort_mode">
+          <button class="asset-button asset-button--text asset-sort-button" data-event-click="open_sort_menu" data-attr-title="sort_tooltip">
             <span class="asset-button-text">{{sort_label}}</span>
           </button>
           <button class="asset-button asset-button--text asset-toolbar-view" data-event-click="open_view_menu">
@@ -53,7 +53,7 @@
               <span class="asset-icon-list"><span></span><span></span><span></span></span>
             </button>
           </div>
-          <input id="asset-thumbnail-slider" class="asset-thumbnail-slider" type="range" min="112" max="320" step="8"
+          <input id="asset-thumbnail-slider" class="asset-thumbnail-slider" type="range" min="112" max="320" step="8" data-if="is_gallery_view" data-thumbnail-size="true"
                  data-value="thumbnail_size" data-tooltip="projects.toolbar.thumbnail_size"
                  aria-label="{{thumbnail_size_label}}"/>
           <button class="asset-button asset-button--text asset-check-gallery"

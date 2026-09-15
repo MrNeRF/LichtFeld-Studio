@@ -1,4 +1,9 @@
 {
+  "projects.toolbar.sort": "Sort",
+  "projects.sort.iteration": "Iteration",
+  "projects.sort.ascending": "Ascending",
+  "projects.sort.descending": "Descending",
+  "projects.toolbar.sort_by_iteration": "Sort by: Iteration",
   "toolbar.asset_manager": "Projects",
   "rendering.tonemapping.filmic": "Filmic",
   "projects.action.open": "Open",

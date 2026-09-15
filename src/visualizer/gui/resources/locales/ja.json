@@ -1,4 +1,9 @@
 {
+  "projects.toolbar.sort": "並べ替え",
+  "projects.sort.iteration": "反復回数",
+  "projects.sort.ascending": "昇順",
+  "projects.sort.descending": "降順",
+  "projects.toolbar.sort_by_iteration": "並べ替え: 反復回数",
   "toolbar.asset_manager": "プロジェクト",
   "main_panel.color_exposure": "スプラットの露出",
   "projects.action.open": "開く",

@@ -187,10 +187,12 @@
     flex-direction: column;
     align-items: stretch;
     flex-shrink: 0;
-    gap: 16dp;
-    padding: 28dp 12dp 10dp;
-    border-bottom-width: 1dp;
-    min-height: 44dp;
+    box-sizing: border-box;
+    gap: 0;
+    padding: 0;
+    border-bottom-width: 0;
+    height: 40dp;
+    min-height: 40dp;
 }
 
 .toolbar-row {
@@ -1017,7 +1019,9 @@
 }
 
 .toolbar-row-primary {
-    min-height: 24dp;
+    box-sizing: border-box;
+    height: 40dp;
+    min-height: 40dp;
     display: flex;
     align-items: center;
     gap: 8dp;
@@ -1030,27 +1034,56 @@
     box-sizing: border-box;
     min-height: 24dp;
     height: 24dp;
+    max-height: 24dp;
+    min-width: 0;
+    padding: 0 8dp;
+}
+
+.toolbar-row-primary > .asset-button--icon,
+.toolbar-row-primary > .asset-view-toggle > .asset-button--icon {
+    width: 24dp;
+    min-width: 24dp;
+    max-width: 24dp;
+    padding: 0;
 }
 
 .asset-search-box {
+    box-sizing: border-box;
+    position: relative;
     display: flex;
     align-items: center;
     min-width: 80dp;
     height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
+    border-width: 0;
+    padding: 0;
     flex: 1 1 120dp;
     overflow: hidden;
 }
 
-.asset-search-box input {
+.asset-search-box input[type="text"] {
     box-sizing: border-box;
     min-width: 0;
     flex: 1;
     height: 24dp;
-    border-width: 0;
+    border-width: 1dp;
     padding: 0 8dp;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.asset-search-placeholder {
+    position: absolute;
+    left: 8dp;
+    right: 8dp;
+    top: 4dp;
+    height: 16dp;
+    line-height: 16dp;
+    overflow: hidden;
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 .asset-search-icon {
@@ -1064,7 +1097,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.asset-toolbar-filter, .asset-toolbar-view { display: none; }
+.asset-toolbar-filter { display: inline-flex; }
+.asset-toolbar-view { display: none; }
 .asset-check-gallery { display: flex; align-items: center; max-width: 190dp; }
 .asset-check-gallery .asset-button-text,
 .asset-check-gallery .gallery-checked {
@@ -1075,9 +1109,17 @@
 }
 .asset-check-gallery-icon { display: none; }
 .asset-check-gallery .gallery-checked { margin-left: 4dp; }
-.asset-thumbnail-slider { width: 96dp; height: 24dp; flex: 0 0 96dp; }
+.asset-thumbnail-slider { box-sizing: border-box; width: 96dp; height: 24dp; min-height: 24dp; max-height: 24dp; margin: 0; padding: 0; border-width: 0; flex: 0 0 96dp; }
+.asset-thumbnail-slider slidertrack { height: 4dp; margin-top: 10dp; }
+.asset-thumbnail-slider sliderprogress { height: 4dp; margin-top: 0; }
+.asset-thumbnail-slider[type="range"] sliderbar { width: 10dp; height: 10dp; margin-top: 7dp; }
+/* Track clicks move the knob under the pointer. Keep focus on the input so
+   both clicks have the same focus target and RmlUi recognizes a double click. */
+.asset-thumbnail-slider slidertrack,
+.asset-thumbnail-slider sliderprogress,
+.asset-thumbnail-slider sliderbar { focus: none; }
 .asset-add-existing-icon { display: none; }
-.asset-view-toggle-icons { display: flex; flex: 0 0 auto; }
+.asset-view-toggle-icons { display: flex; flex: 0 0 auto; height: 24dp; gap: 8dp; }
 .asset-view-button { width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 0; }
 .asset-view-button img { width: 16dp; height: 16dp; }
 
@@ -1322,7 +1364,7 @@
 .asset-shell.is-narrow .asset-import-button { display: none; }
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 .asset-shell.is-narrow .gallery-account-row, .asset-shell.is-compact .gallery-account-row { display: none; }
-.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; }
+.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; row-gap: 16dp; }
 .asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
 .asset-shell.is-compact .asset-tray, .asset-shell.is-narrow .asset-tray { min-height: 120dp; }
 .asset-shell.is-compact .asset-col-folder, .asset-shell.is-compact .asset-col-modified, .asset-shell.is-compact .asset-col-size { display: none; }
@@ -1338,6 +1380,11 @@
 .asset-shell.is-narrow .asset-list-header,
 .asset-shell.is-compact .asset-list-header { display: none; }
 .asset-shell.is-narrow #asset-popup-toolbar,
-.asset-shell.is-compact #asset-popup-toolbar { min-height: 96dp; }
+.asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
+.asset-shell.is-compact .asset-check-gallery { display: inline-flex; }
+.asset-shell.is-compact .asset-toolbar-view, .asset-shell.is-narrow .asset-toolbar-view { flex: 1; }
+.asset-shell.is-compact .asset-panel-close, .asset-shell.is-narrow .asset-panel-close { margin-left: 0; }
+.asset-shell.is-medium .asset-import-button { display: none; }
+.asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
 .asset-shell.is-medium .asset-col-folder { display: none; }
 .asset-shell.is-medium .asset-col-name { min-width: 120dp; }

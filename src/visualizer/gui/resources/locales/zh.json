@@ -1,4 +1,9 @@
 {
+  "projects.toolbar.sort": "排序",
+  "projects.sort.iteration": "迭代次数",
+  "projects.sort.ascending": "升序",
+  "projects.sort.descending": "降序",
+  "projects.toolbar.sort_by_iteration": "排序依据：迭代次数",
   "toolbar.asset_manager": "项目",
   "main_panel.color_exposure": "高斯点曝光",
   "projects.action.open": "打开",

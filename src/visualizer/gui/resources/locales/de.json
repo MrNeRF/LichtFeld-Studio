@@ -1,4 +1,9 @@
 {
+  "projects.toolbar.sort": "Sortieren",
+  "projects.sort.iteration": "Iteration",
+  "projects.sort.ascending": "Aufsteigend",
+  "projects.sort.descending": "Absteigend",
+  "projects.toolbar.sort_by_iteration": "Sortieren nach: Iteration",
   "toolbar.asset_manager": "Projekte",
   "main_panel.color_exposure": "Splat-Belichtung",
   "projects.action.open": "Öffnen",

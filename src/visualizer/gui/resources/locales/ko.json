@@ -1,4 +1,9 @@
 {
+  "projects.toolbar.sort": "정렬",
+  "projects.sort.iteration": "반복 횟수",
+  "projects.sort.ascending": "오름차순",
+  "projects.sort.descending": "내림차순",
+  "projects.toolbar.sort_by_iteration": "정렬 기준: 반복 횟수",
   "toolbar.asset_manager": "프로젝트",
   "main_panel.color_exposure": "스플랫 노출",
   "projects.action.open": "열기",
