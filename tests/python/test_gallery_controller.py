@@ -191,6 +191,14 @@ def test_recovery_folder_action_reveals_only_service_folder(gallery, tmp_path, m
     panel._dispatch("show_recovery_folder", [])
     assert actions == [str(panel.service.root)]
 
+
+def test_corrupt_journal_does_not_mark_every_project_as_failed(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    facts = asset_sync_state(dict(id="project", exists=True), storage_issue=True, established=False)
+    assert facts["state"] == "not_checked"
+    assert facts["attention"] is False
+    assert facts["actions"] == []
+
 def test_native_lease_survives_detach_until_import_idle(gallery, monkeypatch):
     from contextlib import contextmanager
     panel, _, actions = gallery
@@ -566,7 +574,7 @@ def test_single_badge_precedence_during_transfers(gallery, status, extra, expect
     assert facts['progress'] == 70
     assert facts['jobId'] == 'job'
     diverged = asset_sync_state(dict(id='project', commit_uuid='new', exists=True), link, dict(base,title='remote', metadataRevision='remote-edit'), [job])
-    assert diverged['state'] == 'diverged'
+    assert diverged['state'] == (expected if diverged['active'] else 'diverged')
 
 def test_missing_remote_and_unknown_never_use_timestamps(gallery):
     from lfs_plugins.gallery_controller import asset_sync_state
@@ -597,8 +605,9 @@ def test_local_file_problems_need_attention_and_check(gallery, panel_module, mon
     assert facts["relationship"] == "local_file_problem"
     assert facts["state"] == "error"
     assert facts["icon"] == "cloud-bang"
-    assert facts["action"] == "check"
-    assert facts["attention"] is True
+    assert facts["action"] == ""
+    assert facts["actions"] == []
+    assert facts["attention"] is (status != "UNSUPPORTED_NEWER")
     assert facts["reason"] == reason
 
 
@@ -720,8 +729,8 @@ def test_default_pull_registers_links_without_touching_open_document(gallery, mo
     monkeypatch.setattr(module.lf, 'project_is_dirty', lambda: True)
     monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(project_uuid='fresh-project', commit_uuid='fresh-commit'))
     registered = []
-    index = SimpleNamespace(load=lambda: True, get_asset=lambda _: None,
-        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (SimpleNamespace(project_uuid='fresh-project'), True))
+    index = SimpleNamespace(load=lambda: True, save=lambda: True, get_asset=lambda _: None,
+        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (SimpleNamespace(project_uuid='fresh-project', extra={}), True))
     monkeypatch.setattr(import_module('lfs_plugins.asset_index'), 'AssetIndex', lambda: index)
     panel._register_download(job, state['identity'])
     job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': path}
@@ -812,7 +821,7 @@ def test_D2_removed_portal_wins_when_local_file_is_missing(gallery):
     asset = {'id':'project', 'exists':False}
     facts = asset_sync_state(asset, {'sceneId':'removed', 'remoteDeleted':True}, checked=True)
     assert (facts['relationship'], facts['state'], facts['action']) == ('remote_deleted', 'remote_deleted', 'unlink')
-    assert asset_sync_state(dict(asset, exists=True), {'sceneId':'removed', 'remoteDeleted':True})['action'] == 'publish_new'
+    assert asset_sync_state(dict(asset, exists=True), {'sceneId':'removed', 'remoteDeleted':True})['action'] == 'publish_again'
 
 def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     from lfs_plugins.gallery_messages import localize_message
@@ -946,3 +955,66 @@ def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery)
     assert gallery_eligibility(dict(asset, embedded_dataset_complete=False), facts)["status"] == "not_checked"
     reasons = gallery_eligibility(dict(asset, publication={"visibleSplats": 0, "externalPayloads": True}), facts)
     assert reasons["reasons"] == ["no_splats", "external_payloads"]
+
+
+def test_presentation_metadata_and_scene_content_have_separate_relationships(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    asset = {"id": "project", "commit_uuid": "saved", "status": "AVAILABLE"}
+    remote = dict(scene(), presentationRevision="p1")
+    link = dict(sceneId=remote["id"], commitUuid="saved", contentRevision="original",
+                metadataRevision="original", acknowledgedPresentationRevision="p1")
+    assert asset_sync_state(asset, link, remote)["state"] == "equal"
+    assert asset_sync_state(asset, link, dict(remote, presentationRevision="p2"))["state"] == "presentation"
+    assert asset_sync_state(asset, link, dict(remote, metadataRevision="m2"))["state"] == "remote"
+    assert asset_sync_state(asset, link, dict(remote, contentRevision="c2"))["state"] == "remote_content"
+    assert asset_sync_state(asset, link, None, established=False)["state"] == "not_checked"
+    assert asset_sync_state(asset, dict(link, commitUuid=""), remote)["state"] == "unknown"
+
+
+def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
+    from lfs_plugins.gallery_controller import conflict_groups
+    base = dict(title="Original", description="First", visibility="private", viewerSettings={})
+    mine = dict(base, title="Mine", viewerSettings={"exposure": 2, "cameraPath": {"duration": 2}})
+    remote = dict(base, title="Gallery", description="Edited there", visibility="public",
+                  viewerSettings={"exposure": 3, "cameraPath": {"duration": 5}}, contentRevision="new")
+    rows = {r["id"]: r for r in conflict_groups({"commit_uuid": "local"},
+        dict(sharedFields=base, contentRevision="old", commitUuid="old"), mine, remote)}
+    assert set(rows) == {"text", "visibility", "view", "track", "content"}
+    assert "Mine" in rows["text"]["mine_value"] and "Edited there" in rows["text"]["gallery_value"]
+    assert rows["text"]["choice"] == "mine" and rows["visibility"]["choice"] == "gallery"
+    assert rows["content"]["choice"] == "mine" and not rows["content"]["can_both"]
+    assert rows["track"]["can_both"]
+
+
+def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"saved project with training history")
+    project = ("project", str(path))
+    monkeypatch.setattr(panel, "_project_identity", lambda: project)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "is_training_active", lambda: False, raising=False)
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(panel, "_begin_local_update", lambda *_: pytest.fail("Settings entered geometry replacement"))
+    monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: actions.append("view"))
+    monkeypatch.setattr(panel, "_save_current_project", lambda callback: (actions.append("save"), callback()))
+    job = dict(id="settings", status="completed", project="project",
+               localUpdate={"id": "backup", "state": "preparing", "backupPath": str(tmp_path / "backup.licht")})
+    state["jobs"] = [job]
+    panel.service.prepare_settings_update = lambda *args: ("settings", "backup")
+    def finish_settings(*args, **kwargs):
+        actions.append("link")
+        job["localUpdate"]["state"] = "applied"
+    panel.service.finish_settings_update = finish_settings
+    panel._begin_settings_apply({"id": "project"}, scene(), dict(title="Gallery title", viewerSettings={}))
+    panel.service.busy = True
+    panel._finish_settings_apply()
+    assert actions == []
+    panel.service.busy = False
+    job["localUpdate"]["state"] = "ready"
+    panel._finish_settings_apply()
+    panel._finish_settings_apply()
+    assert actions == ["view", "save", "link"]
+    assert panel._undo_pull["jobId"] == "settings"
+    assert path.read_bytes() == b"saved project with training history"
