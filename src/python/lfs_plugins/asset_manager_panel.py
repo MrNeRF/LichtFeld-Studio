@@ -227,7 +227,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dialog_busy = False
         self._dialog_drop_checkpoints = True
         self._dialog_drop_dataset = False
-        self._operations_expanded = False
+        self._operations_expanded = None
+        self._inspector_sections = {"project": True, "file": True, "gallery": True}
+        self._info_thumbnail_geometry = None
         self._verify_results: Dict[str, str] = {}
         self._init_gallery()
 
@@ -243,11 +245,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "tray_height": self._tray_height,
             "thumbnail_sizes": dict(self._thumbnail_sizes),
             "list_column_overrides": dict(self._list_column_overrides),
+            "inspector_sections": dict(self._inspector_sections),
+            "operations_expanded": self._operations_expanded,
             "selected_folder_id": folder_id,
         }
 
     def apply_chrome(self, payload: Any) -> None:
         if isinstance(payload, dict):
+            sections = payload.get("inspector_sections", {})
+            if isinstance(sections, dict):
+                for section in self._inspector_sections:
+                    if isinstance(sections.get(section), bool):
+                        self._inspector_sections[section] = sections[section]
+            if isinstance(payload.get("operations_expanded"), bool):
+                self._operations_expanded = payload["operations_expanded"]
             self._folders_collapsed = bool(
                 payload.get("folders_collapsed", self._folders_collapsed)
             )
@@ -430,6 +441,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("navigator_style_width", self.get_navigator_style_width)
         model.bind_func("inspector_width", lambda: f"{self._inspector_width:.1f}dp")
         model.bind_func("inspector_style_width", self.get_inspector_style_width)
+        for section in self._inspector_sections:
+            model.bind_func("inspector_" + section + "_expanded",
+                            lambda section=section: self._inspector_sections[section])
+        model.bind_func("inspector_gallery_action_label", lambda: (
+            self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
+            if self._get_selected_asset() else ""))
+        model.bind_func("inspector_has_gallery_action", lambda: (
+            not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
+        model.bind_func("inspector_more_label", lambda: tr("common.more"))
+        model.bind_func("inspector_training_tooltip", lambda: " · ".join(filter(None, (
+            self._selected_details_rows().get("iteration", ""), self._selected_details_rows().get("strategy", "")))))
+        model.bind_func("inspector_model_tooltip", lambda: " · ".join(filter(None, (
+            self._selected_details_rows().get("gaussians", ""),
+            "SH " + self._selected_details_rows()["sh_degree"] if self._selected_details_rows().get("sh_degree") else ""))))
+        model.bind_func("inspector_reclaimable_tooltip", lambda: "{} ({})".format(
+            self._selected_details_rows().get("dead_bytes", ""), self._selected_details_rows().get("reclaimable_percent", "")))
         model.bind_func("inspector_height", lambda: f"{self._inspector_preferred_height:.1f}dp")
         model.bind_func("inspector_style_height", self.get_inspector_style_height)
         model.bind_func("inspector_reserved_height", lambda: (
@@ -709,6 +736,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ("open_view_menu", self.open_view_menu),
             ("open_filter_menu", self.open_filter_menu),
             ("toggle_inspector", self.toggle_inspector),
+            ("toggle_inspector_section", self.toggle_inspector_section),
+            ("open_inspector_menu", self.open_inspector_menu),
             ("refresh_catalog", self.refresh_catalog),
             ("on_locate_file", self.on_locate_file),
             ("on_use_found_location", self.on_use_found_location),
@@ -1047,6 +1076,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return [{**row, "label": tr(keys.get(row["action"], row["label"]))} for row in rows]
 
     def get_operations_expanded(self) -> bool:
+        if self._operations_expanded is not None:
+            return self._operations_expanded
         if self.selected_has_problem():
             return True
         rows = self._selected_details_rows()
@@ -1054,11 +1085,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             reclaimable = float(str(rows.get("reclaimable_percent", "0")).rstrip("%"))
         except (TypeError, ValueError):
             reclaimable = 0.0
-        return self._operations_expanded or reclaimable > 10.0
+        return reclaimable > 10.0
 
     def toggle_operations(self, _handle=None, _ev=None, _args=None) -> None:
-        self._operations_expanded = not self._operations_expanded
+        self._operations_expanded = not self.get_operations_expanded()
         self._dirty_fields("inspector_operations_expanded")
+
+    def toggle_inspector_section(self, _handle=None, _ev=None, args=None) -> None:
+        section = str(args[0]) if args else ""
+        if section in self._inspector_sections:
+            self._inspector_sections[section] = not self._inspector_sections[section]
+            self._dirty_fields("inspector_" + section + "_expanded")
+
+    def open_inspector_menu(self, _handle=None, _ev=None, _args=None) -> None:
+        asset_id = self.get_selected_asset_id()
+        if asset_id:
+            self._show_asset_context_menu(asset_id)
 
     def _all_transfer_rows(self) -> List[Dict[str, Any]]:
         rows = list(transfer_rows(self._gallery_state))
@@ -1269,8 +1311,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             else:
                 element = header.parent().insert_before("div", header)
             element.set_id("asset-info-thumbnail")
-            element.set_property("width", "160dp")
-            element.set_property("height", "100dp")
+        # The Inspector owns a 12 dp scroll gutter. The band alone uses the
+        # small landscape preview; the column fills its own content width.
+        width = (max(0.0, self._inspector_width - 12.0) if self._layout_class == "wide"
+                 else max(0.0, self._content_width - 12.0)
+                 if self._layout_class in ("compact", "narrow") else 160.0)
+        geometry = (width, width * 10.0 / 16.0)
+        geometry_changed = geometry != self._info_thumbnail_geometry
+        if created or geometry_changed:
+            self._info_thumbnail_geometry = geometry
+            element.set_property("width", f"{geometry[0]:.2f}dp")
+            element.set_property("height", f"{geometry[1]:.2f}dp")
+            element.set_property("flex-basis", f"{geometry[1] if self._layout_class != 'medium' else geometry[0]:.2f}dp")
         changed = source != self._info_thumbnail_source
         if changed:
             release = getattr(lf.ui, "release_rml_texture", None)
@@ -1280,7 +1332,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             element.set_property("decorator", decorator)
         if changed or created:
             element.set_property("display", "block" if source else "none")
-        return changed
+        return changed or created or geometry_changed
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
@@ -1922,6 +1974,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "inspector_saves", "inspector_autosave_newer", "inspector_has_details",
             "inspector_card_diagnostic", "inspector_operation_actions", "inspector_can_resume",
             "inspector_operations_expanded",
+            "inspector_gallery_action_label", "inspector_has_gallery_action",
+            "inspector_training_tooltip", "inspector_model_tooltip", "inspector_reclaimable_tooltip",
             "inspector_verify_result",
             "catalog_notice",
             "has_catalog_notice",
@@ -3017,6 +3071,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "asset_card_slot_width",
                 "asset_list_wide",
                 "asset_list_show_folder",
+                "asset_list_gallery_compact",
+                "asset_list_name_width", "asset_list_gallery_width", "asset_list_size_width",
+                "asset_list_modified_width", "asset_list_folder_width",
             ):
                 self._handle.dirty(field)
         self._request_model_update()
@@ -3262,15 +3319,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             button = int(event.get_parameter("button", "0"))
         except (TypeError, ValueError):
             return
-        if button != 1:
-            return
         container = event.current_target()
         resize_element = rml_widgets.find_ancestor_with_attribute(
             event.target(), "data-resize", container
         )
         if resize_element is not None:
-            self._start_resize(resize_element.get_attribute("data-resize", ""), event)
-            self._stop_event(event)
+            if button == 0:
+                self._start_resize(resize_element.get_attribute("data-resize", ""), event)
+                # RmlUi detects double clicks only after mousedown propagates.
+            return
+        if button != 1:
             return
         element = rml_widgets.find_ancestor_with_attribute(event.target(), "data-asset-action", container)
         if element is None or element.get_attribute("data-asset-action", "") != "select":
@@ -3675,10 +3733,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_resize("inspector-height", event)
 
     def _list_column_width(self, column: str) -> float:
-        columns = list_columns(self._asset_window_client_width / self._ui_scale())
-        defaults = {"name": columns["name"], "gallery": columns["gallery"],
-                    "size": 48.0, "modified": 72.0, "folder": 58.0}
-        return float(self._list_column_overrides.get(column, defaults[column]))
+        width = self._asset_window_client_width / self._ui_scale()
+        columns = list_columns(width)
+        widths = {"size": 48.0, "modified": 72.0, "folder": 58.0,
+                  "gallery": columns["gallery"]}
+        widths.update(self._list_column_overrides)
+        fixed = widths["size"] + columns["modified"] * widths["modified"] + columns["folder"] * widths["folder"]
+        gaps = 8.0 * (3 + int(columns["modified"]) + int(columns["folder"]))
+        remaining = max(0.0, width - 24.0 - 32.0 - gaps - fixed)
+        if "gallery" not in self._list_column_overrides:
+            widths["gallery"] = min(widths["gallery"], max(96.0, remaining - 64.0))
+        widths["name"] = self._list_column_overrides.get("name", max(64.0, remaining - widths["gallery"]))
+        return float(widths[column])
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
@@ -3695,13 +3761,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields("bottom_panel_resize_dragging")
 
     def _reset_resize(self, region: str) -> None:
+        self._resize_region = ""
+        self._bottom_panel_dragging = False
         defaults = breakpoint_metrics(self._content_width or 1100.0)
         if region == "navigator":
             self._navigator_width = defaults["navigator_default"]
             self._dirty_fields("navigator_width")
         elif region == "inspector":
             self._inspector_width = defaults["inspector_default"]
-            self._dirty_fields("inspector_width")
+            self._dirty_layout_fields()
         elif region == "inspector-height":
             self._inspector_preferred_height = defaults["inspector_default"]
             self._info_preferred_height = self._inspector_preferred_height
@@ -3730,7 +3798,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._dirty_fields("navigator_width")
         elif region == "inspector":
             self._inspector_width = min(420.0, max(240.0, self._resize_start_inspector - delta_x))
-            self._dirty_fields("inspector_width")
+            self._dirty_layout_fields()
         elif region == "tray":
             popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
             panel_height = native_to_dp(

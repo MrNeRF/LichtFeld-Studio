@@ -1148,25 +1148,29 @@
 .gallery-progress { height: 4dp; min-height: 4dp; overflow: hidden; border-radius: 2dp; }
 .gallery-progress-fill { height: 100%; }
 
-.asset-scroll-shell-list { padding: 0 12dp; }
+.asset-scroll-shell-list { box-sizing: border-box; padding: 0 12dp; }
 .asset-list-header, .asset-list-row { display: flex; align-items: center; gap: 8dp; min-width: 0; }
 .asset-list-thumb { flex: 0 0 32dp; width: 32dp; height: 20dp; min-width: 32dp; min-height: 20dp; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .asset-list-thumb .asset-card-placeholder { padding: 0; font-size: 8dp; line-height: 10dp; }
 .asset-list-header { height: 40dp; min-height: 40dp; }
-#asset-gallery > .asset-list-header { padding: 0 12dp; }
-.asset-list-row { position: relative; height: 40dp; min-height: 40dp; border-bottom-width: 1dp; }
+#asset-gallery > .asset-list-header { width: auto; margin: 0 12dp; padding: 0; border-width: 0; }
+.asset-list-row { position: relative; height: 40dp; min-height: 40dp; padding: 0; border-width: 0; border-bottom-width: 1dp; }
 .asset-list-header .asset-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .asset-list-header-spacer { visibility: hidden; }
-.asset-list-header-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-list-header-label { display: block; height: 24dp; line-height: 24dp; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.asset-col-name { flex: 1 1 auto; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
+.asset-col-name { flex: 1 1 0dp; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }
 .asset-col-folder { flex: 0 0 100dp; }
 .asset-col-size { flex: 0 0 72dp; text-align: right; font-family: "JetBrains Mono"; }
 .asset-col-modified { flex: 0 0 96dp; font-family: "JetBrains Mono"; }
 .asset-col-gallery { flex: 0 1 128dp; min-width: 96dp; max-width: 200dp; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
-.asset-list-header .asset-col { display: flex; align-items: center; }
+.asset-list-header .asset-col, .asset-list-row .asset-col { flex: 0 0 auto; min-width: 0; max-width: none; box-sizing: border-box; height: 24dp; line-height: 24dp; }
+.asset-list-header .asset-col { position: relative; display: flex; flex-direction: row; align-items: center; height: 24dp; padding: 0; }
 .asset-list-column-handle {
+    position: absolute;
+    right: 0;
+    top: 0;
     width: 8dp;
     min-width: 8dp;
     height: 20dp;
@@ -1176,7 +1180,7 @@
     cursor: ew-resize;
 }
 .asset-list-column-handle:hover { border-right-color: #8fb4ff; background-color: rgba(143, 180, 255, 0.18); }
-.asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex-basis: auto; }
+.asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex: 0 0 auto; min-width: 0; }
 .asset-list-header.show-folder .asset-col-folder,
 .asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
 .asset-list-header.is-wide .asset-col-modified,
@@ -1188,31 +1192,43 @@
 .gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; }
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
-.asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; }
-.inspector-strip { position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 68dp 0 12dp; overflow: hidden; }
+.asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
+.inspector-strip { box-sizing: border-box; position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 68dp 0 12dp; overflow: hidden; }
 .inspector-strip-name { flex: 1 1 0dp; width: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-strip-meta { flex: 0 1 56dp; width: 56dp; min-width: 0; max-width: 56dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10dp; }
-.inspector-strip-open { position: absolute; right: 12dp; top: 4dp; display: block; width: 48dp; min-width: 48dp; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 4dp; }
-.inspector-header { display: flex; flex-direction: column; gap: 4dp; padding: 12dp; min-width: 0; }
-.inspector-title { font-size: 14dp; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.inspector-path { font-size: 10dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8dp; }
-.asset-inspector-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
-.asset-inspector-content > [data-if] { flex: 1 1 auto; min-width: 0; }
-.asset-info-asset-layout { width: 100%; }
-.asset-info-details { width: 100%; }
-.inspector-section { display: flex; flex-direction: column; gap: 4dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
-.inspector-section-title { height: 24dp; line-height: 24dp; font-weight: 600; }
-.parameter-row { display: flex; align-items: baseline; gap: 8dp; min-height: 20dp; min-width: 0; }
-.parameter-label { flex: 0 0 88dp; width: 88dp; min-width: 88dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.parameter-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: "JetBrains Mono"; }
+.inspector-strip-open { position: absolute; right: 12dp; top: 4dp; display: block; width: 48dp; min-width: 48dp; padding: 0 4dp; }
+.asset-inspector-content { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; }
+.asset-inspector-content > [data-if] { flex: 0 0 auto; min-width: 0; width: 100%; }
+.asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 16dp; align-items: stretch; }
+.asset-info-details { box-sizing: border-box; width: 100%; min-width: 0; flex: 0 0 auto; }
+#asset-info-thumbnail { margin: 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; }
+.inspector-header { box-sizing: border-box; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8dp; padding: 8dp 12dp; margin: 0; min-width: 0; border-bottom-width: 1dp; }
+.inspector-title, .inspector-path { display: block; min-width: 0; width: 100%; height: 16dp; min-height: 16dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-title { font-size: 12dp; font-weight: bold; }
+.inspector-path { font-size: 10dp; }
+.inspector-actions { box-sizing: border-box; display: flex; align-items: center; flex-wrap: nowrap; height: 24dp; min-height: 24dp; gap: 8dp; min-width: 0; }
+.inspector-actions .btn { flex: 0 1 auto; min-width: 48dp; padding: 0 8dp; white-space: nowrap; }
+.inspector-actions .btn span, .inspector-operation span { display: block; min-width: 0; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspector-more { margin-left: auto; flex: 0 0 24dp; }
+.inspector-more img { width: 16dp; height: 16dp; }
+.inspector-facts { display: flex; flex-direction: column; min-width: 0; }
+.inspector-section { box-sizing: border-box; display: flex; flex: 0 0 auto; flex-direction: column; gap: 8dp; padding: 8dp 12dp; border-bottom-width: 1dp; min-width: 0; }
+.inspector-section-title { box-sizing: border-box; display: flex; flex: 0 0 24dp; align-items: center; gap: 4dp; justify-content: flex-start; width: 100%; height: 24dp; min-height: 24dp; padding: 0; margin: 0; border-width: 0; line-height: 16dp; font-weight: bold; text-align: left; cursor: pointer; }
+.inspector-section-title span { display: block; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspector-disclosure { flex: 0 0 8dp; width: 8dp; height: 8dp; transform: rotate(-90deg); }
+.inspector-disclosure.is-expanded { transform: rotate(0deg); }
+.inspector-section-body { display: flex; flex-direction: column; min-width: 0; }
+.parameter-row { box-sizing: border-box; display: flex; flex: 0 0 24dp; flex-direction: row; align-items: center; gap: 8dp; height: 24dp; min-height: 24dp; padding: 0; border-width: 0; min-width: 0; }
+.parameter-label, .parameter-value { display: block; box-sizing: border-box; height: 24dp; min-height: 24dp; line-height: 24dp; padding: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.parameter-label { flex: 0 0 88dp; width: 88dp; min-width: 88dp; font-size: 12dp; }
+.parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
+.inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inspector-operations { display: flex; flex-direction: column; align-items: stretch; gap: 8dp; min-width: 0; width: 100%; }
+.inspector-operation { box-sizing: border-box; flex: 0 0 24dp; width: 100%; min-width: 0; max-width: 100%; padding: 0 8dp; text-align: left; justify-content: flex-start; }
+.inspector-band-facts { display: flex; align-items: flex-start; gap: 16dp; min-width: 0; }
+.inspector-band-column { display: flex; flex: 1 1 0dp; flex-direction: column; min-width: 0; }
 .inspector-multi { display: flex; flex-wrap: wrap; gap: 8dp; align-items: center; }
-.inspector-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
-.inspector-actions .btn { box-sizing: border-box; flex: 0 0 auto; height: 24dp; min-height: 24dp; max-height: 24dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.inspector-operations { display: flex; align-items: center; flex-wrap: nowrap; gap: 8dp; min-width: 0; max-width: 100%; overflow: hidden; padding-top: 4dp; }
-.inspector-operation { flex: 0 1 auto; min-width: 0; max-width: 100%; text-overflow: ellipsis; }
-.asset-info-empty { display: block; padding: 16dp 12dp; color: rgba(220, 225, 235, 0.72); }
-.inspector-history-empty { display: block; min-width: 0; padding: 4dp 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-info-empty { display: block; box-sizing: border-box; padding: 16dp 12dp; }
 
 .project-operation-modal { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; padding: 24dp; background-color: rgba(0, 0, 0, 0.52); z-index: 40; }
 .project-operation-dialog { display: flex; flex-direction: column; width: 520dp; max-width: 100%; max-height: 90%; min-width: 280dp; padding: 16dp; gap: 12dp; border-width: 1dp; border-radius: 6dp; overflow: hidden; }
@@ -1249,26 +1265,20 @@
 .asset-shell.is-floating #asset-popup { min-width: 480dp; min-height: 360dp; }
 .asset-shell.is-wide .asset-navigator { flex: 0 0 200dp; flex-basis: 200dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-wide .inspector-resize-handle { display: block; }
-.asset-shell.is-wide .asset-inspector { flex-basis: 280dp; }
+.asset-shell.is-wide .asset-inspector { flex: 0 0 auto; min-width: 240dp; max-width: 420dp; }
 .asset-shell.is-wide .asset-info-asset-layout,
 .asset-shell.is-narrow .asset-info-asset-layout,
 .asset-shell.is-compact .asset-info-asset-layout { flex-direction: column; }
-.asset-shell.is-wide #asset-info-thumbnail,
-.asset-shell.is-narrow #asset-info-thumbnail,
-.asset-shell.is-compact #asset-info-thumbnail { flex: 0 0 100dp; margin: 8dp 12dp 0; }
-.asset-info-details { flex: 0 0 auto; min-width: 0; }
-.inspector-facts { display: flex; flex-direction: column; min-width: 0; }
-.inspector-facts > .inspector-section { flex-shrink: 0; }
 .asset-shell.is-wide .asset-resize-handle--horizontal { display: none; }
 .asset-shell.is-medium #asset-main-row { flex-direction: row; }
 .asset-shell.is-medium .asset-results-stack { flex-direction: column; }
 .asset-shell.is-medium .asset-navigator { flex: 0 0 160dp; flex-basis: 160dp; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-medium .asset-inspector { position: absolute; left: 0; right: 0; bottom: 0; width: auto; flex: 0 0 auto; overflow: visible; }
-.asset-shell.is-medium .asset-info-asset-layout { box-sizing: border-box; padding: 8dp 12dp; }
+.asset-shell.is-medium .asset-info-asset-layout { padding: 8dp 16dp; align-items: flex-start; }
 .asset-shell.is-medium .asset-info-details { flex: 1 1 0dp; width: auto; }
-.asset-shell.is-medium .inspector-header { flex-direction: column; align-items: flex-start; margin: 0; }
-.asset-shell.is-medium .inspector-facts { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
-.asset-shell.is-medium .inspector-facts > .inspector-section { box-sizing: border-box; flex: 0 0 50%; width: 50%; }
+.asset-shell.is-medium .inspector-header { padding: 0; margin: 0 0 8dp; border-width: 0; }
+
+
 .asset-shell.is-medium .inspector-resize-handle { display: none; }
 .asset-shell.is-medium .asset-inspector > .asset-resize-handle { position: absolute; left: 0; right: 0; top: -8dp; height: 12dp; margin: 0; }
 .asset-shell.is-medium .inspector-strip { display: none; }
