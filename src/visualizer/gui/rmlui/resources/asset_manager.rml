@@ -270,8 +270,8 @@
         <aside id="asset-inspector" class="asset-inspector" data-style-width="inspector_style_width" data-style-height="inspector_style_height">
           <div class="inspector-strip" data-event-click="toggle_inspector">
             <span class="inspector-strip-name" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
-            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_asset_size}}</span>
-            <span class="inspector-strip-meta" data-if="show_selection_asset">{{selected_health_label}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_asset_size">{{selected_asset_size}}</span>
+            <span class="inspector-strip-meta" data-if="show_selection_asset" data-attr-title="selected_health_label">{{selected_health_label}}</span>
             <button class="btn btn--primary asset-button--toolbar24 inspector-strip-open" data-if="show_selection_asset"
                     data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
           </div>
@@ -312,7 +312,7 @@
                   <div class="inspector-facts" data-if="!is_medium">
                   <div class="inspector-section inspector-problem" data-if="selected_has_problem">
                     <div class="inspector-section-title">{{problem_title}}</div>
-                    <div class="parameter-row"><span class="parameter-label">{{selected_health_label}}</span><span class="parameter-value" data-attr-title="selected_fix_label">{{selected_fix_label}}</span></div>
+                    <div class="inspector-problem-status">{{selected_health_label}}</div>
                     <button class="btn btn--secondary" data-if="selected_fix_requires_action" data-event-click="on_selected_fix">{{selected_fix_label}}</button>
                     <div class="parameter-row" data-if="has_inspector_verify_result"><span class="parameter-label">{{inspector_verify_label}}</span><span class="parameter-value" data-attr-title="inspector_verify_result">{{inspector_verify_result}}</span></div>
                   </div>
@@ -372,7 +372,7 @@
               </div>
             </div>
             <div data-if="show_selection_folder">
-              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path">{{selected_folder_path}}</span></div>
+              <div class="inspector-header"><span class="inspector-title">{{selected_folder_name}}</span><span class="inspector-path" data-attr-title="selected_folder_path">{{selected_folder_path}}</span></div>
               <div class="inspector-section"><div class="inspector-section-title">{{folder_details_title}}</div>
                 <div class="parameter-row"><span class="parameter-label">{{prop_assets_label}}</span><span class="parameter-value" data-attr-title="selected_folder_asset_count">{{selected_folder_asset_count}}</span></div>
               </div>
