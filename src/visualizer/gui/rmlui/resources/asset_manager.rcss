@@ -1207,8 +1207,21 @@
 .inspector-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 .inspector-actions .btn { box-sizing: border-box; flex: 0 0 auto; height: 24dp; min-height: 24dp; max-height: 24dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .inspector-operations { display: flex; align-items: center; flex-wrap: nowrap; gap: 8dp; min-width: 0; max-width: 100%; overflow: hidden; padding-top: 4dp; }
+.inspector-operation { flex: 0 1 auto; min-width: 0; max-width: 100%; text-overflow: ellipsis; }
 .asset-info-empty { display: block; padding: 16dp 12dp; color: rgba(220, 225, 235, 0.72); }
 .inspector-history-empty { display: block; min-width: 0; padding: 4dp 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.project-operation-modal { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; padding: 24dp; background-color: rgba(0, 0, 0, 0.52); z-index: 40; }
+.project-operation-dialog { display: flex; flex-direction: column; width: 520dp; max-width: 100%; max-height: 90%; min-width: 280dp; padding: 16dp; gap: 12dp; border-width: 1dp; border-radius: 6dp; overflow: hidden; }
+.project-operation-header, .project-operation-footer { display: flex; align-items: center; gap: 8dp; min-height: 28dp; }
+.project-operation-header { justify-content: space-between; }
+.project-operation-body { display: flex; flex-direction: column; gap: 8dp; min-height: 0; overflow-y: auto; }
+.project-operation-footer { justify-content: flex-end; }
+.project-dialog-input { width: 100%; min-width: 0; height: 28dp; min-height: 28dp; padding: 4dp 8dp; }
+.project-dialog-check { display: flex; align-items: center; gap: 8dp; min-height: 28dp; }
+.project-dialog-table { display: flex; flex-direction: column; min-width: 0; }
+.project-dialog-table-row { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 28dp; gap: 8dp; padding: 4dp 8dp; text-align: left; }
+.project-dialog-message { white-space: pre-wrap; }
 
 .asset-tray { position: relative; display: flex; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; border-top-width: 1dp; overflow: visible; }
 .asset-tray-label, .asset-tray-detail, .asset-tray-title, .asset-tray-phase, .asset-tray-bytes { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
