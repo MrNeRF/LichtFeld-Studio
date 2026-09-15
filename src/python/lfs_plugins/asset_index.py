@@ -875,6 +875,15 @@ class AssetIndex:
                     # one-argument shape; bulk verification remains correct.
                     inspection = self._inspect_path(path)
         except Exception as exc:
+            # Full inspection needs a valid head. The native classifier can
+            # still distinguish two damaged heads from an unreadable file.
+            try:
+                import lichtfeld as lf
+                classification = lf.io.classify_project(path)
+                if _enum_name(classification.state) == "REPAIR_ONLY":
+                    return "REPAIR_ONLY", str(classification.diagnostic or exc)
+            except Exception:
+                pass
             return "UNREADABLE", str(exc)
         if str(inspection.project_uuid) != expected_uuid:
             return (
@@ -903,6 +912,8 @@ class AssetIndex:
             )
             return
         self._clear_runtime(project, kind, str(payload or ""))
+        if kind == "REPAIR_ONLY":
+            project.open_state = kind
 
     def _refresh_project(self, project: Project) -> None:
         kind, payload = self._read_project_runtime(
@@ -2148,6 +2159,12 @@ class LibraryService:
 
     def verify(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("verify_asset", *args, **kwargs)
+
+    def list_projects(self) -> List[Project]:
+        return self._call("list_projects")
+
+    def verify_projects_batch(self, asset_ids: List[str]) -> int:
+        return self._call("verify_projects_batch", asset_ids)
 
     def relink(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("relink_asset", *args, **kwargs)

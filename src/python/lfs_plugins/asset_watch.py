@@ -757,11 +757,13 @@ def _commit_registration_batch(
 
     prepared: list[tuple[str, str, Any]] = []
     already_cataloged = 0
+    repair_only = 0
     failed = 0
     find_by_path = getattr(index, "find_asset_by_path", None)
     for path, folder_id in batch:
         if cancel_event is not None and cancel_event.is_set():
             return 0, 0, 0, True
+        existing = None
         try:
             if callable(find_by_path):
                 existing = find_by_path(path)
@@ -790,6 +792,16 @@ def _commit_registration_batch(
                     continue
             prepared.append((path, folder_id, inspect(path)))
         except Exception:
+            verify = getattr(index, "verify_asset", None)
+            if existing is not None and callable(verify):
+                verified = verify(existing.id)
+                if verified is not None and getattr(verified, "status", "") == "REPAIR_ONLY":
+                    # Keep the known locator and its explicit Repair action.
+                    # Missing heads are an expected catalog state, not a
+                    # failed registration of a different project.
+                    already_cataloged += 1
+                    repair_only += 1
+                    continue
             failed += 1
             _log.warning("Failed to register Asset Manager project: %s", path, exc_info=True)
 
@@ -817,7 +829,7 @@ def _commit_registration_batch(
         )
         return (
             int(result.get("added", 0)),
-            int(result.get("already_cataloged", 0)),
+            int(result.get("already_cataloged", 0)) + repair_only,
             int(result.get("failed", 0)) + failed,
             False,
         )

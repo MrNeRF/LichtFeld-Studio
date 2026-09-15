@@ -486,7 +486,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             not self.get_selected_asset_can_locate()
             and not self._selected_details_rows().get("resumable") and bool(self._selected_gallery_action())))
         model.bind_func("open_button_label", lambda: tr(
-            "projects.action.locate" if self.get_selected_asset_can_locate() else "projects.action.open"))
+            "projects.action.locate" if self.get_selected_asset_can_locate() else
+            "projects.action.repair" if (self._get_selected_asset() or {}).get("status") == "REPAIR_ONLY" else
+            "projects.action.open"))
         model.bind_func("inspector_gallery_action_tooltip", lambda: (
             self._gallery_badge(self._get_selected_asset())["gallery_action_label"]
             if self._get_selected_asset() else ""))
@@ -2183,6 +2185,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._asset_dict(asset_id) or {}
         if str(asset.get("status") or "") in ("MISSING", "IDENTITY_MISMATCH"):
             self.on_locate_file(None, None, [asset_id])
+        elif asset.get("status") == "REPAIR_ONLY":
+            self.open_project_operation(None, None, ["repair"])
         else:
             self._load_asset(asset_id)
 
@@ -2771,8 +2775,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ]
         )
         details = self._inspection_by_asset.get(str(asset.get("id") or asset.get("project_uuid") or ""), {}).get("details")
-        if details is not None:
+        if details is not None or asset.get("status") == "REPAIR_ONLY":
             labels = {
+                "repair": "projects.action.repair",
                 "save_history": "projects.action.save_history",
                 "reduce_size": "projects.action.reduce_size",
                 "embed_dataset": "projects.action.embed_dataset",
@@ -3246,14 +3251,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         visible_ids: List[str], generation: int,
     ) -> None:
         try:
-            if self._library_service is not None:
-                verified = self._library_service._call(
-                    "verify_projects_batch", visible_ids
-                )
-            else:
-                verified = verify_catalog_projects(
-                    index, cancel_event, visible_asset_ids=visible_ids
-                )
+            verified = verify_catalog_projects(
+                self._library_service or index, cancel_event, visible_asset_ids=visible_ids
+            )
             self._catalog_verify_succeeded = not cancel_event.is_set()
             _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception:
