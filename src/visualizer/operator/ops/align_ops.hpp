@@ -95,7 +95,7 @@ namespace lfs::vis::op {
     // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
 
-    [[nodiscard]] std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
+    [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
 
     inline constexpr float kAlignMarkerWorldRadius = 0.05f;
     [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,
