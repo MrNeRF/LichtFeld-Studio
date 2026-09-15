@@ -652,7 +652,7 @@ class GallerySync:
             job["publishAsNew"] = job["metadata"].pop("_publishAsNew", False)
             handoff = job["metadata"].pop("_handoff", None)
             target = job["metadata"].get("replaceSceneId")
-            if target and not handoff and any(key != project_id and value["sceneId"] == target
+            if target and not handoff and (linked or {}).get("sceneId") != target and any(key != project_id and value["sceneId"] == target
                     for key, value in self._bucket()["links"].items()):
                 raise ValueError("The published scene belongs to the previous project. Review the replacement first.")
             if handoff:

@@ -967,3 +967,23 @@ def test_handoff_rejects_changed_old_link_and_preserves_links_when_commit_fails(
     assert service.snapshot()["jobs"][0]["handoff"]["state"] == "pending"
 
 
+
+
+def test_downloaded_copy_does_not_block_original_project_updates(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = dict(id="scene", title="Title", contentRevision="c", metadataRevision="m")
+    service._bucket()["links"] = {
+        "original": gallery_sync.exchange_link(scene, "saved"),
+        "viewing-copy": dict(gallery_sync.exchange_link(scene, "copy-save"), viewingCopy=True)}
+    service._save()
+    path = tmp_path / "scene.licht"
+    path.write_bytes(b"prepared copy")
+    metadata = dict(title="Updated", replaceSceneId="scene", baseRevisions=dict(content="c", metadata="m"))
+    with pytest.raises(ValueError, match="previous project"):
+        service.queue_upload(path, metadata, "unlinked-new-project")
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(scene, contentRevision="c2")}, raising=False)
+    service.queue_upload(path, metadata, "original"); finish(service)
+    assert set(service.snapshot()["links"]) == {"original", "viewing-copy"}
+    assert service.snapshot()["links"]["original"]["contentRevision"] == "c2"
+    assert service.snapshot()["links"]["viewing-copy"]["contentRevision"] == "c"
+
