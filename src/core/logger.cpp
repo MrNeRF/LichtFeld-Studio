@@ -601,9 +601,14 @@ namespace lfs::core {
 
         impl_->logger = std::make_shared<spdlog::logger>("lfs", sinks.begin(), sinks.end());
         impl_->logger->set_level(spdlog::level::trace);
-        impl_->logger->flush_on(spdlog::level::err);
+        // Gallery stage records are INFO lines. Flush at INFO so a native crash
+        // immediately after a stage cannot erase the last durable breadcrumb.
+        impl_->logger->flush_on(spdlog::level::info);
         spdlog::set_default_logger(impl_->logger);
         spdlog::flush_every(std::chrono::seconds(2));
+
+        impl_->logger->log(spdlog::source_loc{__FILE__, __LINE__, __func__},
+                           spdlog::level::info, "Log file: {}", path_to_utf8(default_log_path));
 
 #ifdef _WIN32
         // Deliberately keep a small, visible probe near the top of every Windows

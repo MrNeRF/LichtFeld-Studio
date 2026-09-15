@@ -5,6 +5,7 @@
 #include "gui/gallery_scene_publication.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -369,6 +371,10 @@ namespace lfs::vis::gui {
     void writeGalleryScenePublication(GalleryScenePublishRequest& request,
                                       const std::function<bool(float, const std::string&)>& report,
                                       const std::function<bool()>& canceled) {
+        const auto preparation_started = std::chrono::steady_clock::now();
+        LOG_INFO("gallery stage=preparation_start node_count={} staging_path={} format={}",
+                 request.nodes.size(), lfs::core::path_to_utf8(request.path),
+                 static_cast<int>(request.format));
         throwIfCanceled(canceled, "Scene preparation canceled.");
         if (!std::filesystem::create_directory(request.path))
             throw std::runtime_error("The gallery preparation directory already exists.");
@@ -623,6 +629,12 @@ namespace lfs::vis::gui {
         manifest << metadata.dump();
         manifest.close();
         std::filesystem::rename(request.path / "manifest.json.tmp", request.path / "manifest.json");
+        const auto elapsed = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - preparation_started)
+                                 .count();
+        LOG_INFO("gallery stage=preparation_end node_count={} payload_bytes={} staging_path={} elapsed_ms={:.1f}",
+                 nodes.size(), std::filesystem::file_size(request.path / "project.licht"),
+                 lfs::core::path_to_utf8(request.path), elapsed);
     }
 
 } // namespace lfs::vis::gui

@@ -18,6 +18,7 @@ from .gallery_view import capture_view, restore_view
 from .portal_gallery import domain_tokens, UNSUPPORTED_PORTAL
 from . import gallery_preparation
 from .portal_security import redact, safe_filename, checked_portal_url
+from .gallery_logging import failure as log_failure, safe_url, stage as log_stage
 
 class GalleryController:
     def __init__(self):
@@ -65,16 +66,21 @@ class GalleryController:
         self._batch_retries = {}
         self._batch_approval = None
         self._batch_current = None
+        self._preparation_failure = None
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
 
     def _account_changed(self, _state):
         def update():
-            changed = self._check_identity()
-            if changed and self.service.snapshot().get("signed_in"):
-                self.refresh()
-            self._schedule_poll()
+            try:
+                changed = self._check_identity()
+                if changed and self.service.snapshot().get("signed_in"):
+                    self.refresh()
+                self._schedule_poll()
+            except Exception as exc:
+                log_failure("account_callback", exc)
+                self._message = friendly_error(exc)
         lf.ui.schedule_on_ui_thread(update)
 
     def preferences(self):
@@ -161,6 +167,7 @@ class GalleryController:
                                entry["format"], update=True)
         except Exception as exc:
             self._batch_current = None
+            log_failure("batch_publish", exc, project_id=entry["asset"].get("id", ""))
             self._record_batch_failure(entry, str(exc))
 
     def _record_batch_failure(self, entry, message):
@@ -376,6 +383,7 @@ class GalleryController:
                 try:
                     self._resolve_pending_uploads(asset["id"], scene["id"], identity, apply)
                 except Exception as exc:
+                    log_failure("resolve_pending", exc, project_id=asset["id"])
                     self._message = friendly_error(exc)
                 self._schedule_poll()
                 return
@@ -492,6 +500,7 @@ class GalleryController:
                     continuation()
                 except Exception as exc:
                     from .gallery_messages import localize_message
+                    log_failure("confirmation_callback", exc)
                     self._message = localize_message(str(exc))
                 self._schedule_poll()
         lf.ui.confirm_dialog(tr("sidebar.title"), message, [tr("action.cancel"), label], selected)
@@ -523,6 +532,7 @@ class GalleryController:
             try:
                 link = PortalGalleryClient(account, expected_session=identity[1:3]).share_link(scene["id"])
             except Exception as exc:
+                log_failure("share_link", exc, scene_id=scene["id"])
                 error = friendly_error(exc)
 
             def finished():
@@ -594,7 +604,11 @@ class GalleryController:
         self._subscribers[callback] = True
         self._check_identity()
         initial = self.snapshot()
-        callback(initial)
+        try:
+            callback(initial)
+        except Exception as exc:
+            log_failure("subscriber_callback", exc)
+            self._message = friendly_error(exc)
         self._last_snapshot = copy.deepcopy(initial)
         return lambda: self._subscribers.pop(callback, None)
 
@@ -603,6 +617,7 @@ class GalleryController:
         state = self.service.snapshot()
         state["jobs"] = list(state.get("jobs", [])) + copy.deepcopy(self._batch_rows)
         state["batchQueued"] = len(self._update_queue)
+        state["preparationFailure"] = copy.deepcopy(self._preparation_failure)
         state["jobs"].extend({"id": "queue:" + entry["asset"]["id"], "project": entry["asset"]["id"],
             "status": "queued", "kind": "upload", "batchQueued": True,
             "metadata": {"title": entry["scene"].get("title") or entry["asset"].get("name", "")}}
@@ -642,6 +657,7 @@ class GalleryController:
         try:
             pending["operation"] = self.service.restore_local_backup(pending["path"], pending["backup"], pending["stamp"])
         except Exception as exc:
+            log_failure("undo_pull", exc)
             self._record_undo_failure(pending, str(exc))
         else:
             self._after_service = self._finish_undo_pull
@@ -704,6 +720,8 @@ class GalleryController:
             self._last_poll_error = None
         except Exception as exc:
             from .gallery_messages import report_poll_error
+            if self._last_poll_error != (type(exc).__name__, redact(exc)):
+                log_failure("poll", exc)
             self._message = report_poll_error(self, exc, "Gallery polling failed")
         finally:
             if self._work_pending():
@@ -757,6 +775,7 @@ class GalleryController:
                 try:
                     self._finish_pulls()
                 except Exception as exc:
+                    log_failure("finish_pulls", exc)
                     self._message = friendly_error(exc)
         self._advance_update_all()
         completion = self.service.snapshot().get("completion")
@@ -772,7 +791,7 @@ class GalleryController:
                     try:
                         callback(copy.deepcopy(snapshot))
                     except Exception as exc:
-                        lf.log.error(redact(f"Gallery subscriber failed: {exc}"))
+                        log_failure("subscriber_callback", exc)
 
     def _transfer_speed_and_eta(self, jobs, stage):
         return self._transfer_estimate.sample(jobs, stage)
@@ -847,6 +866,7 @@ class GalleryController:
             actions = {"resume": self._action_resume, "show_recovery_folder": self._action_show_recovery_folder}
             actions[name](*args)
         except Exception as exc:
+            log_failure("dispatch", exc, action=name)
             self._message = friendly_error(exc)
         self._refresh_model()
 
@@ -943,6 +963,7 @@ class GalleryController:
                     self._export_progress = (100 * native.get("progress", 0) if native.get("active") else
                         min(100, 100 * staged.get("completed", 0) / max(1, staged.get("total", 0))))
         except Exception as exc:
+            log_failure("advance_phases", exc)
             self._discard_update_preview()
             self._export_pending = self._import_pending = self._save_pending = None
             self._message = friendly_error(exc)
@@ -961,9 +982,9 @@ class GalleryController:
             incoming = scene.get_node_by_uuid(update["incoming"])
             if incoming is not None:
                 scene.remove_node(incoming.name)
-        except Exception:
+        except Exception as exc:
             # Never hide the original failure or touch another project's nodes.
-            pass
+            log_failure("discard_update_preview", exc)
 
     def _action_show_recovery_folder(self):
         lf.ui.reveal_in_file_manager(str(self.service.root))
@@ -1041,6 +1062,15 @@ class GalleryController:
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
+        self._preparation_failure = None
+        try:
+            size = Path(path).stat().st_size
+        except OSError:
+            size = 0
+        account = getattr(self.service, "account", None)
+        log_stage("publish_requested", project_id=project_id, path=path, size=size,
+                  format=upload_format, account_origin=safe_url(getattr(account, "base_url", "")),
+                  update=update)
         self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
                                                              environment_source, upload_format, update=update))
 
@@ -1144,6 +1174,11 @@ class GalleryController:
             self._remove_preparation(export)
             error = str(state.get("error", ""))
             self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else (error or "Scene preparation failed. Check the export status and try again.")
+            if outcome == "failed" and not self._export_cancelled:
+                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                    "message": self._message, "failureReason": self._message}
+                log_failure("native_preparation", RuntimeError(self._message), project_id=project_id)
             self._refresh_model()
         elif outcome == "completed" and export.exists():
             self._export_pending = None
@@ -1159,10 +1194,15 @@ class GalleryController:
                 self.service.queue_prepared_upload(export, metadata, project_id)
                 self._message = ""
             except Exception as exc:
+                log_failure("queue_after_preparation", exc, project_id=project_id)
+                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                    "message": friendly_error(exc), "failureReason": friendly_error(exc)}
                 try:
                     self._remove_preparation(export)
                     self._message = friendly_error(exc)
-                except (OSError, ValueError):
+                except (OSError, ValueError) as cleanup_exc:
+                    log_failure("preparation_cleanup", cleanup_exc, project_id=project_id)
                     self._message = "The upload could not be queued. Temporary files were kept; open the recovery folder to review them."
             self._refresh_model()
         elif time.monotonic() - started > 60:
@@ -1170,6 +1210,10 @@ class GalleryController:
             self._export_pending = None
             self._remove_preparation(export)
             self._message = "LichtFeld Studio could not prepare the scene. Check the export status and try again."
+            self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                "message": self._message, "failureReason": self._message}
+            log_failure("native_preparation_timeout", TimeoutError(self._message), project_id=project_id)
             self._refresh_model()
 
     def _action_resume(self, job_id):
@@ -1230,7 +1274,8 @@ class GalleryController:
         self._acquire_native_use(job["id"])
         try:
             stage_id = self.service.stage_download(job["id"])
-        except Exception:
+        except Exception as exc:
+            log_failure("stage_download", exc, job_id=job["id"])
             self._release_native_use()
             raise
         self._import_pending = dict(job, _accountIdentity=identity,
@@ -1521,7 +1566,8 @@ class GalleryController:
             if self._project_identity() == project and file_stamp(project[1]) == update["stamp"]:
                 lf.project_open(project[1], discard_changes=True, keep_asset_manager_open=True)
                 recovery = "Your saved local project is being reopened. Its recovery copy is also available."
-        except Exception:
+        except Exception as exc:
+            log_failure("recover_failed_update", exc, project_id=update.get("project", ("", ""))[0])
             pass
         raise ValueError("The gallery update could not be completed. " + recovery) from exc
 
@@ -1543,6 +1589,7 @@ class GalleryController:
         try:
             update["link_operation"] = self._link_saved_download(job["id"], update["project"][1])
         except Exception as exc:
+            log_failure("link_saved_download", exc, job_id=job["id"])
             raise ValueError("The project was updated and its recovery copy was kept, but the gallery link could not be saved. Refresh your gallery before continuing.") from exc
         self._message = "Project updated. Saving its gallery link…"
 

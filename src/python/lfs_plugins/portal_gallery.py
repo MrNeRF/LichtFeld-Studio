@@ -26,6 +26,7 @@ from .http import urlopen
 from .portal_retry import retry_call
 from .portal_account import _default_client_version
 from .portal_account import PortalHTTPError, PortalProtocolError
+from .gallery_logging import failure as log_failure, safe_text, safe_url, stage as log_stage
 
 API = "/api/gallery/v1"
 UNSUPPORTED_PORTAL = "This portal version does not support gallery sync"
@@ -246,8 +247,10 @@ class PortalGalleryClient:
         host = urllib.parse.urlsplit(result).netloc
         if host not in self._logged_storage_hosts:
             self._logged_storage_hosts.add(host)
-            # Presigned paths/queries contain secrets; log only the authority.
-            logging.getLogger(__name__).debug("Portal storage transfer host: %s", host)
+            # Presigned queries are never logged; the path is query-free and
+            # masks conventional private path components.
+            log_stage("storage_url", storage_host=host,
+                      storage_path=urllib.parse.urlsplit(safe_url(result)).path)
         return result
 
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
@@ -283,6 +286,9 @@ class PortalGalleryClient:
             saved = {}
         offset = partial.stat().st_size if resume else 0
         keep_partial = bool(resume)
+        log_stage("download_requested", scene_id=scene["id"], path=destination.name,
+                  size=total, format=scene.get("sourceFormat", ""),
+                  account_origin=safe_url(self.account.base_url))
         try:
             def transfer():
                 nonlocal offset, saved, keep_partial
@@ -297,6 +303,8 @@ class PortalGalleryClient:
                 with urlopen(request, timeout=120, no_redirect=True) as response:
                     response_headers = getattr(response, 'headers', {})
                     status = getattr(response, 'status', 200)
+                    log_stage("download_response", scene_id=scene["id"], http_status=status,
+                              bytes_offset=offset, path=destination.name)
                     current_tag = response_headers.get('ETag')
                     pinned = (isinstance(current_tag, str) and re.fullmatch(r'"[^"\r\n]+"', current_tag)
                               and response_headers.get('Accept-Ranges', '').lower() == 'bytes')
@@ -388,21 +396,33 @@ class PortalGalleryClient:
                 scene = {**scene, **{key: current[key] for key in
                          ('title', 'description', 'visibility', 'metadataRevision') if key in current}}
             os.replace(partial, destination)
+            log_stage("download_complete", scene_id=scene["id"], bytes=total,
+                      sha256=checksum, status="completed", path=destination.name)
             return scene
         except (GalleryTransferCanceled, IncompleteRead, TimeoutError, ConnectionError, urllib.error.URLError) as exc:
+            log_failure("download", exc, scene_id=scene_id, path=destination.name)
             if not keep_partial:
                 partial.unlink(missing_ok=True)
             if isinstance(getattr(exc, 'reason', exc), (IncompleteRead, RemoteDisconnected)):
                 raise ConnectionError('Gallery download connection closed before completion') from exc
             raise
-        except Exception:
+        except Exception as exc:
+            log_failure("download", exc, scene_id=scene_id, path=destination.name)
             partial.unlink(missing_ok=True)
             raise
 
     def _await_processing(self, upload, upload_id, size, cancel, on_processing):
+        try:
+            return self._await_processing_checked(upload, upload_id, size, cancel, on_processing)
+        except Exception as exc:
+            log_failure("processing_wait", exc, upload_id=upload_id)
+            raise
+
+    def _await_processing_checked(self, upload, upload_id, size, cancel, on_processing):
         deadline = self.processing_deadline or (time.time() + PROCESSING_TIMEOUT)
         explicit_deadline = self.processing_deadline is not None
         monotonic_deadline = time.monotonic() + max(0, min(PROCESSING_TIMEOUT, deadline - time.time()))
+        poll = 0
         while upload.get("status") == "processing":
             if _identifier(upload.get("id")) != upload_id:
                 raise PortalProtocolError("The portal returned a different upload.")
@@ -421,6 +441,9 @@ class PortalGalleryClient:
                 except (ValueError, TypeError, OverflowError):
                     raise PortalProtocolError('Invalid portal processing start time') from None
             self.processing_deadline = deadline
+            poll += 1
+            log_stage("processing_wait", upload_id=upload_id, poll=poll, status=upload.get("status"),
+                      stage=state["stage"], progress=f"{state['bytesProcessed']}/{size}")
             on_processing({"stage": state["stage"], "completed": state["bytesProcessed"], "total": size})
             if time.time() >= deadline or time.monotonic() >= monotonic_deadline:
                 raise GalleryProcessingTimeout('Portal is taking longer than expected · Retry / Keep waiting')
@@ -457,6 +480,8 @@ class PortalGalleryClient:
         if size <= 0 or path.suffix.lower() != ".licht":
             raise ValueError("Choose a nonempty .licht export")
         fingerprint = _fingerprint(path, cancel)
+        log_stage("upload_requested", path=path, size=size, format=path.suffix.lower()[1:],
+                  account_origin=safe_url(self.account.base_url))
         capabilities = self._request("GET", "/me")
         if capabilities.get("gallerySyncVersion") != 1:
             raise PortalProtocolError(UNSUPPORTED_PORTAL)
@@ -482,9 +507,17 @@ class PortalGalleryClient:
                 raise ValueError("The account, export or details changed. Start a new upload.")
         check_canceled()
         create = {**request, "idempotencyKey": checkpoint["idempotencyKey"]}
-        upload = self._request("POST", "/splats/uploads", create)
+        try:
+            upload = self._request("POST", "/splats/uploads", create)
+        except Exception as exc:
+            log_failure("upload_create", exc, path=path.name, bytes=size)
+            raise
         checkpoint["request"] = {key: value for key, value in create.items() if key != "idempotencyKey"}
         upload_id = _identifier(upload["id"])
+        log_stage("upload_create", request_id=upload.get("requestId", checkpoint["idempotencyKey"]),
+                  upload_id=upload_id, part_size=upload.get("partSize", 0),
+                  part_count=((size + upload["partSize"] - 1) // upload["partSize"])
+                  if type(upload.get("partSize")) is int and upload.get("partSize") else 0)
         checkpoint["uploadId"] = upload_id
         on_checkpoint(dict(checkpoint))
         # The create response can be an idempotent replay. Storage is the
@@ -493,6 +526,8 @@ class PortalGalleryClient:
             upload = self._request("GET", f"/splats/uploads/{upload_id}")
         if upload.get("status") == "completed":
             on_progress(size, size)
+            log_stage("upload_complete", upload_id=upload_id, status=upload.get("status"),
+                      scene_id=(upload.get("scene") or {}).get("id", ""))
             return upload
         if upload.get("status") == "failed" and upload.get("processing", {}).get("retryable"):
             upload = self._request("POST", f"/splats/uploads/{upload_id}/complete", {"idempotencyKey": checkpoint["idempotencyKey"], "parts": []})
@@ -504,6 +539,7 @@ class PortalGalleryClient:
         if type(part_size) is not int or not 1 <= part_size <= 64 * 1024 * 1024:
             raise PortalProtocolError("Invalid gallery upload part size")
         part_count = (size + part_size - 1) // part_size
+        log_stage("upload_parts", upload_id=upload_id, part_size=part_size, part_count=part_count)
         parts = {part["partNumber"]: part for part in upload.get("uploadedParts", [])}
         completed = 0
         with path.open("rb") as stream:
@@ -526,11 +562,32 @@ class PortalGalleryClient:
                     req = urllib.request.Request(self._storage_url(urls[0]["url"]), data=data, method="PUT",
                         headers={"Content-Type": "application/octet-stream", "User-Agent": self.user_agent})
                     def send():
-                        with urlopen(req, timeout=120, no_redirect=True) as response:
-                            tag = response.headers.get("ETag")
-                            if not tag or not 200 <= response.status < 300:
-                                raise GalleryTransferInvalid("Storage did not acknowledge the upload part")
-                            return tag
+                        put_part.attempts += 1
+                        started = time.monotonic()
+                        try:
+                            with urlopen(req, timeout=120, no_redirect=True) as response:
+                                status = getattr(response, "status", None)
+                                if status is None:
+                                    status = response.getcode()
+                                tag = response.headers.get("ETag")
+                                elapsed = (time.monotonic() - started) * 1000
+                                if not tag or not 200 <= status < 300:
+                                    raise GalleryTransferInvalid("Storage did not acknowledge the upload part")
+                                log_stage("part_put", upload_id=upload_id, part=number,
+                                          bytes=length, http_status=status, elapsed_ms=f"{elapsed:.1f}",
+                                          retry_count=put_part.attempts - 1)
+                                return tag
+                        except Exception as exc:
+                            if isinstance(exc, urllib.error.HTTPError):
+                                try:
+                                    exc.response_body = safe_text(exc.read(65536).decode("utf-8", errors="replace"))
+                                except (OSError, UnicodeError):
+                                    pass
+                            log_failure("part_put", exc, upload_id=upload_id, part=number,
+                                        bytes=length, retry_count=put_part.attempts - 1,
+                                        http_status=getattr(exc, "code", "unknown"))
+                            raise
+                    put_part.attempts = 0
                     return retry_call(send, idempotent=True)
                 for renewal in range(2):
                     try:
@@ -552,6 +609,13 @@ class PortalGalleryClient:
                 {"partNumber": n, "etag": parts[n]["etag"]} for n in range(1, part_count + 1)]})
         except PortalHTTPError as exc:
             if exc.status != 409:
+                log_failure("upload_complete", exc, upload_id=upload_id)
                 raise
             result = {"id": upload_id, "status": "conflict", "conflict": {"detail": exc.detail}}
-        return self._await_processing(result, upload_id, size, cancel, on_processing)
+        except Exception as exc:
+            log_failure("upload_complete", exc, upload_id=upload_id)
+            raise
+        result = self._await_processing(result, upload_id, size, cancel, on_processing)
+        log_stage("upload_complete", upload_id=upload_id, status=result.get("status"),
+                  scene_id=(result.get("scene") or {}).get("id", ""))
+        return result

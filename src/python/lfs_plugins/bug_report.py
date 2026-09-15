@@ -347,10 +347,20 @@ def build_payload(
     if consent_to_logs:
         current_text = truncate_utf8_tail(redact(current_log_text))
         if current_text:
+            try:
+                log_path = redact(str(lf.log.log_file_path()))
+            except Exception:
+                log_path = "lichtfeld.log"
             payload["log"] = {
                 "file_name": "lichtfeld-session.log",
+                "path": log_path,
                 "text": current_text,
             }
+        else:
+            try:
+                payload["log_file"] = redact(str(lf.log.log_file_path()))
+            except Exception:
+                payload["log_file"] = "lichtfeld.log"
         if include_previous_log:
             source = previous_session_log() if previous_log_text is None else previous_log_text
             prior_text = truncate_utf8_tail(redact(source))

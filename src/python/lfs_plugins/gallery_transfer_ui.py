@@ -111,6 +111,13 @@ def transfer_rows(snapshot, history_limit=30):
             "bytes": "", "phase": tr("phase." + snapshot["phase"]), "reason": "", "detail": "",
             "progress": progress, "progress_width": f"{progress or 35:.1f}%", "indeterminate": not progress,
             "can_pause": False, "can_resume": False, "can_cancel": True})
+    failure = snapshot.get("preparationFailure")
+    if failure:
+        pending.insert(0, {"id": failure["id"], "title": failure.get("metadata", {}).get("title", "Gallery upload"),
+            "direction": "↑", "status": "error", "bytes": "", "phase": tr("phase.error"),
+            "reason": failure.get("message", "Scene preparation failed."), "detail": "",
+            "progress": 0, "progress_width": "0%", "indeterminate": False,
+            "can_pause": False, "can_resume": False, "can_cancel": False})
     if snapshot.get("batchQueued") and not any(j.get("batchQueued") for j in snapshot.get("jobs", [])):
         pending.append({"id": "batch-queue", "title": tr("batch", count=snapshot["batchQueued"]),
             "direction": "↑", "status": "queued", "bytes": "", "phase": tr("phase.queued"), "reason": "", "detail": "",

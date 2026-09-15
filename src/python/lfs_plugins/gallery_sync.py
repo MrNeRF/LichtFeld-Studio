@@ -20,11 +20,12 @@ from pathlib import Path
 
 from .portal_account import PortalHTTPError, PortalProtocolError, _locked_sidecar
 from .portal_gallery import (PortalGalleryClient, GalleryTransferCanceled, GalleryProcessingPaused,
-    GalleryProcessingTimeout, GalleryTransferInvalid, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight, domain_tokens, UNSUPPORTED_PORTAL)
+    GalleryProcessingTimeout, GalleryTransferInvalid, PROCESSING_TIMEOUT, DEFAULT_MAX_FILE_BYTES, disk_preflight, domain_tokens, UNSUPPORTED_PORTAL, _fingerprint)
 from .portal_retry import transfer_attempts, is_transient
 from .portal_security import redact, safe_filename
 from .credential_storage import FileBackend
 from . import gallery_validation, gallery_preparation
+from .gallery_logging import failure as log_failure, safe_url, safe_text, stage as log_stage
 
 
 MAX_JOURNAL_BYTES = 32 * 1024 * 1024
@@ -112,6 +113,7 @@ def _validate_journal(data):
             require(all(type(job.get(key)) is int and 0 <= job[key] <= 2**63-1 for key in ("completed", "total")))
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId"))
+            optional_text(job, ("failureReason",))
             guards(job["metadata"])
             require(job.get("checkpoint") is None or isinstance(job["checkpoint"], dict))
             if job.get("checkpoint") is not None:
@@ -384,6 +386,7 @@ class GallerySync:
                         self._check_journal_ready()
                         action()
                 except Exception as exc:
+                    log_failure("worker", exc, operation=operation or "transfer")
                     with self._lock:
                         self._relink_identity = identity if isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required" else None
                         self.message = friendly_error(exc)
@@ -395,7 +398,8 @@ class GallerySync:
             self._operation = operation
             try:
                 self._thread.start()
-            except Exception:
+            except Exception as exc:
+                log_failure("worker_start", exc, operation=operation or "transfer")
                 self._thread, self._operation, self._cancel = previous, previous_operation, previous_cancel
                 raise
 
@@ -503,8 +507,9 @@ class GallerySync:
         with self._lock:
             try:
                 self._trim_poster_cache(cache_limit)
-            except OSError:
-                pass  # Poster I/O must not fail a successful scene listing.
+            except OSError as exc:
+                log_failure("poster_cache_trim", exc)
+                # Poster I/O must not fail a successful scene listing.
             for key in set(self._poster_entries) - live:
                 Path(self._poster_entries.pop(key)["path"]).unlink(missing_ok=True)
         for scene in scenes:
@@ -541,7 +546,8 @@ class GallerySync:
                     os.utime(destination, ns=(time.time_ns(), destination.stat().st_mtime_ns))
                     self._poster_entries[scene_id] = {"path": str(destination), "etag": tag}
                     self._trim_poster_cache(cache_limit)
-            except (OSError, ValueError, PortalHTTPError, PortalProtocolError):
+            except (OSError, ValueError, PortalHTTPError, PortalProtocolError) as exc:
+                log_failure("poster_cache", exc, scene_id=scene["id"])
                 # A missing/malformed poster does not prevent scene synchronization.
                 with self._lock:
                     entry = self._poster_entries.pop(scene["id"], None)
@@ -574,6 +580,9 @@ class GallerySync:
                 "metadata": copy.deepcopy(metadata), "checkpoint": None, "status": "queued",
                 "completed": 0, "total": 0 if preparation is not None else Path(export_path).stat().st_size,
                 "message": "Ready to prepare" if preparation is not None else "Ready to upload"}
+            log_stage("upload_queued", project_id=project_id, path=export_path,
+                      size=job["total"], format=Path(export_path).suffix.lower().lstrip("."),
+                      account_origin=safe_url(self.account.base_url))
             job["commitUuid"] = job["metadata"].pop("_commitUuid", "")
             job["uploadFormat"] = job["metadata"].pop("_uploadFormat", "studio")
             job["contentStamp"] = job["metadata"].pop("_contentStamp", "")
@@ -601,7 +610,8 @@ class GallerySync:
         # the queued snapshot for resume instead of making the panel delete it.
         try:
             self.resume(job["id"])
-        except Exception:
+        except Exception as exc:
+            log_failure("upload_launch", exc, project_id=project_id)
             with self._lock:
                 job.update(status="paused", message="Scene prepared. Resume when ready to upload.")
                 self.message = job["message"]
@@ -653,7 +663,8 @@ class GallerySync:
                 guard.__exit__(None, None, None)
         try:
             self.resume(job["id"])
-        except Exception:
+        except Exception as exc:
+            log_failure("download_launch", exc, scene_id=scene.get("id", ""))
             with self._lock:
                 job.update(status="paused", message="Ready to download. Resume when ready.")
                 self.message = job["message"]
@@ -721,6 +732,10 @@ class GallerySync:
                     self.message = "Upload complete. Review Story on portal after this content change." if job["metadata"].get("replaceSceneId") else "Upload complete."
                 self._save()
                 self._retire_export(job)
+                log_stage("link_saved", scene_id=scene["id"],
+                          content_revision=scene.get("contentRevision", ""),
+                          metadata_revision=scene.get("metadataRevision", ""),
+                          project_id=job["project"])
 
             try:
                 with self._lock:
@@ -745,6 +760,9 @@ class GallerySync:
                     if destination != staging.with_suffix(".licht") or destination.is_symlink():
                         raise ValueError("Scene preparation no longer matches its transfer. Keep it for recovery.")
                     nodes, total = gallery_preparation.read_staging(self.root, job["preparation"])
+                    preparation_started = time.monotonic()
+                    log_stage("preparation_start", node_count=len(nodes), payload_bytes=total,
+                              staging_path=staging, project_id=job["project"])
                     with self._lock:
                         job.update(completed=0, total=total, message="Preparing scene package")
                         self.message = job["message"]
@@ -783,6 +801,13 @@ class GallerySync:
                     with self._lock:
                         job.update(packaged=True, completed=0, total=Path(job["path"]).stat().st_size, message="Uploading")
                         self.message = job["message"]
+                    staged_path = Path(job["path"])
+                    log_stage("preparation_end", node_count=len(nodes),
+                              payload_bytes=staged_path.stat().st_size, staging_path=staging,
+                              elapsed_ms=f"{(time.monotonic() - preparation_started) * 1000:.1f}",
+                              project_id=job["project"])
+                    log_stage("export_staged", path=staged_path, bytes=staged_path.stat().st_size,
+                              sha256=_fingerprint(staged_path), project_id=job["project"])
                     self._save()
                 if job.get("kind") == "download":
                     def download_message(message):
@@ -798,13 +823,20 @@ class GallerySync:
                         self._completion = {"id": str(uuid.uuid4()), "kind": "download"}
                         job.update(status="completed", sha256=(job.get("checkpoint") or {}).get("sha256", ""), result=scene, message="Downloaded. Open as a new project when ready.")
                         self.message = job["message"]
+                    log_stage("download_complete", scene_id=scene["id"],
+                              bytes=job.get("total", 0), status="completed")
                     self._save()
                     return
                 client.processing_deadline = job.get('processingDeadline')
+                if not job.get("preparation"):
+                    upload_path = Path(job["path"])
+                    log_stage("export_staged", path=upload_path, bytes=upload_path.stat().st_size,
+                              sha256=_fingerprint(upload_path), project_id=job["project"])
                 result = client.upload(job["path"], job["metadata"], checkpoint=job["checkpoint"],
                     on_checkpoint=checkpoint, on_progress=progress, on_processing=processing, cancel=self._cancel)
                 complete_upload(result)
             except Exception as exc:
+                log_failure("transfer", exc, job_id=job.get("id", ""), kind=job.get("kind", "upload"))
                 if job["status"] == "completed":
                     with self._lock:
                         job.update(cleanupPending=True, message=("Download complete. Its local files were kept; refresh to check the saved transfer."
@@ -821,6 +853,7 @@ class GallerySync:
                         "Embedded project asset checksum failed."):
                     exc = GalleryTransferInvalid(friendly_error(exc))
                 with self._lock:
+                    job["failureReason"] = safe_text(f"{type(exc).__name__}: {exc}")
                     job.update(status="paused" if isinstance(exc, GalleryTransferCanceled) else "conflict"
                         if isinstance(exc, PortalHTTPError) and exc.status == 409 else "error", message=friendly_error(exc))
                     if (is_transient(exc) and not isinstance(exc, (PortalHTTPError, urllib.error.HTTPError))
@@ -873,6 +906,7 @@ class GallerySync:
                     job["linkOperation"] = {"id": operation, "state": "ready"}
                 self._save()
             except Exception as exc:
+                log_failure("link_saved", exc, project_id=project_id, operation_id=operation)
                 with self._lock:
                     if previous is None:
                         bucket["links"].pop(project_id, None)
@@ -935,6 +969,7 @@ class GallerySync:
                 with self._lock:
                     record.update(state="ready", backupPath=str(backup), sha256=digest.hexdigest())
             except Exception as exc:
+                log_failure("local_backup", exc, project_id=project_id, job_id=job_id)
                 with self._lock:
                     record.update(state="failed", message="Update canceled. Your local splats remain." if isinstance(exc, GalleryTransferCanceled) else friendly_error(exc))
                     self.message = record["message"]
@@ -964,6 +999,7 @@ class GallerySync:
                 for path in previous_paths[1:]:  # The first path is the kept download.
                     self._unlink_temporary(path)
             except Exception as exc:
+                log_failure("download_staging_cleanup", exc, job_id=job["id"])
                 with self._lock:
                     previous = job.setdefault("stagedImport", record)
                     previous.update(state="failed", message=friendly_error(exc))
@@ -1030,6 +1066,7 @@ class GallerySync:
                 with self._lock:
                     record.update(state="ready", path=str(target))
             except Exception as exc:
+                log_failure("download_staging", exc, job_id=job["id"])
                 if retained_project is not None:
                     retained_project.unlink(missing_ok=True)
                 if retained_asset is not None:
@@ -1097,6 +1134,7 @@ class GallerySync:
                 with self._lock:
                     operation.update(state="restored")
             except Exception as exc:
+                log_failure("download_restore", exc, operation_id=operation["id"])
                 with self._lock:
                     # Once replace succeeded, retrying would overwrite a restored
                     # file; a later journal failure does not undo that success.
@@ -1269,7 +1307,8 @@ class GallerySync:
                         if j["id"] not in cleared or j["id"] in replacements]
                 try:
                     self._save()
-                except Exception:
+                except Exception as exc:
+                    log_failure("clear_transfers", exc)
                     with self._lock:
                         bucket["jobs"] = previous
                     raise
@@ -1286,7 +1325,8 @@ class GallerySync:
         try:
             for path in self._cleanup_paths(job, self._cleanup_references()):
                 self._unlink_temporary(path)
-        except (ValueError, OSError):
+        except (ValueError, OSError) as exc:
+            log_failure("export_cleanup", exc, job_id=job["id"])
             with self._lock:
                 job.update(cleanupPending=True, message=("Upload complete." if job["status"] == "completed" else "Upload discarded.")
                     + " Some temporary files were kept. Open the recovery folder to review them.")
