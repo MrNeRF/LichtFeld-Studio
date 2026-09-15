@@ -128,7 +128,10 @@
 
 .asset-quick-look {
     position: absolute;
-    inset: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -367,7 +370,6 @@
 .asset-row-main {
     background-color: transparent;
     border-width: 0;
-    color: inherit;
     text-align: left;
 }
 
@@ -405,7 +407,6 @@
     border-radius: 3dp;
     background-color: transparent;
     border-width: 0;
-    color: inherit;
     text-align: left;
     width: 100%;
 }
@@ -1243,5 +1244,7 @@
 .asset-shell.is-narrow .asset-col-modified { display: none; }
 .asset-shell.is-narrow .asset-col-name { min-width: 120dp; }
 .asset-shell.is-narrow .asset-col-gallery { min-width: 96dp; }
+.asset-shell.is-narrow #asset-popup-toolbar,
+.asset-shell.is-compact #asset-popup-toolbar { min-height: 96dp; }
 .asset-shell.is-medium .asset-col-folder { display: none; }
 .asset-shell.is-medium .asset-col-name { min-width: 120dp; }

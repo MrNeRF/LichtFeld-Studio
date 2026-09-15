@@ -3681,7 +3681,7 @@ namespace lfs::vis::gui {
             }
             std::error_code filesystem_error;
             if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
-                if (filesystem_error)
+                if (filesystem_error && filesystem_error != std::make_error_code(std::errc::no_such_file_or_directory))
                     LOG_WARN("Unable to inspect window state: {}", filesystem_error.message());
                 return std::nullopt;
             }

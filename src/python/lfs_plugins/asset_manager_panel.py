@@ -390,7 +390,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 f"asset_list_{column}_width",
                 lambda column=column: f"{self._list_column_width(column):.1f}dp",
             )
-        model.bind_func("asset_list_gallery_width", lambda: f"{self._list_column_width('gallery'):.1f}dp")
         model.bind_func("asset_list_gallery_compact", lambda: list_columns(self._asset_window_client_width / self._ui_scale())["gallery"] < 140)
         model.bind_func("col_gallery_label", lambda: tr("projects.gallery.sidebar.title"))
         model.bind_func("is_compact", lambda: self._layout_class == "compact")

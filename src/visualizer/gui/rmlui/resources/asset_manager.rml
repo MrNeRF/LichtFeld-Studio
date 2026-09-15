@@ -26,7 +26,7 @@
         <div class="toolbar-row toolbar-row-primary">
           <div class="asset-search-box">
             <span class="asset-search-icon">{{search_icon_label}}</span>
-            <input id="asset-search-input" type="text" placeholder="{{search_placeholder}}" data-value="search_query"/>
+            <input id="asset-search-input" type="text" data-attr-placeholder="search_placeholder" data-value="search_query"/>
           </div>
           <button class="asset-button asset-button--text asset-toolbar-filter" data-event-click="open_filter_menu">
             <span class="asset-button-text">{{active_filter_label}}</span>
@@ -138,14 +138,13 @@
                 <button class="asset-button asset-button--text gallery-sign-in" data-if="!gallery_signed_in"
                         data-event-click="gallery_sign_in">{{g_sidebar_sign_in}}</button>
               </div>
-              <div class="text-muted gallery-checked">{{gallery_checked}}</div>
+              <div class="text-muted gallery-checked" data-if="gallery_signed_in">{{gallery_checked}}</div>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
                 <span class="asset-row-label">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
               </button>
               <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__">
                 <span class="asset-row-label">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
               </button>
-              <div class="asset-account-chip" data-if="!gallery_signed_in">{{g_sidebar_sign_in_hint}}</div>
             </div>
           </div>
         </nav>
