@@ -161,18 +161,6 @@ def test_outage_stops_update_batch_until_another_user_action(gallery):
     assert controller._batch_approval is None
 
 
-def test_outage_stops_resume_all_until_another_user_action(gallery):
-    controller, state, actions = gallery
-    controller._resume_current = 'upload'
-    controller._resume_queue = ['next']
-    controller.service.resume = actions.append
-    state['jobs'] = [{'id': 'upload', 'project': 'project', 'status': 'paused', 'message': 'Paused (connection lost)'}]
-    controller._poll()
-    assert not controller._resume_queue
-    assert not actions
-    assert controller._timer is None
-
-
 def test_domainless_link_is_rejected_as_a_whole():
     data = {'version': 2, 'accounts': {'owner': {'jobs': [], 'links': {
         'project': {'sceneId': 'scene', 'revision': 'broad', 'metadata': {}}}}}}

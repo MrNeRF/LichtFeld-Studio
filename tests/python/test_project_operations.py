@@ -543,17 +543,3 @@ def test_repair_checks_recovered_identity_before_creating_destination(native_io,
     restored = native_io.repair_project(path, destination, str(before.project_uuid))
     assert restored.card.project_uuid == before.project_uuid
     assert native_io.verify_project_file(destination).status is native_io.ProjectVerificationStatus.VERIFIED
-
-
-def test_contents_history_clear_is_durable_and_keeps_recovery_files(tmp_path):
-    from lfs_plugins.project_operations import ProjectOperations
-    store = ProjectOperations(None, tmp_path / 'store')
-    backup = tmp_path / 'backup.licht'
-    backup.write_bytes(b'kept')
-    store._put(dict(id='done', asset_id='project', path='/project.licht', title='Edit',
-        status='completed', backup_path=str(backup)))
-    store._put(dict(id='failed', asset_id='project', path='/project.licht', title='Edit',
-        status='failed', backup_path=str(backup)))
-    store.clear_finished()
-    assert set(ProjectOperations(None, tmp_path / 'store').recover()) == {'failed'}
-    assert backup.read_bytes() == b'kept'

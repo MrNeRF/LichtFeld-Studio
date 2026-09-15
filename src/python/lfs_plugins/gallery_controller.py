@@ -54,8 +54,6 @@ class GalleryController:
         self._operation_title = ""
         self._pull_requests = {}
         self._cancel_requests = set()
-        self._resume_queue = []
-        self._resume_current = None
         self._open_continuation = None
         self._pull_overrides = None
         self._undo_pull = None
@@ -220,10 +218,6 @@ class GalleryController:
                     self.service.pause()
             else:
                 self.service.discard(job_id)
-        elif name == "resume_all":
-            self._resume_queue = [j["id"] for j in self.service.snapshot()["jobs"]
-                                  if j["status"] in ("paused", "error", "queued") and j.get("retryable") is not False
-                                  and not j.get("requiresPreparation")]
         elif name == "keep_waiting":
             self.service.resume(job_id, keep_waiting=True)
         elif name == "clear_finished":
@@ -863,7 +857,7 @@ class GalleryController:
     def _work_pending(self):
         return bool(self.service.busy or self.phase() != "idle" or self._native_use
                     or self._open_continuation or self._refresh_pending or self._refresh_requested or self._cancel_requests
-                    or self._resume_queue or self._update_queue or self._batch_current
+                    or self._update_queue or self._batch_current
                     or getattr(self, "_after_service", None) or self._account_linking())
 
     def _poll_body(self):
@@ -898,11 +892,6 @@ class GalleryController:
                 self._open_continuation = None
                 continuation()
         if not self.service.busy:
-            if self._resume_current:
-                resumed = next((j for j in self._state["jobs"] if j["id"] == self._resume_current), {})
-                if resumed.get("status") != "completed":
-                    self._resume_queue.clear()
-                self._resume_current = None
             after = getattr(self, "_after_service", None)
             if after:
                 self._after_service = None
@@ -912,9 +901,6 @@ class GalleryController:
                 job = next((j for j in self.service.snapshot()["jobs"] if j["id"] == job_id), None)
                 if job and job["status"] not in ("completed", "canceled"):
                     self.service.discard(job_id)
-            elif self._resume_queue:
-                self._resume_current = self._resume_queue.pop(0)
-                self.service.resume(self._resume_current)
             else:
                 try:
                     self._finish_pulls()
@@ -1042,8 +1028,6 @@ class GalleryController:
         self._batch_current = None
         self._pull_requests.clear()
         self._cancel_requests.clear()
-        self._resume_queue.clear()
-        self._resume_current = None
         self._open_continuation = None
         self._pull_overrides = None
         self._undo_pull = None
