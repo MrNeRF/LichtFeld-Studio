@@ -80,7 +80,7 @@ def _validate_journal(data):
             require(isinstance(tokens, dict) and bool(tokens) and not tokens.keys() - {"content", "metadata"}
                     and all(isinstance(value, str) and bool(value) for value in tokens.values()))
 
-    require(isinstance(data, dict) and type(data.get("version")) is int and data["version"] == 2
+    require(isinstance(data, dict) and type(data.get("version")) is int and data["version"] in (2, 3)
         and isinstance(data.get("accounts"), dict))
     for bucket in data["accounts"].values():
         require(isinstance(bucket, dict) and isinstance(bucket.get("links"), dict)
@@ -114,6 +114,15 @@ def _validate_journal(data):
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId"))
             optional_text(job, ("failureReason",))
+            if "handoff" in job:
+                handoff = job["handoff"]
+                require(data["version"] == 3 and isinstance(handoff, dict))
+                require(all(isinstance(handoff.get(key), str) and handoff[key] for key in
+                    ("oldProject", "newProject", "sceneId", "origin", "owner", "commitUuid", "fileUuid")))
+                require(handoff["oldProject"] != handoff["newProject"] == job["project"])
+                require(handoff.get("state") in ("pending", "completed"))
+                guards(handoff)
+                require(set(handoff.get("baseRevisions", {})) == {"content", "metadata"})
             guards(job["metadata"])
             require(job.get("checkpoint") is None or isinstance(job["checkpoint"], dict))
             if job.get("checkpoint") is not None:
@@ -641,6 +650,19 @@ class GallerySync:
             job["uploadFormat"] = job["metadata"].pop("_uploadFormat", "studio")
             job["contentStamp"] = job["metadata"].pop("_contentStamp", "")
             job["publishAsNew"] = job["metadata"].pop("_publishAsNew", False)
+            handoff = job["metadata"].pop("_handoff", None)
+            target = job["metadata"].get("replaceSceneId")
+            if target and not handoff and any(key != project_id and value["sceneId"] == target
+                    for key, value in self._bucket()["links"].items()):
+                raise ValueError("The published scene belongs to the previous project. Review the replacement first.")
+            if handoff:
+                job["handoff"] = copy.deepcopy(handoff)
+                job["metadata"]["originFileUuid"] = handoff["fileUuid"]
+                self._check_handoff(job)
+            job["metadata"].setdefault("originProjectUuid", project_id)
+            if job["commitUuid"]:
+                job["metadata"].setdefault("originCommitUuid", job["commitUuid"])
+            job["metadata"].setdefault("clientMutationId", job["id"])
             if preparation is not None:
                 job.update(preparation=preparation, packaged=False)
             guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
@@ -653,10 +675,14 @@ class GallerySync:
                     self._stale = True
                     raise ValueError(JOURNAL_CHANGED_MESSAGE)
                 jobs.append(job)
+                previous_version = self._data["version"]
+                if handoff:
+                    self._data["version"] = 3
                 try:
                     self._save()
                 except Exception:
                     jobs.remove(job)
+                    self._data["version"] = previous_version
                     raise
             finally:
                 guard.__exit__(None, None, None)
@@ -671,6 +697,27 @@ class GallerySync:
                 self.message = job["message"]
                 self.version += 1
         return job["id"]
+
+    def _check_handoff(self, job):
+        handoff = job.get("handoff")
+        if not handoff:
+            return
+        bucket = self._bucket()
+        old = bucket["links"].get(handoff.get("oldProject"), {})
+        tokens = {name: old.get(name + "Revision") for name in ("content", "metadata")}
+        if (handoff.get("origin") != self._origin or handoff.get("owner") != self._owner
+                or handoff.get("newProject") != job["project"] or handoff.get("oldProject") == job["project"]
+                or old.get("sceneId") != handoff.get("sceneId") or tokens != handoff.get("baseRevisions")
+                or job["metadata"].get("replaceSceneId") != handoff.get("sceneId")
+                or job["metadata"].get("baseRevisions") != tokens
+                or not handoff.get("commitUuid") or handoff["commitUuid"] != job.get("commitUuid")
+                or not handoff.get("fileUuid") or job["project"] in bucket["links"]):
+            raise ValueError("The previous gallery link changed. Review the replacement again.")
+        if any(other["id"] != job["id"] and other["status"] not in ("completed", "canceled")
+                and (other.get("project") in (handoff["oldProject"], job["project"])
+                    or other.get("metadata", {}).get("replaceSceneId") == handoff["sceneId"])
+                for other in bucket["jobs"]):
+            raise ValueError("Finish the previous project's transfer before replacing its published scene.")
 
     def download(self, scene, *, destination=None):
         with self._lock:
@@ -777,14 +824,30 @@ class GallerySync:
                 self._client()
                 scene = result["scene"]
                 with self._lock:
+                    self._check_handoff(job)
+                    if job.get("handoff") and scene["id"] != job["handoff"]["sceneId"]:
+                        raise ValueError("The Gallery returned a different replacement scene. The previous link was kept.")
+                    previous_links = copy.deepcopy(bucket["links"])
+                    previous_job = copy.deepcopy(job)
                     self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
                     bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
                     bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
                     bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
                     job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
+                    if job.get("handoff"):
+                        bucket["links"].pop(job["handoff"]["oldProject"])
+                        job["handoff"]["state"] = "completed"
                     self.scenes = [s for s in self.scenes if s["id"] != scene["id"]] + [scene]
                     self.message = "Upload complete. Review Story on portal after this content change." if job["metadata"].get("replaceSceneId") else "Upload complete."
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    with self._lock:
+                        bucket["links"] = previous_links
+                        job.clear()
+                        job.update(previous_job)
+                        self._completion = None
+                    raise
                 self._retire_export(job)
                 log_stage("link_saved", scene_id=scene["id"],
                           content_revision=scene.get("contentRevision", ""),
@@ -792,6 +855,7 @@ class GallerySync:
                           project_id=job["project"])
 
             try:
+                self._check_handoff(job)
                 with self._lock:
                     if extend_processing:
                         job["processingDeadline"] = time.time() + PROCESSING_TIMEOUT
@@ -1404,7 +1468,8 @@ class GallerySync:
 
     def unlink(self, project_id):
         def check_pending():
-            if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in self._bucket()["jobs"]):
+            if any((j["project"] == project_id or j.get("handoff", {}).get("oldProject") == project_id)
+                    and j["status"] not in ("completed", "canceled") for j in self._bucket()["jobs"]):
                 raise ValueError("Discard the pending transfer before unlinking.")
         with self._lock:
             self._client()

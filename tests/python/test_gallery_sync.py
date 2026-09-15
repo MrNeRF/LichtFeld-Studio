@@ -634,13 +634,13 @@ def test_completed_upload_records_exact_prepared_commit(tmp_path, monkeypatch):
         received.append(dict(metadata))
         return {'scene':remote}
     monkeypatch.setattr(Client,'upload',upload,raising=False)
-    service.queue_upload(path,{'title':'Example','_commitUuid':'prepared-commit','_uploadFormat':'sog'},'project')
+    job = service.queue_upload(path,{'title':'Example','_commitUuid':'prepared-commit','_uploadFormat':'sog'},'project')
     finish(service)
     link=service.snapshot()['links']['project']
     assert link['commitUuid']=='prepared-commit' and link['uploadFormat']=='sog'
     assert link['sharedFields']==gallery_sync.shared_fields(remote)
     assert link['exchangedAt'] > 0
-    assert received==[{'title':'Example'}]
+    assert received == [dict(title='Example', originProjectUuid='project', originCommitUuid='prepared-commit', clientMutationId=job)]
 
 def test_publish_as_new_keeps_old_pair_until_success(tmp_path, monkeypatch):
     service=connected(tmp_path,monkeypatch)
@@ -906,3 +906,64 @@ def test_incremental_check_and_expired_feed_full_walk(tmp_path, monkeypatch):
     service.refresh(); finish(service)
     assert service.snapshot()["scenes"][0]["id"] == "full"
     assert service.snapshot()["refresh_ok"]
+
+
+def handoff_upload(service, tmp_path):
+    old = dict(id="scene", title="Title", contentRevision="c", metadataRevision="m")
+    service._bucket()["links"]["old"] = gallery_sync.exchange_link(old, "old-save")
+    service._save()
+    path = tmp_path / "prepared.licht"
+    path.write_bytes(b"viewing-copy")
+    handoff = dict(oldProject="old", newProject="new", sceneId="scene", origin=service._origin,
+                   owner=service._owner, commitUuid="pinned-save", fileUuid="pinned-file",
+                   baseRevisions=dict(content="c", metadata="m"), state="pending")
+    metadata = dict(title="Title", replaceSceneId="scene", baseRevisions=dict(content="c", metadata="m"),
+                    _commitUuid="pinned-save", _handoff=handoff)
+    return path, metadata
+
+
+def test_replacement_handoff_survives_restart_and_retires_only_old_link(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    path, metadata = handoff_upload(service, tmp_path)
+    def pause(self, path, metadata, **kwargs):
+        kwargs["on_checkpoint"]({"uploadId": "upload", "idempotencyKey": "stable"})
+        raise GalleryTransferCanceled()
+    monkeypatch.setattr(Client, "upload", pause, raising=False)
+    identifier = service.queue_upload(path, metadata, "new")
+    finish(service)
+    assert set(service.snapshot()["links"]) == {"old"}
+    saved = json.loads(service._journal.read_text())
+    assert saved["version"] == 3
+    assert gallery_sync._validate_journal(saved)
+    saved["version"] = 2
+    with pytest.raises(ValueError):
+        gallery_sync._validate_journal(saved)
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh(); finish(restarted)
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(id="scene", title="Title", contentRevision="new-c", metadataRevision="m")})
+    restarted.resume(identifier); finish(restarted)
+    assert set(restarted.snapshot()["links"]) == {"new"}
+    assert restarted.snapshot()["links"]["new"]["commitUuid"] == "pinned-save"
+    assert restarted.snapshot()["jobs"][0]["handoff"]["state"] == "completed"
+    assert gallery_sync._validate_journal(json.loads(restarted._journal.read_text()))
+
+
+def test_handoff_rejects_changed_old_link_and_preserves_links_when_commit_fails(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    path, metadata = handoff_upload(service, tmp_path)
+    metadata["_handoff"]["commitUuid"] = "wrong-save"
+    with pytest.raises(ValueError, match="previous gallery link"):
+        service.queue_upload(path, metadata, "new")
+    metadata["_handoff"]["commitUuid"] = "pinned-save"
+    real_save = service._save
+    def save():
+        if service._bucket()["jobs"] and service._bucket()["jobs"][0]["status"] == "completed":
+            raise OSError("disk full")
+        real_save()
+    monkeypatch.setattr(service, "_save", save)
+    monkeypatch.setattr(Client, "upload", lambda *_a, **_k: {"scene": dict(id="scene", title="Title", contentRevision="new-c", metadataRevision="m")}, raising=False)
+    service.queue_upload(path, metadata, "new"); finish(service)
+    assert set(service.snapshot()["links"]) == {"old"}
+    assert service.snapshot()["jobs"][0]["handoff"]["state"] == "pending"
+
+
