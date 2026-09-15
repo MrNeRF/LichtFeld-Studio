@@ -168,6 +168,7 @@ target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/rendering/include
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_BINARY_DIR}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
 if(NOT WIN32)
     target_include_directories(lichtfeld_format_tests PRIVATE
@@ -175,7 +176,6 @@ if(NOT WIN32)
         ${CMAKE_SOURCE_DIR}/src/training
         ${CMAKE_SOURCE_DIR}/src/training/include
         ${CMAKE_SOURCE_DIR}/src/visualizer
-        ${CUDAToolkit_INCLUDE_DIRS}
     )
 endif()
 target_compile_definitions(lichtfeld_format_tests PRIVATE

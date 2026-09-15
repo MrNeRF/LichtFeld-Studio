@@ -347,6 +347,10 @@ target_include_directories(lfs_io
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/rendering/include
         ${CMAKE_SOURCE_DIR}/external/spz
+        # Project-container sources include core CUDA runtime declarations.
+        # Keep the toolkit include explicit for MSVC compile-database entries;
+        # relying on lfs_core's transitive include is not sufficient there.
+        ${CUDAToolkit_INCLUDE_DIRS}
 )
 target_include_directories(lfs_io SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/external
