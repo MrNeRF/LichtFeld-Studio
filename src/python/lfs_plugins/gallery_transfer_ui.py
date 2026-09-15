@@ -9,13 +9,28 @@ from collections import deque
 from functools import partial
 
 from .asset_format import format_size
-from .gallery_messages import tr as gallery_tr
+from .gallery_messages import localize_message, tr as gallery_tr
 
 tr = partial(gallery_tr, prefix="gallery.transfer.")
 
 
+def open_projects_panel():
+    import lichtfeld as lf
+    lf.ui.set_panel_enabled("lfs.asset_manager", True)
+
+
 def transfer_phase(job):
     status = job.get("status", "queued")
+    if job.get("localUpdate", {}).get("state") == "failed":
+        return "error"
+    if job.get("settingsEnvironment", {}).get("state") == "preparing":
+        return "downloading"
+    if job.get("localUpdate", {}).get("interrupted"):
+        return "interrupted"
+    if job.get("localUpdate", {}).get("state") in ("preparing", "applying"):
+        return "applying"
+    if job.get("serverProcessing") and job.get("needsAttention"):
+        return "processing"
     if status != "running":
         return "interrupted" if status == "paused" and job.get("interrupted") else status
     if job.get("serverProcessing"):
@@ -69,6 +84,7 @@ def transfer_metrics(speed, remaining):
 
 
 def transfer_rows(snapshot, history_limit=30):
+    from .gallery_actions import gallery_actions
     pending, history = [], []
     for job in snapshot.get("jobs", []):
         if job.get("retired"):
@@ -78,23 +94,37 @@ def transfer_rows(snapshot, history_limit=30):
         phase = transfer_phase(job)
         progress = 100 if status == "completed" else min(100, 100 * done / max(1, total))
         indeterminate = status == "running" and (phase in ("preparing", "processing") or total <= 0)
-        phase_label = tr("phase.error") if job.get("needsAttention") else tr("phase." + phase)
+        settings_only = job.get("settingsOnly", False)
+        phase_label = tr("phase." + phase)
         if status == "running" and not indeterminate:
             phase_label = gallery_tr("gallery.status.progress", prefix="", stage=phase_label, percent=int(progress))
         row = {"id": job["id"], "title": job.get("metadata", {}).get("title", "") or tr("title"),
                "direction": "↓" if job.get("kind") == "download" else "↑", "status": status,
-               "bytes": (format_size(total) if status == "completed" else format_size(done) if status == "canceled"
+               "bytes": ("" if settings_only else format_size(total) if status == "completed" else format_size(done) if status == "canceled"
                          else "" if job.get("batchQueued") else tr("bytes", done=format_size(done), total=format_size(total))),
                "phase": phase_label,
-               "reason": job.get("message", "") if status in ("error", "conflict", "paused") else "",
-               "detail": job.get("transferDetail", ""),
+               "reason": localize_message(job.get("message", "")) if phase in ("error", "conflict", "paused", "interrupted") else "",
+               "detail": gallery_tr("info.prepare_again") if job.get("requiresPreparation") else job.get("transferDetail", ""),
+               "requiresPreparation": bool(job.get("requiresPreparation")),
                "progress": progress, "progress_width": f"{35 if indeterminate else progress:.1f}%",
                "indeterminate": indeterminate,
                "can_pause": status == "running",
                "can_resume": status in ("paused", "error", "queued") and job.get("retryable") is not False
                              and not job.get("batchQueued") and not snapshot.get("busy"),
                "can_cancel": status not in ("completed", "canceled")}
-        (history if status in ("completed", "canceled") else pending).append(row)
+        facts = dict(snapshot, job=job, activity=phase, freshness="diverged" if status == "conflict" else "unknown",
+                     relationship="replaced" if job.get("handoffIntent") else "linked",
+                     undoAvailable=job["id"] in snapshot.get("undoHistory", {}),
+                     active=phase in ("uploading", "downloading", "preparing", "applying", "processing"),
+                     state="completed" if status == "completed" else phase)
+        actions = gallery_actions({}, facts)
+        verbs = {action["id"] for action in actions if action["enabled"]}
+        primary = actions[0] if actions else {}
+        row.update(project=job.get("project", ""), can_pause="pause" in verbs,
+                   can_resume=bool(verbs & {"resume", "retry", "keep_waiting", "replace_review"}), can_cancel="cancel" in verbs,
+                   action=primary.get("id", ""), action_label=primary.get("label", ""),
+                   can_resolve="resolve" in verbs, can_recover="open_recovery" in verbs, can_undo="undo" in verbs)
+        (history if status in ("completed", "canceled") and phase not in ("applying", "interrupted", "error", "downloading") else pending).append(row)
     pending.sort(key=lambda row: {"running": 0, "queued": 1}.get(row["status"], 2))
     if snapshot.get("phase", "idle") != "idle":
         progress = snapshot.get("preparationProgress", 0)
@@ -102,10 +132,25 @@ def transfer_rows(snapshot, history_limit=30):
             "direction": "↓" if snapshot["phase"] == "applying" else "↑", "status": "running",
             "bytes": "", "phase": tr("phase." + snapshot["phase"]), "reason": "", "detail": "",
             "progress": progress, "progress_width": f"{progress or 35:.1f}%", "indeterminate": not progress,
-            "can_pause": False, "can_resume": False, "can_cancel": True})
+            "can_pause": False, "can_resume": False, "can_cancel": snapshot["phase"] != "applying"})
+    failure = snapshot.get("preparationFailure")
+    if failure:
+        entry = dict(id=failure.get("project", ""), commit_uuid=failure.get("commitUuid", ""))
+        actions = gallery_actions(entry, dict(snapshot, job=failure, activity="error"))
+        retry = next((action for action in actions if action["id"] == "retry"), {})
+        pending.insert(0, {"id": failure["id"], "title": failure.get("metadata", {}).get("title", "Gallery upload"),
+            "direction": "↑", "status": "error", "bytes": "", "phase": tr("phase.error"),
+            "reason": localize_message(failure.get("message", "Scene preparation failed.")), "detail": "",
+            "progress": 0, "progress_width": "0%", "indeterminate": False,
+            "can_pause": False, "can_resume": retry.get("enabled", False), "can_cancel": False,
+            "project": failure.get("project", ""), "action": "retry", "action_label": retry.get("label", "")})
     if snapshot.get("batchQueued") and not any(j.get("batchQueued") for j in snapshot.get("jobs", [])):
         pending.append({"id": "batch-queue", "title": tr("batch", count=snapshot["batchQueued"]),
             "direction": "↑", "status": "queued", "bytes": "", "phase": tr("phase.queued"), "reason": "", "detail": "",
             "progress": 0, "progress_width": "0%", "indeterminate": False,
             "can_pause": False, "can_resume": False, "can_cancel": False})
-    return pending + list(reversed(history))[:history_limit]
+    rows = pending + list(reversed(history))[:history_limit]
+    for row in rows:
+        for key, default in (("action", ""), ("action_label", ""), ("can_resolve", False), ("can_recover", False), ("can_undo", False), ("project", "")):
+            row.setdefault(key, default)
+    return rows

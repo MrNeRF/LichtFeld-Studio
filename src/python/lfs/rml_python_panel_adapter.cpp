@@ -15,6 +15,7 @@
 #include <cassert>
 #include <format>
 #include <nanobind/stl/string.h>
+#include <RmlUi/Core/Context.h>
 
 namespace lfs::vis::gui {
     namespace {
@@ -181,14 +182,17 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPythonPanelAdapter::onViewportDrop(const std::string& type, const std::string& data) {
-        if (type != "application/x-lichtfeld-gallery-scene" || !isMounted() ||
+        if ((type != "application/x-lichtfeld-gallery-scene" &&
+             type != "application/x-lichtfeld-project-file") || !isMounted() ||
             !lfs::python::can_acquire_gil())
             return false;
         const lfs::python::GilAcquire gil;
         try {
-            if (!nb::hasattr(panel_instance_, "gallery_viewport_drop"))
+            const char* hook = type == "application/x-lichtfeld-project-file"
+                ? "native_file_drop" : "gallery_viewport_drop";
+            if (!nb::hasattr(panel_instance_, hook))
                 return false;
-            return nb::cast<bool>(panel_instance_.attr("gallery_viewport_drop")(data));
+            return nb::cast<bool>(panel_instance_.attr(hook)(data));
         } catch (const std::exception& e) {
             LOG_ERROR("Gallery viewport drop failed: {}", e.what());
             return false;
@@ -336,12 +340,29 @@ namespace lfs::vis::gui {
     }
 
     void RmlPythonPanelAdapter::syncDirectLayout(float w, float h) {
-        if (!ensureDocumentInitialized())
+        auto* doc = ensureDocumentInitialized();
+        if (!doc)
             return;
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         if (ops.prepare_layout)
             ops.prepare_layout(host_, w, h);
+        const float scale = doc->GetContext()->GetDensityIndependentPixelRatio();
+        if (w != layout_width_ || h != layout_height_ || scale != layout_scale_) {
+            on_layout_changed();
+            if (!lfs::python::can_acquire_gil())
+                return;
+            const lfs::python::GilAcquire gil;
+            try {
+                if (nb::hasattr(panel_instance_, "on_host_geometry_changed"))
+                    panel_instance_.attr("on_host_geometry_changed")(w, h, scale);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel on_host_geometry_changed error: {}", e.what());
+            }
+            layout_width_ = w;
+            layout_height_ = h;
+            layout_scale_ = scale;
+        }
     }
 
     void RmlPythonPanelAdapter::drawImmediateLayout(Rml::ElementDocument* doc,
@@ -516,10 +537,18 @@ namespace lfs::vis::gui {
 
         setInputClipY(request.clip_y_min, request.clip_y_max);
         setInput(request.input);
+        if (request.forced_height != layout_forced_height_) {
+            layout_forced_height_ = request.forced_height;
+            on_layout_changed();
+        }
         setForcedHeight(request.forced_height);
 
         bool handled = true;
         try {
+            // Even a cached draw must observe the host bounds before deciding
+            // whether Python has work. Preload can otherwise consume the frame
+            // with old dimensions and leave a resized panel stale until input.
+            syncDirectLayout(request.width, request.height);
             switch (request.mode) {
             case PanelDirectRenderMode::Measure:
                 break;
@@ -553,9 +582,6 @@ namespace lfs::vis::gui {
                                            const PanelDrawContext& ctx) {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         assert(ops.create && ops.draw_direct && ops.get_document && ops.is_loaded);
-
-        if (ctx.frame_serial == 0 || last_prepare_frame_ != ctx.frame_serial)
-            syncDirectLayout(w, h);
 
         if (!prepareForRender(&ctx))
             return;
@@ -613,6 +639,15 @@ namespace lfs::vis::gui {
         enabled_visible_ = visible;
         if (visible)
             content_dirty_ = true;
+    }
+
+    void RmlPythonPanelAdapter::on_layout_changed() {
+        content_dirty_ = true;
+        last_prepare_frame_ = 0;
+    }
+
+    void RmlPythonPanelAdapter::on_content_changed() {
+        content_dirty_ = true;
     }
 
     void RmlPythonPanelAdapter::preload(const PanelDrawContext& ctx) {
@@ -812,6 +847,7 @@ namespace lfs::vis::gui {
             return;
 
         floating_ = floating;
+        on_layout_changed();
         if (host_) {
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             if (ops.set_floating)

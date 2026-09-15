@@ -47,6 +47,16 @@ class AboutOperator(Operator):
         return {"FINISHED"}
 
 
+class GalleryTransfersOperator(Operator):
+    label = "gallery.transfer.action.details"
+    description = "Open the Projects panel"
+
+    def execute(self, context) -> set:
+        from .gallery_transfer_ui import open_projects_panel
+        open_projects_panel()
+        return {"FINISHED"}
+
+
 class PortalConnectionOperator(Operator):
     label = "portal.status.connect"
     description = "Connect or disconnect the LichtFeld Portal account"
@@ -69,17 +79,6 @@ class PortalConnectionOperator(Operator):
                 account.disconnect_async()
         else:
             account.start_device_flow()
-        return {"FINISHED"}
-
-
-class GalleryTransfersOperator(Operator):
-    label = "gallery.transfer.title"
-    description = "Show the viewport transfer queue"
-
-    def execute(self, context) -> set:
-        from .overlays import show_gallery_transfers
-
-        show_gallery_transfers()
         return {"FINISHED"}
 
 
@@ -113,11 +112,11 @@ class HelpMenu:
 
 
 _operator_classes = [
+    GalleryTransfersOperator,
     GettingStartedOperator,
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,
     PortalConnectionOperator,
-    GalleryTransfersOperator,
     BugReportOperator,
     AboutOperator,
 ]

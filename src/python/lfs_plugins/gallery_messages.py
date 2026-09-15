@@ -8,7 +8,7 @@ import re
 from .portal_security import redact
 
 
-def tr(key, *, prefix="asset_manager.gallery.", **values):
+def tr(key, *, prefix="projects.gallery.", **values):
     import lichtfeld as lf
     from .localization import safe_format
     return safe_format(lf.ui.tr(prefix + key), **values)
@@ -19,14 +19,24 @@ def localize_message(message):
         return ""
     import lichtfeld as lf
     text = redact(message)
-    if text == lf.ui.tr("asset_manager.gallery.error.unsafe_url"):
+    if "Traceback (most recent call last)" in text:
+        text = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")
+        text = re.sub(r"^[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception):\s*", "", text)
+    if text.startswith("projects.gallery.") and " " not in text:
+        return lf.ui.tr(text)
+    if text == lf.ui.tr("projects.gallery.error.unsafe_url"):
         return text
     if text.startswith("gallery_project_"):
-        return text
+        key = {"gallery_project_no_splats": "eligibility.no_splats",
+               "gallery_project_payload_unavailable": "eligibility.external_payloads",
+               "gallery_project_not_supported": "eligibility.format",
+               "gallery_project_commit_mismatch": "error.project_changed"}.get(text.split(":", 1)[0])
+        return tr(key) if key else text
     lower = text.casefold()
     if any(message in lower for message in ('pinned representation', 'pinned download', 'restarted this download')):
         return text  # Keep the explanation of restart versus resume visible.
     rules = (
+        (r'^gallery cover updated', 'info.cover'),
         (r'^ready to download', 'action.pull'),
         (r'download exceeds its declared size|download.*larger than.*declared', 'error.download_size'),
         (r'download.*incomplete|download.*damaged|invalid portable lichtfeld|portable project|checksum|corrupt.*(?:project|container)|invalid.*(?:lichtfeld|container)', 'error.download_damaged'),
@@ -35,7 +45,7 @@ def localize_message(message):
         (r'unsafe portal url|unsafe_portal_url', 'error.unsafe_url'),
         (r'account changed|account or .*changed|previous account', 'error.account_changed'),
         (r'sign out and reconnect|approve gallery', 'error.access'),
-        (r'sign in|account details.*loading', 'sidebar.sign_in'),
+        (r'sign in|account details.*loading|connect (?:your|the) account', 'error.access'),
         (r'access.*unavailable', 'error.access'),
         (r'project.*changed|camera track changed|preview changed|hdr background changed|preparation.*changed', 'error.project_changed'),
         (r'could not be saved|could not.*save|save.*error', 'error.save'),
@@ -73,7 +83,7 @@ def localize_message(message):
         # Text from a modern localized command is already user-ready; external
         # technical diagnostics remain useful as the reason beside its badge.
         return text
-    full_key = 'asset_manager.gallery.' + key
+    full_key = 'projects.gallery.' + key
     translated = lf.ui.tr(full_key)
     if translated == full_key:
         return text

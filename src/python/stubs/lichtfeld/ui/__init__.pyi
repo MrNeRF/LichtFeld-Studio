@@ -957,7 +957,17 @@ def poll_operator(id: str) -> bool:
 def get_operator_ids() -> list[str]:
     """Get list of registered operator ids"""
 
-def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None) -> None:
+def form_dialog(key: str, title: str, body_rml: str, buttons: list, callback: object, on_change: object | None = None, width: int = 640) -> bool:
+    """
+    Show a form in the shared modal overlay. Escape user text in body_rml; callbacks receive native form values.
+    """
+
+def form_dialog_update(key: str, buttons: list, body_rml: str | None = None) -> bool:
+    """
+    Update a matching live or queued form. Omit body_rml to preserve input focus and values.
+    """
+
+def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None, style: str = 'info') -> None:
     """Show a confirmation dialog with custom buttons"""
 
 def input_dialog(title: str, message: str, default_value: str = '', callback: object | None = None) -> None:
@@ -1909,6 +1919,11 @@ def open_project_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
     """
 
+def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str = '') -> str:
+    """
+    Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2765,6 +2780,9 @@ def set_mouse_cursor_hand() -> None:
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
+
+def resource_directory() -> str:
+    """Directory containing the bundled UI resources"""
 
 def get_current_language() -> str:
     """Get current language code"""

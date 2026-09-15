@@ -5356,6 +5356,8 @@ namespace lfs::vis::project {
         if (!(was_autosave && !error.empty())) {
             refreshStorageStats();
         }
+        if (auto panel = gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+            panel->on_content_changed();
         if (application_close_pending_) {
             viewer_.requestApplicationClose();
         }

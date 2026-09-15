@@ -61,6 +61,7 @@
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 
 namespace lfs::vis::gui {
 
@@ -1751,12 +1752,15 @@ namespace lfs::vis::gui {
                     // LFS-CENSUS-OK(empty-catch): report the captured error through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = e.what();
+                    LOG_ERROR("gallery failure stage=preparation exception_class={} message={}",
+                              typeid(e).name(), e.what());
                     if (source && error == "There are no visible splats to upload.")
                         error = "gallery_project_no_splats: " + error;
                 } catch (...) {
                     // LFS-CENSUS-OK(empty-catch): report an unknown failure through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = "Scene preparation failed.";
+                    LOG_ERROR("gallery failure stage=preparation exception_class=<unknown> message={}", error);
                 }
                 // Settle extraction kernels before releasing owned GPU storage,
                 // including cancellation and partial-allocation failures.

@@ -5,6 +5,7 @@
 from pathlib import Path, PureWindowsPath
 
 import lichtfeld as lf
+from .asset_index import display_name
 from .types import Operator
 from .layouts.menus import (
     menu_action,
@@ -168,7 +169,7 @@ def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
     """Return the compact recent-project label and full-path tooltip."""
     windows_path = PureWindowsPath(path)
     display_path = windows_path if windows_path.drive or "\\" in path else Path(path)
-    name = display_path.name or path
+    name = display_name({"path": display_path.as_posix(), "name": "", "name_origin": "stem"}) or path
     anchor = display_path.anchor
     parent_parts = [
         part
@@ -178,7 +179,10 @@ def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
     parent = "/".join(parent_parts[-2:])
     if not parent:
         return name, path
-    return tr("menu.file.recent_entry").format(name=name, parent=parent), path
+    template = tr("menu.file.recent_entry")
+    if chr(0x2014) in template or chr(0x2013) in template:
+        template = "{name} ({parent})"
+    return template.format(name=name, parent=parent), path
 
 
 class NewProjectOperator(Operator):

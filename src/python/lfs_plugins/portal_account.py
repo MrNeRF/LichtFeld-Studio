@@ -18,6 +18,7 @@ from typing import Callable, Iterator, Mapping, Optional
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
+from .gallery_logging import safe_text
 from .portal_retry import retry_call, retry_after
 
 _log = logging.getLogger(__name__)
@@ -54,11 +55,13 @@ class PortalHTTPError(PortalAccountError):
         error: str,
         retry_after: Optional[float] = None,
         detail: Optional[Mapping[str, object]] = None,
+        response_body: Optional[str] = None,
     ) -> None:
         self.status = status
         self.error = error
         self.retry_after = retry_after
         self.detail = dict(detail) if detail is not None else None
+        self.response_body = response_body
         super().__init__(redact(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}"))
 
 
@@ -363,10 +366,10 @@ class PortalAccountService:
         return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
     def request_response_authenticated(self, method, path, *, body=None, headers=None, max_bytes=4 * 1024 * 1024,
-                                       expected_session=None):
+                                       expected_session=None, allow_redirect=False):
         """Bounded bytes and headers, using the same account/session refresh ladder."""
         return self._authenticated_request(method, path, body, expected_session=expected_session,
-            response_options={"headers": headers or {}, "max_bytes": max_bytes})
+            response_options={"headers": headers or {}, "max_bytes": max_bytes, "allow_redirect": allow_redirect})
 
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
@@ -810,6 +813,8 @@ class PortalAccountService:
             raise PortalHTTPError(401, "invalid_token")
         if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
             raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
+        if method != "GET":
+            raise PortalHTTPError(401, "access_refreshed")
         try:
             return self._request_with_bearer(
                 method,
@@ -847,8 +852,7 @@ class PortalAccountService:
         )
 
     def _request_json(self, method, path, body=None, headers=None, *, timeout=None, response_options=None):
-        idempotent = method in ("GET", "HEAD") or (method == "POST" and path.endswith("/complete")
-            and bool((body or {}).get("idempotencyKey")))
+        idempotent = method == "GET"
         original = self._current_credentials()
         def request():
             if headers and 'Authorization' in headers and self._current_credentials() != original:
@@ -902,13 +906,17 @@ class PortalAccountService:
                 if response_options is not None and len(raw) > response_options["max_bytes"]:
                     raise PortalProtocolError("Portal response exceeds its size limit")
         except urllib.error.HTTPError as exc:
+            if response_options is not None and response_options.get("allow_redirect") and exc.code in (301, 302, 303, 307, 308):
+                exc.close()
+                return exc.code, dict(exc.headers), b""
             if response_options is not None and exc.code == 304:
                 exc.close()
                 return 304, dict(exc.headers), b""
             raw = exc.read(65536)
             retry_after = _retry_after_seconds(getattr(exc, "headers", None))
             error, detail = _error_response(raw)
-            raise PortalHTTPError(int(exc.code), error, retry_after, detail) from None
+            body = safe_text(raw.decode("utf-8", errors="replace")[:65536])
+            raise PortalHTTPError(int(exc.code), error, retry_after, detail, body) from None
 
         if response_options is not None and (200 <= status < 300 or status == 304):
             return status, dict(response_headers or {}), raw
@@ -921,6 +929,7 @@ class PortalAccountService:
                 error,
                 _retry_after_seconds(response_headers),
                 detail,
+                safe_text(raw.decode("utf-8", errors="replace")[:65536]),
             )
         try:
             payload = json.loads(raw.decode("utf-8"))

@@ -10,7 +10,8 @@ import copy
 from pathlib import Path
 
 import lichtfeld as lf
-from .gallery_messages import tr
+from .gallery_messages import tr, localize_message
+from .gallery_actions import gallery_actions
 from .gallery_transfer_ui import TransferEstimate, transfer_metrics, transfer_phase, transfer_rows
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
@@ -18,6 +19,7 @@ from .gallery_view import capture_view, restore_view
 from .portal_gallery import domain_tokens, UNSUPPORTED_PORTAL
 from . import gallery_preparation
 from .portal_security import redact, safe_filename, checked_portal_url
+from .gallery_logging import failure as log_failure, safe_url, stage as log_stage
 
 class GalleryController:
     def __init__(self):
@@ -26,6 +28,7 @@ class GalleryController:
         self._identity = self._state["identity"]
         self._confirm = None
         self._message = ""
+        self._failure_notice = ""
         self._import_pending = None
         self._save_pending = None
         self._export_pending = None
@@ -51,11 +54,10 @@ class GalleryController:
         self._operation_title = ""
         self._pull_requests = {}
         self._cancel_requests = set()
-        self._resume_queue = []
-        self._resume_current = None
         self._open_continuation = None
         self._pull_overrides = None
         self._undo_pull = None
+        self._settings_pending = None
         self._reupload_reason = None
         self._pulled_project = None
         self._decision_pending = False
@@ -65,16 +67,21 @@ class GalleryController:
         self._batch_retries = {}
         self._batch_approval = None
         self._batch_current = None
+        self._preparation_failure = None
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
 
     def _account_changed(self, _state):
         def update():
-            changed = self._check_identity()
-            if changed and self.service.snapshot().get("signed_in"):
-                self.refresh()
-            self._schedule_poll()
+            try:
+                changed = self._check_identity()
+                if changed and self.service.snapshot().get("signed_in"):
+                    self.refresh()
+                self._schedule_poll()
+            except Exception as exc:
+                log_failure("account_callback", exc)
+                self._message = friendly_error(exc)
         lf.ui.schedule_on_ui_thread(update)
 
     def preferences(self):
@@ -161,6 +168,7 @@ class GalleryController:
                                entry["format"], update=True)
         except Exception as exc:
             self._batch_current = None
+            log_failure("batch_publish", exc, project_id=entry["asset"].get("id", ""))
             self._record_batch_failure(entry, str(exc))
 
     def _record_batch_failure(self, entry, message):
@@ -210,9 +218,8 @@ class GalleryController:
                     self.service.pause()
             else:
                 self.service.discard(job_id)
-        elif name == "resume_all":
-            self._resume_queue = [j["id"] for j in self.service.snapshot()["jobs"]
-                                  if j["status"] in ("paused", "error", "queued") and j.get("retryable") is not False]
+        elif name == "keep_waiting":
+            self.service.resume(job_id, keep_waiting=True)
         elif name == "clear_finished":
             self.service.clear_finished(tuple(self._clearable_jobs()))
         else:
@@ -250,7 +257,7 @@ class GalleryController:
         self._review_publish(scene, details, upload_format, publish_as_new, update=update)
         self._schedule_poll()
 
-    def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new):
+    def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
         """Prepare saved content without consulting the current scene or view."""
         if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
@@ -264,7 +271,9 @@ class GalleryController:
             raise ValueError("This project already has an upload. Resume or discard it first.")
         link = self._state["links"].get(project_id)
         scene = next((s for s in self._state["scenes"] if link and s["id"] == link["sceneId"]), None) if update else None
-        if update and scene is None:
+        if handoff:
+            scene = next((s for s in self._state["scenes"] if s["id"] == handoff["sceneId"]), None)
+        if (update or handoff) and scene is None:
             raise ValueError(tr("error.refresh"))
         if update and asset_sync_state(asset, link, scene)["freshness"] in ("diverged", "remote", "unknown"):
             # Review must resolve remote write guards before any replacement.
@@ -272,11 +281,16 @@ class GalleryController:
         if link and not update and not publish_as_new:
             raise ValueError("This project is linked to a gallery item. Select it to replace, or unlink before publishing a new item.")
         metadata = self._details(details)
+        if getattr(info, "file_uuid", ""):
+            metadata["originFileUuid"] = str(info.file_uuid)
         metadata["_uploadFormat"] = upload_format
         if publish_as_new:
             metadata["_publishAsNew"] = True
         if scene:
             metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
+        if handoff:
+            metadata.update(_handoff=copy.deepcopy(handoff), replaceSceneId=handoff["sceneId"],
+                            baseRevisions=copy.deepcopy(handoff["baseRevisions"]))
         expected_commit = str(asset.get("commit_uuid") or getattr(info, "commit_uuid", ""))
         identity = self.service.identity()
         self._operation_project = project_id
@@ -286,6 +300,7 @@ class GalleryController:
         self.upload_format = upload_format
 
         def start():
+            self._preparation_failure = None
             if self.service.identity() != identity:
                 return
             if lf.ui.get_export_state().get("active"):
@@ -294,6 +309,7 @@ class GalleryController:
                 raise ValueError(tr("error.project_changed"))
             if self._patch_saved_update(metadata, project_id, path, update=update):
                 return
+            self._pin_publish_preview(metadata, path, expected_commit)
             metadata["viewerSettings"] = {}  # Portal imports VIEW/SEQR from the prepared .licht.
             export = self.service.root / (str(uuid.uuid4()) + ".scene")
             self._export_cancelled = False
@@ -306,6 +322,29 @@ class GalleryController:
 
         self._public_confirmation(scene, start, details=metadata)
         self._schedule_poll()
+
+    def replace_published_asset(self, asset, scene, upload_format):
+        self._check_identity()
+        self._refresh_model()
+        if self._panel_busy():
+            raise ValueError(tr("error.busy"))
+        old_project = asset.get("previous_project_uuid")
+        old = self._state["links"].get(old_project, {})
+        if old.get("sceneId") != scene.get("id") or asset["id"] in self._state["links"]:
+            raise ValueError(tr("error.project_changed"))
+        current = lf.project_poll_write().get("path")
+        if current and Path(current).resolve() == Path(asset["path"]).resolve() and lf.project_is_dirty():
+            raise ValueError(tr("error.project_changed"))
+        info = lf.io.inspect_project(asset["path"])
+        if str(info.project_uuid) != asset["id"] or str(info.commit_uuid) != asset.get("commit_uuid"):
+            raise ValueError(tr("error.project_changed"))
+        handoff = dict(oldProject=old_project, newProject=asset["id"], sceneId=scene["id"],
+                       origin=self.service._origin, owner=self.service._owner,
+                       commitUuid=str(info.commit_uuid), fileUuid=str(info.file_uuid), state="pending",
+                       oldLinkRevisions={name: old[name + "Revision"] for name in ("content", "metadata")},
+                       baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
+        handoff = self.service.remember_replacement(handoff)
+        self._publish_closed_asset(asset, scene, upload_format, update=False, publish_as_new=False, handoff=handoff)
 
     def _public_confirmation(self, scene, action, *, details=None):
         """One public-visibility policy for PATCH and upload commands."""
@@ -328,8 +367,9 @@ class GalleryController:
                     and scene.get("visibility") == "public"
                     and details.get("visibility", "public") == "public")
 
-    def resolve_asset(self, asset, details):
-        """Review each differing shared group before accepting a new write guard."""
+    def resolve_asset(self, asset, details, *, apply_only=False):
+        """Review all differing parts together, before accepting any write guard."""
+        self._check_identity()
         self._refresh_model()
         link = self._state["links"].get(asset["id"])
         scene = next((s for s in self._state["scenes"] if link and s["id"] == link["sceneId"]), None)
@@ -341,96 +381,138 @@ class GalleryController:
             identity = self._identity
             def open_selected(stop_training):
                 lf.project_open(asset["path"], True, stop_training, keep_asset_manager_open=True)
-                self._open_continuation = (asset["path"], identity, lambda: self.resolve_asset(asset, details))
+                self._open_continuation = (asset["path"], identity,
+                    lambda: self.resolve_asset(asset, details, apply_only=apply_only))
                 self._schedule_poll()
-            confirm_discard_work_then(tr("action.resolve"), open_selected)
+            confirm_discard_work_then(tr("action.apply"), open_selected)
             return
         local = dict(details, viewerSettings=capture_view(lf))
         remote = copy.deepcopy(scene)
-        groups = []
-        for name, keys in (("text", ("title", "description")), ("visibility", ("visibility",))):
-            if any(local.get(k) != remote.get(k) for k in keys):
-                groups.append((name, keys))
-        local_view, remote_view = local["viewerSettings"], remote.get("viewerSettings", {})
-        if {k: v for k, v in local_view.items() if k != "cameraPath"} != {k: v for k, v in remote_view.items() if k != "cameraPath"}:
-            groups.append(("view", ()))
-        if local_view.get("cameraPath") != remote_view.get("cameraPath"):
-            groups.append(("track", ()))
-        if (not link.get("commitUuid") or asset.get("commit_uuid") != link["commitUuid"]
-                or link.get("contentRevision") and scene.get("contentRevision")
-                and link["contentRevision"] != scene["contentRevision"]):
-            groups.append(("content", ()))
+        groups = conflict_groups(asset, link, local, remote, apply_only=apply_only)
         if not groups:
-            self._message = tr("state.unknown")
+            self._message = tr("state.equal")
             return
-        identity = self._identity
-        decisions = {}
-        expected_project = self._project_identity()
+        identity, project = self._identity, self._project_identity()
+        local_view, remote_view = local["viewerSettings"], remote.get("viewerSettings", {})
+        reviewed_stamp = file_stamp(asset["path"]) if Path(asset["path"]).is_file() else None
+        reviewed_dirty = lf.project_is_dirty()
 
-        def choose(index):
-            if self.service.identity() != identity or self._project_identity() != expected_project:
-                self._decision_pending = False
-                return
-            if index == len(groups):
-                self._decision_pending = False
-                try:
-                    self._resolve_pending_uploads(asset["id"], scene["id"], identity, apply)
-                except Exception as exc:
-                    self._message = friendly_error(exc)
-                self._schedule_poll()
-                return
-            name, keys = groups[index]
-            buttons = [tr("action.cancel"), tr("conflict.mine"), tr("conflict.portal")]
-            if name == "track" and local_view.get("cameraPath") and remote_view.get("cameraPath"):
-                buttons.append(tr("conflict.both"))
-            def selected(button):
-                if button not in buttons[1:]:
-                    self._decision_pending = False
-                    self._last_canceled = True
-                    return
-                decisions[name] = "mine" if button == buttons[1] else "portal" if button == buttons[2] else "both"
-                choose(index + 1)
-            self._decision_pending = True
-            lf.ui.confirm_dialog(tr("action.resolve"), tr("conflict.group", title=scene["title"], group=tr("conflict." + name)), buttons, selected)
-
-        def apply():
-            if self.service.identity() != identity or self._project_identity() != expected_project:
-                raise ValueError("The account or current project changed. Review it before resolving.")
+        def apply(decisions):
+            if self.service.identity() != identity or self._project_identity() != project:
+                raise ValueError(tr("error.project_changed"))
+            if (reviewed_stamp is not None and file_stamp(asset["path"]) != reviewed_stamp
+                    or lf.project_is_dirty() != reviewed_dirty or capture_view(lf) != local_view):
+                raise ValueError(tr("error.project_changed"))
             metadata = copy.deepcopy(local)
-            for name, keys in groups:
-                if decisions[name] == "portal":
+            for group, keys in (("text", ("title", "description")), ("visibility", ("visibility",))):
+                if decisions.get(group) == "gallery":
                     for key in keys:
                         metadata[key] = remote.get(key, "")
-            view = copy.deepcopy(remote_view if decisions.get("view") == "portal" else local_view)
-            track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "portal" else local_view.get("cameraPath"))
+            view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else local_view)
+            track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else local_view.get("cameraPath"))
             if decisions.get("track") == "both":
                 track = combine_camera_tracks(local_view["cameraPath"], remote_view["cameraPath"])
-            view["cameraPath"] = track
-            metadata["viewerSettings"] = view
-            if decisions.get("content") == "portal":
-                self.pull_asset(asset, scene)
-                # The staged apply consumes the reviewed view; metadata PATCH
-                # waits until the backup and local save have completed.
-                self._pull_overrides = (scene["id"], metadata, identity)
-            elif "content" in decisions:
-                metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
-                self._operation_project = asset["id"]
-                self._operation_title = metadata.get("title", "")
-                environment_source = str(lf.get_render_settings().environment_map_path) if view.get("environment") else None
-                restore_view(lf, view, environment_path=environment_source)
-                self._publish(metadata, expected_project=expected_project, environment_source=environment_source,
-                    upload_format=self.upload_format)
+            if track is not None:
+                view["cameraPath"] = track
             else:
-                # Apply reviewed settings before recording the new shared baseline.
-                # The native save persists both VIEW and SEQR in this project.
-                environment_source = str(lf.get_render_settings().environment_map_path) if view.get("environment") else None
-                restore_view(lf, view, environment_path=environment_source)
-                def saved():
-                    self.service.edit(scene["id"], domain_tokens(scene), metadata,
-                        commit_uuid=str(lf.io.inspect_project(asset["path"]).commit_uuid))
-                self._save_current_project(saved)
+                view.pop("cameraPath", None)
+            metadata["viewerSettings"] = view
+
+            def start():
+                if decisions.get("content") == "gallery":
+                    self.pull_asset(asset, scene)
+                    self._pull_overrides = (scene["id"], metadata, identity, not apply_only)
+                else:
+                    self._begin_settings_apply(asset, scene, metadata,
+                        publish=not apply_only, replace_content="content" in decisions and not apply_only,
+                        use_gallery_environment=decisions.get("view") == "gallery" and bool(view.get("environment")))
+                self._schedule_poll()
+            self._resolve_pending_uploads(asset["id"], scene["id"], identity, start)
+
+        from .gallery_file_panel import open_gallery_file_panel
+        self._decision_pending = True
+        def closed(_submitted):
+            self._decision_pending = False
             self._schedule_poll()
-        choose(0)
+        open_gallery_file_panel(controller=self, asset=asset, scene=scene, action="conflict", fields={},
+            mode="conflict", groups=groups, on_submit=apply, on_done=closed, apply_only=apply_only)
+
+    def _begin_settings_apply(self, asset, scene, metadata, *, publish=False, replace_content=False, use_gallery_environment=False):
+        project = self._project_identity()
+        identity = self.service.identity()
+        if project[0] != asset["id"] or lf.is_training_active():
+            raise ValueError(tr("error.project_changed"))
+        def saved():
+            stamp = file_stamp(project[1])
+            job, backup = self.service.prepare_settings_update(scene, project[0], project[1], stamp)
+            self._settings_pending = dict(project=project, identity=identity, stamp=stamp,
+                scene=copy.deepcopy(scene), metadata=copy.deepcopy(metadata), job=job, backup=backup,
+                phase="backup", publish=publish, replace_content=replace_content, use_gallery_environment=use_gallery_environment)
+            self._operation_project, self._operation_title = project[0], metadata["title"]
+            self._schedule_poll()
+        if lf.project_is_dirty():
+            self._save_current_project(saved, expected_project=project)
+        else:
+            saved()
+
+    def _finish_settings_apply(self):
+        pending = self._settings_pending
+        if not pending or self.service.busy or self._save_pending:
+            return
+        if self.service.identity() != pending["identity"] or self._project_identity() != pending["project"]:
+            raise ValueError(tr("error.project_changed"))
+        job = next(j for j in self.service.snapshot()["jobs"] if j["id"] == pending["job"])
+        backup = job.get("localUpdate", {})
+        if pending["phase"] in ("backup", "environment"):
+            if backup.get("id") != pending["backup"] or backup.get("state") != "ready":
+                raise ValueError(backup.get("message") or tr("error.backup"))
+            if file_stamp(pending["project"][1]) != pending["stamp"] or lf.project_is_dirty():
+                raise ValueError(tr("error.project_changed"))
+            if pending["phase"] == "backup" and pending.get("use_gallery_environment"):
+                self.service.prepare_settings_environment(pending["job"])
+                pending["phase"] = "environment"
+                return
+            metadata = pending["metadata"]
+            environment = metadata["viewerSettings"].get("environment")
+            environment_path = str(lf.get_render_settings().environment_map_path) if environment else None
+            if pending["phase"] == "environment":
+                prepared = job.get("settingsEnvironment", {})
+                if prepared.get("state") != "ready":
+                    raise ValueError(prepared.get("message") or tr("error.failed"))
+                environment_path = prepared["path"]
+            pending["environment_path"] = environment_path or ""
+            restore_view(lf, metadata["viewerSettings"], environment_path=environment_path)
+            pending["phase"] = "saving"
+            def saved():
+                stamp = file_stamp(pending["project"][1])
+                self.service.finish_settings_update(pending["job"],
+                    str(lf.io.inspect_project(pending["project"][1]).commit_uuid), stamp,
+                    pending["metadata"], acknowledge=not pending["publish"])
+                pending.update(phase="linking", applied_stamp=stamp)
+            self._save_current_project(saved, expected_project=pending["project"])
+            return
+        if pending["phase"] != "linking":
+            return
+        if backup.get("state") != "applied":
+            raise ValueError(tr("error.failed"))
+        self._settings_pending = None
+        self._undo_pull = dict(path=pending["project"][1], backup=backup["backupPath"],
+            stamp=pending["applied_stamp"], identity=pending["identity"], jobId=job["id"], project=pending["project"][0])
+        if pending["publish"]:
+            metadata = pending["metadata"]
+            if pending["replace_content"]:
+                metadata.update(replaceSceneId=pending["scene"]["id"], baseRevisions={name: pending["scene"][name + "Revision"] for name in ("content", "metadata")})
+                self._publish_saved(metadata, pending["project"][0], pending["project"][1], pending["identity"],
+                    upload_format=self.upload_format, environment_source=pending.get("environment_path", ""))
+            else:
+                self.service.edit(pending["scene"]["id"], domain_tokens(pending["scene"]), metadata,
+                    commit_uuid=str(lf.io.inspect_project(pending["project"][1]).commit_uuid), project_id=pending["project"][0])
+        self._message = tr("info.applied")
+
+    def _fail_settings_apply(self, error):
+        pending, self._settings_pending = self._settings_pending, None
+        if pending and self.service.identity() == pending["identity"] and not self.service.busy:
+            self.service.fail_local_update(pending["job"], friendly_error(error))
 
     def _resolve_pending_uploads(self, project_id, scene_id, identity, continuation):
         """Retire only the failed replacement explicitly superseded by Resolve."""
@@ -468,7 +550,8 @@ class GalleryController:
         metadata_only = key in ("confirm.remove", "confirm.unlink")
         if self._metadata_busy() if metadata_only else self._panel_busy():
             raise ValueError(tr("error.busy"))
-        self._confirm = (tr(key, title=title), continuation, tr("action.submit"))
+        verb = {"confirm.remove": "action.remove", "confirm.unlink": "action.unlink"}.get(key, "action.submit")
+        self._confirm = (tr(key, title=title), continuation, tr(verb).rstrip("…."))
         self._show_confirmation(metadata_only=metadata_only)
 
     def _show_confirmation(self, *, metadata_only=False):
@@ -492,7 +575,9 @@ class GalleryController:
                     continuation()
                 except Exception as exc:
                     from .gallery_messages import localize_message
+                    log_failure("confirmation_callback", exc)
                     self._message = localize_message(str(exc))
+                    self._failure_notice = self._message
                 self._schedule_poll()
         lf.ui.confirm_dialog(tr("sidebar.title"), message, [tr("action.cancel"), label], selected)
 
@@ -521,8 +606,9 @@ class GalleryController:
         def copy_link():
             link, error = None, None
             try:
-                link = PortalGalleryClient(account, expected_session=identity[1:3]).share_link(scene["id"])
+                link = PortalGalleryClient(account, expected_session=identity[1:3]).share_link_details(scene["id"])
             except Exception as exc:
+                log_failure("share_link", exc, scene_id=scene["id"])
                 error = friendly_error(exc)
 
             def finished():
@@ -533,9 +619,11 @@ class GalleryController:
                     return
                 if error:
                     self._message = error
+                    self._failure_notice = error
                 else:
-                    lf.ui.set_clipboard_text(checked_portal_url(account, link))
-                    self._message = tr("share.copied", prefix="asset_manager.gallery.")
+                    lf.ui.set_clipboard_text(checked_portal_url(account, link["url"]))
+                    self._message = tr("share.expiry", prefix="projects.gallery.",
+                        expiry=link.get("expiresAt") or tr("share.never", prefix="projects.gallery."))
                 self._refresh_model()
                 self._schedule_poll()
             lf.ui.schedule_on_ui_thread(finished)
@@ -576,8 +664,11 @@ class GalleryController:
             else:
                 def apply(job=job):
                     self._refresh_model()
-                    self._action_update_local(job["id"])
-                    self._show_confirmation()
+                    if self._pull_overrides and self._pull_overrides[0] == job["result"]["id"]:
+                        self._begin_local_update(job, self._project_identity())
+                    else:
+                        self._action_update_local(job["id"])
+                        self._show_confirmation()
                 current = lf.project_poll_write().get("path")
                 if current and Path(current).resolve() == Path(asset["path"]).resolve():
                     apply()
@@ -594,7 +685,11 @@ class GalleryController:
         self._subscribers[callback] = True
         self._check_identity()
         initial = self.snapshot()
-        callback(initial)
+        try:
+            callback(initial)
+        except Exception as exc:
+            log_failure("subscriber_callback", exc)
+            self._message = friendly_error(exc)
         self._last_snapshot = copy.deepcopy(initial)
         return lambda: self._subscribers.pop(callback, None)
 
@@ -602,7 +697,14 @@ class GalleryController:
         from .gallery_messages import localize_message
         state = self.service.snapshot()
         state["jobs"] = list(state.get("jobs", [])) + copy.deepcopy(self._batch_rows)
+        queued_intents = {job.get("handoff", {}).get("id") for job in state["jobs"] if job.get("status") != "canceled"}
+        for intent in state.get("handoffIntents", {}).values():
+            if intent["id"] not in queued_intents and not (self._operation_project == intent["newProject"] and self.phase() == "preparing"):
+                state["jobs"].append(dict(id="handoff:" + intent["id"], project=intent["newProject"], sceneId=intent["sceneId"],
+                    kind="upload", status="paused", interrupted=True, handoffIntent=True, completed=0, total=0,
+                    metadata={"title": tr("replacement.title")}, message=tr("state.interrupted")))
         state["batchQueued"] = len(self._update_queue)
+        state["preparationFailure"] = dict(self._preparation_failure, nativePreparation=True) if self._preparation_failure else None
         state["jobs"].extend({"id": "queue:" + entry["asset"]["id"], "project": entry["asset"]["id"],
             "status": "queued", "kind": "upload", "batchQueued": True,
             "metadata": {"title": entry["scene"].get("title") or entry["asset"].get("name", "")}}
@@ -619,21 +721,53 @@ class GalleryController:
                 estimate = self._job_transfer_estimates.setdefault(job["id"], TransferEstimate())
                 job["transferDetail"] = transfer_metrics(*estimate.sample([job], stage))
         self._job_transfer_estimates = {key: value for key, value in self._job_transfer_estimates.items() if key in measured_ids}
-        return dict(state, checkedAt=self.checked_at, offline=self.offline,
+        undo_history = self.undo_records(state)
+        if self._undo_pull and self._undo_pull.get("jobId") and self._undo_pull["jobId"] not in undo_history:
+            self._undo_pull = None
+        if not self._undo_pull and undo_history:
+            self._undo_pull = copy.deepcopy(next(reversed(undo_history.values())))
+        return dict(state, checkedAt=self.checked_at or state.get("checkedAt", 0), offline=self.offline,
                     message=localize_message(self._message or state.get("message", "")),
-                    accountFlow=self._account_flow(), phase=self.phase(), preparationProgress=self._export_progress,
-                    undoPull=copy.deepcopy(self._undo_pull), pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
+                    actionError=localize_message(self._failure_notice),
+                    actionErrorId=(state.get("actionFailure") or {}).get("id", ""),
+                    phase=self.phase(), preparationProgress=self._export_progress,
+                    undoPull=copy.deepcopy(self._undo_pull), undoHistory=undo_history,
+                    operationProject=self._operation_project,
+                    pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
 
-    def _account_flow(self):
+    def undo_records(self, state=None):
+        state = self.service.snapshot() if state is None else state
+        records = {}
+        if not state.get("signed_in") or not any(job.get("localUpdate", {}).get("state") == "applied" for job in state.get("jobs", [])):
+            return records
+        current = lf.project_poll_write().get("path")
+        for job in state.get("jobs", []):
+            update = job.get("localUpdate", {})
+            if update.get("state") != "applied" or job.get("retired") or update.get("undoRestored"):
+                continue
+            if update.get("appliedIdentity") and tuple(update["appliedIdentity"]) != tuple(state["identity"]):
+                continue
+            if update.get("appliedLink"):
+                from .gallery_sync import same_undo_link
+                if not same_undo_link(state.get("links", {}).get(job["project"], {}), update["appliedLink"]):
+                    continue
+            try:
+                path, stamp = update["path"], update["appliedStamp"]
+                if file_stamp(path) != stamp or current and Path(current).resolve() == Path(path).resolve() and lf.project_is_dirty():
+                    continue
+            except (KeyError, OSError):
+                continue
+            records[job["id"]] = dict(path=path, stamp=stamp, backup=update["backupPath"],
+                identity=state["identity"], jobId=job["id"], project=job["project"])
+        return records
+
+    def _account_linking(self):
         account = getattr(self.service, "account", None)
-        if account is None:
-            return {}
-        snap = account.snapshot()
-        return {key: getattr(snap, key, default) for key, default in (
-            ("linking", False), ("user_code", ""), ("verification_uri_complete", ""),
-            ("countdown_seconds", 0), ("error", ""))}
+        return bool(account and getattr(account.snapshot(), "linking", False))
 
-    def undo_pull(self):
+    def undo_pull(self, job_id=None):
+        if job_id:
+            self._undo_pull = self.undo_records().get(job_id)
         pending = self._undo_pull
         if not pending or pending["identity"] != self.service.identity():
             return
@@ -642,6 +776,7 @@ class GalleryController:
         try:
             pending["operation"] = self.service.restore_local_backup(pending["path"], pending["backup"], pending["stamp"])
         except Exception as exc:
+            log_failure("undo_pull", exc)
             self._record_undo_failure(pending, str(exc))
         else:
             self._after_service = self._finish_undo_pull
@@ -673,7 +808,7 @@ class GalleryController:
         self._message = pending["error"]
 
     def phase(self):
-        if self._import_pending:
+        if self._import_pending or getattr(self, "_settings_pending", None):
             return "applying"
         if self._export_pending or self._save_pending:
             return "preparing"
@@ -681,6 +816,13 @@ class GalleryController:
 
     def refresh(self):
         self._check_identity()
+        if self._refresh_pending and self.service.busy:
+            return
+        if not self.service.snapshot().get("signed_in"):
+            self._refresh_requested = False
+            self._message = ""
+            self._refresh_model()
+            return
         self._refresh_requested = True
         if not self.service.busy:
             self._refresh_requested = False
@@ -704,7 +846,10 @@ class GalleryController:
             self._last_poll_error = None
         except Exception as exc:
             from .gallery_messages import report_poll_error
+            if self._last_poll_error != (type(exc).__name__, redact(exc)):
+                log_failure("poll", exc)
             self._message = report_poll_error(self, exc, "Gallery polling failed")
+            self._failure_notice = self._message
         finally:
             if self._work_pending():
                 self._schedule_poll()
@@ -712,12 +857,23 @@ class GalleryController:
     def _work_pending(self):
         return bool(self.service.busy or self.phase() != "idle" or self._native_use
                     or self._open_continuation or self._refresh_pending or self._refresh_requested or self._cancel_requests
-                    or self._resume_queue or self._update_queue or self._batch_current
-                    or getattr(self, "_after_service", None) or self._account_flow().get("linking"))
+                    or self._update_queue or self._batch_current
+                    or getattr(self, "_after_service", None) or self._account_linking())
 
     def _poll_body(self):
         self._check_identity()
+        failure = self.service.snapshot().get("actionFailure")
+        if failure and failure["id"] != getattr(self, "_reported_action_failure", None):
+            self._reported_action_failure = failure["id"]
+            self._failure_notice = failure["message"]
         self._advance_phases()
+        try:
+            self._finish_settings_apply()
+        except Exception as exc:
+            self._fail_settings_apply(exc)
+            log_failure("apply_settings", exc)
+            self._message = friendly_error(exc)
+            self._failure_notice = self._message
         if self._refresh_requested and not self.service.busy:
             self.refresh()
         if self._refresh_pending and not self.service.busy:
@@ -736,11 +892,6 @@ class GalleryController:
                 self._open_continuation = None
                 continuation()
         if not self.service.busy:
-            if self._resume_current:
-                resumed = next((j for j in self._state["jobs"] if j["id"] == self._resume_current), {})
-                if resumed.get("status") != "completed":
-                    self._resume_queue.clear()
-                self._resume_current = None
             after = getattr(self, "_after_service", None)
             if after:
                 self._after_service = None
@@ -750,14 +901,13 @@ class GalleryController:
                 job = next((j for j in self.service.snapshot()["jobs"] if j["id"] == job_id), None)
                 if job and job["status"] not in ("completed", "canceled"):
                     self.service.discard(job_id)
-            elif self._resume_queue:
-                self._resume_current = self._resume_queue.pop(0)
-                self.service.resume(self._resume_current)
             else:
                 try:
                     self._finish_pulls()
                 except Exception as exc:
+                    log_failure("finish_pulls", exc)
                     self._message = friendly_error(exc)
+                    self._failure_notice = self._message
         self._advance_update_all()
         completion = self.service.snapshot().get("completion")
         if completion and completion.get("id") != getattr(self, "_refreshed_completion", None) and not self._work_pending():
@@ -772,7 +922,7 @@ class GalleryController:
                     try:
                         callback(copy.deepcopy(snapshot))
                     except Exception as exc:
-                        lf.log.error(redact(f"Gallery subscriber failed: {exc}"))
+                        log_failure("subscriber_callback", exc)
 
     def _transfer_speed_and_eta(self, jobs, stage):
         return self._transfer_estimate.sample(jobs, stage)
@@ -847,16 +997,18 @@ class GalleryController:
             actions = {"resume": self._action_resume, "show_recovery_folder": self._action_show_recovery_folder}
             actions[name](*args)
         except Exception as exc:
+            log_failure("dispatch", exc, action=name)
             self._message = friendly_error(exc)
+            self._failure_notice = self._message
         self._refresh_model()
 
     def _panel_busy(self):
-        return self.service.busy or self._decision_pending or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use)
+        return self.service.busy or self._decision_pending or bool(self._export_pending or self._import_pending or self._save_pending or self._settings_pending or self._native_use)
 
     def _metadata_busy(self):
         self._release_native_use()
         return (getattr(self.service, "metadata_busy", self.service.busy) or self._decision_pending
-                or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use))
+                or bool(self._export_pending or self._import_pending or self._save_pending or self._settings_pending or self._native_use))
 
     def _check_identity(self):
         identity = self.service.identity()
@@ -866,6 +1018,8 @@ class GalleryController:
         self._state = dict(self._state, scenes=[], links={}, jobs=[], posters={}, identity=identity)
         self._last_snapshot = None
         self._reupload_reason = None
+        self._preparation_failure = None
+        self._failure_notice = ""
         self._pulled_project = None
         self._update_queue = []
         self._batch_rows = []
@@ -874,11 +1028,10 @@ class GalleryController:
         self._batch_current = None
         self._pull_requests.clear()
         self._cancel_requests.clear()
-        self._resume_queue.clear()
-        self._resume_current = None
         self._open_continuation = None
         self._pull_overrides = None
         self._undo_pull = None
+        self._settings_pending = None
         self._after_service = None
         self._decision_pending = False
         self.checked_at = 0
@@ -901,7 +1054,9 @@ class GalleryController:
         return True
 
     def _clearable_jobs(self):
-        return [j["id"] for j in self._state["jobs"] if j["status"] in ("completed", "canceled") and not j.get("retired")]
+        undo = self.undo_records()
+        return [j["id"] for j in self._state["jobs"] if j["status"] in ("completed", "canceled") and not j.get("retired") and j["id"] not in undo
+                and not j.get("localUpdate", {}).get("interrupted")]
 
     def _acquire_native_use(self, job_id):
         self._release_native_use()
@@ -943,9 +1098,16 @@ class GalleryController:
                     self._export_progress = (100 * native.get("progress", 0) if native.get("active") else
                         min(100, 100 * staged.get("completed", 0) / max(1, staged.get("total", 0))))
         except Exception as exc:
+            log_failure("advance_phases", exc)
             self._discard_update_preview()
+            self._fail_settings_apply(exc)
+            pending = self._import_pending
+            if (pending and not self.service.busy and pending.get("_accountIdentity") == self.service.identity()
+                    and callable(getattr(self.service, "fail_local_update", None))):
+                self.service.fail_local_update(pending["id"], friendly_error(exc))
             self._export_pending = self._import_pending = self._save_pending = None
             self._message = friendly_error(exc)
+            self._failure_notice = self._message
             self._refresh_model()
         finally:
             self._release_native_use()
@@ -961,9 +1123,9 @@ class GalleryController:
             incoming = scene.get_node_by_uuid(update["incoming"])
             if incoming is not None:
                 scene.remove_node(incoming.name)
-        except Exception:
+        except Exception as exc:
             # Never hide the original failure or touch another project's nodes.
-            pass
+            log_failure("discard_update_preview", exc)
 
     def _action_show_recovery_folder(self):
         lf.ui.reveal_in_file_manager(str(self.service.root))
@@ -973,21 +1135,30 @@ class GalleryController:
         title = details["title"].strip()
         if not title or len(title) > 120 or len(details["description"]) > 5000 or details["visibility"] not in ("private", "public"):
             raise ValueError(tr("error.details"))
-        return {"title": title, "description": details["description"], "visibility": details["visibility"]}
+        result = {"title": title, "description": details["description"], "visibility": details["visibility"]}
+        if "useEmbeddedPreview" in details:
+            result["useEmbeddedPreview"] = bool(details["useEmbeddedPreview"])
+        return result
 
     def _project_identity(self):
         if not lf.project_has_path():
             raise ValueError("Save the current project first so gallery updates stay linked to it.")
-        path = lf.project_poll_write()["path"]
+        path = str(Path(lf.project_poll_write()["path"]).resolve())
         return str(lf.io.inspect_project(path).project_uuid), path
 
-    def _save_current_project(self, continuation):
+    def _save_current_project(self, continuation, *, expected_project=None):
         project = self._project_identity()
+        if expected_project is not None and project != expected_project:
+            raise ValueError("The project identity or path changed before saving. Refresh Projects and try again.")
         identity = self.service.identity()
         poll = lf.project_poll_write()
         if poll.get("running"):
             raise ValueError("Wait for the current project save before continuing.")
         generation = poll["generation"]
+        # File operations can append a save before the open document rebases.
+        saved_generation = getattr(lf.io.inspect_project(project[1]), "generation", None)
+        if type(saved_generation) is int:
+            generation = max(generation, saved_generation)
         if not lf.project_save(wait=False, regenerate_preview=False):
             raise ValueError("The project could not be saved. Resolve the save error before uploading.")
         self._save_pending = {"project": project, "identity": identity, "generation": generation + 1,
@@ -1003,6 +1174,8 @@ class GalleryController:
             return
         self._save_pending = None
         if poll.get("error"):
+            if self._project_identity() != pending["project"]:
+                raise ValueError("The project identity or path changed before saving. Refresh Projects and try again.")
             raise ValueError("The project could not be saved. Your gallery operation was stopped; resolve the save error before retrying.")
         if pending.get("canceled") or self.service.identity() != pending["identity"]:
             self._message = "Project save finished. The gallery operation was canceled."
@@ -1041,6 +1214,15 @@ class GalleryController:
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
+        self._preparation_failure = None
+        try:
+            size = Path(path).stat().st_size
+        except OSError:
+            size = 0
+        account = getattr(self.service, "account", None)
+        log_stage("publish_requested", project_id=project_id, path=path, size=size,
+                  format=upload_format, account_origin=safe_url(getattr(account, "base_url", "")),
+                  update=update)
         self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
                                                              environment_source, upload_format, update=update))
 
@@ -1060,7 +1242,7 @@ class GalleryController:
                 and metadata.get("replaceSceneId") == linked.get("sceneId")):
             details = {k: v for k, v in metadata.items() if k in ("title", "description", "visibility", "viewerSettings")}
             self.service.edit(linked["sceneId"], {name + "Revision": token for name, token in metadata["baseRevisions"].items()}, details,
-                commit_uuid=str(lf.io.inspect_project(path).commit_uuid), content_stamp=content_stamp)
+                commit_uuid=str(lf.io.inspect_project(path).commit_uuid), content_stamp=content_stamp, project_id=project_id)
             return True
         return False
 
@@ -1086,12 +1268,16 @@ class GalleryController:
         export = self.service.root / (str(uuid.uuid4()) + ".scene")
         metadata = dict(metadata)
         metadata["_commitUuid"] = str(getattr(lf.io.inspect_project(path), "commit_uuid", ""))
+        file_uuid = str(getattr(lf.io.inspect_project(path), "file_uuid", ""))
+        if file_uuid:
+            metadata["originFileUuid"] = file_uuid
         metadata["_uploadFormat"] = upload_format
         self._message = "Preparing the current scene for upload…"
         self._refresh_model()
         if lf.ui.get_export_state().get("active"):
             raise ValueError("Wait for the current export to finish before uploading.")
         self._export_cancelled = False
+        self._pin_publish_preview(metadata, path, metadata["_commitUuid"])
         self._prepared_commit = metadata["_commitUuid"]
         self._export_identity = identity
         self._export_progress = 0
@@ -1101,6 +1287,17 @@ class GalleryController:
             self._export_cancelled = True
         self._export_pending = (export, metadata, project_id, time.monotonic())
         self._schedule_poll()
+
+    @staticmethod
+    def _pin_publish_preview(metadata, path, commit):
+        if metadata.get("useEmbeddedPreview"):
+            import base64
+            preview = lf.io.read_preview(path)
+            if str(lf.io.inspect_project(path).commit_uuid) != commit:
+                raise ValueError(tr("error.project_changed"))
+            if not preview:
+                raise ValueError(tr("error.preview"))
+            metadata["_previewPng"] = base64.b64encode(preview).decode("ascii")
 
     def _owns_export(self, state):
         return bool(self._export_pending and state.get("path")
@@ -1120,6 +1317,7 @@ class GalleryController:
 
     def _finish_export(self):
         export, metadata, project_id, started = self._export_pending
+        prepared_commit = self._prepared_commit
         if self._export_identity is not None and self.service.identity() != self._export_identity:
             self._export_cancelled = True
         state = lf.ui.get_export_state()
@@ -1144,6 +1342,12 @@ class GalleryController:
             self._remove_preparation(export)
             error = str(state.get("error", ""))
             self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else (error or "Scene preparation failed. Check the export status and try again.")
+            if outcome == "failed" and not self._export_cancelled:
+                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "commitUuid": prepared_commit,
+                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                    "message": self._message, "failureReason": self._message}
+                log_failure("native_preparation", RuntimeError(self._message), project_id=project_id)
             self._refresh_model()
         elif outcome == "completed" and export.exists():
             self._export_pending = None
@@ -1155,14 +1359,21 @@ class GalleryController:
                     if not commit or (source and commit != source):
                         raise ValueError("The prepared project commit does not match the reviewed version.")
                     metadata["_commitUuid"] = commit
-                    metadata["viewerSettings"] = gallery_preparation.publication_view_metadata(self.service.root, export)
+                    saved_view = gallery_preparation.publication_view_metadata(self.service.root, export)
+                    metadata["viewerSettings"] = saved_view | metadata.get("viewerSettings", {})
                 self.service.queue_prepared_upload(export, metadata, project_id)
                 self._message = ""
             except Exception as exc:
+                log_failure("queue_after_preparation", exc, project_id=project_id)
+                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                    "commitUuid": prepared_commit,
+                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                    "message": friendly_error(exc), "failureReason": friendly_error(exc)}
                 try:
                     self._remove_preparation(export)
                     self._message = friendly_error(exc)
-                except (OSError, ValueError):
+                except (OSError, ValueError) as cleanup_exc:
+                    log_failure("preparation_cleanup", cleanup_exc, project_id=project_id)
                     self._message = "The upload could not be queued. Temporary files were kept; open the recovery folder to review them."
             self._refresh_model()
         elif time.monotonic() - started > 60:
@@ -1170,6 +1381,11 @@ class GalleryController:
             self._export_pending = None
             self._remove_preparation(export)
             self._message = "LichtFeld Studio could not prepare the scene. Check the export status and try again."
+            self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
+                "commitUuid": prepared_commit,
+                "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
+                "message": self._message, "failureReason": self._message}
+            log_failure("native_preparation_timeout", TimeoutError(self._message), project_id=project_id)
             self._refresh_model()
 
     def _action_resume(self, job_id):
@@ -1230,7 +1446,8 @@ class GalleryController:
         self._acquire_native_use(job["id"])
         try:
             stage_id = self.service.stage_download(job["id"])
-        except Exception:
+        except Exception as exc:
+            log_failure("stage_download", exc, job_id=job["id"])
             self._release_native_use()
             raise
         self._import_pending = dict(job, _accountIdentity=identity,
@@ -1257,16 +1474,21 @@ class GalleryController:
             index = AssetIndex()
             if not index.load():
                 raise ValueError(tr("error.storage"))
+            if file_stamp(path) != stage.get("projectStamp"):
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
             inspection = lf.io.inspect_project(path)
+            if str(inspection.project_uuid) != stage.get("projectId"):
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
             previous = index.get_asset(str(inspection.project_uuid))
             if previous and Path(previous.path).resolve() != Path(path).resolve() and Path(previous.path).exists():
                 # Never move an existing catalog entry to an unrelated copy.
                 raise ValueError(tr("error.link"))
             project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
             if project is None:
-                raise ValueError(tr("error.storage"))
+                raise ValueError(index.last_error or tr("error.storage"))
+            self._mark_viewing_copy(index, project)
             pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
-                operation=self._link_saved_download(job["id"], path))
+                operation=self._link_saved_download(job["id"], path, str(inspection.project_uuid)))
             return
         operation = current.get("linkOperation", {})
         self._import_pending = None
@@ -1314,10 +1536,17 @@ class GalleryController:
             from .asset_index import AssetIndex
             index = AssetIndex()
             if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
-            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"])
-            if project is None: raise ValueError("The project opened but could not be added to Asset Manager.")
+            if file_stamp(expected["path"]) != expected["projectStamp"]:
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
+            inspection = lf.io.inspect_project(expected["path"])
+            if str(inspection.project_uuid) != expected["projectId"]:
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
+            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"], inspection=inspection)
+            if project is None:
+                raise ValueError(index.last_error or "The project opened but could not be added to Asset Manager.")
+            self._mark_viewing_copy(index, project)
             restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
-            operation = self._link_saved_download(job["id"], expected["path"])
+            operation = self._link_saved_download(job["id"], expected["path"], expected["projectId"])
             job.pop("_native_project")
             job["_link"] = operation
             job["_registered_project"] = {"id": str(project.project_uuid), "path": expected["path"], "jobId": job["id"]}
@@ -1341,11 +1570,14 @@ class GalleryController:
             if stage.get("id") != opening["stage_id"] or stage.get("state") != "ready":
                 raise ValueError(stage.get("message") or "The downloaded scene could not be prepared.")
             from .portable_project import ProjectFile
-            with open(stage["projectPath"], "rb") as source:
+            # The downloaded subset has the validated portable index. The
+            # fresh local identity may use native index compression.
+            with open(job["path"], "rb") as source:
                 prepared = ProjectFile(source)
                 count = sum(node["count"] for node in prepared.manifest["nodes"])
             lf.project_open(stage["projectPath"], keep_asset_manager_open=True)
-            job["_native_project"] = {"path": stage["projectPath"], "count": count}
+            job["_native_project"] = {"path": stage["projectPath"], "count": count,
+                "projectId": stage["projectId"], "projectStamp": stage["projectStamp"]}
             opening["phase"] = "opened"
             self._import_started = time.monotonic()
             self._message = "Opening .licht project…"
@@ -1368,11 +1600,18 @@ class GalleryController:
                 self._message = "The download is saved in Asset Manager, but its gallery link could not be saved. Refresh your gallery before continuing."
             self._refresh_model()
             return
-    def _link_saved_download(self, job_id, path):
+    @staticmethod
+    def _mark_viewing_copy(index, project):
+        if index.update_asset(project.id, viewing_copy=True) is None:
+            raise ValueError(index.last_error or tr("error.storage"))
+
+    def _link_saved_download(self, job_id, path, expected_project_id):
         inspected = lf.io.inspect_project(path)
+        if str(inspected.project_uuid) != expected_project_id:
+            raise ValueError("The project identity changed before linking. Refresh Projects and try again.")
         commit = str(getattr(inspected, "commit_uuid", ""))
         args = (job_id, str(inspected.project_uuid))
-        return self.service.link_download(*args, commit)
+        return self.service.link_download(*args, commit, project_path=path)
 
     def _action_update_local(self, job_id):
         job = next(j for j in self._state["jobs"] if j["id"] == job_id)
@@ -1455,10 +1694,10 @@ class GalleryController:
                 self._undo_pull = {"path": project[1], "backup": current_job["localUpdate"]["backupPath"],
                     "stamp": file_stamp(project[1]), "identity": self._identity}
             if self._pull_overrides:
-                scene_id, metadata, identity = self._pull_overrides
+                scene_id, metadata, identity, publish = self._pull_overrides
                 self._pull_overrides = None
-                if identity == self._identity:
-                    self.service.edit(scene_id, domain_tokens(current_job["result"]), metadata)
+                if identity == self._identity and publish:
+                    self.service.edit(scene_id, domain_tokens(current_job["result"]), metadata, project_id=project[0])
             self._message = "Linked project updated. Your previous local work is kept in its recovery copy."
             self._refresh_model()
             return
@@ -1485,7 +1724,7 @@ class GalleryController:
             update["incoming"] = incoming.uuid
             update["old_nodes"] = [n.uuid for n in self._visible_splats() if n.uuid != incoming.uuid]
             update["phase"] = "save_before_backup"
-            self._save_current_project(lambda: self._prepare_update_backup(job))
+            self._save_current_project(lambda: self._prepare_update_backup(job), expected_project=project)
             return
         backup = current_job.get("localUpdate", {})
         if backup.get("id") != update["backup_id"] or backup.get("state") != "ready":
@@ -1521,7 +1760,8 @@ class GalleryController:
             if self._project_identity() == project and file_stamp(project[1]) == update["stamp"]:
                 lf.project_open(project[1], discard_changes=True, keep_asset_manager_open=True)
                 recovery = "Your saved local project is being reopened. Its recovery copy is also available."
-        except Exception:
+        except Exception as exc:
+            log_failure("recover_failed_update", exc, project_id=update.get("project", ("", ""))[0])
             pass
         raise ValueError("The gallery update could not be completed. " + recovery) from exc
 
@@ -1541,8 +1781,9 @@ class GalleryController:
             return
         update["phase"] = "linking"
         try:
-            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1])
+            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1], update["project"][0])
         except Exception as exc:
+            log_failure("link_saved_download", exc, job_id=job["id"])
             raise ValueError("The project was updated and its recovery copy was kept, but the gallery link could not be saved. Refresh your gallery before continuing.") from exc
         self._message = "Project updated. Saving its gallery link…"
 
@@ -1569,6 +1810,8 @@ class GalleryController:
         if scene.get_node(title) is not None:
             title += " (gallery " + incoming.uuid[:8] + ")"
         scene.rename_node(incoming.name, title)
+        if self._project_identity() != update["project"] or file_stamp(update["project"][1]) != update["stamp"]:
+            raise ValueError("The project identity or path changed before saving. Your recovery copy was kept.")
         if not lf.project_save(wait=False):
             raise ValueError("The updated project could not be saved. Your recovery copy is available in the recovery folder.")
 
@@ -1576,14 +1819,17 @@ class GalleryController:
 _controller = None
 
 _LOCAL_FILE_PROBLEM_STATUSES = {
+    "MISSING",
+    "READING",
+    "UNVERIFIED",
     "UNREADABLE",
     "UNSUPPORTED",
     "REPAIR_ONLY",
     "UNSUPPORTED_NEWER",
 }
 _LOCAL_FILE_PROBLEM_LABELS = {
-    "REPAIR_ONLY": "asset_manager.status.needs_repair",
-    "UNSUPPORTED_NEWER": "asset_manager.status.newer_version",
+    "REPAIR_ONLY": "projects.status.needs_repair",
+    "UNSUPPORTED_NEWER": "projects.status.newer_version",
 }
 
 def get_gallery_controller():
@@ -1592,13 +1838,61 @@ def get_gallery_controller():
         _controller = GalleryController()
     return _controller
 
+def conflict_groups(asset, link, local, remote, *, apply_only=False):
+    import json
+    baseline = link.get("sharedFields", {})
+    local_view, remote_view = local.get("viewerSettings", {}), remote.get("viewerSettings", {})
+    parts = [
+        ("text", {k: local.get(k, "") for k in ("title", "description")}, {k: remote.get(k, "") for k in ("title", "description")}, {k: baseline.get(k, "") for k in ("title", "description")}),
+        ("visibility", local.get("visibility"), remote.get("visibility"), baseline.get("visibility")),
+        ("view", {k: v for k, v in local_view.items() if k != "cameraPath"}, {k: v for k, v in remote_view.items() if k != "cameraPath"}, {k: v for k, v in baseline.get("viewerSettings", {}).items() if k != "cameraPath"}),
+        ("track", local_view.get("cameraPath"), remote_view.get("cameraPath"), baseline.get("viewerSettings", {}).get("cameraPath")),
+    ]
+    rows = []
+    def text(value):
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(", ", ": "))
+    for identifier, mine, gallery, base in parts:
+        if mine == gallery:
+            continue
+        mine_value, gallery_value = text(mine), text(gallery)
+        values = tr("conflict.values", mine=mine_value, gallery=gallery_value)
+        difference = values
+        if identifier == "text":
+            changed = [key for key in ("title", "description") if mine.get(key) != gallery.get(key)]
+            difference = tr("conflict.values", mine=" · ".join(text(mine.get(key, "")) for key in changed),
+                            gallery=" · ".join(text(gallery.get(key, "")) for key in changed))
+        elif identifier == "view":
+            native_labels = {"exposure": "main_panel.color_exposure", "tonemapping": "main_panel.color_tonemapping",
+                             "background": "main_panel.background", "antialiasing": "main_panel.mip_filter", "shDegree": "main_panel.sh_degree",
+                             "renderMode": "main_panel.raster_backend", "environment": "main_panel.environment", "verticalFov": "main_panel.fov"}
+            names = [lf.ui.tr(native_labels[key]) if key in native_labels else tr("conflict.camera" if key == "camera" else "conflict.view")
+                     for key in sorted(set(mine) | set(gallery)) if mine.get(key) != gallery.get(key)]
+            difference = tr("conflict.changed_settings", parts=", ".join(dict.fromkeys(names)))
+        elif identifier == "track":
+            difference = tr("conflict.track_counts", mine=len((mine or {}).get("keyframes", [])),
+                            gallery=len((gallery or {}).get("keyframes", [])))
+        rows.append(dict(id=identifier, label=tr({"text": "conflict.text", "visibility": "conflict.visibility", "view": "conflict.view", "track": "conflict.track"}[identifier]),
+            mine_value=mine_value, gallery_value=gallery_value,
+            difference=difference, values=values,
+            choice="gallery" if apply_only or mine == base else "mine",
+            can_both=identifier == "track" and bool(mine and gallery)))
+    content_changed = (link.get("contentRevision") != remote.get("contentRevision")
+        or not apply_only and (not link.get("commitUuid") or asset.get("commit_uuid") != link.get("commitUuid")))
+    if content_changed:
+        mine, gallery = tr("conflict.local_content"), tr("conflict.gallery_content")
+        rows.append(dict(id="content", label=tr("conflict.content"), mine_value=mine, gallery_value=gallery,
+            difference=tr("conflict.values", mine=mine, gallery=gallery), values=tr("conflict.values", mine=mine, gallery=gallery),
+            choice="mine", can_both=False))
+    return rows
+
+
 def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=False,
-                     phase="idle", storage_issue=False, cached_projection=None):
+                     phase="idle", storage_issue=False, cached_projection=None, established=True):
     """Three independent facts and one deterministic badge; never compare clocks."""
     project = project or {}
     identifier = project.get("project_uuid", project.get("id", ""))
     relationship = "linked" if link else "unlinked" if project else "remote_only"
-    if project.get("status") in ("IDENTITY_CONFLICT", "IDENTITY_MISMATCH", "DUPLICATE", "AMBIGUOUS"):
+    if project.get("status") in ("IDENTITY_CONFLICT", "IDENTITY_MISMATCH", "DUPLICATE", "AMBIGUOUS", "DIVERGED_COPIES"):
         relationship = "identity_ambiguous"
     elif project.get("status") in _LOCAL_FILE_PROBLEM_STATUSES:
         relationship = "local_file_problem"
@@ -1608,33 +1902,39 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
         relationship = "local_missing"
     freshness = "unknown"
     if link and link.get("commitUuid") and project.get("commit_uuid") and scene and all(link.get(key) and scene.get(key) for key in ("contentRevision", "metadataRevision")):
-        local = project["commit_uuid"] != link["commitUuid"]
+        local = (project["commit_uuid"] != link["commitUuid"] or
+                 "localFields" in link and link["localFields"] != link.get("sharedFields", {}))
         remote = any(scene[key] != link[key] for key in ("contentRevision", "metadataRevision"))
         freshness = "diverged" if local and remote else "local" if local else "remote" if remote else "equal"
     scene_id = (link or scene or {}).get("sceneId", (scene or {}).get("id"))
-    matching = [j for j in jobs if j.get("status") not in ("completed", "canceled") and not j.get("retired") and
+    matching = [j for j in jobs if (j.get("status") not in ("completed", "canceled") or j.get("localUpdate", {}).get("interrupted") or j.get("localUpdate", {}).get("state") == "failed"
+                or j.get("settingsEnvironment", {}).get("state") == "preparing") and not j.get("retired") and
                 ((identifier and j.get("project") == identifier) or (scene_id and
                 (j.get("sceneId") == scene_id or j.get("metadata", {}).get("replaceSceneId") == scene_id)))]
     job = matching[-1] if matching else {}
     activity = phase
     if job:
         status = job.get("status")
-        activity = "error" if status in ("conflict", "error") else transfer_phase(job)
+        activity = "error" if status == "conflict" else transfer_phase(job)
         if status == "conflict":
             freshness = "diverged"
+    remote_content = bool(link and scene and link.get("contentRevision") != scene.get("contentRevision"))
+    presentation = bool(link and scene and scene.get("presentationRevision") and scene["presentationRevision"] != (link.get("acknowledgedPresentationRevision") or link.get("metadata", {}).get("presentationRevision", "")))
     active = activity in ("preparing", "queued", "uploading", "processing", "downloading", "applying")
-    if freshness == "diverged":
-        visible = "diverged"
+    if relationship in ("identity_ambiguous", "local_file_problem"):
+        visible = "error"
     elif active:
         visible = activity
-    elif storage_issue or relationship in ("identity_ambiguous", "local_file_problem"):
-        visible = "error"
+    elif freshness == "diverged":
+        visible = "diverged"
     elif activity in ("error", "paused", "interrupted"):
         visible = activity
     elif relationship in ("local_missing", "remote_deleted"):
         visible = relationship
+    elif not established:
+        visible = "not_checked"
     elif relationship == "linked":
-        visible = freshness
+        visible = "remote_content" if freshness == "remote" and remote_content else "presentation" if freshness == "equal" and presentation else freshness
     else:
         visible = relationship
     if cached_projection and not link and not scene and not jobs and not storage_issue and relationship == "unlinked":
@@ -1643,35 +1943,41 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
             relationship = "linked"
             visible = cached
     icons = {"unlinked": "cloud", "equal": "cloud-check", "local": "cloud-up",
-             "remote": "cloud-down", "diverged": "cloud-updown", "remote_only": "cloud-down",
-             "queued": "cloud-dotted", "paused": "cloud-dotted", "interrupted": "cloud-dotted",
-             "error": "cloud-bang", "local_missing": "cloud-bang", "remote_deleted": "cloud-strike",
-             "unknown": "cloud-dotted"}
-    tones = {"equal": "success", "local": "primary", "remote": "info", "remote_only": "info",
-             "diverged": "warning", "error": "error", "local_missing": "warning", "remote_deleted": "warning",
-             "interrupted": "warning", "processing": "info"}
-    action = {"unlinked": "publish", "equal": "open", "local": "update", "remote": "pull",
-              "diverged": "resolve", "remote_only": "pull", "local_missing": "pull",
-              "remote_deleted": "publish_new", "unknown": "", "error": "retry",
-              "paused": "resume", "interrupted": "resume"}.get(visible, "")
-    if job and job.get("retryable") is False and action in ("retry", "resume"):
-        action = ""
-    if visible == "remote_deleted" and not project.get("exists", True):
-        action = "unlink"
-    if relationship in ("identity_ambiguous", "local_file_problem") or storage_issue or (cached_projection and not link):
-        action = "check"
-    reason = job.get("message") or project.get("error", "")
+             "remote": "cloud-down", "diverged": "cloud-bang", "remote_only": "cloud-dotted",
+             "queued": "ring", "paused": "pause", "interrupted": "pause",
+             "error": "error", "local_missing": "cloud-bang", "remote_deleted": "cloud-strike",
+             "unknown": "cloud-dotted", "not_checked": "cloud-dotted",
+             "presentation": "cloud-check", "remote_content": "cloud-down"}
+    tones = {"equal": "success", "local": "primary", "remote": "primary", "remote_only": "primary",
+             "diverged": "warning", "error": "error", "local_missing": "warning", "remote_deleted": "text_dim",
+             "interrupted": "text_dim", "processing": "primary", "remote_content": "primary"}
+    reason = localize_message(job.get("message") or project.get("error", ""))
     if relationship == "local_file_problem":
         reason = project.get("error")
         if not reason:
             from .asset_manager_panel import tr as asset_tr
             label = _LOCAL_FILE_PROBLEM_LABELS.get(project["status"])
             reason = asset_tr(label) if label else project["status"]
-    return dict(relationship=relationship, freshness=freshness, activity=activity, state=visible,
-                icon=icons.get(visible, "ring"), tone=tones.get(visible, "primary" if active else "text_dim"),
-                action=action, active=active, jobId=job.get("id", ""), reason=reason,
+    health = project.get("status", "")
+    health_tone = ("warning" if health in ("MISSING", "IDENTITY_MISMATCH", "IDENTITY_CONFLICT", "DUPLICATE", "AMBIGUOUS")
+                   else "error" if health in _LOCAL_FILE_PROBLEM_STATUSES else "")
+    icon = "ring" if active else icons.get(visible, "cloud")
+    if relationship == "local_file_problem":
+        icon = "cloud-bang"
+    result = dict(relationship=relationship, freshness=freshness, activity=activity, state=visible,
+                icon=icon, tone="primary" if active else tones.get(visible, "text_dim"),
+                health_icon="bang" if health_tone else "", health_tone=health_tone,
+                active=active, jobId=job.get("id", ""), job=job, reason=reason,
+                linked=bool(link), sceneReady=bool(scene and scene.get("status", "ready") == "ready"),
+                established=established, cachedUnverified=bool(cached_projection and not link), storage_issue=storage_issue, viewingCopy=bool(project.get("viewing_copy") or (link or {}).get("viewingCopy")),
+                remoteContent=remote_content, presentationChanged=presentation,
                 progress=min(100, int(100 * job.get("completed", 0) / max(1, job.get("total", 0)))),
-                attention=visible in ("diverged", "error", "local_missing", "remote_deleted"))
+                attention=visible in ("diverged", "error", "interrupted", "local_missing", "remote_deleted")
+                and project.get("status") not in ("READING", "UNSUPPORTED_NEWER"))
+    actions = gallery_actions(project, result)
+    result["action"] = actions[0]["id"] if actions else ""
+    result["actions"] = actions
+    return result
 
 def combine_camera_tracks(mine, portal):
     """Keep both complete tracks in order in the native camera path."""

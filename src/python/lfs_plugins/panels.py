@@ -50,13 +50,9 @@ PANEL_SPECS = {
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
         update_policy="dirty",
     ),
-    "gallery_transfer": _PanelSpec(
-        "lfs_plugins.gallery_transfer_panel", "GalleryTransferPanel", "lfs.gallery_transfer", "Transfers",
-        "FLOATING", 93, "rmlui/gallery_transfer_panel.rml", "CONTENT", (460, 0), update_policy="dirty",
-    ),
     "gallery_file": _PanelSpec(
         "lfs_plugins.gallery_file_panel", "GalleryFilePanel", "lfs.gallery_file", "Gallery",
-        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (500, 0),
+        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (680, 0),
         update_policy="dirty", has_poll=True,
     ),
     "bug_report": _PanelSpec(
@@ -101,8 +97,8 @@ PANEL_SPECS = {
     ),
     "asset_manager": _PanelSpec(
         "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",
-        "Asset Manager", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
-        (980, 620), update_policy="dirty",
+        "Projects", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
+        (1100, 700), update_policy="dirty",
     ),
 }
 
@@ -176,6 +172,7 @@ def _register_lazy_panel(lf, name):
         _delegated_instance_methods = frozenset({
             "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
             "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+            "on_host_geometry_changed",
         })
 
         def _load(self):
@@ -327,7 +324,6 @@ def _build_builtin_panel_steps(lf):
 
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
-        _register_lazy_panel(lf, "gallery_transfer")
         _register_lazy_panel(lf, "gallery_file")
 
     def overlays():

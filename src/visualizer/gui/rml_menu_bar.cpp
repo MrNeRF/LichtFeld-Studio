@@ -1079,7 +1079,9 @@ namespace lfs::vis::gui {
                                          : connection;
         const auto connection_key = "portal.status." + activity;
         std::string label = localization.get(connection_key);
-        if (account.linking && !account.label.empty())
+        if (connected && !account.label.empty())
+            label = account.label + ", " + localization.get("projects.gallery.sidebar.title");
+        else if (account.linking && !account.label.empty())
             label += " " + account.label;
         set("portal_connection_label", portal_connection_label_, std::move(label));
         std::string tooltip = localization.get(account.linking  ? "portal.status.cancel"
@@ -1093,7 +1095,7 @@ namespace lfs::vis::gui {
         if (!account.error.empty()) {
             const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
                                           : account.error == "sign_in_failed"    ? "account.error.generic"
-                                          : account.error == "unsafe_portal_url" ? "asset_manager.gallery.error.unsafe_url"
+                                          : account.error == "unsafe_portal_url" ? "projects.gallery.error.unsafe_url"
                                                                                  : "account.error." + account.error;
             tooltip += "\n" + std::string(localization.hasKey(error_key) ? localization.get(error_key)
                                                                          : localization.get("account.error.generic"));

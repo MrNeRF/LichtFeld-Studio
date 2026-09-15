@@ -306,6 +306,7 @@ class RuntimeState:
         DEFAULT_GALLERY_STATE.copy(),
     )
     gallery_transfers = Signal({}, "gallery_transfers")
+    projects_panel_visible = Signal(False, "projects_panel_visible")
     bug_report_state = Signal(new_bug_report_state(), "bug_report_state")
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",
@@ -379,6 +380,7 @@ class RuntimeState:
         cls.import_overlay_state.value = {}
         cls.account_state.value = DEFAULT_ACCOUNT_STATE.copy()
         cls.gallery_transfers.value = {}
+        cls.projects_panel_visible.value = False
         cls.gallery_state.value = DEFAULT_GALLERY_STATE.copy()
         cls.bug_report_state.value = new_bug_report_state()
         cls.video_export_overlay_state.value = {}

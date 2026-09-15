@@ -37,6 +37,8 @@ namespace lfs::vis::gui {
         void setPollVisibility(bool visible) override;
         bool isVisibleForAnimation() const override;
         void on_visibility_changed(bool visible) override;
+        void on_layout_changed() override;
+        void on_content_changed() override;
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};
@@ -108,6 +110,10 @@ namespace lfs::vis::gui {
         uint64_t last_scene_gen_ = 0;
         uint64_t last_prepare_frame_ = 0;
         bool content_dirty_ = false;
+        float layout_width_ = -1.0f;
+        float layout_height_ = -1.0f;
+        float layout_scale_ = -1.0f;
+        float layout_forced_height_ = -1.0f;
         bool has_update_interval_ = false;
         bool dirty_driven_updates_ = false;
         bool warned_non_bool_scene_changed_ = false;

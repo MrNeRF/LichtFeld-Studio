@@ -251,7 +251,9 @@ select:focus-visible,
 button:focus-visible,
 .btn:focus-visible,
 .context-menu-item:focus-visible,
-.section-header:focus-visible {
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
     border-color: #89b4fa;
     box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }
@@ -1122,6 +1124,13 @@ crf-curve {
     width: 100%;
     margin-bottom: 2dp;
     box-sizing: border-box;
+}
+
+.asset-button--toolbar24 {
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
 }
 
 /* ── Disabled overlay ──────────────────────────────────── */

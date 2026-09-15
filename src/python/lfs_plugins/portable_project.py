@@ -203,7 +203,6 @@ def read_project(source):
     return chapters, assets
 
 
-
 class SliceReader(io.RawIOBase):
     def __init__(self, source, offset, size):
         self.source, self.offset, self.size, self.position = source, offset, size, 0
@@ -284,14 +283,6 @@ class ProjectFile:
         else:
             _check(not references)
         _check(bound == self.assets.keys(), 'Unreferenced embedded assets cannot be published.')
-
-    def node_storage(self, index):
-        value = self._nodes[index]
-        return value['offset'], value['size'], value['crc32c']
-
-    def environment_storage(self):
-        value = self._environment
-        return value['offset'], value['size'], value['crc32c']
 
     def _copy(self, asset, output, metadata, progress, environment=False):
         try:

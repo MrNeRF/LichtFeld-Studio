@@ -45,6 +45,7 @@ namespace lfs::vis::gui {
                    element->GetTagName() != "#root" &&
                    element->GetId() != "overlay-body" &&
                    element->GetId() != "dm-root" &&
+                   element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
                    !element->IsClassSet("left-dock-resize-indicator");
         }
@@ -363,16 +364,19 @@ namespace lfs::vis::gui {
         if (std::abs(viewport_content_offset_ - x) > 0.5f) {
             viewport_content_offset_ = x;
             viewport_content_offset_dirty_ = true;
+            toolbar_roots_dirty_ = true;
             markRenderNeeded(RenderReason::ViewportResize);
         }
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
                                               const float primary_width,
+                                              const float inset,
                                               const bool show_secondary,
                                               const float secondary_x,
                                               const float secondary_width) {
         const bool changed =
+            std::abs(toolbar_inset_ - inset) > 0.5f ||
             std::abs(primary_toolbar_x_ - primary_x) > 0.5f ||
             std::abs(primary_toolbar_width_ - primary_width) > 0.5f ||
             show_secondary_toolbar_ != show_secondary ||
@@ -382,6 +386,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        toolbar_inset_ = inset;
         primary_toolbar_x_ = primary_x;
         primary_toolbar_width_ = primary_width;
         show_secondary_toolbar_ = show_secondary;
@@ -607,7 +612,7 @@ namespace lfs::vis::gui {
                                     const float width,
                                     const bool visible) {
             if (auto* const element = document_->GetElementById(element_id)) {
-                element->SetProperty("left", std::format("{:.1f}px", x));
+                element->SetProperty("left", std::format("{:.1f}px", x - viewport_content_offset_));
                 element->SetProperty("width", std::format("{:.1f}px", std::max(width, 0.0f)));
                 element->SetClass("hidden", !visible);
             }
@@ -623,7 +628,8 @@ namespace lfs::vis::gui {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
-        apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
+        apply_left_toolbar_offset("primary-utility-toolbar", toolbar_inset_);
+        apply_left_toolbar_offset("secondary-utility-toolbar", toolbar_inset_);
         attachToolbarDragListeners();
         applyToolbarPosition();
         applied_primary_toolbar_x_ = primary_toolbar_x_;
@@ -640,8 +646,7 @@ namespace lfs::vis::gui {
         if (!document_ || !rml_context_ || !toolbar_rail_layout_dirty_)
             return false;
 
-        const float dpi = std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
-        const float available_height = std::max(0.0f, vp_size_.y - 24.0f * dpi);
+        const float available_height = std::max(0.0f, vp_size_.y - 2.0f * toolbar_inset_);
         auto* const primary_toolbar = document_->GetElementById("primary-utility-toolbar");
         auto* const secondary_toolbar = document_->GetElementById("secondary-utility-toolbar");
         auto* const primary_tools = document_->GetElementById("primary-rail-tools");
@@ -709,11 +714,7 @@ namespace lfs::vis::gui {
     }
 
     float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
-        const float dp_ratio = rml_context_
-                                   ? std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f)
-                                   : 1.0f;
-        constexpr float kViewportGapDp = 12.0f;
-        return std::min(kViewportGapDp * dp_ratio,
+        return std::min(toolbar_inset_,
                         std::max(0.0f, (vp_size_.y - std::max(toolbar_height, 0.0f)) * 0.5f));
     }
 
@@ -760,7 +761,7 @@ namespace lfs::vis::gui {
             if (!toolbar)
                 return;
 
-            if (viewport_toolbar_position_ != "free") {
+            if (viewport_toolbar_position_ == "centered") {
                 if (mode_changed)
                     toolbar->RemoveProperty("margin-top");
                 applied_top = std::numeric_limits<float>::quiet_NaN();
@@ -770,7 +771,7 @@ namespace lfs::vis::gui {
             float height = toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
             if (height <= 0.0f)
                 height = fallback_height;
-            const float top = toolbarFreeTop(height);
+            const float top = viewport_toolbar_position_ == "free" ? toolbarFreeTop(height) : toolbar_inset_;
             if (!std::isfinite(applied_top) || std::abs(applied_top - top) > 0.25f) {
                 toolbar->SetProperty("margin-top", std::format("{:.1f}px", top));
                 applied_top = top;
@@ -880,6 +881,10 @@ namespace lfs::vis::gui {
         if (auto* const element = document_->GetElementById("viewport-content")) {
             element->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
         }
+        if (auto* const border = document_->GetElementById("left-frame-border"))
+            border->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
+        applyLeftDockResizeIndicator();
+        applySplitDividerOverlay();
         applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
     }
@@ -891,7 +896,7 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("split-divider-overlay")) {
             overlay->SetClass("hidden", !split_divider_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x));
+            overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x - viewport_content_offset_));
             overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y));
             overlay->SetProperty("width", std::format("{:.1f}px", std::max(split_divider_overlay_.width, 0.0f)));
             overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
@@ -907,6 +912,9 @@ namespace lfs::vis::gui {
                 document_->GetElementById("left-dock-resize-indicator")) {
             indicator->SetClass("hidden", !left_dock_resize_visible_);
             indicator->SetClass("active", left_dock_resize_active_);
+            indicator->SetProperty(
+                "left",
+                std::format("{:.1f}px", viewport_content_offset_ - left_dock_resize_thickness_));
             indicator->SetProperty(
                 "width",
                 std::format("{:.1f}px", left_dock_resize_thickness_));
@@ -1002,10 +1010,6 @@ namespace lfs::vis::gui {
 
         if (auto* const overlay = document_->GetElementById("project-drop-overlay")) {
             overlay->SetClass("hidden", !project_drag_overlay_.visible);
-            overlay->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
-            overlay->SetProperty(
-                "width",
-                std::format("{:.1f}px", std::max(vp_size_.x - viewport_content_offset_, 0.0f)));
         }
         if (auto* const title = document_->GetElementById("project-drop-title"))
             title->SetClass("hidden", project_drag_overlay_.gallery_scene);
@@ -1322,6 +1326,9 @@ namespace lfs::vis::gui {
         for (auto* child : children_to_move)
             wrapper->AppendChild(body->RemoveChild(child));
 
+        viewport_content_offset_dirty_ = true;
+        toolbar_roots_dirty_ = true;
+        updateViewportContentOffset();
         applyGTMetricsOverlay();
         applySplitDividerOverlay();
         applyLeftDockResizeIndicator();
@@ -1459,7 +1466,8 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
-        const bool builtin_document_sync_due = document_sync_dirty_;
+        const bool builtin_document_sync_due = document_sync_dirty_ ||
+                                               lfs::python::has_pending_rml_document_updates(document_);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);
@@ -1524,8 +1532,10 @@ namespace lfs::vis::gui {
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
         updateViewportContentOffset();
+        const bool python_document_dirty = lfs::python::consume_pending_rml_document_updates(document_);
         const bool document_force = theme_changed || size_changed || toolbar_changed;
         bool document_dirty = syncBuiltinDocument(document_force);
+        document_dirty |= python_document_dirty;
         const bool run_prepend_document_hooks = shouldRunDocumentHooks(document_force, true);
         const bool run_append_document_hooks = shouldRunDocumentHooks(document_force, false);
         if (run_prepend_document_hooks || run_append_document_hooks) {

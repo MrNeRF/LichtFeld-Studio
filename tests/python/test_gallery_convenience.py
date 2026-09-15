@@ -45,7 +45,7 @@ def test_gallery_quota_requires_server_usage(convenience):
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
     assert panel._gallery_quota() == '12.3 GB of 50 GB used'
     panel._gallery_state.update(quotaBytes=100, usedBytes=None)
-    assert panel._gallery_quota_values() == (None, 0)
+    assert panel._gallery_quota() == ''
     panel._gallery_state["usedBytes"] = 84
     local['file_size_bytes'] = 20
     assert 'may not fit' in panel._gallery_quota_warning()
@@ -64,7 +64,7 @@ def test_completion_actions_pin_scene_and_expire_without_focus(convenience, monk
     panel._select_asset_id('remote:remote-only')
     panel._gallery_command('toast_copy')
     assert calls == [(remote, 'copy')]
-    assert panel._gallery_toast_timer.interval == 8
+    assert panel._gallery_toast_timer.interval == 6
     panel._gallery_toast_timer.function()
     assert panel._gallery_toast is None
 
@@ -171,7 +171,7 @@ def test_update_all_one_public_confirmation_continues_after_item_failure(gallery
     failures = [j for j in controller.snapshot()['jobs'] if j.get('batchFailure')]
     assert len(failures) == 1 and failures[0]['project'] == 'project0'
     assert failures[0]['message'] == 'Missing source payload'
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     row = next(r for r in transfer_rows(controller.snapshot()) if r['id'] == failures[0]['id'])
     assert row['can_resume'] and row['can_cancel']
 
@@ -320,6 +320,7 @@ def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monke
 def test_publish_opens_dialog_with_current_format_and_selected_file(convenience, monkeypatch):
     from lfs_plugins import gallery_file_panel
     panel, asset, _ = convenience
+    panel._gallery_state['links'] = {}
     opened = []
     panel._gallery_controller = SimpleNamespace(upload_format='spz')
     monkeypatch.setattr(gallery_file_panel, 'open_gallery_file_panel', lambda **kw: opened.append(kw))

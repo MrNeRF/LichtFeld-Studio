@@ -482,7 +482,7 @@ namespace lfs::vis::gui {
     } // namespace
 
     SceneGraphElement::SceneGraphElement(const Rml::String& tag) : Rml::Element(tag) {
-        SetAttribute("tab-index", "0");
+        SetAttribute("tabindex", "0");
     }
 
     bool SceneGraphElement::ownsContextMenuAction(const std::string_view action) {
@@ -1691,7 +1691,7 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::focusTree() {
         if (rename_node_id_ == core::NULL_NODE) {
-            SetProperty("tab-index", "0");
+            SetAttribute("tabindex", "0");
             Focus();
         }
     }

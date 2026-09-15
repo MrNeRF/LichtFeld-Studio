@@ -394,6 +394,7 @@ TEST_F(PanelLayoutRenderDemandTest, LeftDockReservationAppliesOnTheFramePanelBec
     const auto disabled = layout.computeBottomDockHorizontalLayout(true, false, s);
     EXPECT_FLOAT_EQ(disabled.x, closed.x);
     EXPECT_FLOAT_EQ(disabled.width, closed.width);
+    PanelRegistry::instance().set_panel_enabled("test.left", true);
 }
 
 TEST_F(PanelLayoutRenderDemandTest, FloatingViewportAnchorStaysInViewportHole) {
@@ -541,4 +542,104 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockAndSequencerChangesPublishToolbarG
     EXPECT_EQ(generation.get(), initial + 3);
     layout.setShowSequencer(false);
     EXPECT_EQ(generation.get(), initial + 4);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
+    using namespace lfs::vis::gui;
+
+    auto projects = registerPanel("lfs.asset_manager", PanelSpace::LeftDock, 100.0f);
+    auto& reg = PanelRegistry::instance();
+    const float previous_dpi = lfs::python::get_shared_dpi_scale();
+    for (const float dpi : {1.0f, 1.5f}) {
+        SCOPED_TRACE(dpi);
+        lfs::python::set_shared_dpi_scale(dpi);
+        PanelLayoutManager layout;
+        UIContext ui;
+        PanelDrawContext ctx;
+        ctx.ui = &ui;
+        PanelInputState input;
+        const ScreenState s{.work_pos = {23.0f, 31.0f}, .work_size = {3000.0f, 1800.0f}};
+        for (const float width : {320.0f, 500.0f, 760.0f, 1100.0f}) {
+            SCOPED_TRACE(width);
+            layout.setLeftDockWidth(width * dpi);
+            reg.set_panel_enabled("lfs.asset_manager", true);
+            EXPECT_TRUE(reg.set_panel_space("lfs.asset_manager", PanelSpace::LeftDock));
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto docked = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(docked.panel_x, s.work_pos.x);
+            EXPECT_FLOAT_EQ(docked.panel_width, width * dpi);
+            EXPECT_FLOAT_EQ(docked.toolbar_x, s.work_pos.x + (width + 8.0f) * dpi);
+            EXPECT_FLOAT_EQ(projects->last_draw_x, docked.panel_x);
+            EXPECT_FLOAT_EQ(layout.computeViewportLayout(true, false, false, s).pos.x,
+                            docked.panel_x + docked.panel_width);
+            layout.renderLeftDockCached(ctx, true, false, input, s);
+            EXPECT_FLOAT_EQ(projects->last_cached_x, docked.panel_x);
+            EXPECT_FLOAT_EQ(projects->last_cached_width, docked.panel_width);
+
+            reg.set_panel_enabled("lfs.asset_manager", false);
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto closed = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(closed.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(closed.toolbar_x, s.work_pos.x + 8.0f * dpi);
+
+            reg.set_panel_enabled("lfs.asset_manager", true);
+            EXPECT_TRUE(reg.set_panel_space("lfs.asset_manager", PanelSpace::Floating));
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto floating = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(floating.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(floating.toolbar_x, s.work_pos.x + 8.0f * dpi);
+        }
+
+        registerPanel("test.other.left", PanelSpace::LeftDock, 100.0f);
+        layout.renderLeftDock(ctx, true, false, input, s);
+        const auto other = layout.computeLeftDockLayout(true, false, s);
+        EXPECT_FLOAT_EQ(other.panel_x, s.work_pos.x);
+        EXPECT_FLOAT_EQ(other.toolbar_x, s.work_pos.x + other.panel_width + 8.0f * dpi);
+        EXPECT_GT(other.panel_width, 0.0f);
+        reg.unregister_panel("test.other.left");
+
+        reg.set_panel_space("lfs.asset_manager", PanelSpace::LeftDock);
+        for (const auto [show_main, hidden] : {std::pair{false, false}, std::pair{true, true}}) {
+            const auto hidden_dock = layout.computeLeftDockLayout(show_main, hidden, s);
+            EXPECT_FLOAT_EQ(hidden_dock.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(hidden_dock.toolbar_x, s.work_pos.x + 8.0f * dpi);
+        }
+    }
+    lfs::python::set_shared_dpi_scale(previous_dpi);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand) {
+    using namespace lfs::vis::gui;
+
+    auto projects = registerPanel("lfs.asset_manager", PanelSpace::LeftDock, 100.0f);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext ctx;
+    ctx.ui = &ui;
+    PanelInputState input;
+    const auto s = screen();
+    layout.renderLeftDock(ctx, true, false, input, s);
+    const auto before = layout.computeLeftDockLayout(true, false, s);
+    input.mouse_x = before.toolbar_x + 1.0f;
+    input.mouse_y = 200.0f;
+    input.mouse_clicked[0] = true;
+    input.mouse_down[0] = true;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
+    EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), before.panel_width);
+
+    input.mouse_x = before.panel_x + before.panel_width - 2.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_TRUE(layout.isResizeInteractionActive());
+    input.mouse_clicked[0] = false;
+    input.mouse_x += 180.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    const auto after = layout.computeLeftDockLayout(true, false, s);
+    EXPECT_FLOAT_EQ(after.panel_width, before.panel_width + 180.0f);
+    EXPECT_FLOAT_EQ(after.toolbar_x, projects->last_draw_x + projects->last_draw_width +
+                                         8.0f * lfs::python::get_shared_dpi_scale());
+    EXPECT_LE(after.edge_max_x, after.toolbar_x);
+    input.mouse_down[0] = false;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
 }

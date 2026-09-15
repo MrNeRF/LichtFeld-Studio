@@ -10,10 +10,12 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -98,10 +100,10 @@ namespace lfs::core {
         try {
             // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
-            // statics, mirror mult cache, nan-check scratch, …) while the pool
+            // statics, mirror mult cache, nan-check scratch,) while the pool
             // and CUDA context are still usable. After this returns, static/TLS
-            // dtors must find empty holders — otherwise they free after the
-            // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
+            // dtors must find empty holders; otherwise they free after the
+            // Meyers-singleton pool is destroyed causes SIGSEGV (exit 139).
             run_gpu_pre_shutdown_hooks_once();
             g_gpu_process_teardown_started.store(true, std::memory_order_release);
 
@@ -133,10 +135,16 @@ namespace lfs::core {
         std::mutex g_crash_log_mutex;
 
 #ifdef _WIN32
-        HANDLE g_crash_log = INVALID_HANDLE_VALUE;
+        HANDLE open_crash_log() noexcept {
+            if (g_crash_log_path.empty())
+                return INVALID_HANDLE_VALUE;
+            return CreateFileW(g_crash_log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
 
         LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* exception) {
-            if (g_crash_log != INVALID_HANDLE_VALUE) {
+            const HANDLE crash_log = open_crash_log();
+            if (crash_log != INVALID_HANDLE_VALUE) {
                 std::array<char, 256> header{};
                 const DWORD code = exception && exception->ExceptionRecord
                                        ? exception->ExceptionRecord->ExceptionCode
@@ -146,7 +154,7 @@ namespace lfs::core {
                     "LichtFeld Studio unhandled exception 0x%08lx\r\n", code);
                 DWORD written = 0;
                 if (length > 0) {
-                    WriteFile(g_crash_log, header.data(), static_cast<DWORD>(length), &written, nullptr);
+                    WriteFile(crash_log, header.data(), static_cast<DWORD>(length), &written, nullptr);
                 }
 
                 std::array<void*, 64> frames{};
@@ -156,24 +164,29 @@ namespace lfs::core {
                     const int frame_length = std::snprintf(
                         header.data(), header.size(), "  #%u %p\r\n", i, frames[i]);
                     if (frame_length > 0) {
-                        WriteFile(g_crash_log, header.data(),
+                        WriteFile(crash_log, header.data(),
                                   static_cast<DWORD>(frame_length), &written, nullptr);
                     }
                 }
-                FlushFileBuffers(g_crash_log);
+                FlushFileBuffers(crash_log);
+                CloseHandle(crash_log);
             }
             return EXCEPTION_CONTINUE_SEARCH;
         }
 #else
-        int g_crash_log_fd = -1;
+        int open_crash_log() noexcept {
+            if (g_crash_log_path.empty())
+                return -1;
+            return ::open(g_crash_log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        }
 
-        void write_signal_text(const char* text, const size_t length) noexcept {
-            if (g_crash_log_fd < 0) {
+        void write_signal_text(const int fd, const char* text, const size_t length) noexcept {
+            if (fd < 0) {
                 return;
             }
             size_t offset = 0;
             while (offset < length) {
-                const ssize_t written = ::write(g_crash_log_fd, text + offset, length - offset);
+                const ssize_t written = ::write(fd, text + offset, length - offset);
                 if (written <= 0) {
                     return;
                 }
@@ -193,30 +206,33 @@ namespace lfs::core {
             static constexpr char UNKNOWN_HEADER[] =
                 "LichtFeld Studio fatal signal; backtrace follows\n";
 
+            const int fd = open_crash_log();
             switch (signal_number) {
             case SIGSEGV:
-                write_signal_text(SIGSEGV_HEADER, sizeof(SIGSEGV_HEADER) - 1);
+                write_signal_text(fd, SIGSEGV_HEADER, sizeof(SIGSEGV_HEADER) - 1);
                 break;
             case SIGABRT:
-                write_signal_text(SIGABRT_HEADER, sizeof(SIGABRT_HEADER) - 1);
+                write_signal_text(fd, SIGABRT_HEADER, sizeof(SIGABRT_HEADER) - 1);
                 break;
             case SIGFPE:
-                write_signal_text(SIGFPE_HEADER, sizeof(SIGFPE_HEADER) - 1);
+                write_signal_text(fd, SIGFPE_HEADER, sizeof(SIGFPE_HEADER) - 1);
                 break;
             case SIGBUS:
-                write_signal_text(SIGBUS_HEADER, sizeof(SIGBUS_HEADER) - 1);
+                write_signal_text(fd, SIGBUS_HEADER, sizeof(SIGBUS_HEADER) - 1);
                 break;
             default:
-                write_signal_text(UNKNOWN_HEADER, sizeof(UNKNOWN_HEADER) - 1);
+                write_signal_text(fd, UNKNOWN_HEADER, sizeof(UNKNOWN_HEADER) - 1);
                 break;
             }
 
-            // backtrace_symbols_fd writes directly to the pre-opened descriptor. glibc may
+            // glibc may
             // lazily load unwind support on its first backtrace(), so installation prewarms it.
             std::array<void*, 128> frames{};
             const int count = ::backtrace(frames.data(), static_cast<int>(frames.size()));
-            if (g_crash_log_fd >= 0 && count > 0) {
-                ::backtrace_symbols_fd(frames.data(), count, g_crash_log_fd);
+            if (fd >= 0 && count > 0) {
+                ::backtrace_symbols_fd(frames.data(), count, fd);
+                if (fd >= 0)
+                    ::close(fd);
             }
 
             struct sigaction action {};
@@ -240,7 +256,7 @@ namespace lfs::core {
 
         // Shared by the terminate handler and the dispatch firewall: describes
         // whatever exception is active in the calling catch block and emits it
-        // through the standard failure-report path. Best effort — swallows its
+        // through the standard failure-report path. Best effort: swallows its
         // own failures so callers can rely on it never throwing.
         void report_current_exception(const std::string_view family,
                                       const std::string_view contract,
@@ -293,24 +309,31 @@ namespace lfs::core {
         try {
             const std::lock_guard lock(g_crash_log_mutex);
 #ifdef _WIN32
-            if (g_crash_log == INVALID_HANDLE_VALUE)
+            const HANDLE crash_log = open_crash_log();
+            if (crash_log == INVALID_HANDLE_VALUE)
                 return;
             size_t offset = 0;
             while (offset < text.size()) {
                 const DWORD chunk = static_cast<DWORD>(std::min<size_t>(text.size() - offset, MAXDWORD));
                 DWORD written = 0;
-                if (!WriteFile(g_crash_log, text.data() + offset, chunk, &written, nullptr) || written == 0)
+                if (!WriteFile(crash_log, text.data() + offset, chunk, &written, nullptr) || written == 0) {
+                    CloseHandle(crash_log);
                     return;
+                }
                 offset += written;
             }
             DWORD written = 0;
-            WriteFile(g_crash_log, "\n", 1, &written, nullptr);
-            FlushFileBuffers(g_crash_log);
+            WriteFile(crash_log, "\n", 1, &written, nullptr);
+            FlushFileBuffers(crash_log);
+            CloseHandle(crash_log);
 #else
-            write_signal_text(text.data(), text.size());
-            write_signal_text("\n", 1);
-            if (g_crash_log_fd >= 0)
-                (void)::fsync(g_crash_log_fd);
+            const int fd = open_crash_log();
+            write_signal_text(fd, text.data(), text.size());
+            write_signal_text(fd, "\n", 1);
+            if (fd >= 0) {
+                (void)::fsync(fd);
+                ::close(fd);
+            }
 #endif
         } catch (...) {
             // LFS-CENSUS-OK(empty-catch): A diagnostic sink failure must not recurse
@@ -325,25 +348,30 @@ namespace lfs::core {
                 return;
             }
 
+            const auto paths = UserPaths::resolve();
+            if (paths) {
+                std::error_code error;
+                std::filesystem::create_directories(paths->logDir(), error);
+                if (!error) {
+                    const auto date = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
 #ifdef _WIN32
-            std::array<wchar_t, MAX_PATH> temp_path{};
-            const DWORD length = GetTempPathW(static_cast<DWORD>(temp_path.size()), temp_path.data());
-            const std::filesystem::path base = length > 0 && length < temp_path.size()
-                                                   ? std::filesystem::path(temp_path.data())
-                                                   : std::filesystem::current_path();
-            g_crash_log_path = base / std::format("lichtfeld-studio-crash-{}.log", GetCurrentProcessId());
-            g_crash_log = CreateFileW(g_crash_log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
-                                      nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    const auto pid = GetCurrentProcessId();
+#else
+                    const auto pid = ::getpid();
+#endif
+                    g_crash_log_path = paths->logDir() /
+                                       std::format("lichtfeld-studio-crash-{:%Y-%m-%d-%H%M%S}-{}.log", date, pid);
+                } else {
+                    std::fprintf(stderr, "Could not create crash log directory: %s\n", error.message().c_str());
+                }
+            } else {
+                std::fprintf(stderr, "Could not resolve LichtFeld home for crash logs\n");
+            }
+#ifdef _WIN32
             SetUnhandledExceptionFilter(unhandled_exception_filter);
 #else
-            g_crash_log_path = std::filesystem::temp_directory_path() /
-                               std::format("lichtfeld-studio-crash-{}.log", ::getpid());
-            g_crash_log_fd = ::open(g_crash_log_path.c_str(),
-                                    O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0600);
-            if (g_crash_log_fd >= 0) {
-                std::array<void*, 1> warmup{};
-                (void)::backtrace(warmup.data(), static_cast<int>(warmup.size()));
-            }
+            std::array<void*, 1> warmup{};
+            (void)::backtrace(warmup.data(), static_cast<int>(warmup.size()));
 
             struct sigaction action {};
             action.sa_handler = fatal_signal_handler;
@@ -354,10 +382,6 @@ namespace lfs::core {
             }
 #endif
 
-            write_crash_diagnostic(
-                "LichtFeld Studio crash diagnostics initialized.\n"
-                "Records native crashes and the first report of each handled failure.\n"
-                "A forced process termination cannot invoke a crash handler.");
             std::set_terminate(terminate_handler);
             const std::string path = g_crash_log_path.string();
             std::fprintf(stderr, "Crash diagnostics: %s\n", path.c_str());

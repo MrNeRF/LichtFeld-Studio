@@ -206,8 +206,8 @@ namespace lfs::vis::gui {
         }
 
         float clampedFloatingPanelWidth(const float initial_width, const float anchor_width,
-                                        const float dpi) {
-            const float min_panel_width = 320.0f * dpi;
+                                        const float dpi, const float minimum_width = 320.0f) {
+            const float min_panel_width = minimum_width * dpi;
             const float max_panel_width = std::max(min_panel_width, anchor_width);
             const float w = initial_width > 0.0f ? initial_width : 560.0f * dpi;
             return std::clamp(w, min_panel_width, max_panel_width);
@@ -228,8 +228,9 @@ namespace lfs::vis::gui {
                                                  const bool auto_center,
                                                  const bool park_at_bottom,
                                                  const float dpi,
-                                                 const float override_height = 0.0f) {
-            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi);
+                                                 const float override_height = 0.0f,
+                                                 const float minimum_width = 320.0f) {
+            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi, minimum_width);
             const float h = override_height > 0.0f
                                 ? override_height
                                 : (initial_height > 0.0f ? initial_height : 400.0f * dpi);
@@ -717,7 +718,8 @@ apply_registered_chrome:
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi);
+            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi,
+                                                snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             const float max_h = snap.initial_height > 0
                                     ? std::min(snap.initial_height, anchor.height)
                                     : anchor.height;
@@ -800,7 +802,8 @@ apply_registered_chrome:
                                                      auto_center,
                                                      in_viewport,
                                                      dpi,
-                                                     h);
+                                                     h,
+                                                     snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             w = box.width;
             h = box.height;
             px = box.x;
@@ -912,7 +915,7 @@ apply_registered_chrome:
                         float drawn_h = layout.drawn_height;
                         bool has_user_height = layout.has_user_height;
 
-                        const float kMinPanelWidth = 320.0f * dpi;
+                        const float kMinPanelWidth = (snap.id == "lfs.asset_manager" ? 260.0f : 320.0f) * dpi;
                         const float kMinPanelHeight = 180.0f * dpi;
 
                         {
@@ -1726,8 +1729,8 @@ apply_registered_chrome:
                             interaction.x = NAN;
                             interaction.y = NAN;
                             interaction.auto_center = true;
-                            resetFloatingPanelSize(
-                                p, interaction, floatingUiScale());
+                            // initial_width/height retain the last floating
+                            // size while a panel is temporarily hidden.
                             bring_floating_panel_to_front_locked(p);
                         }
                     } else if (!enabled) {
@@ -2077,20 +2080,24 @@ apply_registered_chrome:
                 if (!validatePanelContract(p, new_space))
                     return false;
                 const bool was_floating = p.space == PanelSpace::Floating;
+                const bool space_changed = p.space != new_space;
                 requested_project_floating_state_.erase(p.id);
                 p.space = new_space;
+                if (space_changed && p.panel)
+                    p.panel->on_layout_changed();
                 ++visibility_revision_;
                 if (!was_floating && new_space == PanelSpace::Floating) {
                     auto& interaction = ensure_floating_interaction_locked(p);
                     interaction.x = NAN;
                     interaction.y = NAN;
                     interaction.auto_center = true;
-                    resetFloatingPanelSize(p, interaction, floatingUiScale());
+                    // Keep a user's floating width when the panel is docked and
+                    // opened again. The original size is already present for a
+                    // panel that has never been resized.
+                    interaction.user_height = 0.0f;
                     writeProvisionalFloatingBounds(p, interaction);
                     bring_floating_panel_to_front_locked(p);
                 } else if (was_floating && new_space != PanelSpace::Floating) {
-                    p.initial_width = p.original_width;
-                    p.initial_height = p.original_height;
                     floating_interactions_.erase(p.id);
                 }
                 return true;

@@ -209,4 +209,7 @@ def test_saved_publication_metadata_uses_embedded_hdr_without_live_view(tmp_path
     staging.mkdir()
     shutil.copyfile(Path(__file__).parents[1] / 'data' / 'portable-sog.licht', staging / 'project.licht')
     result = gallery_preparation.publication_view_metadata(tmp_path, staging)
-    assert result == {'environment': {'exposure': -1.25, 'rotation': 123.0}}
+    assert result['environment'] == {'exposure': -1.25, 'rotation': 123.0}
+    assert result['exposure'] == pytest.approx(0.7)
+    assert result['camera']['position'] == [-2.0, 2.0, -6.0]
+    assert result['verticalFov'] is True

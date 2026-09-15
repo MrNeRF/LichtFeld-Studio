@@ -2712,6 +2712,8 @@ namespace lfs::python {
                         ci.is_submenu_item = nb::cast<bool>(d["is_submenu_item"]);
                     if (d.contains("is_active"))
                         ci.is_active = nb::cast<bool>(d["is_active"]);
+                    if (d.contains("icon"))
+                        ci.icon = nb::cast<std::string>(d["icon"]);
                     vec.push_back(std::move(ci));
                 }
 
@@ -3324,6 +3326,16 @@ namespace lfs::python {
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
+
+        m.def(
+            "save_project_file_dialog",
+            [](const std::string& default_name, const std::string& start_dir) -> std::string {
+                const auto result = lfs::vis::gui::SaveProjectFileDialog(
+                    default_name, lfs::core::utf8_to_path(start_dir));
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
+            "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
 
         m.def(
             "open_ply_file_dialog",
@@ -5330,6 +5342,8 @@ namespace lfs::python {
                 }
                 if (!result)
                     return std::string(result.error().user_message());
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
                 return {};
             },
             nb::arg("path"),
@@ -5340,6 +5354,8 @@ namespace lfs::python {
             [] {
                 nb::gil_scoped_release release;
                 vis::clearProjectLocationPreference();
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
             },
             "Clear the project location preference so the default is used.");
 
@@ -5498,6 +5514,8 @@ namespace lfs::python {
                 }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
+
+        m.def("resource_directory", []() { return lfs::core::path_to_utf8(lfs::core::getResourceBaseDir()); }, "Directory containing the bundled UI resources");
 
         m.def(
             "get_current_language",

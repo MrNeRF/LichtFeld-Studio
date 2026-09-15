@@ -24,7 +24,7 @@ __lfs_panel_classes__ = ["BugReportPanel"]
 __lfs_panel_ids__ = ["lfs.bug_report"]
 
 _ERROR_TRANSLATION_KEYS = {
-    "unsafe_portal_url": "asset_manager.gallery.error.unsafe_url",
+    "unsafe_portal_url": "projects.gallery.error.unsafe_url",
     "access_denied": "account.error.access_denied",
     "authorization_pending": "account.error.authorization_pending",
     "expired_token": "account.error.expired_token",

@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Transfer boundaries: redirects, local files, account changes and pagination."""
 import io
+import hashlib
+import os
+from pathlib import Path
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +16,59 @@ import pytest
 
 from lfs_plugins import http, portal_gallery
 from lfs_plugins.portal_account import PortalHTTPError, PortalProtocolError
+
+
+@pytest.mark.parametrize("representation", [False, True], ids=["legacy", "representation"])
+@pytest.mark.parametrize("swap", ["identity", "path", "appeared"])
+def test_download_rechecks_destination_before_replacement(tmp_path, monkeypatch, representation, swap):
+    from lichtfeld import io as native_io
+
+    data = (Path(__file__).parents[1] / "data" / "portable-sog.licht").read_bytes()
+    target = tmp_path / "项目-é.licht"
+    target.write_bytes(data)
+    replacement = tmp_path / "replacement.licht"
+    native_io.restore_save(target, 1, replacement)
+    replacement_bytes = replacement.read_bytes()
+    if swap == "appeared":
+        target.unlink()
+    identifier = str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p",
+                 contentLength=len(data), sourceFormat="licht", viewerSettings={})
+    choice = dict(representationId="pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                  format="licht", status="ready")
+
+    def request(method, path, body=None, **kwargs):
+        if path.endswith("download-options"):
+            return {"representations": [choice]} if representation else {}
+        if path.endswith("/download"):
+            return {"url": "https://portal.lichtfeld.io/data", "scene": scene}
+        return scene
+
+    def response(method, path, **kwargs):
+        start, end = map(int, kwargs["headers"]["Range"].removeprefix("bytes=").split("-"))
+        return 206, {"Content-Range": f"bytes {start}-{end}/{len(data)}"}, data[start:end + 1]
+
+    account = SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=request,
+                              request_response_authenticated=response)
+    client = portal_gallery.PortalGalleryClient(account)
+    client.max_file_bytes = len(data) * 2
+    monkeypatch.setattr(portal_gallery, "urlopen", lambda *args, **kwargs: io.BytesIO(data))
+    swapped = False
+
+    def progress(*_args):
+        nonlocal swapped
+        if swapped:
+            return
+        swapped = True
+        if swap == "path":
+            target.unlink()
+            target.symlink_to(replacement)
+        else:
+            os.replace(replacement, target)
+
+    with pytest.raises(ValueError, match="identity or path changed"):
+        client.download(identifier, target, on_progress=progress)
+    assert swapped and target.read_bytes() == replacement_bytes
 
 def test_upload_resumes_server_processing_without_sending_parts(tmp_path):
     identifier = str(uuid.uuid4())
@@ -158,7 +214,7 @@ def test_old_portal_cannot_silently_create_instead_of_replace(tmp_path):
         portal_gallery.PortalGalleryClient(account).upload(export, {"title": "Edited", "replaceSceneId": str(uuid.uuid4())})
     assert requests == [("GET", "/api/gallery/v1/me")]
 
-def _domain_client(version=1, changed=None):
+def _domain_client(changed=None):
     scene_id = str(uuid.uuid4())
     scene = {"id": scene_id, "revision": "reviewed", "contentRevision": "content-old", "metadataRevision": "metadata-old"}
     calls = []
@@ -166,7 +222,7 @@ def _domain_client(version=1, changed=None):
         import copy
         calls.append((method, path, copy.deepcopy(body)))
         if path.endswith("/me"):
-            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1, **({"revisionDomains": version} if version else {})}
+            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1}
         writes = sum(call[0] != "GET" for call in calls)
         if changed and writes == 1:
             raise PortalHTTPError(409, "sync_conflict", detail={"changedDomains": changed,
@@ -179,10 +235,9 @@ def _domain_client(version=1, changed=None):
         request_json_authenticated=request, request_response_authenticated=response))
     return client, scene, calls
 
-@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("operation,domains", [("metadata", {"metadata"}), ("camera", {"content", "metadata"}), ("delete", {"content", "metadata"})])
-def test_capability_selects_exactly_one_guard_style(version, operation, domains):
-    client, scene, calls = _domain_client(version)
+def test_capability_selects_exactly_one_guard_style(operation, domains):
+    client, scene, calls = _domain_client()
     if operation == "delete":
         client.delete(scene["id"], scene)
     else:
@@ -191,9 +246,9 @@ def test_capability_selects_exactly_one_guard_style(version, operation, domains)
     assert set(body["baseRevisions"]) == domains
     assert "baseRevision" not in body
 
-@pytest.mark.parametrize('changed', [['content'], ['metadata']])
 @pytest.mark.parametrize('operation', ['update', 'delete'])
-def test_domain_conflict_preserves_details_without_retry(changed, operation):
+def test_domain_conflict_preserves_details_without_retry(operation):
+    changed = ['content', 'metadata']
     client, scene, calls = _domain_client(changed=changed)
     with pytest.raises(PortalHTTPError) as error:
         if operation == 'update':
@@ -230,9 +285,9 @@ def test_listing_validator_only_on_first_page_and_304():
         calls.append((path, kwargs["headers"]))
         return next(responses)
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
-    assert client.list_scenes(etag='W/"old"') == [{"id": "a"}, {"id": "b"}]
+    assert client.list_scenes(etag='W/"old"', owner_wide=True) == [{"id": "a"}, {"id": "b"}]
     assert client.list_etag == 'W/"first"'
-    assert client.list_scenes(etag=client.list_etag) is None
+    assert client.list_scenes(etag=client.list_etag, owner_wide=True) is None
     assert calls == [(portal_gallery.API + "/splats", {"If-None-Match": 'W/"old"'}),
                      (portal_gallery.API + "/splats?cursor=cursor", {}),
                      (portal_gallery.API + "/splats", {"If-None-Match": 'W/"first"'})]
@@ -282,9 +337,9 @@ def test_bounded_authenticated_response_rejects_oversized_thumbnail(tmp_path, mo
     with pytest.raises(PortalProtocolError, match="size limit"):
         service._request_json("GET", "/thumbnail", response_options={"max_bytes": 4})
 
-@pytest.mark.parametrize('changed', [['content'], ['metadata']])
 @pytest.mark.parametrize('background', [False, True])
-def test_upload_conflicts_preserve_details_without_automatic_rebase(tmp_path, changed, background):
+def test_upload_conflicts_preserve_details_without_automatic_rebase(tmp_path, background):
+    changed = ['content', 'metadata']
     identifier, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
     calls = []
     parts = [{'partNumber': 1, 'etag': 'part', 'size': 8}]
@@ -322,7 +377,7 @@ def test_expired_listing_restarts_unconditionally_once():
         return 200, {"ETag": 'W/"new"'}, json.dumps({"scenes": [], "nextCursor": "expired"}).encode()
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
     with pytest.raises(PortalHTTPError):
-        client.list_scenes(etag='W/"old"')
+        client.list_scenes(etag='W/"old"', owner_wide=True)
     assert len(calls) == 4
     assert calls[0][1] == {"If-None-Match": 'W/"old"'}
     assert all(not headers for _, headers in calls[1:])
@@ -332,3 +387,164 @@ def test_cached_scene_tokens_cannot_override_an_older_review():
     with pytest.raises(PortalProtocolError, match="Missing gallery revision tokens"):
         client.update(scene["id"], "older-review", title="Edited")
     assert all(call[0] == "GET" for call in calls)
+
+
+def test_old_portal_check_sees_title_changed_on_scene_101():
+    import json
+    calls, title = [], ["Before"]
+    def response(method, path, **kwargs):
+        calls.append((path, kwargs["headers"]))
+        assert not kwargs["headers"]
+        page = ({"scenes": [{"id": str(i)} for i in range(100)], "nextCursor": "page2"}
+                if "cursor=" not in path else {"scenes": [{"id": "101", "title": title[0]}], "nextCursor": None})
+        return 200, {"ETag": '"unchanged-page-one"'}, json.dumps(page).encode()
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_response_authenticated=response))
+    assert client.list_scenes()[-1]["title"] == "Before"
+    title[0] = "After"
+    assert client.list_scenes(etag=client.list_etag)[-1]["title"] == "After"
+    assert len(calls) == 4
+
+
+def test_change_feed_walk_pins_sequence_and_rejects_repeated_cursor():
+    pages = iter([
+        {"changeSequence": 12, "nextSince": 11, "changes": [dict(changeSequence=11, type="upsert", sceneId="s", scene={"id": "s"})]},
+        {"changeSequence": 12, "nextSince": None, "changes": [dict(changeSequence=12, type="delete", sceneId="s", scene={"id": "s"})]},
+    ])
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=lambda *_: next(pages)))
+    assert len(client.changes_since(10)) == 2
+    assert client.change_sequence == 12
+    client._request = lambda *_: {"changeSequence": 12, "changes": [], "nextSince": 10}
+    with pytest.raises(PortalProtocolError, match="pagination"):
+        client.changes_since(10)
+
+
+def test_origin_lookup_and_share_links_are_owner_scoped():
+    identifier, calls = str(uuid.uuid4()), []
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        if "originProjectUuid" in path:
+            return {"scenes": [], "nextCursor": None, "changeSequence": 1}
+        if method == "GET":
+            return {"links": []}
+        return {"id": "link", "url": "https://portal.example/gallery/share/example/", "expiresAt": None}
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
+    client.list_scenes(origin_project_uuid=identifier)
+    assert client.share_link_details(identifier)["expiresAt"] is None
+    assert calls[0][1].endswith("originProjectUuid=" + identifier)
+    assert calls[-1][2] == {"expiresIn": "never"}
+
+
+def test_pinned_download_uses_authenticated_ranges_and_checks_digest(tmp_path, monkeypatch):
+    import hashlib
+    data, identifier = b"viewing copy", str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p")
+    choice = dict(representationId="project-pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(), format="licht", status="ready")
+    calls = []
+    def request(method, path, body=None, **kwargs):
+        return {"representations": [choice]} if path.endswith("download-options") else scene
+    def response(method, path, **kwargs):
+        calls.append((path, kwargs))
+        assert kwargs["headers"]["Range"] == f"bytes=0-{len(data)-1}"
+        return 206, {"Content-Range": f"bytes 0-{len(data)-1}/{len(data)}"}, data
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=request, request_response_authenticated=response), expected_session=("test", "session"))
+    client.max_file_bytes = 1024
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *_: None)
+    target = tmp_path / "new.licht"
+    client.download(identifier, target)
+    assert target.read_bytes() == data
+    assert calls[0][1]["expected_session"] == ("test", "session")
+    choice["sha256"] = "0" * 64
+    with pytest.raises(portal_gallery.GalleryTransferInvalid, match="checksum"):
+        client.download(identifier, tmp_path / "bad.licht")
+    assert not (tmp_path / "bad.licht").exists()
+
+
+def test_pinned_download_storage_redirect_never_forwards_account_token(tmp_path, monkeypatch):
+    import hashlib
+    data, identifier = b"viewing copy", str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p")
+    choice = dict(representationId="pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(), format="licht", status="ready")
+    location = ["https://storage.example/viewing.licht?signature=test"]
+    def request(method, path, body=None, **kwargs):
+        return {"representations": [choice]} if path.endswith("download-options") else scene
+    def response(method, path, **kwargs):
+        assert kwargs["allow_redirect"] is True
+        return 302, {"Location": location[0]}, b""
+    def storage(request, **kwargs):
+        assert request.get_header("Authorization") is None
+        assert request.get_header("Range") == f"bytes=0-{len(data)-1}"
+        assert kwargs["no_redirect"] is True
+        result = io.BytesIO(data)
+        result.status = 206
+        result.headers = {"Content-Range": f"bytes 0-{len(data)-1}/{len(data)}"}
+        return result
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request, request_response_authenticated=response))
+    client.storage_hosts = ["storage.example"]
+    client.max_file_bytes = 1024
+    monkeypatch.setattr(portal_gallery, "urlopen", storage)
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *_: None)
+    target = tmp_path / "new.licht"
+    client.download(identifier, target)
+    assert target.read_bytes() == data
+    location[0] = "https://untrusted.example/data"
+    with pytest.raises(PortalProtocolError):
+        client.download(identifier, tmp_path / "unsafe.licht")
+
+
+@pytest.mark.parametrize('method,attempts', [('GET', 4), ('HEAD', 1), ('POST', 1)])
+def test_only_get_requests_retry_transient_failures(monkeypatch, method, attempts):
+    from lfs_plugins import portal_account, portal_retry
+    service = object.__new__(portal_account.PortalAccountService)
+    service._current_credentials = lambda: None
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise PortalHTTPError(503, 'busy')
+    service._request_json_once = fail
+    monkeypatch.setattr(portal_retry.time, 'sleep', lambda _delay: None)
+    with pytest.raises(PortalHTTPError):
+        service._request_json(method, '/uploads/id/complete', {'idempotencyKey': 'key'}, timeout=7)
+    assert len(calls) == attempts
+    assert all(kwargs['timeout'] == 7 for _args, kwargs in calls)
+
+
+def test_expired_authorization_refresh_does_not_repeat_a_post(monkeypatch):
+    from lfs_plugins.portal_account import PortalAccountService
+    service = object.__new__(PortalAccountService)
+    credentials = SimpleNamespace(access_token='old', connection_enabled=True)
+    service._current_credentials = lambda: credentials
+    service.snapshot = lambda: SimpleNamespace(disconnecting=False)
+    calls = []
+    def fail(*args, **_kwargs):
+        calls.append(args[0])
+        raise PortalHTTPError(401, 'invalid_token')
+    service._request_with_bearer = fail
+    refreshed = []
+    service._refresh_tokens = lambda token, **_kwargs: refreshed.append(token) or 'ok'
+    with pytest.raises(PortalHTTPError) as failure:
+        service._authenticated_request('POST', '/uploads')
+    assert failure.value.status == 401
+    assert calls == ['POST'] and refreshed == ['old']
+
+
+@pytest.mark.parametrize('status,key', [(401, 'authorization_expired'), (403, 'access'),
+    (404, 'not_found'), (409, 'http_conflict'), (413, 'too_large'), (429, 'portal_busy'), (500, 'server')])
+def test_http_status_reasons_remain_distinct_at_the_ui(monkeypatch, status, key):
+    import json
+    import sys
+    from pathlib import Path
+    from lfs_plugins.gallery_sync import friendly_error
+    from lfs_plugins.gallery_messages import localize_message
+    translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: translations.get(key, key))))
+    expected = translations['projects.gallery.error.' + key]
+    assert localize_message(friendly_error(PortalHTTPError(status, 'reason'))) == expected
+    assert localize_message(friendly_error(urllib.error.HTTPError('https://host', status, 'reason', {}, io.BytesIO()))) == expected
+
+
+def test_gallery_notice_never_contains_a_python_traceback(monkeypatch):
+    import sys
+    from lfs_plugins.gallery_messages import localize_message
+    monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: key)))
+    text = 'Traceback (most recent call last):\n  File "/private/path.py", line 7\nRuntimeError: request marker'
+    assert localize_message(text) == 'request marker'

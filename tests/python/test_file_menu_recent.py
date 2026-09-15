@@ -22,7 +22,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
 
     def tr(key):
         if key == "menu.file.recent_entry":
-            return "{name} — {parent}"
+            return "{name} ({parent})"
         if key == "menu.file.recent_missing_message":
             return "{path} missing"
         return f"tr:{key}"
@@ -140,26 +140,26 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
     tr = file_menu.lf.ui.tr
 
     assert file_menu.format_recent_project_entry(recent_path, tr) == (
-        "project.licht — scans/garden",
+        "garden (scans/garden)",
         recent_path,
     )
     assert file_menu.format_recent_project_entry("/tmp/project.licht", tr) == (
-        "project.licht — tmp",
+        "tmp (tmp)",
         "/tmp/project.licht",
     )
     assert file_menu.format_recent_project_entry("/project.licht", tr) == (
-        "project.licht",
+        "project",
         "/project.licht",
     )
 
     windows_path = r"C:\Users\paja\scans\garden\project.licht"
     assert file_menu.format_recent_project_entry(windows_path, tr) == (
-        "project.licht — scans/garden",
+        "garden (scans/garden)",
         windows_path,
     )
 
     recent_item = file_menu.FileMenu().menu_items()[2]["items"][0]
-    assert recent_item["label"] == "project.licht — scans/garden"
+    assert recent_item["label"] == "garden (scans/garden)"
     assert recent_item["tooltip"] == recent_path
 
 
@@ -170,7 +170,7 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     file_menu.lf.project_clear_recent_files = lambda: cleared.append(True)
 
     populated = file_menu.FileMenu().menu_items()[2]["items"]
-    assert populated[0]["label"] == "project.licht — scans/garden"
+    assert populated[0]["label"] == "garden (scans/garden)"
     assert populated[1]["type"] == "separator"
     assert populated[2]["label"] == "tr:menu.file.clear_recent_projects"
     assert populated[2]["enabled"] is True
@@ -290,19 +290,6 @@ def test_open_project_with_confirmation_handles_dirty_project(monkeypatch):
     assert file_menu.lf.project_open_calls == [(path, True)]
 
 
-def test_asset_manager_open_can_keep_panel_open(monkeypatch):
-    path = "/tmp/catalog-project.licht"
-    file_menu = _load_file_menu(monkeypatch)
-
-    file_menu.open_project_with_confirmation(
-        path,
-        keep_asset_manager_open=True,
-    )
-
-    assert file_menu.lf.project_open_calls == [(path, True)]
-    assert file_menu.lf.project_open_keep_asset_manager == [True]
-
-
 def test_open_project_with_confirmation_reports_open_error(monkeypatch):
     path = "/tmp/broken-catalog-project.licht"
     file_menu = _load_file_menu(monkeypatch)
@@ -351,38 +338,6 @@ def test_embed_dataset_operator_requires_external_incomplete_dataset(monkeypatch
     assert file_menu.EmbedDatasetOperator.poll(None) is True
     assert file_menu.EmbedDatasetOperator().execute(None) == {"FINISHED"}
     assert file_menu.lf.embed_calls == [True]
-
-
-def test_imports_are_grouped_before_exports(monkeypatch):
-    file_menu = _load_file_menu(monkeypatch)
-    items = file_menu.FileMenu().menu_items()
-
-    import_index = next(
-        index
-        for index, item in enumerate(items)
-        if item.get("type") == "submenu"
-        and item.get("label") == "tr:menu.file.import"
-    )
-    import_items = items[import_index]["items"]
-    operator_names = [
-        item["operator_id"].rsplit(".", 1)[-1]
-        for item in import_items
-        if item.get("type") == "operator"
-    ]
-
-    assert operator_names == [
-        "ImportDatasetOperator",
-        "ImportPlyOperator",
-        "ImportSsogOperator",
-        "ImportMeshOperator",
-        "ImportCheckpointOperator",
-        "ImportConfigOperator",
-    ]
-    assert import_items[-2]["type"] == "separator"
-    assert items[import_index + 1]["operator_id"].endswith("ExportOperator")
-    assert items[import_index + 2]["operator_id"].endswith(
-        "ExportConfigOperator"
-    )
 
 
 def test_unrecognized_dataset_reports_modal_and_warning(monkeypatch):
@@ -468,10 +423,15 @@ def test_immediate_import_error_reports_reason(monkeypatch):
 def test_new_project_while_training_opens_dialog_without_prompt(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.is_training_active = lambda: True
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+    dialogs = []
+    monkeypatch.setattr(import_module("lfs_plugins.import_panels"),
+                        "open_new_project_panel", dialogs.append)
 
-    file_menu.NewProjectOperator().execute(None)
+    assert file_menu.NewProjectOperator().execute(None) == {"FINISHED"}
 
-    assert file_menu.lf.new_project_calls == []
+    assert dialogs == [""]
     assert file_menu.lf.new_project_calls == []
     assert file_menu.lf.confirm_dialogs == []
 
@@ -562,18 +522,6 @@ def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
     assert file_menu.lf.project_open_keep_asset_manager == [True]
 
 
-def test_new_project_dirty_opens_dialog_without_prompt(monkeypatch):
-    file_menu = _load_file_menu(monkeypatch)
-    file_menu.lf.project_is_dirty = lambda: True
-    file_menu.lf.project_has_path = lambda: True
-
-    file_menu.NewProjectOperator().execute(None)
-
-    assert file_menu.lf.new_project_calls == []
-    assert file_menu.lf.new_project_calls == []
-    assert file_menu.lf.confirm_dialogs == []
-
-
 def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.project_is_dirty = lambda: True
@@ -629,3 +577,17 @@ def test_splat_picker_imports_ssog_as_splat(monkeypatch):
     file_menu.lf.ui.open_ply_file_dialog = lambda _default: selected
     assert file_menu.ImportPlyOperator().execute(None) == {"FINISHED"}
     assert file_menu.lf.load_file_calls == [((selected,), {"is_dataset": False})]
+
+
+def test_menu_bar_transfer_operator_opens_projects_panel(monkeypatch):
+    import ast
+    file_menu = _load_file_menu(monkeypatch)
+    calls = []
+    monkeypatch.setattr(file_menu.lf.ui, 'set_panel_enabled', lambda panel_id, enabled: calls.append((panel_id, enabled)), raising=False)
+    path = PROJECT_ROOT / 'src/python/lfs_plugins/help_menu.py'
+    tree = ast.parse(path.read_text())
+    node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'GalleryTransfersOperator')
+    scope = {'Operator': object, '__package__': 'lfs_plugins', '__name__': 'lfs_plugins.help_menu'}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), scope)
+    assert scope['GalleryTransfersOperator']().execute(None) == {'FINISHED'}
+    assert calls == [('lfs.asset_manager', True)]

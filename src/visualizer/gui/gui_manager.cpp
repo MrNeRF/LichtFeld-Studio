@@ -3681,7 +3681,9 @@ namespace lfs::vis::gui {
             }
             std::error_code filesystem_error;
             if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
-                if (filesystem_error)
+                if (filesystem_error == std::make_error_code(std::errc::no_such_file_or_directory))
+                    LOG_DEBUG("Unable to inspect window state: {}", filesystem_error.message());
+                else if (filesystem_error)
                     LOG_WARN("Unable to inspect window state: {}", filesystem_error.message());
                 return std::nullopt;
             }
@@ -6611,26 +6613,17 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_live_capture_ = false;
 
         // ── Left Dock ─────────────────────────────────────────────
-        constexpr float ICON_BAR_WIDTH = 40.0f;
-        const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
-        const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
-        const float left_dock_h = show_main_panel_ && !ui_hidden_
-                                      ? screen.work_size.y
-                                      : screen.work_size.y;
-        const float left_dock_edge_grab_w =
-            std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
-                     8.0f * current_ui_scale_);
-        const float left_dock_x = screen.work_pos.x + icon_bar_w;
-        const float left_dock_right_x = panel_layout_.isLeftDockVisible() ? left_dock_x + left_dock_panel_w : -1.0f;
+        auto left_dock_layout = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, screen);
+        const float left_dock_h = screen.work_size.y;
         const bool pointer_over_left_dock =
-            panel_layout_.isLeftDockVisible() &&
+            left_dock_layout.panel_width > 0.0f &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                        glm::vec2{left_dock_x, screen.work_pos.y},
-                        glm::vec2{left_dock_panel_w, left_dock_h});
+                        glm::vec2{left_dock_layout.panel_x, screen.work_pos.y},
+                        glm::vec2{left_dock_layout.panel_width, left_dock_h});
         const bool pointer_over_left_dock_edge =
-            panel_layout_.isLeftDockVisible() &&
-            panel_input.mouse_x >= left_dock_right_x - left_dock_edge_grab_w &&
-            panel_input.mouse_x <= left_dock_right_x + left_dock_edge_grab_w &&
+            left_dock_layout.panel_width > 0.0f &&
+            panel_input.mouse_x >= left_dock_layout.edge_min_x &&
+            panel_input.mouse_x < left_dock_layout.edge_max_x &&
             panel_input.mouse_y >= screen.work_pos.y &&
             panel_input.mouse_y < screen.work_pos.y + left_dock_h;
         const bool pointer_targets_left_dock =
@@ -6659,6 +6652,10 @@ namespace lfs::vis::gui {
         }
         if (!hasMouseButtonDown(sdl_input))
             left_dock_pointer_live_capture_ = false;
+
+        if (left_dock_requires_live_layout) {
+            left_dock_layout = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, screen);
+        }
 
         const bool dock_resize_interaction_active = panel_layout_.isResizeInteractionActive();
         if (dock_resize_interaction_active != dock_resize_interaction_active_) {
@@ -6768,13 +6765,12 @@ namespace lfs::vis::gui {
 
         rml_viewport_overlay_.setToolbarPanels(primary_toolbar_x,
                                                primary_toolbar_width,
+                                               left_dock_layout.toolbar_x - left_dock_layout.panel_x - left_dock_layout.panel_width,
                                                show_secondary_toolbar,
                                                secondary_toolbar_x,
                                                secondary_toolbar_width);
-        const float left_dock_w =
-            ui_hidden_ ? 0.0f : icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
         const glm::vec2 overlay_pos = {screen.work_pos.x, viewport_layout_.pos.y};
-        const glm::vec2 overlay_size = {viewport_layout_.size.x + left_dock_w, viewport_layout_.size.y};
+        const glm::vec2 overlay_size = {viewport_layout_.size.x + viewport_content_offset, viewport_layout_.size.y};
         rml_viewport_overlay_.setViewportBounds(
             overlay_pos, overlay_size,
             {panel_input.screen_x, panel_input.screen_y});
@@ -6973,6 +6969,8 @@ namespace lfs::vis::gui {
             reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
             viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
         }
+        if (pointer_targets_left_dock)
+            viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
             if (!block_underlay_input)

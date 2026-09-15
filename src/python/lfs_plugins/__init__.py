@@ -22,6 +22,15 @@ from .plugin import PluginInfo, PluginInstance, PluginState
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .utils import cleanup_torch_model, get_gpu_memory, log_gpu_memory
 
+# Install the process-wide Python -> native logger bridge before any lazy
+# plugin module creates a child logger.
+try:
+    from . import logging_bridge as _logging_bridge
+    _logging_bridge.install()
+except Exception:
+    import logging
+    logging.getLogger(__name__).exception("Could not install the native logging bridge")
+
 if TYPE_CHECKING:
     from .panels import PluginMarketplacePanel as PluginMarketplacePanel
 

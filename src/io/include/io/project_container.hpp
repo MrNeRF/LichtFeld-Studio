@@ -162,6 +162,9 @@ namespace lfs::io::project {
         Autosave = 2,
         Recovered = 3,
         Compaction = 4,
+        // Inspector classification from generation-scoped PROJ provenance.
+        // Contents writes retain the Explicit wire kind for older readers.
+        Contents = 5,
     };
 
     // Chunk payload entropy encodings (wire u16 / index-row u8).
@@ -398,6 +401,10 @@ namespace lfs::io::project {
     public:
         [[nodiscard]] static lfs::Result<ProjectReader>
         open(const std::filesystem::path& path, const ReaderOptions& options = {});
+        [[nodiscard]] static lfs::Result<ProjectReader>
+        open_generation(const std::filesystem::path& path,
+                        std::uint64_t generation,
+                        const ReaderOptions& options = {});
         [[nodiscard]] static OpenClassification
         classify(const std::filesystem::path& path, const ReaderOptions& options = {});
 
@@ -413,7 +420,10 @@ namespace lfs::io::project {
         [[nodiscard]] const SuperblockInfo& superblock() const noexcept;
         [[nodiscard]] const HeadInfo& selected_head() const noexcept;
         [[nodiscard]] const CommitInfo& commit() const noexcept;
+        [[nodiscard]] std::vector<CommitInfo> lineage() const;
         [[nodiscard]] const std::vector<ChunkInfo>& chunks() const noexcept;
+        [[nodiscard]] lfs::Result<std::vector<std::vector<ChunkInfo>>>
+        lineage_chunks() const;
         [[nodiscard]] const std::vector<std::string>& warnings() const noexcept;
         [[nodiscard]] const std::optional<PreviewLocator>& preview() const noexcept;
         [[nodiscard]] const ReaderOptions& reader_options() const noexcept;
@@ -538,6 +548,7 @@ namespace lfs::io::project {
         // Writers that must not lose their generation to a transient
         // in-process lock holder wait instead of failing immediately.
         std::chrono::milliseconds writer_lock_wait{0};
+        lfs::core::Uuid expected_project_uuid;
     };
 
     struct ChunkWriteOptions {
@@ -563,6 +574,7 @@ namespace lfs::io::project {
     };
 
     struct CompactionOptions {
+        std::optional<WriterLockLease> writer_lock_lease = std::nullopt;
         ReaderOptions compatibility;
         lfs::core::Uuid new_file_uuid;
         // Save As staging may replace the project identity before rewriting
@@ -579,6 +591,11 @@ namespace lfs::io::project {
         // must complete the final append, full CRC verification, and durable
         // publication before exposing it as the destination.
         bool private_staging = false;
+        std::function<void(float, const std::string&)> progress;
+        std::function<bool()> cancel;
+        // Optional PROJ metadata prepared by a closed-file Contents operation.
+        // It is published atomically with the compacted file.
+        std::vector<std::byte> project_chapter_override;
     };
 
     class LFS_IO_API ProjectWriter {

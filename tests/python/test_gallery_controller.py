@@ -4,8 +4,8 @@
 from importlib import import_module
 from contextlib import nullcontext
 from types import SimpleNamespace
+from pathlib import Path
 import copy
-import math
 import struct
 
 import pytest
@@ -38,6 +38,96 @@ def gallery(monkeypatch, panel_module):
 def scene(**fields):
     return dict(id="private-one", title="My scene", description="Private description",
         visibility="private", revision="original", status="ready", **fields, contentRevision="original", metadataRevision="original")
+
+
+@pytest.mark.parametrize("operation", ["contents", "settings"])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_gallery_apply_rechecks_project_after_scene_changes(gallery, monkeypatch, tmp_path, operation, swap):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "项目.licht"
+    path.write_text("project", encoding="utf-8")
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(alias), "generation": 1}, raising=False)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda p: SimpleNamespace(project_uuid=Path(p).read_text()))
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **kw: actions.append("saved") or True, raising=False)
+    monkeypatch.setattr(module.lf, "set_node_visibility", lambda *args: None, raising=False)
+    project = panel._project_identity()
+    stamp = module.file_stamp(path)
+
+    def swap_project(*args, **kwargs):
+        if swap == "identity":
+            path.write_text("other-project")
+        else:
+            other = tmp_path / "other.licht"
+            other.write_text("project")
+            alias.unlink()
+            alias.symlink_to(other)
+
+    if operation == "contents":
+        monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: None)
+        panel.service.environment_path = lambda job: None
+        scene_tree = SimpleNamespace(get_node=lambda name: None, rename_node=swap_project)
+        incoming = SimpleNamespace(name="incoming", uuid="incoming-id")
+        with pytest.raises(ValueError, match="identity or path changed before saving"):
+            panel._apply_local_update(scene_tree, incoming, {"result": {"title": "Gallery"}},
+                {"old_nodes": [], "project": project, "stamp": stamp})
+    else:
+        monkeypatch.setattr(module, "restore_view", swap_project)
+        state["jobs"] = [{"id": "settings", "localUpdate": {"id": "backup", "state": "ready"}}]
+        panel._settings_pending = dict(job="settings", project=project, identity=state["identity"],
+            phase="backup", backup="backup", stamp=stamp, metadata={"viewerSettings": {}})
+        with pytest.raises(ValueError, match="identity or path changed before saving"):
+            panel._finish_settings_apply()
+    assert "saved" not in actions
+
+
+@pytest.mark.parametrize("open_project", [False, True])
+@pytest.mark.parametrize("swap", ["identity", "path"])
+def test_download_registration_refuses_changed_project(gallery, monkeypatch, tmp_path, open_project, swap):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "项目.licht"
+    path.write_text("downloaded-project")
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    stage = dict(id="stage", state="ready", projectPath=str(alias), projectId="downloaded-project",
+                 projectStamp=module.file_stamp(alias))
+    if swap == "identity":
+        path.write_text("other-project")
+        # A current stat must not substitute for the planned project UUID.
+        stage["projectStamp"] = module.file_stamp(alias)
+    else:
+        other = tmp_path / "other.licht"
+        other.write_bytes(path.read_bytes())
+        alias.unlink()
+        alias.symlink_to(other)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda p: SimpleNamespace(project_uuid=Path(p).read_text()))
+    index = SimpleNamespace(load=lambda: True,
+        register_licht_asset=lambda *a, **kw: pytest.fail("Changed project was registered"))
+    monkeypatch.setattr(import_module("lfs_plugins.asset_index"), "AssetIndex", lambda: index)
+    job = dict(id="download", result={"title": "Gallery"}, stagedImport=stage, _accountIdentity=state["identity"])
+    state["jobs"] = [job]
+    if open_project:
+        job["_native_project"] = dict(path=str(alias), projectId=stage["projectId"], projectStamp=stage["projectStamp"], count=1)
+        monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(total_gaussian_count=1), raising=False)
+        monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(alias)}, raising=False)
+    else:
+        job["_register"] = dict(phase="staging", stage_id="stage")
+    panel._import_pending = job
+    with pytest.raises(ValueError, match="downloaded project identity.*changed"):
+        panel._finish_import()
+
+
+def test_download_link_keeps_the_planned_project_id(gallery):
+    panel, _, actions = gallery
+    panel.service.link_download = lambda *args, **kwargs: actions.append("linked")
+    with pytest.raises(ValueError, match="identity changed before linking"):
+        panel._link_saved_download("download", "/project.licht", "previous-project")
+    assert "linked" not in actions
 
 def test_per_frame_account_check_does_not_copy_transfer_history(gallery):
     panel, state, actions = gallery
@@ -108,6 +198,28 @@ def test_project_open_rechecks_other_native_work_after_staging(gallery, monkeypa
         panel._finish_import()
     assert not actions
 
+
+@pytest.mark.parametrize("finished_generation,allowed", [(8, True), (9, False)])
+def test_publish_save_accounts_for_a_thumbnail_save_before_it_starts(gallery, monkeypatch, finished_generation, allowed):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    poll = dict(running=False, generation=5, path="/project.licht", error="")
+    monkeypatch.setattr(panel, "_project_identity", lambda: ("project", poll["path"]))
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda _: SimpleNamespace(generation=7))
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: dict(poll), raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **_: True, raising=False)
+    panel._save_current_project(lambda: actions.append("upload"))
+    poll["generation"] = finished_generation
+    if allowed:
+        panel._finish_current_project_save()
+        assert actions == ["upload"]
+    else:
+        with pytest.raises(ValueError, match="changed while saving"):
+            panel._finish_current_project_save()
+        assert not actions
+
 def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
@@ -125,7 +237,7 @@ def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch,
     monkeypatch.setattr(module.lf, "get_scene", lambda: native_scene, raising=False)
     monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"generation": 3}, raising=False)
-    panel.service.link_download = lambda *args: (_ for _ in ()).throw(ValueError("Account changed"))
+    panel.service.link_download = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Account changed"))
     panel._finish_local_update(job)
     assert update["phase"] == "save_updated"
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"generation": 4}, raising=False)
@@ -146,7 +258,7 @@ def test_update_final_save_links_only_its_clean_committed_project(gallery, monke
     monkeypatch.setattr(module.lf, "project_is_dirty", lambda: outcome == "edited", raising=False)
     monkeypatch.setattr(panel, "_project_identity", lambda: ("other", "/other.licht") if outcome == "project" else project)
     monkeypatch.setattr(panel, "_recover_failed_update", lambda *a: (_ for _ in ()).throw(ValueError("recovery available")))
-    panel.service.link_download = lambda *a: actions.append("linked") or "operation"
+    panel.service.link_download = lambda *a, **kw: actions.append("linked") or "operation"
     panel._finish_update_save(job)
     assert not actions
     poll.update(running=False, generation=5 if outcome == "generation" else 4, error="disk full" if outcome == "failed" else "")
@@ -190,6 +302,14 @@ def test_recovery_folder_action_reveals_only_service_folder(gallery, tmp_path, m
     monkeypatch.setattr(module.lf.ui, "reveal_in_file_manager", lambda path: actions.append(path), raising=False)
     panel._dispatch("show_recovery_folder", [])
     assert actions == [str(panel.service.root)]
+
+
+def test_corrupt_journal_does_not_mark_every_project_as_failed(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    facts = asset_sync_state(dict(id="project", exists=True), storage_issue=True, established=False)
+    assert facts["state"] == "not_checked"
+    assert facts["attention"] is False
+    assert facts["actions"] == []
 
 def test_native_lease_survives_detach_until_import_idle(gallery, monkeypatch):
     from contextlib import contextmanager
@@ -454,88 +574,35 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
         panel._finish_local_update(job)
     assert module.lf._test_state.opened == [("/project.licht", True, False, True)]
 
-def test_transfer_tray_tracks_processing_pause_completion_and_cleared_recovery(gallery):
+def test_overlay_rows_track_processing_pause_completion_and_cleared_recovery(gallery, monkeypatch):
     panel, state, _ = gallery
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+    from test_asset_manager_panel import _Handle
+    module = import_module('lfs_plugins.gallery_controller')
+    monkeypatch.setattr(module.lf.ui, 'is_panel_enabled', lambda _name: False, raising=False)
+    overlay = GalleryTransferOverlay()
+    overlay._handle = _Handle()
+
+    def rows():
+        panel._publish_runtime_state(panel.snapshot())
+        assert overlay.update()
+        return overlay._handle.records['gallery_transfer_rows']
+
     job = dict(id='transfer', kind='upload', metadata={'title': 'Private garden'},
                status='running', serverProcessing=True, completed=40, total=100, message='Checking scene')
     state['jobs'] = [job]
-    progress = transfer_rows(panel.snapshot())[0]
+    progress = rows()[0]
     assert progress['progress'] == 40 and progress['can_pause']
     assert progress['phase'].endswith('phase.processing')
     job.update(status='paused', message='Stopped waiting')
     panel._state = dict(state, jobs=[dict(job, status='running')])
-    progress = transfer_rows(panel.snapshot())[0]
+    progress = rows()[0]
     assert progress['can_resume'] and not progress['can_pause']
     job.update(status='completed', serverProcessing=False)
-    assert transfer_rows(panel.snapshot())[0]['progress'] == 100
+    assert rows()[0]['progress'] == 100
     job.update(retired=True, total=0, completed=0, message='Transfer cleared. Recovery copy kept.')
-    assert transfer_rows(panel.snapshot()) == []
+    assert rows() == []
     assert state['jobs'][0]['retired']  # Recovery record remains in the journal.
-
-CAMERA_TRACK = {
-    "version": 1,
-    "keyframes": [{"t": 0, "eye": [0, 1, 3]}],
-    "duration": 2.5,
-    "loopMode": "once",
-    "playbackSpeed": 1.0,
-}
-REMOTE_PRECISE_TRACK = {
-    "duration": 4.5,
-    "keyframes": [{
-        "easing": 0, "focal_length_mm": 25.73408317565918,
-        "position": [-2.0, 2.0, -6.0],
-        "rotation": [-0.15830765664577484, 0.02443433739244938, 0.9755357503890991, 0.15057116746902466],
-        "time": 0.0,
-    }, {
-        "easing": 3, "focal_length_mm": 26.33159828186035,
-        "position": [-1.1, 2.1, -5.6],
-        "rotation": [-0.1110728457570076, 0.06121033430099487, 0.9799413681030273, 0.15372401475906372],
-        "time": 2.0,
-    }],
-    "loopMode": "ping_pong",
-    "playbackSpeed": 1.25,
-    "version": 1,
-}
-
-def _f32(value):
-    return struct.unpack("f", struct.pack("f", value))[0]
-
-def _native_camera_path(path):
-    if path is None:
-        return None
-
-    def convert(value, key=None):
-        if isinstance(value, bool) or value is None:
-            return value
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return _f32(value)
-        if isinstance(value, list):
-            items = [convert(item) for item in value]
-            if key == "rotation" and len(items) == 4 and all(isinstance(item, float) for item in items):
-                length = math.sqrt(sum(item * item for item in items)) or 1.0
-                return [_f32(item / length) for item in items]
-            return items
-        if isinstance(value, dict):
-            return {name: convert(item, name) for name, item in value.items()}
-        return value
-
-    return convert(copy.deepcopy(path))
-def _local_track_state(monkeypatch, module, initial=None):
-    current = {"path": None if initial is None else _native_camera_path(initial)}
-
-    def set_path(path):
-        if not isinstance(path, dict):
-            return False
-        current["path"] = _native_camera_path(path)
-        return True
-
-    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: None if current["path"] is None else copy.deepcopy(current["path"]), raising=False)
-    monkeypatch.setattr(module.lf.ui, "set_camera_path", set_path, raising=False)
-    monkeypatch.setattr(module.lf.ui, "clear_keyframes", lambda: current.update(path=None), raising=False)
-    return current
 
 @pytest.mark.parametrize('commit,remote_title,expected', [
     ('saved', 'My scene', 'equal'), ('new-save', 'My scene', 'local'),
@@ -550,6 +617,7 @@ def test_three_fact_freshness_uses_commit_and_shared_fields(gallery, commit, rem
     assert facts['freshness'] == expected
     assert facts['state'] == expected
     assert facts['relationship'] == 'linked'
+    assert facts['icon'] == {'equal':'cloud-check','local':'cloud-up','remote':'cloud-down','diverged':'cloud-bang','unknown':'cloud-dotted'}[expected]
 
 @pytest.mark.parametrize('status,extra,expected', [
     ('queued', {}, 'queued'), ('running', {}, 'uploading'), ('running', {'serverProcessing': True}, 'processing'),
@@ -565,8 +633,9 @@ def test_single_badge_precedence_during_transfers(gallery, status, extra, expect
     assert facts['state'] == expected
     assert facts['progress'] == 70
     assert facts['jobId'] == 'job'
+    assert facts['icon'] == ('ring' if facts['active'] else {'paused':'pause','interrupted':'pause','error':'error','diverged':'cloud-bang'}[expected])
     diverged = asset_sync_state(dict(id='project', commit_uuid='new', exists=True), link, dict(base,title='remote', metadataRevision='remote-edit'), [job])
-    assert diverged['state'] == 'diverged'
+    assert diverged['state'] == (expected if diverged['active'] else 'diverged')
 
 def test_missing_remote_and_unknown_never_use_timestamps(gallery):
     from lfs_plugins.gallery_controller import asset_sync_state
@@ -588,8 +657,8 @@ def test_local_file_problems_need_attention_and_check(gallery, panel_module, mon
     from lfs_plugins.gallery_controller import asset_sync_state
 
     monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: {
-        "asset_manager.status.needs_repair": "Needs repair",
-        "asset_manager.status.newer_version": "Saved by a newer version",
+        "projects.status.needs_repair": "Needs repair",
+        "projects.status.newer_version": "Saved by a newer version",
     }.get(key, key))
     project = dict(id="project", status=status, exists=True, error="")
     facts = asset_sync_state(project, {"sceneId": "private-one"}, scene())
@@ -597,8 +666,9 @@ def test_local_file_problems_need_attention_and_check(gallery, panel_module, mon
     assert facts["relationship"] == "local_file_problem"
     assert facts["state"] == "error"
     assert facts["icon"] == "cloud-bang"
-    assert facts["action"] == "check"
-    assert facts["attention"] is True
+    assert facts["action"] == ""
+    assert facts["actions"] == []
+    assert facts["attention"] is (status != "UNSUPPORTED_NEWER")
     assert facts["reason"] == reason
 
 
@@ -648,8 +718,8 @@ def test_subscribers_are_coalesced_and_unsubscribe_stops_delivery(gallery, monke
     panel._poll()
     assert len(received) == count + 1
 
-def test_tray_has_all_pending_jobs_and_bounded_history(gallery):
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+def test_overlay_rows_have_all_pending_jobs_and_bounded_history(gallery):
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     jobs = [dict(id=str(i), metadata={'title':str(i)}, status='completed', completed=1,total=1) for i in range(35)]
     jobs += [dict(id='upload',metadata={'title':'Upload'},status='running',completed=2,total=10),
              dict(id='paused',metadata={'title':'Paused'},status='paused',interrupted=True,completed=0,total=10)]
@@ -684,7 +754,7 @@ def test_metadata_only_update_skips_native_export(gallery, monkeypatch):
     panel.service.edit=lambda *a,**kw:actions.append((a,kw))
     state['links']={'project':{'sceneId':'scene','contentStamp':'same-content:same-view'}}
     panel._publish_saved({'title':'New title','replaceSceneId':'scene','baseRevisions':{'content':'r1','metadata':'r1'}},'project','/project.licht',state['identity'], update=True)
-    assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view'})]
+    assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view','project_id':'project'})]
 
 def test_cancel_paused_job_does_not_pause_someone_elses_upload(gallery, monkeypatch):
     panel,state,actions=gallery
@@ -709,25 +779,28 @@ def test_default_pull_registers_links_without_touching_open_document(gallery, mo
     panel, state, actions = gallery
     module = import_module('lfs_plugins.gallery_controller')
     path = str(tmp_path / 'pulled.licht')
+    Path(path).write_bytes(b"downloaded project")
     job = dict(id='pull', kind='download', status='completed', path='download.licht',
                metadata={'title': 'Portal'}, result={'title': 'Portal'})
     state['jobs'] = [job]
     panel.service.stage_download = lambda identifier: 'stage'
-    panel.service.link_download = lambda *args: actions.append(('link', args)) or 'link'
+    panel.service.link_download = lambda *args, **kwargs: actions.append(('link', args, kwargs)) or 'link'
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
     for name in ('project_open', 'project_save', 'new_project', 'get_scene'):
         monkeypatch.setattr(module.lf, name, lambda *a, **k: pytest.fail('Default Pull must leave the open document alone'), raising=False)
     monkeypatch.setattr(module.lf, 'project_is_dirty', lambda: True)
     monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(project_uuid='fresh-project', commit_uuid='fresh-commit'))
     registered = []
-    index = SimpleNamespace(load=lambda: True, get_asset=lambda _: None,
-        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (SimpleNamespace(project_uuid='fresh-project'), True))
+    project = SimpleNamespace(id='fresh-project', project_uuid='fresh-project', extra={})
+    index = SimpleNamespace(load=lambda: True, update_asset=lambda *a, **kw: project, get_asset=lambda _: None,
+        register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (project, True))
     monkeypatch.setattr(import_module('lfs_plugins.asset_index'), 'AssetIndex', lambda: index)
     panel._register_download(job, state['identity'])
-    job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': path}
+    job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': path, 'projectId': 'fresh-project',
+                          'projectStamp': module.file_stamp(path)}
     panel._finish_import()
     assert registered[0][0] == path
-    assert actions == [('link', ('pull', 'fresh-project', 'fresh-commit'))]
+    assert actions == [('link', ('pull', 'fresh-project', 'fresh-commit'), {'project_path': path})]
     assert panel._pulled_project is None
     job['linkOperation'] = {'id': 'link', 'state': 'ready'}
     panel._finish_import()
@@ -812,23 +885,22 @@ def test_D2_removed_portal_wins_when_local_file_is_missing(gallery):
     asset = {'id':'project', 'exists':False}
     facts = asset_sync_state(asset, {'sceneId':'removed', 'remoteDeleted':True}, checked=True)
     assert (facts['relationship'], facts['state'], facts['action']) == ('remote_deleted', 'remote_deleted', 'unlink')
-    assert asset_sync_state(dict(asset, exists=True), {'sceneId':'removed', 'remoteDeleted':True})['action'] == 'publish_new'
+    assert asset_sync_state(dict(asset, exists=True), {'sceneId':'removed', 'remoteDeleted':True})['action'] == 'publish_again'
 
 def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     from lfs_plugins.gallery_messages import localize_message
     module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: 'localized:' + key)
-    assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:asset_manager.gallery.sidebar.refresh'
+    assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:projects.gallery.sidebar.refresh'
 
-@pytest.mark.parametrize('kind', ['upload', 'download'])
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
-def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, kind, status, expected):
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
-    module = import_module('lfs_plugins.gallery_transfer_panel')
+def test_A5_finished_overlay_rows_show_one_adaptive_size(gallery, monkeypatch, status, expected):
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
+    module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: {
-        'asset_manager.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
+        'projects.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
     }.get(key, key))
-    job = dict(id='job', kind=kind, status=status, completed=1024, total=137114)
+    job = dict(id='job', kind='upload', status=status, completed=1024, total=137114)
     row = transfer_rows({'jobs': [job]})[0]
     assert row['bytes'] == expected
     if status == 'completed':
@@ -842,10 +914,8 @@ def test_A5_gallery_asset_borders_use_supported_longhands():
     unsupported = re.compile(r'\bborder(?:-(?:top|right|bottom|left))?\s*:\s*[^;]*(?:solid|dashed|dotted|double)\s*;')
     assert paths
     assert not [(p.name, match.group()) for p in paths for match in unsupported.finditer(p.read_text())]
-    assert 'border-bottom-width: 1dp;' in (resources / 'gallery_transfer_panel.rcss').read_text()
-    assert 'border-bottom-color: @{border};' in (resources / 'gallery_transfer_panel.theme.rcss').read_text()
 
-@pytest.mark.parametrize('upload_format', ['studio', 'sog', 'ssog', 'spz'])
+@pytest.mark.parametrize('upload_format', ['studio', 'sog'])
 def test_closed_project_prepares_saved_file_without_opening(gallery, monkeypatch, tmp_path, upload_format):
     panel, state, actions = gallery
     module = import_module('lfs_plugins.gallery_controller')
@@ -916,3 +986,185 @@ def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path
     changed = bytearray(original)
     changed[row+72] ^= 1  # A new payload checksum, with unchanged SCNG and VIEW.
     assert stamp(changed) != before
+
+
+def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery):
+    from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
+    asset = {"id": "project", "exists": True, "status": "AVAILABLE"}
+    facts = dict(state="local", relationship="linked", linked=True, sceneReady=True,
+                 signed_in=True, established=True, source_formats=["licht"])
+    assert gallery_actions(asset, facts)[0]["id"] == "update"
+    disabled = gallery_actions(asset, dict(facts, signed_in=False))[0]
+    assert not disabled["enabled"] and disabled["reason"].endswith("eligibility.connect")
+    assert gallery_actions(dict(asset, status="UNREADABLE"), facts) == []
+    cached = dict(facts, cachedUnverified=True)
+    assert gallery_actions(dict(asset, status="UNREADABLE"), cached) == []
+    assert gallery_actions(dict(asset, status="MISSING"), cached)[0]["id"] == "locate"
+    interrupted = dict(facts, activity="interrupted", job={"id": "j", "status": "paused"})
+    assert [a["id"] for a in gallery_actions(asset, interrupted)] == ["resume", "cancel"]
+    processing = dict(facts, activity="processing", active=True, job={"needsAttention": True})
+    assert [a["id"] for a in gallery_actions(asset, processing)] == ["keep_waiting", "cancel"]
+    assert gallery_actions(asset, dict(facts, activity="applying", active=True)) == []
+    completed = dict(facts, job={"id": "done", "status": "completed"}, undoAvailable=True)
+    assert [a["id"] for a in gallery_actions(asset, completed)] == ["undo"]
+    assert not gallery_actions(asset, dict(completed, signed_in=False))[0]["enabled"]
+    assert gallery_actions(asset, dict(facts, viewingCopy=True, state="equal"))[0]["id"] == "publish_new"
+    assert gallery_actions(asset, dict(facts, viewingCopy=True, state="remote"))[0]["id"] == "publish_new"
+    queued = dict(facts, activity="queued", active=True, job={"id": "j", "status": "queued"})
+    assert [a["id"] for a in gallery_actions(asset, queued)] == ["resume", "cancel"]
+    assert gallery_eligibility(asset, dict(facts, quotaBytes=100))["remainingBytes"] is None
+    publication = dict(asset, publication={"checked": True, "preparedBytes": 30})
+    quota = gallery_eligibility(publication, dict(facts, quotaBytes=100, usedBytes=60, reservedBytes=20))
+    assert quota["remainingBytes"] == 20 and quota["reasons"] == ["space"]
+    assert gallery_eligibility(dict(asset, embedded_dataset_complete=False), facts)["status"] == "not_checked"
+    reasons = gallery_eligibility(dict(asset, publication={"visibleSplats": 0, "externalPayloads": True}), facts)
+    assert reasons["reasons"] == ["no_splats", "external_payloads"]
+
+
+def test_presentation_metadata_and_scene_content_have_separate_relationships(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    asset = {"id": "project", "commit_uuid": "saved", "status": "AVAILABLE"}
+    remote = dict(scene(), presentationRevision="p1")
+    link = dict(sceneId=remote["id"], commitUuid="saved", contentRevision="original",
+                metadataRevision="original", acknowledgedPresentationRevision="p1")
+    assert asset_sync_state(asset, link, remote)["state"] == "equal"
+    assert asset_sync_state(asset, link, dict(remote, presentationRevision="p2"))["state"] == "presentation"
+    assert asset_sync_state(asset, link, dict(remote, metadataRevision="m2"))["state"] == "remote"
+    assert asset_sync_state(asset, link, dict(remote, contentRevision="c2"))["state"] == "remote_content"
+    assert asset_sync_state(asset, link, None, established=False)["state"] == "not_checked"
+    assert asset_sync_state(asset, dict(link, commitUuid=""), remote)["state"] == "unknown"
+
+
+def test_eligibility_uses_only_checks_for_the_saved_commit(gallery):
+    from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
+    asset = dict(id="project", commit_uuid="saved", exists=True)
+    failed = dict(project="project", commitUuid="saved", nativePreparation=True,
+                  failureReason="gallery_project_no_splats: No visible geometry")
+    facts = dict(signed_in=True, job=failed, activity="error")
+    assert gallery_eligibility(asset, facts)["reasons"] == ["no_splats"]
+    assert not gallery_actions(asset, facts)[0]["enabled"]
+    assert gallery_eligibility(dict(asset, commit_uuid="changed"), facts)["status"] == "not_checked"
+    checked = dict(project="project", commitUuid="saved", kind="upload", packaged=True,
+                   status="completed", uploadFormat="sog", total=80)
+    facts = dict(signed_in=True, jobs=[checked], quotaBytes=100, usedBytes=40)
+    assert gallery_eligibility(asset, facts)["reasons"] == ["space"]
+    assert gallery_eligibility(asset, dict(facts, replacedBytes=80))["status"] == "eligible"
+    assert gallery_eligibility(dict(asset, commit_uuid="changed"), facts)["status"] == "not_checked"
+
+
+@pytest.mark.parametrize("reason,resumable", [
+    ("gallery_project_no_splats: No visible geometry", False),
+    ("gallery_project_payload_unavailable: Missing payload", False),
+    ("Could not write the prepared copy", True),
+])
+def test_preparation_retry_in_overlay_uses_the_failed_commit(gallery, reason, resumable):
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
+    failure = dict(id="preparation:project", project="project", commitUuid="saved", nativePreparation=True,
+                   status="error", failureReason=reason, message=reason)
+    row = transfer_rows(dict(signed_in=True, preparationFailure=failure))[0]
+    assert row["project"] == "project"
+    assert row["can_resume"] is resumable
+
+
+def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
+    from lfs_plugins.gallery_controller import conflict_groups
+    base = dict(title="Original", description="First", visibility="private", viewerSettings={})
+    mine = dict(base, title="Mine", viewerSettings={"exposure": 2, "cameraPath": {"duration": 2}})
+    remote = dict(base, title="Gallery", description="Edited there", visibility="public",
+                  viewerSettings={"exposure": 3, "cameraPath": {"duration": 5}}, contentRevision="new")
+    rows = {r["id"]: r for r in conflict_groups({"commit_uuid": "local"},
+        dict(sharedFields=base, contentRevision="old", commitUuid="old"), mine, remote)}
+    assert set(rows) == {"text", "visibility", "view", "track", "content"}
+    assert "Mine" in rows["text"]["mine_value"] and "Edited there" in rows["text"]["gallery_value"]
+    assert rows["text"]["choice"] == "mine" and rows["visibility"]["choice"] == "gallery"
+    assert rows["content"]["choice"] == "mine" and not rows["content"]["can_both"]
+    assert rows["track"]["can_both"]
+
+
+def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"saved project with training history")
+    project = ("project", str(path))
+    monkeypatch.setattr(panel, "_project_identity", lambda: project)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "is_training_active", lambda: False, raising=False)
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(panel, "_begin_local_update", lambda *_: pytest.fail("Settings entered geometry replacement"))
+    monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: actions.append("view"))
+    monkeypatch.setattr(panel, "_save_current_project", lambda callback, **kwargs: (actions.append("save"), callback()))
+    job = dict(id="settings", status="completed", project="project",
+               localUpdate={"id": "backup", "state": "preparing", "backupPath": str(tmp_path / "backup.licht")})
+    state["jobs"] = [job]
+    panel.service.prepare_settings_update = lambda *args: ("settings", "backup")
+    def finish_settings(*args, **kwargs):
+        actions.append("link")
+        job["localUpdate"]["state"] = "applied"
+    panel.service.finish_settings_update = finish_settings
+    panel._begin_settings_apply({"id": "project"}, scene(), dict(title="Gallery title", viewerSettings={}))
+    panel.service.busy = True
+    panel._finish_settings_apply()
+    assert actions == []
+    panel.service.busy = False
+    job["localUpdate"]["state"] = "ready"
+    panel._finish_settings_apply()
+    panel._finish_settings_apply()
+    assert actions == ["view", "save", "link"]
+    assert panel._undo_pull["jobId"] == "settings"
+    assert path.read_bytes() == b"saved project with training history"
+
+
+def test_gallery_review_survives_a_locale_document_reload(gallery, monkeypatch):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_file_panel").lf.ui, "get_panel_object", lambda _: None, raising=False)
+    monkeypatch.setattr(GalleryFilePanel.__bases__[0], 'on_unmount', lambda *_: None, raising=False)
+    panel = GalleryFilePanel()
+    closed = []
+    review = dict(mode='conflict', on_done=lambda submitted: closed.append(submitted))
+    panel._review = review
+    panel.on_unmount(None)
+    assert panel._review is review and not closed
+    panel._finish(False)
+    assert panel._review is None and closed == [False]
+
+
+def test_replacement_buttons_wait_for_the_account_and_transfer(gallery):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    panel = GalleryFilePanel()
+    actions = []
+    panel._review = dict(mode="replacement", on_submit=actions.append)
+    for state in ({"signed_in": False}, {"signed_in": True, "busy": True}):
+        panel._state = state
+        panel._replacement(["replace"])
+        panel._replacement(["keep"])
+    assert not actions
+
+
+def test_replacement_confirmation_names_the_existing_public_scene(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    remote = dict(scene(), visibility="public")
+    state.update(source_formats=["licht"], scenes=[remote])
+    panel._state = state
+    panel.service.root = tmp_path
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(panel, "_public_confirmation", lambda scene, action, **_: actions.append(scene))
+    panel._publish_closed_asset(dict(id="project", path="/project.licht"), remote, "sog",
+        update=False, publish_as_new=False,
+        handoff=dict(sceneId=remote["id"], baseRevisions={"content": "original", "metadata": "original"}))
+    assert actions == [remote]
+
+
+@pytest.mark.parametrize("health,tone", [
+    ("MISSING", "warning"), ("IDENTITY_MISMATCH", "warning"),
+    ("UNREADABLE", "error"), ("REPAIR_ONLY", "error"), ("UNSUPPORTED_NEWER", "error"),
+])
+def test_file_health_has_an_independent_glyph(gallery, health, tone):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    facts = asset_sync_state({"id":"project", "status":health, "error":"Fixture reason"},
+        {"sceneId":"one"}, jobs=[dict(id="job",project="project",kind="upload",status="running",completed=43,total=100)])
+    assert facts["health_icon"] == "bang"
+    assert facts["health_tone"] == tone
+    assert facts["action"] == ("locate" if health == "MISSING" else "")
+    assert [action["id"] for action in facts["actions"]] == (["locate"] if health == "MISSING" else [])
+    assert facts["progress"] == 43

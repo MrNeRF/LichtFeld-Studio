@@ -12,9 +12,15 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
+from types import SimpleNamespace
 
-from .asset_index import is_supported_asset_path, resolve_asset_manager_storage_path
+from .asset_index import (
+    AssetObservation,
+    is_supported_asset_path,
+    resolve_asset_manager_storage_path,
+)
+from .project_identity import ProjectPathIdentity
 
 SCAN_BATCH_SIZE = 25
 SCAN_BATCH_INTERVAL_S = 0.25
@@ -27,8 +33,13 @@ _REINSPECT_STATUSES = frozenset(
         "MISSING",
         "UNREADABLE",
         "UNVERIFIED",
+        "READING",
         "IDENTITY_MISMATCH",
         "UNSUPPORTED",
+        "REPLACED_PUBLISHED",
+        "DIVERGED_COPIES",
+        "REPAIR_ONLY",
+        "UNSUPPORTED_NEWER",
     }
 )
 _PRUNED_DIRECTORY_NAMES = frozenset(
@@ -52,19 +63,31 @@ _PRUNED_DIRECTORY_NAMES = frozenset(
 class AssetFolderScanProgress:
     """Worker-side counters for one Asset Manager folder scan."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
         self._lock = threading.Lock()
         self._directories_visited = 0
         self._projects_found = 0
         self._current_root = ""
+        self._on_change = on_change
+        self._last_notification = 0.0
+
+    def _notify(self) -> None:
+        # Progress producers wake the UI at most four times a second. There is
+        # no timer after the worker stops; completion publishes the final state.
+        now = time.monotonic()
+        if self._on_change and now - self._last_notification >= SCAN_BATCH_INTERVAL_S:
+            self._last_notification = now
+            self._on_change()
 
     def add_directory(self) -> None:
         with self._lock:
             self._directories_visited += 1
+        self._notify()
 
     def add_project(self) -> None:
         with self._lock:
             self._projects_found += 1
+        self._notify()
 
     def report(
         self,
@@ -80,6 +103,7 @@ class AssetFolderScanProgress:
                 self._projects_found = projects
             if current_root is not None:
                 self._current_root = current_root
+        self._notify()
 
     def snapshot(self) -> tuple[int, int, str]:
         with self._lock:
@@ -98,6 +122,7 @@ class AssetFolderScanResult:
     added: int = 0
     already_cataloged: int = 0
     failed: int = 0
+    unavailable: bool = False
     cancelled: bool = False
 
 
@@ -244,6 +269,7 @@ def iter_licht_projects(
     progress: AssetFolderScanProgress | None = None,
     *,
     scan_cache: _DirectoryScanCache | None = None,
+    recursive: bool = True,
 ) -> Iterator[str]:
     """Yield .licht files beneath one Asset Manager folder as they are found."""
     cache = scan_cache or _DirectoryScanCache()
@@ -282,6 +308,26 @@ def iter_licht_projects(
         _log.warning("Could not scan Asset Manager folder: %s", exc)
 
     pending = [root]
+    seen_target_ids: set[tuple[Any, ...]] = set()
+
+    def _target_key(path: Path) -> tuple[Any, ...]:
+        try:
+            stat = path.stat()
+            return ("inode", int(stat.st_dev), int(stat.st_ino))
+        except OSError:
+            # Keep a broken symlink visible so an existing catalog row can be
+            # reconciled as MISSING; two broken links are distinct locators.
+            return ("broken", os.path.abspath(str(path)))
+
+    def _yield_path(path: Path) -> str | None:
+        if not is_supported_asset_path(str(path)):
+            return None
+        target_key = _target_key(path)
+        if target_key in seen_target_ids:
+            return None
+        seen_target_ids.add(target_key)
+        return os.path.abspath(str(path))
+
     while pending:
         current = pending.pop()
         if cancel_event is not None and cancel_event.is_set():
@@ -310,9 +356,12 @@ def iter_licht_projects(
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 path = current / name
+                resolved = _yield_path(path)
+                if resolved is None:
+                    continue
                 if progress is not None:
                     progress.add_project()
-                yield os.path.abspath(str(path))
+                yield resolved
             kept_directories = [current / name for name in cached["dirs"]]
             pending.extend(reversed(kept_directories))
             continue
@@ -339,18 +388,26 @@ def iter_licht_projects(
                         for prune in pruned_user_directories
                     ):
                         continue
-                    kept_directories.append(Path(entry.path))
-                    continue
-                if not entry.is_file(follow_symlinks=False):
+                    if recursive:
+                        kept_directories.append(Path(entry.path))
                     continue
                 path = Path(entry.path)
-                if not is_supported_asset_path(str(path)):
+                # A symlink to a .licht file is a locator, while a symlinked
+                # directory is never traversed.  Broken .licht links remain
+                # discoverable for an existing catalog row to become MISSING.
+                is_link = bool(getattr(entry, "is_symlink", lambda: False)())
+                if is_link:
+                    if not is_supported_asset_path(str(path)):
+                        continue
+                elif not entry.is_file(follow_symlinks=False):
                     continue
                 licht_names.append(name)
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 try:
-                    resolved = os.path.abspath(str(path))
+                    resolved = _yield_path(path)
+                    if resolved is None:
+                        continue
                     if progress is not None:
                         progress.add_project()
                     yield resolved
@@ -365,39 +422,53 @@ def iter_licht_projects(
         pending.extend(reversed(kept_directories))
 
 
-def discover_licht_projects(
-    directory: str,
-    cancel_event: threading.Event | None = None,
-    progress: AssetFolderScanProgress | None = None,
-) -> list[str]:
-    """Recursively list .licht files beneath one Asset Manager folder."""
-    cache = _DirectoryScanCache()
-    try:
-        return list(iter_licht_projects(directory, cancel_event, progress, scan_cache=cache))
-    finally:
-        cache.persist()
-
-
 def scan_asset_folder(
     index: Any,
     folder_id: str,
     directory: str,
     cancel_event: threading.Event | None = None,
     progress: AssetFolderScanProgress | None = None,
+    *,
+    recursive: bool = True,
 ) -> AssetFolderScanResult:
     """Discover and register .licht projects from one real filesystem folder."""
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
+    if not Path(directory).expanduser().is_dir():
+        _log.warning("Asset Manager folder is unavailable: %s", directory)
+        return AssetFolderScanResult(unavailable=True)
     if progress is not None:
         progress.report(current_root=directory)
     cache = _DirectoryScanCache()
     try:
+        if callable(getattr(index, "reconcile_observations", None)):
+            discovered = list(
+                iter_licht_projects(
+                    directory, cancel_event, progress,
+                    scan_cache=cache, recursive=recursive,
+                )
+            )
+            was_cancelled = cancel_event is not None and cancel_event.is_set()
+            added, already, failed, _ = _commit_registration_batch(
+                index, [(path, folder_id) for path in discovered], None
+            )
+            was_cancelled = was_cancelled or (
+                cancel_event is not None and cancel_event.is_set()
+            )
+            if added and not index.save():
+                failed += added
+                added = 0
+            return AssetFolderScanResult(
+                discovered=len(discovered), added=added, already_cataloged=already,
+                failed=failed, cancelled=was_cancelled,
+            )
         return _register_discovered_streaming(
             index,
             (
                 (path, folder_id)
                 for path in iter_licht_projects(
-                    directory, cancel_event, progress, scan_cache=cache
+                    directory, cancel_event, progress,
+                    scan_cache=cache, recursive=recursive,
                 )
             ),
             cancel_event,
@@ -459,6 +530,20 @@ def scan_all_asset_folders(
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
     try:
+        if callable(getattr(index, "reconcile_observations", None)):
+            discovered = list(_iter_all())
+            was_cancelled = cancel_event is not None and cancel_event.is_set()
+            added, already, failed, _ = _commit_registration_batch(index, discovered, None)
+            was_cancelled = was_cancelled or (
+                cancel_event is not None and cancel_event.is_set()
+            )
+            if added and not index.save():
+                failed += added
+                added = 0
+            return AssetFolderScanResult(
+                discovered=len(discovered), added=added, already_cataloged=already,
+                failed=failed, cancelled=was_cancelled,
+            )
         return _register_discovered_streaming(index, _iter_all(), cancel_event, progress)
     finally:
         cache.persist()
@@ -616,15 +701,31 @@ def _existing_skips_inspection(existing: Any) -> bool:
 def _known_path_is_unchanged(index: Any, existing: Any, path: str) -> bool:
     if getattr(existing, "status", "AVAILABLE") in _REINSPECT_STATUSES:
         return False
-    size = getattr(existing, "path_size_bytes", None)
-    mtime_ns = getattr(existing, "path_mtime_ns", None)
-    if size is None or mtime_ns is None:
-        return True
     try:
         stat = os.stat(path)
     except OSError:
         return False
-    return (int(stat.st_size), int(stat.st_mtime_ns)) == (int(size), int(mtime_ns))
+    identity = getattr(existing, "stat_identity", None) or {}
+    if identity:
+        for key in ("size", "mtime_ns", "st_dev", "st_ino", "st_ctime_ns"):
+            stat_key = "st_" + key if not key.startswith("st_") else key
+            if key in identity and int(identity[key]) != int(getattr(stat, stat_key, -1)):
+                return False
+    else:
+        size = getattr(existing, "path_size_bytes", None)
+        mtime_ns = getattr(existing, "path_mtime_ns", None)
+        if size is not None and mtime_ns is not None and (
+            int(stat.st_size), int(stat.st_mtime_ns)
+        ) != (int(size), int(mtime_ns)):
+            return False
+    cheap_head = getattr(index, "_cheap_head_identity", None)
+    if callable(cheap_head):
+        observed = cheap_head(path)
+        expected_uuid = str(getattr(existing, "project_uuid", getattr(existing, "id", "")))
+        expected_commit = str(getattr(existing, "commit_uuid", "") or "")
+        if observed is not None and observed != (expected_uuid, expected_commit):
+            return False
+    return True
 
 
 def _commit_registration_batch(
@@ -642,34 +743,96 @@ def _commit_registration_batch(
     if not callable(inspect):
         return _commit_batch_with_snapshot(index, batch, cancel_event)
 
-    prepared: list[tuple[str, str, Any]] = []
+    prepared: list[tuple[str, str, Any, ProjectPathIdentity]] = []
     already_cataloged = 0
+    repair_only = 0
     failed = 0
     find_by_path = getattr(index, "find_asset_by_path", None)
     for path, folder_id in batch:
         if cancel_event is not None and cancel_event.is_set():
             return 0, 0, 0, True
+        existing = None
         try:
+            path_identity = ProjectPathIdentity.capture(path)
             if callable(find_by_path):
                 existing = find_by_path(path)
                 if existing is not None and _known_path_is_unchanged(index, existing, path):
                     already_cataloged += 1
+                    if callable(getattr(index, "reconcile_observations", None)):
+                        prepared.append(
+                            (
+                                path,
+                                folder_id,
+                                SimpleNamespace(
+                                    project_uuid=getattr(existing, "project_uuid", getattr(existing, "id", "")),
+                                    file_uuid=getattr(existing, "file_uuid", ""),
+                                    commit_uuid=getattr(existing, "commit_uuid", ""),
+                                    generation=getattr(existing, "generation", 0),
+                                    created_at_unix_ns=getattr(existing, "created_at_unix_ns", 0),
+                                    saved_at_unix_ns=getattr(existing, "saved_at_unix_ns", 0),
+                                    physical_file_size=getattr(existing, "file_size_bytes", 0),
+                                    role=SimpleNamespace(name=getattr(existing, "role", "MASTER")),
+                                    open_state=SimpleNamespace(name=getattr(existing, "open_state", "OPEN")),
+                                    has_preview=getattr(existing, "has_preview", False),
+                                    iteration=getattr(existing, "iteration", None),
+                                ),
+                                path_identity,
+                            )
+                        )
                     continue
-            prepared.append((path, folder_id, inspect(path)))
+            prepared.append((path, folder_id, inspect(path), path_identity))
         except Exception:
+            verify = getattr(index, "verify_asset", None)
+            if existing is not None and callable(verify):
+                verified = verify(existing.id)
+                if verified is not None and getattr(verified, "status", "") == "REPAIR_ONLY":
+                    # Keep the known locator and its explicit Repair action.
+                    # Missing heads are an expected catalog state, not a
+                    # failed registration of a different project.
+                    already_cataloged += 1
+                    repair_only += 1
+                    continue
             failed += 1
             _log.warning("Failed to register Asset Manager project: %s", path, exc_info=True)
 
     if cancel_event is not None and cancel_event.is_set():
         return 0, 0, 0, True
 
+    reconcile = getattr(index, "reconcile_observations", None)
+    if callable(reconcile):
+        observations = [
+            AssetObservation(
+                path=path,
+                folder_id=folder_id,
+                inspection=inspection,
+                stat_identity={
+                    key: int(value)
+                    for key, value in (getattr(index, "_path_identity", lambda _p: {}) (path) or {}).items()
+                },
+                path_identity=path_identity,
+            )
+            for path, folder_id, inspection, path_identity in prepared
+        ]
+        result = reconcile(
+            observations,
+            folder_ids={folder_id for _path, folder_id in batch},
+            save=False,
+        )
+        return (
+            int(result.get("added", 0)),
+            int(result.get("already_cataloged", 0)) + repair_only,
+            int(result.get("failed", 0)) + failed,
+            False,
+        )
+
     added = 0
     lock = getattr(index, "_lock", None)
 
     def commit_prepared() -> None:
         nonlocal added, already_cataloged, failed
-        for path, folder_id, inspection in prepared:
+        for path, folder_id, inspection, path_identity in prepared:
             try:
+                path_identity.validate()
                 project, created = index.register_licht_asset(
                     path,
                     folder_id=folder_id,

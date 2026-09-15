@@ -14,6 +14,15 @@ body {
     height: 100%;
 }
 
+#viewport-content {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
 .viewport-split-divider {
     position: absolute;
     pointer-events: none;
@@ -41,6 +50,8 @@ body {
 
 .project-drop-overlay {
     position: absolute;
+    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     display: flex;
@@ -108,10 +119,6 @@ body {
     align-items: center;
     pointer-events: auto;
     overflow: hidden;
-}
-
-.toolbar-position-top .toolbar-vertical {
-    margin-top: 12dp;
 }
 
 .toolbar-drag-handle {
@@ -362,7 +369,7 @@ body {
 .viewport-selection-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -373,7 +380,7 @@ body {
 .viewport-depth-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -384,7 +391,7 @@ body {
 .viewport-transform-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -690,7 +697,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 5dp;
     min-width: 0;
 }
@@ -1010,13 +1017,13 @@ body {
 
 #transform-block .viewport-transform-fields,
 #transform-block .viewport-transform-group {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 4dp;
 }
 
 #transform-block .viewport-transform-fields {
     justify-content: flex-start;
-    flex-shrink: 0;
+    flex-shrink: 1;
 }
 
 .viewport-transform-axis-label {
@@ -1115,16 +1122,16 @@ body {
 
 .viewport-transfer-queue {
     position: absolute;
-    right: 12dp;
-    bottom: 12dp;
+    right: 8dp;
+    bottom: 8dp;
     width: 352dp;
     max-width: 90%;
     max-height: 65%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    gap: 6dp;
-    padding: 10dp 12dp;
+    gap: 8dp;
+    padding: 8dp;
     border-width: 1dp;
     border-radius: 8dp;
     pointer-events: auto;
@@ -1135,22 +1142,22 @@ body {
 .viewport-transfer-actions, .viewport-transfer-footer {
     display: flex;
     align-items: center;
-    gap: 6dp;
+    gap: 8dp;
     flex-shrink: 0;
 }
 .viewport-transfer-heading { flex: 1; font-size: 13dp; font-weight: bold; }
 .viewport-transfer-toggle { width: 24dp; min-width: 24dp; padding: 0; }
 .viewport-transfer-summary { font-size: 11dp; flex-shrink: 0; }
 .viewport-transfer-list { min-height: 0; max-height: 320dp; overflow-y: auto; }
-.viewport-transfer-row { display: flex; flex-direction: column; gap: 5dp; padding: 10dp 0; border-top-width: 1dp; }
+.viewport-transfer-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; border-top-width: 1dp; }
 .viewport-transfer-title { font-size: 12dp; font-weight: bold; }
 .viewport-transfer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-transfer-status { flex-wrap: wrap; justify-content: space-between; font-size: 11dp; }
 .viewport-transfer-detail { font-size: 11dp; }
-.viewport-transfer-progress { height: 5dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
+.viewport-transfer-progress { height: 8dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
 .viewport-transfer-fill { height: 100%; }
-.viewport-transfer-footer { padding-top: 6dp; border-top-width: 1dp; flex-wrap: wrap; }
-.viewport-transfer-queue .btn { box-sizing: border-box; height: 26dp; min-height: 26dp; max-height: 26dp; padding: 0 10dp; line-height: 24dp; font-size: 11dp; white-space: nowrap; }
+.viewport-transfer-footer { padding-top: 8dp; border-top-width: 1dp; flex-wrap: wrap; }
+.viewport-transfer-queue .btn { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 22dp; font-size: 11dp; white-space: nowrap; }
 .viewport-transfer-queue .viewport-transfer-toggle { padding: 0; width: 24dp; text-align: center; }
 .viewport-transfer-queue.hidden, .viewport-transfer-queue .hidden { display: none; }
 @keyframes transfer-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }

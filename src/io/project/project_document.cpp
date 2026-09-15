@@ -152,11 +152,13 @@ namespace lfs::io::project {
             }
             std::error_code error;
             auto absolute = std::filesystem::absolute(path, error);
+            if (!error)
+                absolute = std::filesystem::weakly_canonical(absolute, error);
             if (error) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
                     "The project path could not be resolved.",
-                    std::format("filesystem::absolute failed: {}", error.message()),
+                    std::format("project path resolution failed: {}", error.message()),
                     "project.path");
             }
             return absolute.lexically_normal();
@@ -3453,7 +3455,8 @@ namespace lfs::io::project {
         std::vector<std::byte> dataset_preview;
         std::span<const std::byte> preview_png = options.preview_png;
 #if !defined(LFS_FORMAT_TEST_TARGET)
-        if (!is_autosave &&
+        if (!is_autosave && options.regenerate_dataset_preview &&
+            !options.remove_preview &&
             !options.leave_unbound &&
             (options.commit.kind == CommitKind::Explicit ||
              options.commit.kind == CommitKind::Recovered)) {
@@ -3949,6 +3952,7 @@ namespace lfs::io::project {
                         options.writer_lock_lease,
                     .writer_lock_wait =
                         options.writer_lock_wait,
+                    .expected_project_uuid = impl_->project_uuid,
                 });
             if (!result) {
                 return std::move(result).error();
@@ -4006,6 +4010,12 @@ namespace lfs::io::project {
             }
         }
         for (const auto& [key, source] : impl_->source_rows) {
+            if (options.remove_preview && key.fourcc == FOURCC_THMB) {
+                if (auto removed = writer->erase(key); !removed) {
+                    return std::move(removed).error();
+                }
+                continue;
+            }
             if (!preview_png.empty() &&
                 key.fourcc == FOURCC_THMB) {
                 continue;

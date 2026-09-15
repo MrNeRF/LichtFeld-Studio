@@ -338,18 +338,15 @@ def test_tools_menu_includes_gallery_entries(monkeypatch):
 
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
-    assert labels[:3] == [
+    assert labels[:2] == [
         "tr:menu.tools.asset_manager",
         "tr:menu.tools.gallery",
-        "tr:menu.tools.gallery_transfers",
     ]
-    assert items[3]["type"] == "separator"
+    assert items[2]["type"] == "separator"
 
     items[1]["callback"]()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
 
-    items[2]["callback"]()
-    assert state["panel_enabled"][-1] == ("lfs.gallery_transfer", True)
 
 
 def test_tools_menu_gallery_selects_scope_when_available(monkeypatch):

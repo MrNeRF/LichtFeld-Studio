@@ -777,7 +777,7 @@ class PreferencesPanel(Panel):
     def _project_location_hint(self):
         template = (
             lf.ui.tr("preferences.project_location_hint")
-            or "New projects and the Asset Manager Default folder: {path}"
+            or "New projects and the Default folder: {path}"
         )
         return template.replace("{path}", self._applied_project_location)
 

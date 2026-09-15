@@ -17,10 +17,6 @@ def _open_gallery_scope() -> None:
         select_gallery_scope()
 
 
-def _open_gallery_transfers_panel() -> None:
-    lf.ui.set_panel_enabled("lfs.gallery_transfer", True)
-
-
 @register_menu
 class ToolsMenu:
     """Tools menu for the menu bar."""
@@ -39,10 +35,6 @@ class ToolsMenu:
             menu_action(
                 tr("menu.tools.gallery"),
                 _open_gallery_scope,
-            ),
-            menu_action(
-                tr("menu.tools.gallery_transfers"),
-                _open_gallery_transfers_panel,
             ),
             menu_separator(),
             menu_action(
