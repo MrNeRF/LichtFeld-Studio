@@ -111,22 +111,25 @@ body {
     overflow-y: auto;
 }
 
-/* Shared forms keep fields and footer actions on the same 24dp row grid. */
+/* Shared forms use one 28dp row and text baseline for every control. */
 .modal-dialog.form-modal {
     box-sizing: border-box;
     max-width: 96%;
     padding: 16dp;
 }
-.form-modal .modal-title { text-align: left; line-height: 24dp; margin: 0; }
+.form-modal .modal-title { text-align: left; line-height: 28dp; margin: 0; }
 .form-modal .modal-content { text-align: left; }
-.form-modal .modal-button-row { justify-content: flex-end; flex-wrap: wrap; }
+.form-modal .modal-button-row { justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
 .form-modal .modal-button-row .btn {
     box-sizing: border-box;
-    height: 24dp;
-    min-height: 24dp;
+    display: block;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
     min-width: 64dp;
     padding: 0 8dp;
-    line-height: 24dp;
+    margin: 0;
+    line-height: 26dp;
     flex-shrink: 0;
     white-space: nowrap;
 }
@@ -135,52 +138,117 @@ body {
     display: flex;
     align-items: center;
     gap: 8dp;
-    min-height: 24dp;
-    margin-bottom: 8dp;
-}
-.modal-field-label { width: 144dp; flex-shrink: 0; line-height: 24dp; }
-.modal-field-value, .modal-field input, .modal-field select {
     box-sizing: border-box;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
+    margin: 0 0 8dp;
+}
+.modal-field-label {
+    display: block;
+    width: 200dp;
+    flex-shrink: 0;
+    height: 28dp;
+    line-height: 28dp;
+    white-space: nowrap;
+}
+.modal-field-value {
+    display: block;
     flex: 1;
     min-width: 0;
-    height: 24dp;
-    min-height: 24dp;
-    max-height: 24dp;
-    line-height: 24dp;
+    height: 28dp;
+    line-height: 28dp;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.modal-field input { padding: 0 8dp; }
-.modal-field select { padding: 0; }
+.form-modal input[type="text"], .form-modal select, .form-modal textarea {
+    box-sizing: border-box;
+    display: block;
+    flex: 1;
+    min-width: 0;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
+    line-height: 26dp;
+    border-width: 1dp;
+    padding: 0 8dp;
+    margin: 0;
+}
+.form-modal select { overflow: visible; }
+.form-modal select selectvalue {
+    box-sizing: border-box;
+    position: relative;
+    top: 0;
+    height: 26dp;
+    line-height: 26dp;
+    margin: 0 24dp 0 0;
+    padding: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.form-modal select selectarrow {
+    box-sizing: border-box;
+    position: relative;
+    /* Account for the transparent padding in the shared arrow bitmap. */
+    top: 4dp;
+    right: -2dp;
+    width: 16dp;
+    height: 16dp;
+    margin: 0;
+    padding: 0;
+}
+.form-modal select selectbox {
+    box-sizing: border-box;
+    min-width: 100%;
+    width: 100%;
+    max-width: 100%;
+    max-height: 280dp;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+.form-modal select option {
+    box-sizing: border-box;
+    display: block;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
+    line-height: 28dp;
+    padding: 0 8dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.modal-option-name { display: block; font-size: 12dp; line-height: 14dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modal-option-meaning { display: block; font-size: 10dp; line-height: 12dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.form-modal selectvalue .modal-option-name { line-height: 26dp; }
+.form-modal selectvalue .modal-option-meaning { display: none; }
 .modal-note { display: block; margin: 8dp 0; line-height: 20dp; }
-.modal-check { display: flex; align-items: center; min-height: 24dp; gap: 8dp; margin: 8dp 0; }
-.modal-check input { flex-shrink: 0; }
-.modal-history-head, .modal-history-row {
+.modal-check, .modal-history-head, .modal-history-row {
     display: flex;
     align-items: center;
     box-sizing: border-box;
-    height: 32dp;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
     gap: 8dp;
-    padding: 4dp 8dp;
+    padding: 0;
+    margin: 8dp 0;
 }
+.modal-check input, .modal-history-row input, .modal-radio-space {
+    box-sizing: border-box;
+    width: 16dp;
+    height: 16dp;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+}
+.modal-check span, .modal-history-row span, .modal-history-head span { display: block; line-height: 28dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .modal-history-head { font-weight: bold; }
-.modal-history-row input, .modal-radio-space { width: 16dp; height: 16dp; flex-shrink: 0; box-sizing: border-box; margin: 0; }
-.modal-history-row span, .modal-history-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24dp; }
 .modal-history-0 { width: 112dp; flex-shrink: 0; }
 .modal-history-1 { flex: 1; min-width: 144dp; }
 .modal-history-2 { width: 80dp; flex-shrink: 0; text-align: right; }
 .modal-history-3 { width: 96dp; flex-shrink: 0; text-align: right; }
-
-.project-form .modal-field { min-height: 28dp; }
-.project-form .modal-field input, .project-form .modal-field select { height: 28dp; min-height: 28dp; max-height: 28dp; }
-.modal-field--stacked { flex-direction: column; align-items: stretch; }
-.modal-field--stacked .modal-field-label { width: auto; }
-.modal-field textarea { box-sizing: border-box; width: 100%; min-height: 84dp; padding: 4dp 8dp; }
-
-.license-choice selectbox { min-width: 480dp; max-height: 440dp; }
-.license-choice option { display: block; padding: 4dp 8dp; white-space: normal; }
-.license-option-name { display: block; line-height: 20dp; }
-.license-option-meaning { display: block; line-height: 18dp; font-size: 12dp; white-space: normal; }
-.license-choice selectvalue .license-option-meaning { display: none; }
-.project-form .modal-field-label { width: 200dp; white-space: normal; }
