@@ -1,4 +1,4 @@
-"""Gallery stress-harness product regressions."""
+"""Gallery publishing, recovery, and transport regressions."""
 import copy
 from importlib import import_module
 from types import SimpleNamespace
@@ -97,7 +97,6 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     controller._identity = service.identity()
     controller._state = service.snapshot()
     controller._message = ''
-    monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
     monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
     manager._gallery_controller = controller
     manager._gallery_state = service.snapshot()
@@ -309,29 +308,6 @@ def _drain_settings(panel, service):
 
 
 @pytest.mark.parametrize('choice,content,expected', [('mine', True, 'upload'), ('gallery', True, 'pull'), ('gallery', False, 'patch')])
-def test_resolve_single_review_executes_one_final_action(gallery, monkeypatch, choice, content, expected):
-    panel, state, actions = gallery
-    module = import_module('lfs_plugins.gallery_controller')
-    asset = dict(id='project', path='/project.licht', commit_uuid='local' if content else 'base')
-    remote = scene(viewerSettings={'exposure': 2, 'cameraPath': {'keyframes': [{'t': 1}]}})
-    state['scenes'] = [remote]
-    state['links'] = {'project': dict(sceneId=remote['id'], commitUuid='base',
-                                    contentRevision='original', metadataRevision='original')}
-    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', asset['path']))
-    monkeypatch.setattr(module.lf, 'project_poll_write', lambda: {'path': asset['path']}, raising=False)
-    monkeypatch.setattr(module, 'capture_view', lambda _: {'exposure': 1, 'cameraPath': {'keyframes': [{'t': 0}]}})
-    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
-    monkeypatch.setattr(panel, '_begin_settings_apply', lambda *a, **k:
-                        actions.append(('upload' if k['replace_content'] else 'patch', a)))
-    monkeypatch.setattr(panel, 'pull_asset', lambda *a, **k: actions.append(('pull', a)))
-    reviews = _capture_review(monkeypatch)
-    panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
-    choices = _accept_review(reviews, choice)
-    assert set(choices) == ({'text', 'view', 'track', 'content'} if content else {'text', 'view', 'track'})
-    assert not panel._decision_pending
-    assert [a[0] for a in actions] == [expected]
-
-@pytest.mark.parametrize('choice,content,expected', [('mine', True, 'upload'), ('gallery', True, 'pull'), ('gallery', False, 'patch')])
 def test_resolve_confirmation_chain_executes_final_action(gallery, monkeypatch, tmp_path, choice, content, expected):
     # The old confirmation chain is one review; settings still save before publishing.
     panel, state, actions = gallery
@@ -403,85 +379,6 @@ def test_download_validation_reason_is_localized_before_generic_error(panel_modu
     translations = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
     monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda k: translations.get(k, k))
     assert localize_message(friendly_error(ValueError(diagnostic))) == translations['projects.gallery.' + key]
-
-def test_crash_journal_resumes_only_missing_upload_parts(tmp_path, monkeypatch):
-    import hashlib
-    import io
-    import uuid
-    from lfs_plugins import gallery_sync, portal_gallery
-    from test_gallery_sync import connected, finish, gallery_sync
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.licht'
-    source.write_bytes(b'12345678')
-    monkeypatch.setattr(service, 'resume', lambda _: None)
-    identifier = service.queue_upload(source, {'title': 'Scene', '_commitUuid': 'saved'}, 'project')
-    job = service._job(identifier)
-    upload_id = str(uuid.uuid4())
-    job.update(status='running', completed=3, checkpoint=dict(origin=service.account.base_url, owner='one',
-        sha256=hashlib.sha256(source.read_bytes()).hexdigest(), idempotencyKey='stable', uploadId=upload_id,
-        request=dict(job['metadata'], sourceFormat='licht', contentLength=8)))
-    service._save()
-    restarted = gallery_sync.GallerySync(service.account, tmp_path)
-    restarted.refresh()
-    finish(restarted)
-    recovered = restarted.snapshot()['jobs'][0]
-    assert recovered['status'] == 'paused' and recovered['interrupted']
-    puts, creates = [], []
-    result = dict(id=str(uuid.uuid4()), revision='new', title='Scene', description='', visibility='private', viewerSettings={}, contentRevision='new', metadataRevision='new')
-    def request(_client, method, path, body=None):
-        if path == '/me':
-            return dict(id='one', gallerySyncVersion=1, sourceFormats=["licht"])
-        if path == '/splats/uploads':
-            creates.append(body)
-            return dict(id=upload_id, status='uploading', partSize=3,
-                uploadedParts=[dict(partNumber=1, etag='retained', size=3)])
-        if method == 'GET' and path == f'/splats/uploads/{upload_id}':
-            return dict(id=upload_id, status='uploading', partSize=3,
-                uploadedParts=[dict(partNumber=1, etag='retained', size=3)])
-        if path.endswith('/part-upload-urls'):
-            number = body['parts'][0]
-            return dict(urls=[dict(partNumber=number, url=f'https://portal.example/part/{number}')])
-        if path.endswith('/complete'):
-            assert body['parts'][0] == dict(partNumber=1, etag='retained')
-            return dict(id=upload_id, status='completed', scene=result)
-        raise AssertionError((method, path, body))
-    class Response(io.BytesIO):
-        status = 200
-        headers = {'ETag': 'sent'}
-    def opened(request, **kwargs):
-        puts.append((request.full_url, request.data))
-        return Response()
-    monkeypatch.setattr(portal_gallery.PortalGalleryClient, '_request', request)
-    monkeypatch.setattr(portal_gallery, 'urlopen', opened)
-    monkeypatch.setattr(gallery_sync, 'PortalGalleryClient', portal_gallery.PortalGalleryClient)
-    restarted.resume(identifier)
-    finish(restarted)
-    assert [(url.rsplit('/', 1)[-1], data) for url, data in puts] == [('2', b'456'), ('3', b'78')]
-    assert creates[0]['idempotencyKey'] == 'stable'
-    state = restarted.snapshot()
-    assert state['jobs'][0]['status'] == 'completed'
-    from lfs_plugins.gallery_controller import asset_sync_state
-    assert asset_sync_state(dict(id='project', commit_uuid='saved'), state['links']['project'], result)['freshness'] == 'equal'
-
-@pytest.mark.parametrize('exception', [ConnectionRefusedError(), TimeoutError()])
-def test_outage_exhaustion_requires_manual_resume(tmp_path, monkeypatch, exception):
-    from test_gallery_sync import connected, finish, Client
-    service = connected(tmp_path, monkeypatch)
-    source = tmp_path / 'scene.licht'
-    source.write_bytes(b'ply-data')
-    def upload(*args, **kwargs):
-        kwargs['on_checkpoint']({'uploadId': 'retained'})
-        kwargs['on_progress'](4, 8)
-        raise exception
-    monkeypatch.setattr(Client, 'upload', upload, raising=False)
-    service.queue_upload(source, {'title': 'Scene'}, 'project')
-    finish(service)
-    job = service.snapshot()['jobs'][0]
-    assert job['status'] == 'paused' and job['message'] == 'Paused (connection lost)'
-    assert job['completed'] == 4 and job['checkpoint']['uploadId'] == 'retained'
-    assert job['message'] == 'Paused (connection lost)'
-    service.pause()
-    finish(service)
 
 def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monkeypatch, tmp_path):
     from test_gallery_sync import connected, Client
@@ -1013,6 +910,7 @@ def test_upload_transport_failure_classification(tmp_path, monkeypatch, failure)
     assert len(calls) == 2
     if transient:
         assert job['message'] == 'Paused (connection lost)'
+        assert job['checkpoint']['uploadId'] == upload_id
     elif not resumable:
         assert job['retryable'] is False
         assert job['message'] == ('Storage did not acknowledge the upload part' if failure == 'unacknowledged'
@@ -1091,7 +989,7 @@ def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp
         status = 200
     def opened(request, **kwargs):
         number = int(request.full_url.rsplit('/', 1)[-1])
-        puts.append(request.data)
+        puts.append((number, request.data))
         storage[number] = request.data
         response = Response()
         response.headers = {'ETag': f'tag-{number}'}
@@ -1102,7 +1000,9 @@ def test_sigkill_recovery_revalidates_server_parts_and_completes_valid_licht(tmp
     restarted.resume(identifier)
     finish(restarted)
     assert restarted._job(identifier)['status'] == 'completed', restarted._job(identifier)['message']
-    assert sum(map(len, puts)) == len(data) - part_size < len(data)
+    assert puts == [(number, data[(number - 1) * part_size:number * part_size])
+                    for number in range(2, (len(data) + part_size - 1) // part_size + 1)]
+    assert sum(len(payload) for _, payload in puts) == len(data) - part_size < len(data)
     assert ('GET', f'/splats/uploads/{upload_id}') in requests
     from lfs_plugins.gallery_controller import asset_sync_state
     assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved'},

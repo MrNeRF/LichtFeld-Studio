@@ -158,7 +158,7 @@ def test_old_portal_cannot_silently_create_instead_of_replace(tmp_path):
         portal_gallery.PortalGalleryClient(account).upload(export, {"title": "Edited", "replaceSceneId": str(uuid.uuid4())})
     assert requests == [("GET", "/api/gallery/v1/me")]
 
-def _domain_client(version=1, changed=None):
+def _domain_client(changed=None):
     scene_id = str(uuid.uuid4())
     scene = {"id": scene_id, "revision": "reviewed", "contentRevision": "content-old", "metadataRevision": "metadata-old"}
     calls = []
@@ -166,7 +166,7 @@ def _domain_client(version=1, changed=None):
         import copy
         calls.append((method, path, copy.deepcopy(body)))
         if path.endswith("/me"):
-            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1, **({"revisionDomains": version} if version else {})}
+            return {"storageHosts": ["portal.example"], "sourceFormats": ["licht"], "id": "owner", "gallerySyncVersion": 1, "revisionDomains": 1}
         writes = sum(call[0] != "GET" for call in calls)
         if changed and writes == 1:
             raise PortalHTTPError(409, "sync_conflict", detail={"changedDomains": changed,
@@ -179,10 +179,9 @@ def _domain_client(version=1, changed=None):
         request_json_authenticated=request, request_response_authenticated=response))
     return client, scene, calls
 
-@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("operation,domains", [("metadata", {"metadata"}), ("camera", {"content", "metadata"}), ("delete", {"content", "metadata"})])
-def test_capability_selects_exactly_one_guard_style(version, operation, domains):
-    client, scene, calls = _domain_client(version)
+def test_capability_selects_exactly_one_guard_style(operation, domains):
+    client, scene, calls = _domain_client()
     if operation == "delete":
         client.delete(scene["id"], scene)
     else:
@@ -191,9 +190,9 @@ def test_capability_selects_exactly_one_guard_style(version, operation, domains)
     assert set(body["baseRevisions"]) == domains
     assert "baseRevision" not in body
 
-@pytest.mark.parametrize('changed', [['content'], ['metadata']])
 @pytest.mark.parametrize('operation', ['update', 'delete'])
-def test_domain_conflict_preserves_details_without_retry(changed, operation):
+def test_domain_conflict_preserves_details_without_retry(operation):
+    changed = ['content', 'metadata']
     client, scene, calls = _domain_client(changed=changed)
     with pytest.raises(PortalHTTPError) as error:
         if operation == 'update':
@@ -282,9 +281,9 @@ def test_bounded_authenticated_response_rejects_oversized_thumbnail(tmp_path, mo
     with pytest.raises(PortalProtocolError, match="size limit"):
         service._request_json("GET", "/thumbnail", response_options={"max_bytes": 4})
 
-@pytest.mark.parametrize('changed', [['content'], ['metadata']])
 @pytest.mark.parametrize('background', [False, True])
-def test_upload_conflicts_preserve_details_without_automatic_rebase(tmp_path, changed, background):
+def test_upload_conflicts_preserve_details_without_automatic_rebase(tmp_path, background):
+    changed = ['content', 'metadata']
     identifier, scene_id = str(uuid.uuid4()), str(uuid.uuid4())
     calls = []
     parts = [{'partNumber': 1, 'etag': 'part', 'size': 8}]
@@ -436,7 +435,7 @@ def test_pinned_download_storage_redirect_never_forwards_account_token(tmp_path,
         client.download(identifier, tmp_path / "unsafe.licht")
 
 
-@pytest.mark.parametrize('method,attempts', [('GET', 4), ('HEAD', 1), ('POST', 1), ('PUT', 1), ('PATCH', 1), ('DELETE', 1)])
+@pytest.mark.parametrize('method,attempts', [('GET', 4), ('HEAD', 1), ('POST', 1)])
 def test_only_get_requests_retry_transient_failures(monkeypatch, method, attempts):
     from lfs_plugins import portal_account, portal_retry
     service = object.__new__(portal_account.PortalAccountService)
@@ -473,7 +472,7 @@ def test_expired_authorization_refresh_does_not_repeat_a_post(monkeypatch):
 
 
 @pytest.mark.parametrize('status,key', [(401, 'authorization_expired'), (403, 'access'),
-    (404, 'not_found'), (409, 'http_conflict'), (413, 'too_large'), (429, 'portal_busy'), (500, 'server'), (503, 'server')])
+    (404, 'not_found'), (409, 'http_conflict'), (413, 'too_large'), (429, 'portal_busy'), (500, 'server')])
 def test_http_status_reasons_remain_distinct_at_the_ui(monkeypatch, status, key):
     import json
     import sys

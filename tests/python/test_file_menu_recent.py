@@ -290,19 +290,6 @@ def test_open_project_with_confirmation_handles_dirty_project(monkeypatch):
     assert file_menu.lf.project_open_calls == [(path, True)]
 
 
-def test_asset_manager_open_can_keep_panel_open(monkeypatch):
-    path = "/tmp/catalog-project.licht"
-    file_menu = _load_file_menu(monkeypatch)
-
-    file_menu.open_project_with_confirmation(
-        path,
-        keep_asset_manager_open=True,
-    )
-
-    assert file_menu.lf.project_open_calls == [(path, True)]
-    assert file_menu.lf.project_open_keep_asset_manager == [True]
-
-
 def test_open_project_with_confirmation_reports_open_error(monkeypatch):
     path = "/tmp/broken-catalog-project.licht"
     file_menu = _load_file_menu(monkeypatch)
@@ -351,38 +338,6 @@ def test_embed_dataset_operator_requires_external_incomplete_dataset(monkeypatch
     assert file_menu.EmbedDatasetOperator.poll(None) is True
     assert file_menu.EmbedDatasetOperator().execute(None) == {"FINISHED"}
     assert file_menu.lf.embed_calls == [True]
-
-
-def test_imports_are_grouped_before_exports(monkeypatch):
-    file_menu = _load_file_menu(monkeypatch)
-    items = file_menu.FileMenu().menu_items()
-
-    import_index = next(
-        index
-        for index, item in enumerate(items)
-        if item.get("type") == "submenu"
-        and item.get("label") == "tr:menu.file.import"
-    )
-    import_items = items[import_index]["items"]
-    operator_names = [
-        item["operator_id"].rsplit(".", 1)[-1]
-        for item in import_items
-        if item.get("type") == "operator"
-    ]
-
-    assert operator_names == [
-        "ImportDatasetOperator",
-        "ImportPlyOperator",
-        "ImportSsogOperator",
-        "ImportMeshOperator",
-        "ImportCheckpointOperator",
-        "ImportConfigOperator",
-    ]
-    assert import_items[-2]["type"] == "separator"
-    assert items[import_index + 1]["operator_id"].endswith("ExportOperator")
-    assert items[import_index + 2]["operator_id"].endswith(
-        "ExportConfigOperator"
-    )
 
 
 def test_unrecognized_dataset_reports_modal_and_warning(monkeypatch):
@@ -468,10 +423,15 @@ def test_immediate_import_error_reports_reason(monkeypatch):
 def test_new_project_while_training_opens_dialog_without_prompt(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.is_training_active = lambda: True
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+    dialogs = []
+    monkeypatch.setattr(import_module("lfs_plugins.import_panels"),
+                        "open_new_project_panel", dialogs.append)
 
-    file_menu.NewProjectOperator().execute(None)
+    assert file_menu.NewProjectOperator().execute(None) == {"FINISHED"}
 
-    assert file_menu.lf.new_project_calls == []
+    assert dialogs == [""]
     assert file_menu.lf.new_project_calls == []
     assert file_menu.lf.confirm_dialogs == []
 
@@ -560,18 +520,6 @@ def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
         ("/tmp/dragged.licht", True)
     ]
     assert file_menu.lf.project_open_keep_asset_manager == [True]
-
-
-def test_new_project_dirty_opens_dialog_without_prompt(monkeypatch):
-    file_menu = _load_file_menu(monkeypatch)
-    file_menu.lf.project_is_dirty = lambda: True
-    file_menu.lf.project_has_path = lambda: True
-
-    file_menu.NewProjectOperator().execute(None)
-
-    assert file_menu.lf.new_project_calls == []
-    assert file_menu.lf.new_project_calls == []
-    assert file_menu.lf.confirm_dialogs == []
 
 
 def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):

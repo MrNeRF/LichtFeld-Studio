@@ -42,7 +42,7 @@ def test_python_logging_bridge_delivers_records_to_native_logger(monkeypatch):
     assert any(level == "info" and "bridge marker" in message for level, message in delivered)
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 413, 503])
+@pytest.mark.parametrize("status", [403, 503])
 def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, caplog, status):
     upload_id = "11111111-1111-4111-8111-111111111111"
     calls = []

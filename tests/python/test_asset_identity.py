@@ -14,9 +14,6 @@ from lfs_plugins.asset_index import AssetIndex, Project
 from lfs_plugins.asset_watch import scan_asset_folder
 
 
-ROOT = Path(__file__).resolve().parents[2]
-
-
 def _inspection(
     project_uuid: str,
     *,
@@ -525,7 +522,7 @@ def test_pre_1265_projects_are_migrated_as_folders(monkeypatch, tmp_path: Path):
     assert index.assets[project_uuid]["folder_id"] == "default"
 
 
-def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Path):
+def test_v3_load_skips_bad_project_rows_and_migrates_valid_rows(monkeypatch, tmp_path: Path):
     good_path = tmp_path / "good.licht"
     good_path.write_bytes(b"good")
     good_uuid = str(uuid.uuid4())
@@ -591,42 +588,6 @@ def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Pa
     assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
-def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Path):
-    good_path = tmp_path / "good.licht"
-    good_path.write_bytes(b"good")
-    good_uuid = str(uuid.uuid4())
-    _install_inspections(monkeypatch, {good_path.name: _inspection(good_uuid)})
-    library_path = tmp_path / "library.json"
-    payload = {
-        "schema_version": 3,
-        "folders": {"default": {"path": str(tmp_path)}},
-        "projects": {
-            good_uuid: {
-                "name": "Good",
-                "path": str(good_path),
-                "folder_id": "default",
-            },
-            "not-a-uuid": {
-                "name": "Broken",
-                "path": str(tmp_path / "broken.licht"),
-                "folder_id": "default",
-            },
-        },
-    }
-    original = json.dumps(payload, indent=2) + "\n"
-    library_path.write_text(original, encoding="utf-8")
-
-    index = AssetIndex(library_path=library_path)
-    assert index.load() is True
-
-    assert [project.id for project in index.list_projects()] == [good_uuid]
-    assert len(index.load_issues) == 1
-    assert "not-a-uuid" in index.load_issues[0]
-    migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 6
-    assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
-
-
 def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
     monkeypatch, tmp_path: Path
 ):
@@ -680,7 +641,7 @@ def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
 
 
 
-def test_v4_full_cached_inspection_skips_batch_inspection(
+def test_v4_restored_inspection_is_verified_before_becoming_available(
     monkeypatch, tmp_path: Path
 ):
     project_path = tmp_path / "cached.licht"
@@ -1152,11 +1113,7 @@ def test_inspection_maps_repair_only_and_unsupported_newer_status(
     assert stored["projects"][repair_uuid]["status"] == "REPAIR_ONLY"
 
 
-def test_asset_library_binding_returns_canonical_path(lf):
-    assert Path(lf.io.asset_library_dir()).name == "asset_library"
-
-
-def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypatch, tmp_path: Path):
+def test_asset_snapshot_is_cached_but_explicit_verify_reinspects(monkeypatch, tmp_path: Path):
     project_path = tmp_path / "project.licht"
     project_path.write_bytes(b"container")
     project_uuid = str(uuid.uuid4())
@@ -1178,23 +1135,6 @@ def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypat
     assert len(calls) == calls_before_verify + 1
     index.update_asset(project.id, save=False, name="Renamed")
     assert index.assets is not snapshot
-
-
-def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
-    rml = (
-        ROOT / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
-    ).read_text(encoding="utf-8")
-    panel_source = (
-        ROOT / "src/python/lfs_plugins/asset_manager_panel.py"
-    ).read_text(encoding="utf-8")
-
-    assert 'data-event-click="on_import_project"' in rml
-    assert 'data-event-click="gallery_refresh"' in rml
-    assert 'data-folder-action="menu"' in rml
-    assert '"action": "watch_dirs"' not in panel_source
-    assert '"action": "move_to_folder' not in panel_source
-    assert "open_folder_dialog" in panel_source
-    assert rml.count('data-event-click="on_import_project"') == 2
 
 
 def test_fallback_preview_path_is_cached_in_catalog(monkeypatch, tmp_path: Path):

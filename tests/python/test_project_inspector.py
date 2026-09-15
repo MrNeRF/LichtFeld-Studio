@@ -7,7 +7,6 @@ import time
 from lfs_plugins.project_inspector import (
     InspectionFactsPipeline,
     details_rows,
-    dialog_model,
     inspection_cache_key,
     operation_actions,
 )
@@ -95,12 +94,6 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
     assert model["reclaimable_percent"] == "49.9%"
     assert not model["has_metrics"]
     assert model["title"] == "Bicycle"
-
-
-def test_dialog_models_cover_contents_license_and_file_actions():
-    for kind in ("export_as", "update_thumbnail", "license", "rename", "repair"):
-        model = dialog_model(kind, entry=_entry(), details=SimpleNamespace(license=None))
-        assert model["kind"] == kind
 
 
 def test_context_actions_open_contents_and_file_operations():

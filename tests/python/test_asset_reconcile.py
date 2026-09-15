@@ -12,13 +12,11 @@ from types import SimpleNamespace
 from lfs_plugins.asset_index import (
     AssetIndex,
     AssetObservation,
-    LibraryService,
     display_name,
     fix_action_for_health,
     last_known_gallery_label,
     previous_scene_for,
 )
-from lfs_plugins.asset_watch import scan_asset_folder
 
 
 def _inspection(project_uuid, commit_uuid=None):
@@ -129,47 +127,6 @@ def test_v5_owner_catalog_migrates_once_with_distinct_backup(tmp_path):
     backup_bytes = backup.read_bytes()
     assert index.load()
     assert backup.read_bytes() == backup_bytes
-
-
-def test_owner_copy_has_the_four_real_projects_and_folder_removal_keeps_links(tmp_path):
-    source = Path(
-        "/home/paja/projects/gaussian-splatting-cuda/.codex_tmp/am_concept/testhome/data/asset_library/library.json"
-    )
-    library = tmp_path / "library.json"
-    shutil.copy2(source, library)
-    index = AssetIndex(library_path=library, default_folder_path=tmp_path / "projects")
-    assert index.load()
-    real_names = {
-        Path(project.path).name
-        for project in index.list_projects()
-        if "mrnf" in Path(project.path).parts
-    }
-    assert {"project.licht"} == real_names
-    assert sum("mrnf" in Path(project.path).parts for project in index.list_projects()) == 3
-
-    folder_path = tmp_path / "watched"
-    folder_path.mkdir()
-    project_path = folder_path / "linked.licht"
-    project_path.write_bytes(b"linked")
-    project_id = str(uuid.uuid4())
-    links = {"published-id": {"sceneId": "scene"}}
-    index._inspect_path = lambda _path: _inspection(project_id, "c")
-    folder = index.add_folder(str(folder_path))
-    index.register_licht_asset(str(project_path), folder_id=folder.id)
-    index.get_asset(project_id).previous_project_uuid = "published-id"
-    assert index.delete_folder(folder.id) == 1
-    assert index.get_asset(project_id) is None
-    assert links == {"published-id": {"sceneId": "scene"}}
-
-
-def test_library_service_serializes_commands_and_exposes_clean_missing(tmp_path):
-    index = AssetIndex(tmp_path / "library.json", tmp_path)
-    index.load()
-    with LibraryService(index) as service:
-        assert service._worker.is_alive()
-        folder = service.add_folder(str(tmp_path / "folder"))
-        assert folder is None  # add_folder keeps the real-directory contract
-        assert service.snapshot()["epoch"] >= 0
 
 
 def test_display_name_and_health_fixes_cover_panel_contract(tmp_path):

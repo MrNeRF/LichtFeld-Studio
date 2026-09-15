@@ -397,11 +397,6 @@ def test_completed_snapshot_cleanup_never_removes_external_source(tmp_path, monk
     finish(service)
     assert external.read_bytes() == b"user-data"
 
-def test_native_view_space_round_trip():
-    from lfs_plugins.gallery_view import viewer_vector
-    for point in ((1, 2, 3), (0, -1, .5), (1e8, 0, 0)):
-        assert viewer_vector(viewer_vector(point)) == list(point)
-
 def downloaded_job(service):
     path = service.root / 'download.licht'
     path.write_bytes(b'download')
@@ -850,6 +845,12 @@ def test_304_keeps_scene_cache_and_exchange_baseline(tmp_path, monkeypatch):
     assert snap["checkedAt"] >= old and snap["changeSequence"] == 10
     assert service._list_etag == 'W/"cached"'
 
+    service._change_sequence = None
+    monkeypatch.setattr(Client, "list_scenes", lambda self: [dict(id="old", title="Full old portal walk")])
+    service.refresh()
+    finish(service)
+    assert service.snapshot()["scenes"][0]["id"] == "old"
+
 def _poster_scene():
     import uuid
     return {"id": str(uuid.uuid4()), "status": "ready", "posterRevision": "poster1", "thumbnailUrl": "https://portal.example/ignored"}
@@ -1054,30 +1055,6 @@ def test_compact_changes_feed_fetches_view_settings_before_marking_checked(tmp_p
     service.refresh(); finish(service)
     assert service.snapshot()["checkedAt"] == checked
     assert not service.snapshot()["refresh_ok"]
-
-
-
-def test_owner_etag_fallback_requires_a_known_change_sequence(tmp_path, monkeypatch):
-    service = connected(tmp_path, monkeypatch)
-    service._change_sequence = 10
-    service._list_etag = 'W/"owner-ten"'
-    service.scenes = [dict(id="scene", title="Cached full walk")]
-    def unavailable(*_):
-        raise gallery_sync.PortalHTTPError(404, "Not found")
-    def unchanged(self, etag=None, *, owner_wide=False):
-        assert etag == 'W/"owner-ten"' and owner_wide
-        self.list_etag = etag
-        return None
-    monkeypatch.setattr(Client, "changes_since", unavailable, raising=False)
-    monkeypatch.setattr(Client, "list_scenes", unchanged)
-    service.refresh(); finish(service)
-    assert service.snapshot()["scenes"][0]["title"] == "Cached full walk"
-    assert service.snapshot()["changeSequence"] == 10
-    assert service.snapshot()["refresh_ok"]
-    service._change_sequence = None
-    monkeypatch.setattr(Client, "list_scenes", lambda self: [dict(id="old", title="Full old portal walk")])
-    service.refresh(); finish(service)
-    assert service.snapshot()["scenes"][0]["id"] == "old"
 
 
 

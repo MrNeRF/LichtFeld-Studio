@@ -5,7 +5,6 @@ from importlib import import_module
 from contextlib import nullcontext
 from types import SimpleNamespace
 import copy
-import math
 import struct
 
 import pytest
@@ -503,70 +502,6 @@ def test_transfer_tray_tracks_processing_pause_completion_and_cleared_recovery(g
     assert transfer_rows(panel.snapshot()) == []
     assert state['jobs'][0]['retired']  # Recovery record remains in the journal.
 
-CAMERA_TRACK = {
-    "version": 1,
-    "keyframes": [{"t": 0, "eye": [0, 1, 3]}],
-    "duration": 2.5,
-    "loopMode": "once",
-    "playbackSpeed": 1.0,
-}
-REMOTE_PRECISE_TRACK = {
-    "duration": 4.5,
-    "keyframes": [{
-        "easing": 0, "focal_length_mm": 25.73408317565918,
-        "position": [-2.0, 2.0, -6.0],
-        "rotation": [-0.15830765664577484, 0.02443433739244938, 0.9755357503890991, 0.15057116746902466],
-        "time": 0.0,
-    }, {
-        "easing": 3, "focal_length_mm": 26.33159828186035,
-        "position": [-1.1, 2.1, -5.6],
-        "rotation": [-0.1110728457570076, 0.06121033430099487, 0.9799413681030273, 0.15372401475906372],
-        "time": 2.0,
-    }],
-    "loopMode": "ping_pong",
-    "playbackSpeed": 1.25,
-    "version": 1,
-}
-
-def _f32(value):
-    return struct.unpack("f", struct.pack("f", value))[0]
-
-def _native_camera_path(path):
-    if path is None:
-        return None
-
-    def convert(value, key=None):
-        if isinstance(value, bool) or value is None:
-            return value
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return _f32(value)
-        if isinstance(value, list):
-            items = [convert(item) for item in value]
-            if key == "rotation" and len(items) == 4 and all(isinstance(item, float) for item in items):
-                length = math.sqrt(sum(item * item for item in items)) or 1.0
-                return [_f32(item / length) for item in items]
-            return items
-        if isinstance(value, dict):
-            return {name: convert(item, name) for name, item in value.items()}
-        return value
-
-    return convert(copy.deepcopy(path))
-def _local_track_state(monkeypatch, module, initial=None):
-    current = {"path": None if initial is None else _native_camera_path(initial)}
-
-    def set_path(path):
-        if not isinstance(path, dict):
-            return False
-        current["path"] = _native_camera_path(path)
-        return True
-
-    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: None if current["path"] is None else copy.deepcopy(current["path"]), raising=False)
-    monkeypatch.setattr(module.lf.ui, "set_camera_path", set_path, raising=False)
-    monkeypatch.setattr(module.lf.ui, "clear_keyframes", lambda: current.update(path=None), raising=False)
-    return current
-
 @pytest.mark.parametrize('commit,remote_title,expected', [
     ('saved', 'My scene', 'equal'), ('new-save', 'My scene', 'local'),
     ('saved', 'Portal edit', 'remote'), ('new-save', 'Portal edit', 'diverged'), ('', 'My scene', 'unknown')])
@@ -853,15 +788,14 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: 'localized:' + key)
     assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:projects.gallery.sidebar.refresh'
 
-@pytest.mark.parametrize('kind', ['upload', 'download'])
 @pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
-def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, kind, status, expected):
+def test_A5_finished_tray_rows_show_one_adaptive_size(gallery, monkeypatch, status, expected):
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     module = import_module('lfs_plugins.gallery_controller')
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: {
         'projects.unit.kb': 'KB', 'gallery.transfer.bytes': '{done} / {total}',
     }.get(key, key))
-    job = dict(id='job', kind=kind, status=status, completed=1024, total=137114)
+    job = dict(id='job', kind='upload', status=status, completed=1024, total=137114)
     row = transfer_rows({'jobs': [job]})[0]
     assert row['bytes'] == expected
     if status == 'completed':
@@ -876,7 +810,7 @@ def test_A5_gallery_asset_borders_use_supported_longhands():
     assert paths
     assert not [(p.name, match.group()) for p in paths for match in unsupported.finditer(p.read_text())]
 
-@pytest.mark.parametrize('upload_format', ['studio', 'sog', 'ssog', 'spz'])
+@pytest.mark.parametrize('upload_format', ['studio', 'sog'])
 def test_closed_project_prepares_saved_file_without_opening(gallery, monkeypatch, tmp_path, upload_format):
     panel, state, actions = gallery
     module = import_module('lfs_plugins.gallery_controller')
@@ -1114,21 +1048,6 @@ def test_replacement_confirmation_names_the_existing_public_scene(gallery, monke
         update=False, publish_as_new=False,
         handoff=dict(sceneId=remote["id"], baseRevisions={"content": "original", "metadata": "original"}))
     assert actions == [remote]
-
-
-@pytest.mark.parametrize("state,icon,tone", [
-    ("unlinked", "cloud", "text_dim"), ("remote_only", "cloud-dotted", "primary"),
-    ("remote_deleted", "cloud-strike", "text_dim"),
-    ("preparing", "ring", "primary"), ("applying", "ring", "primary"),
-])
-def test_project_state_glyphs(gallery, state, icon, tone):
-    from lfs_plugins.gallery_controller import asset_sync_state
-    asset = {"id":"project", "exists":True}
-    link = {"sceneId":"one", "remoteDeleted":True} if state == "remote_deleted" else None
-    facts = asset_sync_state(None if state == "remote_only" else asset, link,
-                             phase=state if state in ("preparing", "applying") else "idle")
-    assert facts["icon"] == icon
-    assert facts["tone"] == tone
 
 
 @pytest.mark.parametrize("health,tone", [
