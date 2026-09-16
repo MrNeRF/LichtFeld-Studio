@@ -61,9 +61,10 @@ class GalleryFilePanel(Panel):
 
     def show(self, *, controller, asset, scene, action, fields, includes="", quota="",
              warning="", publish_new=False, open_after=False, on_done=None,
-             mode="publish", groups=(), on_submit=None, apply_only=False):
+             mode="publish", groups=(), on_submit=None, apply_only=False,
+             expected_project_path=None):
         identity = controller.service.identity()
-        key = (identity, asset["id"], action, publish_new, open_after)
+        key = (identity, asset["id"], action, publish_new, open_after, expected_project_path)
         if self._review and self._review["key"] == key:
             return
         self._finish(False)
@@ -71,7 +72,8 @@ class GalleryFilePanel(Panel):
                             action=action, identity=identity, key=key, includes=includes,
                             quota=quota, warning=warning, publish_new=publish_new,
                             open_after=open_after, on_done=on_done, mode=mode,
-                            groups=deepcopy(list(groups)), on_submit=on_submit, apply_only=apply_only)
+                            groups=deepcopy(list(groups)), on_submit=on_submit, apply_only=apply_only,
+                            expected_project_path=expected_project_path)
         self._fields = dict(fields)
         self._fields.setdefault("use_cover", False)
         self._error = ""
@@ -231,6 +233,18 @@ class GalleryFilePanel(Panel):
         if controller.service.identity() != review["identity"]:
             self._close(False)
             return
+        expected_path = review.get("expected_project_path")
+        if expected_path is not None:
+            try:
+                current_path = lf.project_poll_write().get("path")
+                same_project = (lf.project_has_path() and current_path
+                                and Path(current_path).resolve() == Path(expected_path).resolve())
+            except Exception:
+                same_project = False
+            if not same_project:
+                self._error = localize_message(tr("error.project_changed"))
+                self._dirty()
+                return
         self._submitting = True
         try:
             if self._is_pull():

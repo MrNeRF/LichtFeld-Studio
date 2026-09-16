@@ -529,6 +529,84 @@ def _can_compact_project() -> bool:
     return _project_has_path()
 
 
+def _publish_current_project_to_gallery() -> None:
+    """Open the shared Gallery review for the active saved project."""
+    from .gallery_messages import tr as gallery_tr
+
+    title = lf.ui.tr("menu.file.publish_to_gallery")
+    try:
+        if not _project_has_path():
+            raise ValueError(gallery_tr("error.save_first"))
+        poll = lf.project_poll_write()
+        raw_path = str(poll.get("path") or "")
+        if not raw_path:
+            raise ValueError(gallery_tr("error.save_first"))
+        path = str(Path(raw_path).resolve())
+        project_path = Path(path)
+        if not project_path.is_file():
+            raise FileNotFoundError(f"The saved project file was not found: {path}")
+
+        card = lf.io.inspect_project_card(path)
+        project_id = str(card.project_uuid)
+        if not project_id:
+            raise ValueError(gallery_tr("error.project_changed"))
+
+        from .gallery_controller import get_gallery_controller
+        from .gallery_file_panel import open_gallery_file_panel
+
+        controller = get_gallery_controller()
+        state = controller.snapshot()
+        link = state.get("links", {}).get(project_id)
+        scene = None
+        if link:
+            scene = next((row for row in state.get("scenes", [])
+                          if row.get("id") == link.get("sceneId")), None)
+            if scene is None:
+                raise ValueError(gallery_tr("error.refresh"))
+        linked_fields = ((link or {}).get("localFields") or (link or {}).get("sharedFields")
+                         or scene or {})
+        project_name = str(getattr(card, "title", None) or project_path.stem)
+        asset = {
+            "id": project_id,
+            "path": path,
+            "name": project_name,
+            "commit_uuid": str(card.commit_uuid),
+            "file_uuid": str(card.file_uuid),
+            "file_size_bytes": int(card.physical_file_size),
+            "has_preview": bool(card.has_preview),
+            "exists": True,
+            "status": "AVAILABLE",
+            "publication": {},
+        }
+        fields = {
+            "title": str(linked_fields.get("title") or project_name),
+            "description": str(linked_fields.get("description") or ""),
+            "visibility": linked_fields.get("visibility", "private"),
+            "upload_format": controller.upload_format,
+        }
+        from .gallery_actions import gallery_quota
+        quota_bytes, used_bytes, remaining_bytes = gallery_quota(state)
+        quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}",
+                            quota=f"{quota_bytes / 1e9:g}")
+                 if quota_bytes is not None else "")
+        warning = (gallery_tr("quota.warning")
+                   if remaining_bytes is not None and asset["file_size_bytes"] > remaining_bytes
+                   else "")
+        open_gallery_file_panel(
+            controller=controller,
+            asset=asset,
+            scene=scene,
+            action="update" if link else "publish",
+            fields=fields,
+            quota=quota,
+            warning=warning,
+            expected_project_path=path,
+        )
+    except Exception as exc:
+        message = str(exc).strip() or title
+        lf.ui.message_dialog(title, message, "error")
+
+
 @register_menu
 class FileMenu:
     """File menu for the menu bar."""
@@ -579,6 +657,11 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
+            menu_action(
+                lf.ui.tr("menu.file.publish_to_gallery"),
+                _publish_current_project_to_gallery,
+                enabled=_can_compact_project(),
+            ),
             menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
             menu_operator(
                 CompactProjectOperator,

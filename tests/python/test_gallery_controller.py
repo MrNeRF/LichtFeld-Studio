@@ -1129,6 +1129,98 @@ def test_gallery_review_survives_a_locale_document_reload(gallery, monkeypatch):
     assert panel._review is None and closed == [False]
 
 
+@pytest.mark.parametrize("change", ["none", "project", "account"])
+def test_file_menu_review_submits_only_for_original_project_and_account(gallery, monkeypatch, tmp_path, change):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+
+    controller, state, _ = gallery
+    controller.service.root = tmp_path
+    original = tmp_path / "original.licht"
+    other = tmp_path / "other.licht"
+    original.write_bytes(b"saved project")
+    other.write_bytes(b"another project")
+    current = [str(original)]
+    monkeypatch.setattr(controller_module := import_module("lfs_plugins.gallery_controller").lf,
+                        "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(controller_module, "project_poll_write", lambda: {"path": current[0]}, raising=False)
+    monkeypatch.setattr(controller_module.ui, "get_panel_object", lambda _identifier: None, raising=False)
+    monkeypatch.setattr(controller_module.ui, "set_panel_enabled", lambda *_args: None, raising=False)
+    monkeypatch.setattr(controller_module.ui, "request_redraw", lambda: None, raising=False)
+    submitted = []
+    monkeypatch.setattr(controller, "publish_asset", lambda *args, **kwargs: submitted.append((args, kwargs)))
+    panel = GalleryFilePanel()
+    panel.show(
+        controller=controller,
+        asset={"id": "project", "path": str(original), "name": "original", "publication": {}},
+        scene=None,
+        action="publish",
+        fields={"title": "Original", "description": "", "visibility": "private", "upload_format": "sog"},
+        expected_project_path=str(original),
+    )
+
+    if change == "project":
+        current[0] = str(other)
+    elif change == "account":
+        state["identity"] = ("https://portal.example", "two@example.com", "second", True)
+    panel._submit()
+
+    if change == "project":
+        assert submitted == []
+        assert panel._review is not None
+        assert panel._error
+    elif change == "account":
+        assert submitted == []
+        assert panel._review is None
+    else:
+        assert len(submitted) == 1
+        args, kwargs = submitted[0]
+        assert args[0]["path"] == str(original)
+        assert args[2] == "sog"
+        assert kwargs == {"update": False, "publish_as_new": False}
+
+
+def test_file_menu_review_does_not_reuse_an_asset_manager_review(gallery, monkeypatch, tmp_path):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+
+    controller, _, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _identifier: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *_args: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    asset = {"id": "project", "path": str(tmp_path / "project.licht"), "name": "Project"}
+    fields = {"title": "Project", "description": "", "visibility": "private"}
+    finished = []
+    panel = GalleryFilePanel()
+    panel.show(controller=controller, asset=asset, scene=None, action="publish", fields=fields,
+               on_done=lambda submitted: finished.append(submitted))
+    panel.show(controller=controller, asset=asset, scene=None, action="publish", fields=fields,
+               expected_project_path=asset["path"])
+
+    assert finished == [False]
+    assert panel._review["expected_project_path"] == asset["path"]
+
+
+def test_publish_current_project_rechecks_identity_when_same_path_is_replaced(gallery, monkeypatch, tmp_path):
+    controller, _, _ = gallery
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"replacement project")
+    module = import_module("lfs_plugins.gallery_controller")
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(project)}, raising=False)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda _path: SimpleNamespace(
+        project_uuid="replacement-project", commit_uuid="replacement-commit"))
+    monkeypatch.setattr(controller, "_refresh_model", lambda: None)
+    monkeypatch.setattr(controller, "_panel_busy", lambda: False)
+    monkeypatch.setattr(controller, "_review_publish", lambda *_args, **_kwargs: pytest.fail("Changed project was reviewed"))
+
+    with pytest.raises(ValueError):
+        controller.publish_asset(
+            {"id": "original-project", "path": str(project)},
+            {"title": "Original", "description": "", "visibility": "private"},
+            "sog",
+        )
+
+
 def test_replacement_buttons_wait_for_the_account_and_transfer(gallery):
     from lfs_plugins.gallery_file_panel import GalleryFilePanel
     panel = GalleryFilePanel()

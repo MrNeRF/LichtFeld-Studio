@@ -2578,6 +2578,7 @@
   "projects.gallery.state.applying": "ギャラリーの変更を適用中",
   "projects.gallery.state.with_reason": "{state}：{reason}",
   "projects.gallery.action.publish": "公開…",
+  "menu.file.publish_to_gallery": "ギャラリーに公開…",
   "projects.gallery.action.update": "変更を公開",
   "projects.gallery.action.pull": "新しいプロジェクトとしてダウンロード",
   "projects.gallery.action.resolve": "解決…",
