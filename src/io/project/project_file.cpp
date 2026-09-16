@@ -174,6 +174,22 @@ namespace lfs::io::project::detail {
     }
 
     namespace {
+        thread_local const ProjectPathIdentity* active_identity = nullptr;
+    }
+
+    const ProjectPathIdentity* active_operation_identity() noexcept {
+        return active_identity;
+    }
+
+    const ProjectPathIdentity* set_active_operation_identity(const ProjectPathIdentity* identity) noexcept {
+        return std::exchange(active_identity, identity);
+    }
+
+    lfs::Result<void> validate_project_operation_identity() {
+        return active_identity ? active_identity->validate() : lfs::Result<void>{};
+    }
+
+    namespace {
 
         lfs::ErrorCode native_error_code(const int error, const bool writing) noexcept {
 #ifdef _WIN32

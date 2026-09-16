@@ -91,12 +91,11 @@ namespace lfs::io::project {
         }
 
         thread_local const WriterLockLease* active_operation_lease = nullptr;
-        thread_local const detail::ProjectPathIdentity* active_operation_identity = nullptr;
 
         lfs::Result<WriterLockLease>
         acquire_operation_lock(const std::filesystem::path& path) {
-            if (active_operation_identity) {
-                if (auto identity = active_operation_identity->validate(); !identity)
+            if (const auto* planned = detail::active_operation_identity()) {
+                if (auto identity = planned->validate(); !identity)
                     return std::move(identity).error();
                 std::error_code error;
                 if (active_operation_lease && !active_operation_lease->owns(path) &&
@@ -983,10 +982,6 @@ namespace lfs::io::project {
 
     } // namespace
 
-    lfs::Result<void> detail::validate_project_operation_identity() {
-        return active_operation_identity ? active_operation_identity->validate() : lfs::Result<void>{};
-    }
-
     lfs::Result<void> run_project_operation(
         const std::filesystem::path& path, const lfs::core::Uuid& expected_project,
         const lfs::core::Uuid& expected_commit, const std::function<void()>& operation) {
@@ -1011,18 +1006,18 @@ namespace lfs::io::project {
             const detail::ProjectPathIdentity* previous_identity;
             ~RestoreLease() {
                 active_operation_lease = previous;
-                active_operation_identity = previous_identity;
+                detail::set_active_operation_identity(previous_identity);
             }
-        } restore{active_operation_lease, active_operation_identity};
+        } restore{active_operation_lease, detail::active_operation_identity()};
         active_operation_lease = &*lease;
-        active_operation_identity = &*identity;
+        detail::set_active_operation_identity(&*identity);
         operation();
         return {};
     }
 
     static lfs::Result<std::filesystem::path> backup_locked_project_file(const std::filesystem::path& path) {
-        if (active_operation_identity) {
-            if (auto checked = active_operation_identity->validate(); !checked)
+        if (const auto* planned = detail::active_operation_identity()) {
+            if (auto checked = planned->validate(); !checked)
                 return std::move(checked).error();
         }
         auto source_identity = detail::ProjectPathIdentity::capture(path);

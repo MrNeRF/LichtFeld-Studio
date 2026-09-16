@@ -117,6 +117,8 @@ namespace lfs::io::project::detail {
     };
 
     [[nodiscard]] lfs::Result<void> validate_project_operation_identity();
+    [[nodiscard]] const ProjectPathIdentity* active_operation_identity() noexcept;
+    const ProjectPathIdentity* set_active_operation_identity(const ProjectPathIdentity* identity) noexcept;
 
     class WriterLock {
     public:
