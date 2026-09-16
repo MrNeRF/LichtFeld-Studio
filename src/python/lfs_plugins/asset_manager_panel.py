@@ -2304,7 +2304,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel), backup=False)
         elif action == "update_thumbnail":
-            self._start_thumbnail_operation(asset)
+            if not self._start_thumbnail_operation(asset):
+                return
         elif action == "license":
             try:
                 identifier, notice = license_value(data)
@@ -2358,20 +2359,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _rename_catalog_entry(self, asset_id: str, name: str) -> None:
         self._library_command("update_asset", asset_id, name=name)
 
-    def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> None:
+    def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> bool:
         source = str(self._dialog_data.get("source") or "first_dataset")
         after = self._gallery_thumbnail_callback(asset) if self._dialog_data.get("use_gallery_cover") else None
         path = str(asset["path"])
         if source == "image_file":
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
-                return
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
+                return False
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after)
         elif source == "viewport":
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
+        return True
 
     @staticmethod
     def _capture_viewport_preview(path: str, project_id: str) -> Any:

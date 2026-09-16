@@ -2363,3 +2363,39 @@ def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monk
     job['status'] = 'canceled'
     controller._after_service()
     assert calls[-1] == ('review', 'project', 'publish')
+
+
+def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+    panel._dialog_data = {"source": "image_file"}
+    operations = []
+    panel._start_project_operation = lambda asset_id, title, operation, **kwargs: operations.append(
+        (asset_id, title, operation, kwargs)
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "open_image_dialog", lambda *_args: "/tmp/selected.jpg", raising=False)
+    native_calls = []
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_native_io_call",
+        staticmethod(lambda name, *args: native_calls.append((name, *args))),
+    )
+
+    assert panel._start_thumbnail_operation(
+        {"id": "target", "path": "/tmp/target.licht"}
+    )
+    assert len(operations) == 1
+    operations[0][2](lambda *_args: None, lambda: False)
+    assert native_calls == [
+        ("preview_from_image_file", "/tmp/target.licht", "/tmp/selected.jpg")
+    ]
+
+    panel._dialog_kind = "update_thumbnail"
+    panel._dialog_data = {"source": "image_file"}
+    panel._dialog_entry = lambda: {"id": "target", "path": "/tmp/target.licht"}
+    panel._inspection_by_asset = {}
+    closed = []
+    panel.close_project_dialog = lambda: closed.append(True)
+    monkeypatch.setattr(panel_module.lf.ui, "open_image_dialog", lambda *_args: "", raising=False)
+    panel.confirm_project_dialog()
+    assert panel._dialog_kind == "update_thumbnail"
+    assert closed == []
