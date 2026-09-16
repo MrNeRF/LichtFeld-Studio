@@ -80,7 +80,7 @@ namespace {
         const auto image_path = temporary.path / "selected.jpg";
         auto image = lfs::core::Tensor::empty(
             {768, 1024, 3}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        for (std::size_t i = 0; i < image.size(); ++i) {
+        for (std::size_t i = 0; i < image.numel(); ++i) {
             image.ptr<std::uint8_t>()[i] = static_cast<std::uint8_t>(i * 13);
         }
         lfs::core::save_image_u8(image_path, image);
