@@ -140,9 +140,18 @@ def _new_project(discard_changes: bool, stop_training: bool = False):
     return lf.new_project(discard_changes)
 
 
-def _open_recent_checked(path: str, stop_training: bool = False) -> None:
+def _open_recent_checked(
+    path: str,
+    stop_training: bool = False,
+    keep_asset_manager_open: bool = False,
+) -> None:
     try:
-        _open_project(path, True, stop_training)
+        _open_project(
+            path,
+            True,
+            stop_training,
+            keep_asset_manager_open=keep_asset_manager_open,
+        )
     except FileNotFoundError:
         # NotFoundError subclasses FileNotFoundError (see startup_recent_panel).
         _offer_remove_missing_recent(path)
@@ -155,14 +164,25 @@ def _open_recent_checked(path: str, stop_training: bool = False) -> None:
         )
 
 
-def _open_recent_project(path: str) -> None:
+def open_recent_project_with_confirmation(
+    path: str,
+    *,
+    keep_asset_manager_open: bool = False,
+) -> None:
+    path = str(path)
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
     confirm_discard_work_then(
         lf.ui.tr("menu.file.open_project"),
-        lambda stop_training: _open_recent_checked(path, stop_training),
+        lambda stop_training: _open_recent_checked(
+            path, stop_training, keep_asset_manager_open
+        ),
     )
+
+
+def _open_recent_project(path: str) -> None:
+    open_recent_project_with_confirmation(path)
 
 
 def format_recent_project_entry(path: str, tr) -> tuple[str, str]:

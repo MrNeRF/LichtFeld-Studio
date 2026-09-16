@@ -28,6 +28,7 @@ def _install_lf_stub(monkeypatch):
         context_menus=context_menus,
         confirm_dialogs=[],
         message_dialogs=[],
+        removed_recent_files=[],
         opened=[],
         revealed=[],
         enabled=[],
@@ -97,6 +98,7 @@ def _install_lf_stub(monkeypatch):
             (path, discard_changes, stop_training, keep_asset_manager_open)
         )
     )
+    lf_stub.project_remove_recent_file = lambda path: state.removed_recent_files.append(path)
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
     lf_stub.read_checkpoint_params = lambda _path: object()
@@ -721,6 +723,157 @@ def test_recent_scope_and_shift_click_select_a_range(panel_module):
     )
 
     assert panel._selected_asset_ids == {"0", "1", "2"}
+
+
+def test_recent_scope_includes_projects_outside_the_asset_index(panel_module):
+    indexed = _project(
+        "44444444-4444-4444-8444-444444444444",
+        path="/watched/indexed.licht",
+        name="Indexed",
+    )
+    recent_paths = ["/outside/recent.licht", indexed["path"]]
+    panel_module.lf.project_recent_files = lambda: list(recent_paths)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={indexed["id"]: indexed})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+
+    rows = panel._filtered_assets()
+
+    assert [row["path"] for row in rows] == recent_paths
+    assert rows[0]["recent_only"] is True
+    assert rows[0]["id"].startswith("recent:")
+    assert rows[1]["id"] == indexed["id"]
+    formatted = panel._format_asset_for_ui(rows[0])
+    assert formatted["display_name"] == "recent"
+    assert formatted["can_load"] is False
+    assert rows[0]["id"] not in panel._all_display_assets()
+
+    panel._selected_folder_id = panel_module.SCOPE_ATTENTION
+    assert panel._filtered_assets() == []
+
+
+def test_recent_scope_resolves_path_aliases(panel_module, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    indexed_path = watched / "indexed.licht"
+    alias_path = watched / "nested" / ".." / "indexed.licht"
+    indexed = _project(path=str(indexed_path), name="Indexed")
+    panel_module.lf.project_recent_files = lambda: [str(alias_path)]
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={indexed["id"]: indexed})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+
+    rows = panel._filtered_assets()
+
+    assert [row["id"] for row in rows] == [indexed["id"]]
+
+
+def test_recent_projection_caches_paths_until_mru_change_or_catalog_refresh(
+    panel_module, monkeypatch, tmp_path
+):
+    first_path = tmp_path / "first.licht"
+    second_path = tmp_path / "second.licht"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    recent_paths = [str(first_path)]
+    monkeypatch.setattr(panel_module.lf, "project_recent_files", lambda: list(recent_paths), raising=False)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    keyed_paths = []
+    project_path_key = panel._project_path_key
+    panel._project_path_key = lambda path: keyed_paths.append(str(path)) or project_path_key(path)
+
+    first_rows = panel._recent_scope_assets()
+    first_key_count = len(keyed_paths)
+    repeated_rows = panel._recent_scope_assets()
+
+    assert repeated_rows is first_rows
+    assert len(keyed_paths) == first_key_count
+    recent_id = first_rows[0]["id"]
+    assert panel._asset_dict(recent_id) is first_rows[0]
+    assert panel._asset_dict(recent_id) is first_rows[0]
+    assert len(keyed_paths) == first_key_count
+
+    recent_paths[:] = [str(second_path)]
+    changed_rows = panel._recent_scope_assets()
+    assert [row["path"] for row in changed_rows] == [str(second_path)]
+    assert len(keyed_paths) > first_key_count
+
+    indexed = _project("55555555-5555-4555-8555-555555555555", path=str(second_path))
+    panel._asset_index.assets[indexed["id"]] = indexed
+    before_refresh_count = len(keyed_paths)
+    panel.refresh_catalog(scan_folders=False)
+
+    assert len(keyed_paths) > before_refresh_count
+    assert [row["id"] for row in panel._recent_scope_assets()] == [indexed["id"]]
+
+
+@pytest.mark.parametrize("exists", [True, False])
+@pytest.mark.parametrize("trigger", ["double_click", "enter"])
+def test_unindexed_recent_open_actions_preserve_mru_and_library_safety(
+    panel_module, monkeypatch, tmp_path, exists, trigger
+):
+    from importlib import import_module
+
+    path = tmp_path / "outside" / "recent.licht"
+    path.parent.mkdir()
+    if exists:
+        path.write_bytes(b"project")
+    path = str(path)
+    panel_module.lf.project_recent_files = lambda: [path]
+    calls = []
+    asset_index = _index(
+        register_licht_asset=lambda *_args: calls.append("register"),
+        verify_asset=lambda *_args: calls.append("verify"),
+        delete_assets=lambda *_args: calls.append("delete"),
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = asset_index
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    panel._handle = _Handle()
+    inspections = []
+    panel._inspection_pipeline = SimpleNamespace(
+        refresh=lambda entries, selected_id: inspections.append((list(entries), selected_id))
+    )
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda **_kwargs: calls.append("scan"))
+    recent = panel._filtered_assets()[0]
+    import_module("lfs_plugins.file_menu")
+
+    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == [
+        "load"
+    ]
+    assert panel._select_asset_id(recent["id"]) is True
+    assert inspections == [([], "")]
+    assert panel.get_contents_rows() == []
+
+    shell = _Element()
+    row = _Element(
+        {"data-asset-action": "select", "data-asset-id": recent["id"]}, shell
+    )
+    if trigger == "double_click":
+        event = _Event(shell, row)
+        panel._on_asset_manager_double_click(event)
+    else:
+        event = _Event(params={"key_identifier": str(panel_module.KI_RETURN)})
+        panel._on_asset_results_keydown(event)
+
+    assert calls == []
+    assert event.stopped is True
+    if exists:
+        assert panel_module.lf._test_state.opened == [(path, True, False, True)]
+        assert panel_module.lf._test_state.confirm_dialogs == []
+    else:
+        assert panel_module.lf._test_state.opened == []
+        assert len(panel_module.lf._test_state.confirm_dialogs) == 1
+        title, _message, buttons, _callback, *_extra = (
+            panel_module.lf._test_state.confirm_dialogs[0]
+        )
+        assert title == "menu.file.recent_missing_title"
+        assert buttons[0] == "menu.file.remove_from_recent"
+    assert panel._selected_asset_ids == {recent["id"]}
+    assert panel._delete_selected_assets() is False
+    assert calls == []
 
 def test_rename_passes_name_to_update_asset_without_shadowing_command(panel_module):
     panel = panel_module.AssetManagerPanel()
