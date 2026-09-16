@@ -2527,8 +2527,8 @@ namespace lfs::io::project {
                     static_cast<bool>(dataset_preview_png(*first));
             }
         } catch (...) {
-            // Failure to inspect an optional source must leave the other
-            // thumbnail choices available.
+            // LFS-CENSUS-OK(empty-catch): a bad external source only removes
+            // this optional choice; keep the other thumbnail sources available.
             availability.first_dataset_image = false;
         }
 
@@ -2552,8 +2552,8 @@ namespace lfs::io::project {
                             availability.first_embedded_image =
                                 static_cast<bool>(encode_image_bytes(*bytes));
                         } catch (...) {
-                            // A corrupt optional embedded image must not hide a
-                            // usable external dataset image source.
+                            // LFS-CENSUS-OK(empty-catch): a corrupt optional
+                            // embedded source must not hide other choices.
                             availability.first_embedded_image = false;
                         }
                     }
