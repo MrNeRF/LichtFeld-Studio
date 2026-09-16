@@ -7,6 +7,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -140,11 +142,11 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
     tr = file_menu.lf.ui.tr
 
     assert file_menu.format_recent_project_entry(recent_path, tr) == (
-        "garden (scans/garden)",
+        "project (scans/garden)",
         recent_path,
     )
     assert file_menu.format_recent_project_entry("/tmp/project.licht", tr) == (
-        "tmp (tmp)",
+        "project (tmp)",
         "/tmp/project.licht",
     )
     assert file_menu.format_recent_project_entry("/project.licht", tr) == (
@@ -154,12 +156,12 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
 
     windows_path = r"C:\Users\paja\scans\garden\project.licht"
     assert file_menu.format_recent_project_entry(windows_path, tr) == (
-        "garden (scans/garden)",
+        "project (scans/garden)",
         windows_path,
     )
 
     recent_item = file_menu.FileMenu().menu_items()[2]["items"][0]
-    assert recent_item["label"] == "garden (scans/garden)"
+    assert recent_item["label"] == "project (scans/garden)"
     assert recent_item["tooltip"] == recent_path
 
 
@@ -170,7 +172,7 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     file_menu.lf.project_clear_recent_files = lambda: cleared.append(True)
 
     populated = file_menu.FileMenu().menu_items()[2]["items"]
-    assert populated[0]["label"] == "garden (scans/garden)"
+    assert populated[0]["label"] == "project (scans/garden)"
     assert populated[1]["type"] == "separator"
     assert populated[2]["label"] == "tr:menu.file.clear_recent_projects"
     assert populated[2]["enabled"] is True
@@ -223,6 +225,147 @@ def test_open_recent_existing_path_opens_without_dialog(monkeypatch, tmp_path):
     assert file_menu.lf.project_open_calls == [(path, True)]
     assert file_menu.lf.confirm_dialogs == []
     assert file_menu.lf.message_dialogs == []
+
+
+def test_file_menu_publishes_current_project_from_review_without_asset_index(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(
+        inspect_project_card=lambda path: SimpleNamespace(
+            project_uuid="project-id",
+            commit_uuid="commit-id",
+            file_uuid="file-id",
+            title=None,
+            physical_file_size=5,
+            has_preview=False,
+        )
+    )
+    controller = SimpleNamespace(
+        upload_format="sog",
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account")),
+        snapshot=lambda: {"links": {}, "scenes": []},
+    )
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+    controller_module = ModuleType("lfs_plugins.gallery_controller")
+    controller_module.get_gallery_controller = lambda: controller
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_controller", controller_module)
+
+    item = next(
+        item for item in file_menu.FileMenu().menu_items()
+        if item.get("label") == "tr:menu.file.publish_to_gallery"
+    )
+    assert item["enabled"] is True
+    item["callback"]()
+
+    assert len(opened) == 1
+    review = opened[0]
+    assert review["asset"]["id"] == "project-id"
+    assert review["asset"]["path"] == str(project.resolve())
+    assert review["action"] == "publish"
+    assert review["fields"]["title"] == "project"
+    assert review["fields"]["upload_format"] == "sog"
+    assert review["expected_project_path"] == str(project.resolve())
+
+
+@pytest.mark.parametrize(
+    "state_name,expected",
+    [("local", "update"), ("remote", "apply"), ("diverged", "resolve"),
+     ("unknown", "check"), ("equal", "update")],
+)
+def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_path, state_name, expected):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid="project-id", commit_uuid="commit-id", file_uuid="file-id",
+            title="Project", physical_file_size=5, has_preview=False,
+        )
+    )
+    scene = {"id": "scene-id", "title": "Project", "contentLength": 10}
+    link = {"sceneId": "scene-id"}
+    calls = []
+    controller = SimpleNamespace(
+        upload_format="sog",
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False),
+        snapshot=lambda: {"links": {"project-id": link}, "scenes": [scene]},
+        refresh=lambda: calls.append(("check",)),
+        resolve_asset=lambda asset, details, **kwargs: calls.append(("resolve", kwargs)),
+        open_portal=lambda selected, action: calls.append((action, selected["id"])),
+        _schedule_poll=lambda: calls.append(("schedule",)),
+    )
+    controller_module = ModuleType("lfs_plugins.gallery_controller")
+    controller_module.get_gallery_controller = lambda: controller
+    controller_module.asset_sync_state = lambda *args, **kwargs: {
+        "relationship": "linked", "linked": True, "freshness": state_name,
+        "state": state_name, "activity": "idle", "active": False,
+        "job": {}, "sceneReady": True, "presentationChanged": False,
+    }
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_controller", controller_module)
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+
+    item = next(item for item in file_menu.FileMenu().menu_items()
+                if item.get("label") == "tr:menu.file.publish_to_gallery")
+    item["callback"]()
+
+    if expected == "update":
+        assert len(opened) == 1 and opened[0]["action"] == "update"
+        assert calls == []
+    elif expected == "apply":
+        assert calls == [("resolve", {"apply_only": True})] and opened == []
+    elif expected == "resolve":
+        assert calls == [("resolve", {"apply_only": False})] and opened == []
+    elif expected == "check":
+        assert calls == [("check",)] and opened == []
+        assert file_menu.lf.message_dialogs[-1][2] == "info"
+
+
+def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: False
+
+    item = next(
+        item for item in file_menu.FileMenu().menu_items()
+        if item.get("label") == "tr:menu.file.publish_to_gallery"
+    )
+
+    assert item["enabled"] is False
+    item["callback"]()
+    assert file_menu.lf.message_dialogs
+
+
+def test_file_menu_publish_rejects_missing_saved_project(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.licht"
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(missing)}
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+
+    item = next(
+        item for item in file_menu.FileMenu().menu_items()
+        if item.get("label") == "tr:menu.file.publish_to_gallery"
+    )
+    item["callback"]()
+
+    assert opened == []
+    assert file_menu.lf.message_dialogs
+    assert "missing.licht" in file_menu.lf.message_dialogs[-1][1]
 
 
 def test_open_recent_existing_file_not_found_offers_remove(monkeypatch, tmp_path):

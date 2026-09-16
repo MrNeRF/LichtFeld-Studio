@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
+import os
 import subprocess
 import threading
 import uuid
@@ -204,6 +206,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._catalog_verify_thread: Optional[threading.Thread] = None
         self._catalog_epoch_seen: Optional[int] = None
         self._catalog_unsubscribe: Optional[Callable[[], None]] = None
+        self._recent_scope_cache_signature: Optional[tuple[Any, ...]] = None
+        self._recent_scope_cache_rows: List[Dict[str, Any]] = []
+        self._recent_scope_cache_only_by_id: Dict[str, Dict[str, Any]] = {}
         self._worker_notification_lock = threading.Lock()
         self._worker_notification_pending = False
         self._scan_progress = AssetFolderScanProgress()
@@ -379,6 +384,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     self.STORAGE_PATH = storage_path
                     self.__class__.STORAGE_PATH = storage_path
                     self._last_default_folder_path = default_path
+                    self._invalidate_recent_scope_cache()
                     self._catalog_epoch_seen = self._catalog_epoch()
                     self._subscribe_catalog()
                     self._repair_selection()
@@ -523,7 +529,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             lambda: self._quick_look_visible and bool(self.get_selected_asset_id()),
         )
         model.bind_func("quick_look_thumbnail", self.get_selected_asset_thumbnail_decorator)
-        model.bind_func("quick_look_placeholder", self.get_selected_asset_placeholder)
         model.bind_func(
             "quick_look_has_thumbnail",
             lambda: self.get_selected_asset_thumbnail_decorator() != "none",
@@ -952,6 +957,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return assets if isinstance(assets, dict) else {}
 
     def _asset_dict(self, asset_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if asset_id and asset_id.startswith("recent:"):
+            if self._selected_folder_id != SCOPE_RECENT:
+                return None
+            return self._recent_only_assets().get(asset_id)
         if asset_id and asset_id.startswith("remote:"):
             return self._gallery_remote_assets().get(asset_id)
         if not asset_id or not self._asset_index:
@@ -962,6 +971,84 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if callable(getter):
             return getter(asset_id)
         return self._asset_index_assets().get(asset_id)
+
+    @staticmethod
+    def _project_path_key(path: Any) -> str:
+        text = str(path or "").strip()
+        if not text:
+            return ""
+        try:
+            expanded = os.path.expanduser(text)
+            normalized = os.path.realpath(os.path.abspath(expanded))
+            return os.path.normcase(normalized)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return os.path.normcase(os.path.abspath(text))
+
+    def _recent_paths(self) -> List[str]:
+        recent_files = getattr(lf, "project_recent_files", None)
+        if not callable(recent_files):
+            return []
+        try:
+            paths = list(recent_files() or [])
+        except Exception:
+            return []
+        return [str(path).strip() for path in paths if path is not None and str(path).strip()]
+
+    def _invalidate_recent_scope_cache(self) -> None:
+        self._recent_scope_cache_signature = None
+        self._recent_scope_cache_rows = []
+        self._recent_scope_cache_only_by_id = {}
+
+    def _recent_scope_assets(self) -> List[Dict[str, Any]]:
+        """Project the MRU list into catalog assets or temporary, open-only rows."""
+        paths = self._recent_paths()
+        signature = (self._catalog_epoch(), tuple(paths))
+        if signature == self._recent_scope_cache_signature:
+            return self._recent_scope_cache_rows
+
+        assets_by_path = {}
+        for asset in self._asset_index_assets().values():
+            key = self._project_path_key(asset.get("path"))
+            if key:
+                assets_by_path.setdefault(key, asset)
+
+        rows = []
+        seen_paths = set()
+        for path in paths:
+            path_key = self._project_path_key(path)
+            if not path_key or path_key in seen_paths:
+                continue
+            seen_paths.add(path_key)
+            asset = assets_by_path.get(path_key)
+            if asset is None:
+                asset_id = "recent:" + hashlib.sha256(path_key.encode("utf-8")).hexdigest()
+                exists = Path(path).is_file()
+                asset = {
+                    "id": asset_id,
+                    "name": Path(path).stem,
+                    "name_origin": "stem",
+                    "display_name": Path(path).stem,
+                    "path": path,
+                    "folder_id": "",
+                    "exists": exists,
+                    "available": exists,
+                    "status": "",
+                    "has_preview": False,
+                    "recent_only": True,
+                }
+            rows.append(asset)
+            if len(rows) >= 10:
+                break
+        self._recent_scope_cache_signature = signature
+        self._recent_scope_cache_rows = rows
+        self._recent_scope_cache_only_by_id = {
+            str(asset["id"]): asset for asset in rows if asset.get("recent_only")
+        }
+        return self._recent_scope_cache_rows
+
+    def _recent_only_assets(self) -> Dict[str, Dict[str, Any]]:
+        self._recent_scope_assets()
+        return self._recent_scope_cache_only_by_id
 
     def _asset_index_folders(self) -> Dict[str, Dict[str, Any]]:
         if self._library_service is not None:
@@ -1051,9 +1138,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _start_inspection_refresh(self) -> None:
         if not self._asset_index or not self._panel_mounted or not self._handle:
             return
-        entries = self._window_assets(self._filtered_assets())
+        entries = [
+            asset
+            for asset in self._window_assets(self._filtered_assets())
+            if not asset.get("recent_only")
+        ]
         selected = self.get_selected_asset_id()
-        self._ensure_inspection_pipeline().refresh(entries, selected)
+        self._ensure_inspection_pipeline().refresh(
+            entries, "" if selected.startswith("recent:") else selected
+        )
 
     def _on_inspection_result(self, asset_id: str, kind: str, result: Any, error: Optional[Exception]) -> None:
         if not self._panel_mounted:
@@ -1304,6 +1397,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _repair_selection(self) -> None:
         assets = self._all_display_assets()
+        if self._selected_folder_id == SCOPE_RECENT:
+            assets.update(self._recent_only_assets())
         folders = self._asset_index_folders()
         self._selected_asset_ids.intersection_update(assets)
         if self._selection_cursor_id not in assets:
@@ -1343,10 +1438,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "UNSUPPORTED_NEWER": "projects.status.newer_version",
         }.get(status, "projects.status.unverified")
         return tr(key)
-
-    @staticmethod
-    def _placeholder_label(display_name: str) -> str:
-        return " ".join(str(display_name or "").split()[:2])[:24]
 
     def _get_asset_display_name(self, asset: Dict[str, Any]) -> str:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
@@ -1428,6 +1519,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             else:
                 element = header.parent().insert_before("div", header)
             element.set_id("asset-info-thumbnail")
+        placeholder = element.query_selector(".asset-thumbnail-placeholder")
+        if placeholder is None:
+            placeholder = element.append_child("span")
+            placeholder.set_class_names("asset-thumbnail-placeholder asset-info-thumbnail-placeholder")
+            placeholder.set_attribute("aria-hidden", "true")
+            image = placeholder.append_child("img")
+            image.set_attribute("src", "../icon/scene/splat.png")
+            image.set_attribute("alt", "")
+        placeholder_title = self._get_asset_display_name(asset) if asset else ""
+        placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title
+        if placeholder_title_changed:
+            placeholder.set_attribute("title", placeholder_title)
         # The Inspector owns a 12 dp scroll gutter. The band alone uses the
         # small landscape preview; the column fills its own content width.
         width = (max(0.0, self._inspector_width - 12.0) if self._layout_class == "wide"
@@ -1447,9 +1550,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 release(self._info_thumbnail_source)
             self._info_thumbnail_source = source
             element.set_property("decorator", decorator)
-        if changed or created:
-            element.set_property("display", "block" if source else "none")
-        return changed or created or geometry_changed
+        placeholder_display = "none" if source else "flex"
+        placeholder_display_changed = placeholder.get_property("display") != placeholder_display
+        if placeholder_display_changed:
+            placeholder.set_property("display", placeholder_display)
+        element_display = "flex" if asset else "none"
+        visibility_changed = element.get_property("display") != element_display
+        if visibility_changed:
+            element.set_property("display", element_display)
+        return (changed or created or geometry_changed or placeholder_title_changed or
+                placeholder_display_changed or visibility_changed)
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
@@ -1482,7 +1592,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             **asset,
             **self._gallery_badge(asset),
             "display_name": display_name,
-            "placeholder_label": self._placeholder_label(display_name),
             "id": asset_id,
             "folder_name": folder_name,
             "size_label": self._format_size(asset.get("file_size_bytes", 0)),
@@ -1494,7 +1603,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             in self._selected_asset_ids,
             "has_preview": bool(asset.get("has_preview")),
             "shows_placeholder": thumbnail_decorator == "none",
-            "can_load": self._project_available(asset),
+            "can_load": self._project_available(asset) and not asset.get("recent_only"),
             "thumbnail_decorator": thumbnail_decorator,
         }
 
@@ -1524,7 +1633,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         folder_id = self._selected_folder_id if folder_id is None else folder_id
         query = self._search_query.strip().casefold()
         rows: List[Dict[str, Any]] = []
-        source = self._gallery_rows(folder_id == SCOPE_ATTENTION) if folder_id in GALLERY_SCOPES else self._asset_index_assets().values()
+        if folder_id == SCOPE_RECENT:
+            source = self._recent_scope_assets()
+        elif folder_id in GALLERY_SCOPES:
+            source = self._gallery_rows(folder_id == SCOPE_ATTENTION)
+        else:
+            source = self._asset_index_assets().values()
         for asset in source:
             if folder_id not in (None, SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
                 continue
@@ -1533,13 +1647,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if not self._asset_matches_filter(asset):
                 continue
             rows.append(asset)
-        if folder_id == SCOPE_RECENT:
-            recent_files = getattr(lf, "project_recent_files", lambda: [])()
-            order = {Path(path): rank for rank, path in enumerate(recent_files)}
-            rows = [asset for asset in rows if Path(asset.get("path") or "") in order]
-            rows.sort(key=lambda asset: order[Path(asset["path"])])
-            rows = rows[:10]
-        else:
+        if folder_id != SCOPE_RECENT:
             recent = {str(Path(path)): -rank for rank, path in enumerate(
                 getattr(lf, "project_recent_files", lambda: [])())} if self._sort_mode == "opened" else {}
             links = self._gallery_state.get("links", {})
@@ -1836,15 +1944,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._get_selected_asset()
         return self._thumbnail_decorator(self._asset_with_poster(asset)) if asset else "none"
 
-    def get_selected_asset_placeholder(self) -> str:
-        asset = self._get_selected_asset()
-        return self._project_status_label(asset) if asset else ""
-
     def open_quick_look(self, _handle=None, _ev=None, _args=None) -> None:
         if self.get_selected_asset_id():
             self._quick_look_visible = True
             self._dirty_fields(
-                "quick_look_visible", "quick_look_thumbnail", "quick_look_placeholder"
+                "quick_look_visible", "quick_look_thumbnail"
             )
 
     def close_quick_look(self, _handle=None, _ev=None, _args=None) -> None:
@@ -2028,7 +2132,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         row_element=None,
         container=None,
     ) -> bool:
-        if asset_id not in self._all_display_assets():
+        if asset_id.startswith("recent:"):
+            if (
+                self._selected_folder_id != SCOPE_RECENT
+                or asset_id not in self._recent_only_assets()
+            ):
+                return False
+        elif asset_id not in self._all_display_assets():
             return False
         visible_ids = [
             str(asset.get("id") or asset.get("project_uuid") or "")
@@ -2089,7 +2199,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "selected_asset_expected_path",
             "quick_look_visible",
             "quick_look_thumbnail",
-            "quick_look_placeholder",
             "quick_look_has_thumbnail",
             "inspector_saved", "inspector_saved_at", "inspector_opened",
             "inspector_iteration", "inspector_strategy", "inspector_resumable",
@@ -2379,7 +2488,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 )
                 self._refresh_project_form()
                 return
-            self._start_thumbnail_operation(asset)
+            if not self._start_thumbnail_operation(asset):
+                return
         elif action == "license":
             try:
                 identifier, notice = license_value(data)
@@ -2433,20 +2543,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _rename_catalog_entry(self, asset_id: str, name: str) -> None:
         self._library_command("update_asset", asset_id, name=name)
 
-    def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> None:
+    def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> bool:
         source = str(self._dialog_data.get("source") or "first_dataset")
         after = self._gallery_thumbnail_callback(asset) if self._dialog_data.get("use_gallery_cover") else None
         path = str(asset["path"])
         if source == "image_file":
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
-                return
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("set_project_preview", path, Path(image_path).read_bytes()), after=after)
+                return False
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after)
         elif source == "viewport":
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
             self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
+        return True
 
     @staticmethod
     def _capture_viewport_preview(path: str, project_id: str) -> Any:
@@ -2592,7 +2703,24 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return True
 
     def _load_asset(self, asset_id: str) -> None:
-        if not asset_id or not self._asset_index:
+        if not asset_id:
+            return
+        if asset_id.startswith("recent:"):
+            asset = self._asset_dict(asset_id)
+            if not asset or not asset.get("recent_only"):
+                return
+            self._selected_asset_ids = {asset_id}
+            self._selection_cursor_id = asset_id
+            self._update_selection_type()
+            self._dirty_selection()
+            from .file_menu import open_recent_project_with_confirmation
+
+            open_recent_project_with_confirmation(
+                str(asset.get("path") or ""),
+                keep_asset_manager_open=True,
+            )
+            return
+        if not self._asset_index:
             return
         if asset_id.startswith("remote:"):
             self._select_asset_id(asset_id)
@@ -2642,6 +2770,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False
 
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if asset.get("recent_only"):
+            return [{"label": tr("projects.action.open"), "action": "load"}]
         items: List[Dict[str, Any]] = []
         if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})
@@ -2898,6 +3028,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             if cancel is not None:
                 return
+        self._invalidate_recent_scope_cache()
         self._sync_default_folder_path()
         if self._catalog_notice:
             self._set_catalog_notice("")
@@ -3083,6 +3214,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if epoch is None or epoch == self._catalog_epoch_seen:
             return False
         self._catalog_epoch_seen = epoch
+        self._invalidate_recent_scope_cache()
         self._refresh_records(assets=True, folders=True)
         self._dirty_selection()
         self._start_inspection_refresh()
@@ -3107,6 +3239,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             with self._worker_notification_lock:
                 self._worker_notification_pending = False
             if generation == self._mount_generation and self._panel_mounted:
+                self._invalidate_recent_scope_cache()
                 self._request_model_update()
 
         scheduler(complete)
@@ -3172,6 +3305,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._catalog_verify_refresh_pending = False
         if not self._panel_mounted:
             return
+        self._invalidate_recent_scope_cache()
         self._publish_catalog_if_changed()
         self._refresh_records(assets=True, folders=True)
         if self._handle:
@@ -3548,6 +3682,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset_id = element.get_attribute("data-asset-id", "")
         if not asset_id or not self._asset_index:
             return
+        if asset_id.startswith("recent:"):
+            return
         remote = self._asset_dict(asset_id) or {}
         if remote.get("remote_only"):
             self._begin_remote_gallery_drag(remote, event)
@@ -3718,6 +3854,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         ids = [str(asset.get("id") or asset.get("project_uuid") or "") for asset in rows]
         cursor_index = ids.index(self._selection_cursor_id) if self._selection_cursor_id in ids else 0
         selected = self._selected_asset_ids.intersection(ids)
+        selected.intersection_update(self._asset_index_assets())
         if not selected:
             return False
         delete_label = tr("common.delete")
@@ -4178,6 +4315,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._invalidate_recent_scope_cache()
         RuntimeState.projects_panel_visible.value = True
         self._panel_mounted = True
         self._mount_generation += 1

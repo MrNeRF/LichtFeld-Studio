@@ -10,6 +10,7 @@
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
@@ -2174,7 +2175,7 @@ namespace {
         lfs::core::free_image(pixels);
     }
 
-    TEST(ProjectDocumentTest, DatasetImageWinsOverCallerPreview) {
+    TEST(ProjectDocumentTest, CallerPreviewWinsOverAutomaticDatasetPreview) {
         TemporaryDirectory temporary;
         const auto images = temporary.path / "images";
         fs::create_directories(images);
@@ -2186,10 +2187,12 @@ namespace {
         require_status(document->edit_parameters().set_snapshot(snapshot));
         bind_dataset(*document, temporary.path);
 
-        const auto preview = one_pixel_png();
+        const auto caller_preview_path = temporary.path / "caller-preview.png";
+        write_solid_png(caller_preview_path, 1, 1);
+        const auto preview = read_file_bytes(caller_preview_path);
         auto options = save_options(2111, 200);
         options.preview_png = std::span<const std::byte>(preview);
-        const auto path = temporary.path / "dataset-wins.licht";
+        const auto path = temporary.path / "caller-preview-wins.licht";
         auto saved = document->save(path, options);
         ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
 
@@ -2198,15 +2201,14 @@ namespace {
         auto png = reader->read_preview();
         ASSERT_TRUE(png);
         ASSERT_FALSE(png->empty());
-        EXPECT_NE(*png, preview);
+        EXPECT_EQ(*png, preview);
         const auto [pixels, width, height, channels] =
             lfs::core::load_image_from_memory(
                 reinterpret_cast<const std::uint8_t*>(png->data()),
                 png->size());
         ASSERT_NE(pixels, nullptr);
-        EXPECT_LE(std::max(width, height), 512);
-        EXPECT_GT(width, 1);
-        EXPECT_GT(height, 1);
+        EXPECT_EQ(width, 1);
+        EXPECT_EQ(height, 1);
         EXPECT_GE(channels, 1);
         lfs::core::free_image(pixels);
     }
@@ -2236,7 +2238,7 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
-         ExplicitSaveReplacesExistingThumbWithDatasetImage) {
+         ExplicitSavePreservesExistingCustomThumbnailWhenDatasetImageAppears) {
         TemporaryDirectory temporary;
         const auto images = temporary.path / "images";
         fs::create_directories(images);
@@ -2273,17 +2275,66 @@ namespace {
         auto png = second_reader->read_preview();
         ASSERT_TRUE(png);
         ASSERT_FALSE(png->empty());
-        EXPECT_NE(*png, preview);
-        const auto [pixels, width, height, channels] =
-            lfs::core::load_image_from_memory(
-                reinterpret_cast<const std::uint8_t*>(png->data()),
-                png->size());
-        ASSERT_NE(pixels, nullptr);
-        EXPECT_LE(std::max(width, height), 512);
-        EXPECT_GT(width, 1);
-        EXPECT_GT(height, 1);
-        EXPECT_GE(channels, 1);
-        lfs::core::free_image(pixels);
+        EXPECT_EQ(*png, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         ReopenedDocumentPreservesContentsThumbnailOnSaveAndSaveAs) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+
+        auto document = make_empty_document(fixed_uuid(2170), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        auto first_options = save_options(2171, 200);
+        const auto path = temporary.path / "contents-thumbnail.licht";
+        auto first_saved = document->save(path, first_options);
+        ASSERT_TRUE(first_saved)
+            << lfs::format_for_developer(first_saved.error());
+
+        const auto external_image_path = temporary.path / "external-preview.png";
+        write_solid_png(external_image_path, 2, 2);
+        const auto external_preview = read_file_bytes(external_image_path);
+        require_result(lfs::io::project::set_project_preview(path, external_preview));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        const auto unsaved_node_uuid = fixed_uuid(2174);
+        require_status(reopened->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = unsaved_node_uuid,
+                .type = "group",
+                .name = "Unsaved scene edit",
+                .child_order = 0,
+            }));
+        write_solid_png(images / "scene.png", 800, 400);
+        auto saved = reopened->save(path, save_options(2172, 300));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        auto png = reader->read_preview();
+        ASSERT_TRUE(png);
+        EXPECT_EQ(*png, external_preview);
+        auto saved_document = require_result_ptr(ProjectDocument::open(path));
+        const auto saved_node = require_result(
+            saved_document->scene_graph().find(unsaved_node_uuid));
+        ASSERT_TRUE(saved_node);
+        EXPECT_EQ(saved_node->name, "Unsaved scene edit");
+
+        const auto destination = temporary.path / "contents-thumbnail-copy.licht";
+        auto save_as = saved_document->save_as(
+            destination, save_options(2173, 400));
+        ASSERT_TRUE(save_as)
+            << lfs::format_for_developer(save_as.error());
+        auto copied_reader = ProjectReader::open(destination);
+        ASSERT_TRUE(copied_reader);
+        auto copied_preview = copied_reader->read_preview();
+        ASSERT_TRUE(copied_preview);
+        EXPECT_EQ(*copied_preview, external_preview);
     }
 
     TEST(ProjectDocumentTest,

@@ -2578,6 +2578,7 @@
   "projects.gallery.state.applying": "Application des modifications de la Galerie",
   "projects.gallery.state.with_reason": "{state} : {reason}",
   "projects.gallery.action.publish": "Publier…",
+  "menu.file.publish_to_gallery": "Publier dans la galerie…",
   "projects.gallery.action.update": "Publier les changements",
   "projects.gallery.action.pull": "Télécharger comme nouveau projet",
   "projects.gallery.action.resolve": "Résoudre…",

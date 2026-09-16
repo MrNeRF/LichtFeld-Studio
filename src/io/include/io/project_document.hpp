@@ -109,12 +109,13 @@ namespace lfs::io::project {
         // First-save replacement requires explicit caller authorization
         // (file-dialog Save As, or New Project overwrite consent).
         bool allow_existing_destination_replacement = false;
-        // Explicit GUI saves may replace THMB. An empty span means carry the
-        // current preview forward without regenerating it.
+        // Explicit callers may replace THMB. An empty span means carry the
+        // current preview forward; automatic preview generation only fills a
+        // missing THMB.
         std::span<const std::byte> preview_png;
         bool remove_preview = false;
-        // Closed-file edits preserve the chosen preview unless explicitly
-        // replacing it. Ordinary scene saves keep their dataset preview policy.
+        // When enabled, an ordinary explicit save creates a dataset preview
+        // only when the opened source has no THMB.
         bool regenerate_dataset_preview = true;
         // Optional deterministic seam for Save As's internal compaction
         // generation. Normal callers leave these unset.

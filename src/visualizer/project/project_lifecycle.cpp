@@ -91,6 +91,13 @@ namespace lfs::vis::project {
         using lfs::io::project::ProjectSessionChapters;
         using lfs::io::project::TrainingFinishReason;
 
+        [[nodiscard]] bool projectHasPreview(
+            const ProjectDocument* document) {
+            const auto* reader =
+                document ? document->source_reader() : nullptr;
+            return reader && reader->preview().has_value();
+        }
+
         [[nodiscard]] bool storedSessionCompleted(
             const int iteration,
             const int max_iterations,
@@ -4448,7 +4455,7 @@ namespace lfs::vis::project {
                 std::move(context).error());
         }
         std::vector<std::byte> preview;
-        if (regenerate_preview) {
+        if (regenerate_preview && !projectHasPreview(document_.get())) {
             auto captured = capturePreviewPng();
             if (!captured) {
                 return lfs::Status::failure(
@@ -6788,7 +6795,7 @@ namespace lfs::vis::project {
                 std::move(synchronized).error());
         }
         std::vector<std::byte> preview;
-        if (regenerate_preview) {
+        if (regenerate_preview && !projectHasPreview(document_.get())) {
             auto captured = capturePreviewPng();
             if (!captured) {
                 return lfs::Status::failure(
@@ -6934,7 +6941,8 @@ namespace lfs::vis::project {
             context->save_as_project_uuid =
                 save_as_project_uuid;
             std::vector<std::byte> preview;
-            if (regenerate_preview) {
+            if (regenerate_preview &&
+                !projectHasPreview(document_.get())) {
                 auto captured =
                     capturePreviewPng();
                 if (!captured) {
@@ -6972,7 +6980,7 @@ namespace lfs::vis::project {
                 std::move(synchronized).error());
         }
         std::vector<std::byte> preview;
-        if (regenerate_preview) {
+        if (regenerate_preview && !projectHasPreview(document_.get())) {
             auto captured = capturePreviewPng();
             if (!captured) {
                 return lfs::Status::failure(

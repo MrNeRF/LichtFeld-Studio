@@ -493,6 +493,7 @@ set(TEST_FILES
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
     test_rml_drag_payload.cpp
+    test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
@@ -515,6 +516,7 @@ set(TEST_FILES
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_image_io.cpp
+    test_project_thumbnail_image.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp

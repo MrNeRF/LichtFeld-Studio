@@ -2660,6 +2660,16 @@ namespace lfs::io::project {
     }
 
     lfs::Result<ProjectInspectorCard>
+    preview_from_image_file(const std::filesystem::path& project_path,
+                            const std::filesystem::path& image_path) {
+        auto png = dataset_preview_png(image_path);
+        if (!png) {
+            return std::move(png).error();
+        }
+        return set_project_preview(project_path, *png);
+    }
+
+    lfs::Result<ProjectInspectorCard>
     undo_contents_removal(const std::filesystem::path& path, const std::string& id) {
         return mutate_document(path, "removal_undone", [&](ProjectDocument& document) -> lfs::Result<void> {
             auto pending = pending_contents(document);

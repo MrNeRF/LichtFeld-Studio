@@ -28,6 +28,7 @@ def _install_lf_stub(monkeypatch):
         context_menus=context_menus,
         confirm_dialogs=[],
         message_dialogs=[],
+        removed_recent_files=[],
         opened=[],
         revealed=[],
         enabled=[],
@@ -97,6 +98,7 @@ def _install_lf_stub(monkeypatch):
             (path, discard_changes, stop_training, keep_asset_manager_open)
         )
     )
+    lf_stub.project_remove_recent_file = lambda path: state.removed_recent_files.append(path)
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
     lf_stub.read_checkpoint_params = lambda _path: object()
@@ -459,6 +461,37 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
 
+def test_project_card_name_uses_project_filename_not_assets_parent(panel_module):
+    asset = _project(
+        name="project",
+        name_origin="stem",
+        path="/work/garden/assets/project.licht",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    row = panel.get_filtered_assets()[0]
+
+    assert row["display_name"] == "project"
+
+
+def test_inspected_native_title_overrides_filename_name(panel_module):
+    asset = _project(
+        name="project",
+        name_origin="stem",
+        path="/work/garden/assets/project.licht",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {
+        "details": SimpleNamespace(card=SimpleNamespace(title="Inspected title"))
+    }
+
+    row = panel.get_filtered_assets()[0]
+
+    assert row["display_name"] == "Inspected title"
+
+
 def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
@@ -721,6 +754,199 @@ def test_recent_scope_and_shift_click_select_a_range(panel_module):
     )
 
     assert panel._selected_asset_ids == {"0", "1", "2"}
+
+
+def test_recent_scope_includes_projects_outside_the_asset_index(panel_module):
+    indexed = _project(
+        "44444444-4444-4444-8444-444444444444",
+        path="/watched/indexed.licht",
+        name="Indexed",
+    )
+    recent_paths = ["/outside/recent.licht", indexed["path"]]
+    panel_module.lf.project_recent_files = lambda: list(recent_paths)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={indexed["id"]: indexed})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+
+    rows = panel._filtered_assets()
+
+    assert [row["path"] for row in rows] == recent_paths
+    assert rows[0]["recent_only"] is True
+    assert rows[0]["id"].startswith("recent:")
+    assert rows[1]["id"] == indexed["id"]
+    formatted = panel._format_asset_for_ui(rows[0])
+    assert formatted["display_name"] == "recent"
+    assert formatted["can_load"] is False
+    assert rows[0]["id"] not in panel._all_display_assets()
+
+    panel._selected_folder_id = panel_module.SCOPE_ATTENTION
+    assert panel._filtered_assets() == []
+
+
+@pytest.mark.parametrize("signed_in", [False, True], ids=["disconnected", "connected"])
+def test_recent_only_project_has_no_gallery_inspector_action(
+    panel_module, monkeypatch, tmp_path, signed_in
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    panel._gallery_state = {
+        "identity": ("account", "owner") if signed_in else None,
+        "signed_in": signed_in,
+        "connected": signed_in,
+        "checkedAt": 1 if signed_in else 0,
+        "links": {},
+        "scenes": [],
+        "jobs": [],
+    }
+    recent = panel._filtered_assets()[0]
+    assert recent["recent_only"] is True
+    assert panel._select_asset_id(recent["id"])
+
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings["inspector_has_gallery_action"]() is False
+    assert model.func_bindings["inspector_gallery_action_label"]() == ""
+    assert model.func_bindings["inspector_gallery_action_enabled"]() is False
+    assert panel._gallery_badge(recent)["gallery_has_action"] is False
+    assert panel._selected_gallery_action() == ""
+
+    controller_calls = []
+    panel._controller = lambda: controller_calls.append(True) or SimpleNamespace(
+        _failure_notice=""
+    )
+    monkeypatch.setattr(panel, "_open_gallery_review", lambda *_args: None)
+    panel._gallery_command("primary")
+    assert controller_calls == []
+
+
+def test_recent_scope_resolves_path_aliases(panel_module, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    indexed_path = watched / "indexed.licht"
+    alias_path = watched / "nested" / ".." / "indexed.licht"
+    indexed = _project(path=str(indexed_path), name="Indexed")
+    panel_module.lf.project_recent_files = lambda: [str(alias_path)]
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={indexed["id"]: indexed})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+
+    rows = panel._filtered_assets()
+
+    assert [row["id"] for row in rows] == [indexed["id"]]
+
+
+def test_recent_projection_caches_paths_until_mru_change_or_catalog_refresh(
+    panel_module, monkeypatch, tmp_path
+):
+    first_path = tmp_path / "first.licht"
+    second_path = tmp_path / "second.licht"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    recent_paths = [str(first_path)]
+    monkeypatch.setattr(panel_module.lf, "project_recent_files", lambda: list(recent_paths), raising=False)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={})
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    keyed_paths = []
+    project_path_key = panel._project_path_key
+    panel._project_path_key = lambda path: keyed_paths.append(str(path)) or project_path_key(path)
+
+    first_rows = panel._recent_scope_assets()
+    first_key_count = len(keyed_paths)
+    repeated_rows = panel._recent_scope_assets()
+
+    assert repeated_rows is first_rows
+    assert len(keyed_paths) == first_key_count
+    recent_id = first_rows[0]["id"]
+    assert panel._asset_dict(recent_id) is first_rows[0]
+    assert panel._asset_dict(recent_id) is first_rows[0]
+    assert len(keyed_paths) == first_key_count
+
+    recent_paths[:] = [str(second_path)]
+    changed_rows = panel._recent_scope_assets()
+    assert [row["path"] for row in changed_rows] == [str(second_path)]
+    assert len(keyed_paths) > first_key_count
+
+    indexed = _project("55555555-5555-4555-8555-555555555555", path=str(second_path))
+    panel._asset_index.assets[indexed["id"]] = indexed
+    before_refresh_count = len(keyed_paths)
+    panel.refresh_catalog(scan_folders=False)
+
+    assert len(keyed_paths) > before_refresh_count
+    assert [row["id"] for row in panel._recent_scope_assets()] == [indexed["id"]]
+
+
+@pytest.mark.parametrize("exists", [True, False])
+@pytest.mark.parametrize("trigger", ["double_click", "enter"])
+def test_unindexed_recent_open_actions_preserve_mru_and_library_safety(
+    panel_module, monkeypatch, tmp_path, exists, trigger
+):
+    from importlib import import_module
+
+    path = tmp_path / "outside" / "recent.licht"
+    path.parent.mkdir()
+    if exists:
+        path.write_bytes(b"project")
+    path = str(path)
+    panel_module.lf.project_recent_files = lambda: [path]
+    calls = []
+    asset_index = _index(
+        register_licht_asset=lambda *_args: calls.append("register"),
+        verify_asset=lambda *_args: calls.append("verify"),
+        delete_assets=lambda *_args: calls.append("delete"),
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = asset_index
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    panel._handle = _Handle()
+    inspections = []
+    panel._inspection_pipeline = SimpleNamespace(
+        refresh=lambda entries, selected_id: inspections.append((list(entries), selected_id))
+    )
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda **_kwargs: calls.append("scan"))
+    recent = panel._filtered_assets()[0]
+    import_module("lfs_plugins.file_menu")
+
+    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == [
+        "load"
+    ]
+    assert panel._select_asset_id(recent["id"]) is True
+    assert inspections == [([], "")]
+    assert panel.get_contents_rows() == []
+
+    shell = _Element()
+    row = _Element(
+        {"data-asset-action": "select", "data-asset-id": recent["id"]}, shell
+    )
+    if trigger == "double_click":
+        event = _Event(shell, row)
+        panel._on_asset_manager_double_click(event)
+    else:
+        event = _Event(params={"key_identifier": str(panel_module.KI_RETURN)})
+        panel._on_asset_results_keydown(event)
+
+    assert calls == []
+    assert event.stopped is True
+    if exists:
+        assert panel_module.lf._test_state.opened == [(path, True, False, True)]
+        assert panel_module.lf._test_state.confirm_dialogs == []
+    else:
+        assert panel_module.lf._test_state.opened == []
+        assert len(panel_module.lf._test_state.confirm_dialogs) == 1
+        title, _message, buttons, _callback, *_extra = (
+            panel_module.lf._test_state.confirm_dialogs[0]
+        )
+        assert title == "menu.file.recent_missing_title"
+        assert buttons[0] == "menu.file.remove_from_recent"
+    assert panel._selected_asset_ids == {recent["id"]}
+    assert panel._delete_selected_assets() is False
+    assert calls == []
 
 def test_rename_passes_name_to_update_asset_without_shadowing_command(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1633,29 +1859,25 @@ def test_completed_save_outside_folder_is_ignored(panel_module):
     assert panel._refresh_after_project_write() is False
     assert registered == []
 
-def test_placeholder_label_uses_first_two_words(panel_module):
+def test_missing_thumbnails_use_the_project_icon(panel_module):
     panel = panel_module.AssetManagerPanel()
     row = panel._format_asset_for_ui(
         _project(name="Bicycle Scene Extra Words", has_preview=False)
     )
-    assert row["placeholder_label"] == "Bicycle Scene"
     assert row["has_preview"] is False
     assert row["shows_placeholder"] is True
-
-    truncated = panel._format_asset_for_ui(
-        _project(name="Supercalifragilisticexpialidocious Wonderful", has_preview=False)
-    )
-    assert truncated["placeholder_label"] == "Supercalifragilisticexpi"
-    assert len(truncated["placeholder_label"]) == 24
+    assert "placeholder_label" not in row
 
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+    theme = (root / "src/visualizer/gui/rmlui/resources/asset_manager.theme.rcss").read_text()
     assert 'data-if="asset.shows_placeholder"' in rml
-    assert 'data-if="!asset.has_preview"' not in rml
-    assert "{{asset.placeholder_label}}" in rml
-    assert "display: block;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
-    assert "width: 100%;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
+    assert rml.count('../icon/scene/splat.png') == 3  # gallery, list, and quick look
+    assert "{{asset.placeholder_label}}" not in rml
+    assert "{{quick_look_placeholder}}" not in rml
+    assert ".asset-thumbnail-placeholder > img" in rcss
+    assert "background-color: @{darken(primary,0.40)};" in theme
 
 
 def test_viewport_thumbnail_capture_refuses_a_different_active_project(panel_module):
@@ -2270,21 +2492,99 @@ def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
     panel._gallery_state["posters"] = {"remote-only": str(poster)}
     panel._selected_folder_id = panel_module.SCOPE_PUBLISHED
     panel._select_asset_id("remote:remote-only")
-    properties, elements = {}, {}
+    elements = {}
     class Element:
+        def __init__(self, tag="div"):
+            self.tag = tag
+            self.properties = {}
+            self.attributes = {}
+            self.classes = ""
+            self.children = []
         def set_id(self, value):
             elements[value] = self
         def set_property(self, key, value):
-            properties[key] = value
-    header = SimpleNamespace(parent=lambda: SimpleNamespace(insert_before=lambda *args: Element()))
-    doc = SimpleNamespace(query_selector=lambda selector: header, get_element_by_id=elements.get)
+            changed = self.properties.get(key) != value
+            self.properties[key] = value
+            return changed
+        def get_property(self, key):
+            return self.properties.get(key, "")
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+        def get_attribute(self, key, default=""):
+            return self.attributes.get(key, default)
+        def set_class_names(self, value):
+            self.classes = value
+        def append_child(self, tag):
+            child = Element(tag)
+            self.children.append(child)
+            return child
+        def query_selector(self, selector):
+            if selector == ".asset-thumbnail-placeholder":
+                return next((child for child in self.children if "asset-thumbnail-placeholder" in child.classes), None)
+            return None
+    thumbnail = Element()
+    header_parent = SimpleNamespace(insert_before=lambda *args: thumbnail)
+    header = SimpleNamespace(parent=lambda: header_parent)
+    doc = SimpleNamespace(query_selector=lambda selector: header if selector == ".asset-info-header" else None,
+                          get_element_by_id=elements.get)
     assert panel._sync_info_thumbnail(doc)
-    assert properties["display"] == "block" and "kind=image" in properties["decorator"]
+    assert thumbnail.properties["display"] == "flex" and "kind=image" in thumbnail.properties["decorator"]
+    placeholder = thumbnail.children[0]
+    assert placeholder.properties["display"] == "none"
+    assert thumbnail.children[0].children[0].attributes["src"] == "../icon/scene/splat.png"
+    assert panel._sync_info_thumbnail(doc) is False
     source = panel._info_thumbnail_source
     panel._selected_asset_ids.clear()
     assert panel._sync_info_thumbnail(doc)
-    assert properties["display"] == "none"
+    assert thumbnail.properties["display"] == "none"
+    assert placeholder.properties["display"] == "flex"
     assert source in panel_module.lf._test_state.released_textures
+
+
+def test_info_thumbnail_shows_project_icon_without_a_preview(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    local["has_preview"] = False
+    panel._select_asset_id(local["id"])
+    elements = {}
+    class Element:
+        def __init__(self, tag="div"):
+            self.tag = tag
+            self.properties = {}
+            self.attributes = {}
+            self.classes = ""
+            self.children = []
+        def set_id(self, value):
+            elements[value] = self
+        def set_property(self, key, value):
+            changed = self.properties.get(key) != value
+            self.properties[key] = value
+            return changed
+        def get_property(self, key):
+            return self.properties.get(key, "")
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+        def get_attribute(self, key, default=""):
+            return self.attributes.get(key, default)
+        def set_class_names(self, value):
+            self.classes = value
+        def append_child(self, tag):
+            child = Element(tag)
+            self.children.append(child)
+            return child
+        def query_selector(self, selector):
+            if selector == ".asset-thumbnail-placeholder":
+                return next((child for child in self.children if "asset-thumbnail-placeholder" in child.classes), None)
+            return None
+    thumbnail = Element()
+    header = SimpleNamespace(parent=lambda: SimpleNamespace(insert_before=lambda *args: thumbnail))
+    doc = SimpleNamespace(query_selector=lambda selector: header if selector == ".asset-info-header" else None,
+                          get_element_by_id=elements.get)
+
+    assert panel._sync_info_thumbnail(doc)
+    placeholder = thumbnail.children[0]
+    assert thumbnail.properties["display"] == "flex"
+    assert placeholder.properties["display"] == "flex"
+    assert placeholder.attributes["title"] == panel._get_asset_display_name(local)
 
 def test_translated_message_has_no_english_append(panel_module):
     from lfs_plugins.gallery_messages import localize_message
@@ -2397,3 +2697,39 @@ def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monk
     job['status'] = 'canceled'
     controller._after_service()
     assert calls[-1] == ('review', 'project', 'publish')
+
+
+def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+    panel._dialog_data = {"source": "image_file"}
+    operations = []
+    panel._start_project_operation = lambda asset_id, title, operation, **kwargs: operations.append(
+        (asset_id, title, operation, kwargs)
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "open_image_dialog", lambda *_args: "/tmp/selected.jpg", raising=False)
+    native_calls = []
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_native_io_call",
+        staticmethod(lambda name, *args: native_calls.append((name, *args))),
+    )
+
+    assert panel._start_thumbnail_operation(
+        {"id": "target", "path": "/tmp/target.licht"}
+    )
+    assert len(operations) == 1
+    operations[0][2](lambda *_args: None, lambda: False)
+    assert native_calls == [
+        ("preview_from_image_file", "/tmp/target.licht", "/tmp/selected.jpg")
+    ]
+
+    panel._dialog_kind = "update_thumbnail"
+    panel._dialog_data = {"source": "image_file"}
+    panel._dialog_entry = lambda: {"id": "target", "path": "/tmp/target.licht"}
+    panel._inspection_by_asset = {}
+    closed = []
+    panel.close_project_dialog = lambda: closed.append(True)
+    monkeypatch.setattr(panel_module.lf.ui, "open_image_dialog", lambda *_args: "", raising=False)
+    panel.confirm_project_dialog()
+    assert panel._dialog_kind == "update_thumbnail"
+    assert closed == []

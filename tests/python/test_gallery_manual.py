@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import uuid
 
 import pytest
 
@@ -132,7 +133,13 @@ def test_native_refusal_keeps_exact_reason_and_never_opens(gallery, tmp_path, mo
     monkeypatch.setattr(module.lf, 'project_open', lambda *a, **kw: pytest.fail('Refused publication opened a project'), raising=False)
     controller._finish_export()
     assert controller._export_pending is None
-    assert controller.snapshot()['message'] == reason
+    expected_message = {
+        'gallery_project_not_supported': 'projects.gallery.eligibility.format',
+        'gallery_project_payload_unavailable': 'projects.gallery.eligibility.external_payloads',
+        'gallery_project_commit_mismatch': 'projects.gallery.error.project_changed',
+    }[reason.split(':', 1)[0]]
+    assert controller._preparation_failure['message'] == reason
+    assert controller.snapshot()['message'] == expected_message
 
 
 def test_native_commit_mismatch_never_queues_upload(gallery, tmp_path, monkeypatch):
@@ -207,8 +214,10 @@ def test_pull_and_open_finishes_and_releases_idle_poll(gallery, monkeypatch, tmp
         poll['path'] = value
     monkeypatch.setattr(module.lf, 'project_open', open_project, raising=False)
     monkeypatch.setattr(module, 'restore_view', lambda *a, **kw: None)
+    project = SimpleNamespace(id='project', project_uuid='project')
     monkeypatch.setattr(asset_index, 'AssetIndex', lambda: SimpleNamespace(load=lambda: True,
-        register_licht_asset=lambda *a, **kw: (SimpleNamespace(project_uuid='project'), None)))
+        update_asset=lambda *a, **kw: project,
+        register_licht_asset=lambda *a, **kw: (project, None)))
     remote = {'id': 'scene', 'title': 'Downloaded', 'contentRevision': 'c', 'metadataRevision': 'm'}
     job = {'id': 'download', 'kind': 'download', 'status': 'running', 'project': 'project',
            'path': str(path), 'result': remote, 'metadata': {'title': remote['title']}}
@@ -218,11 +227,12 @@ def test_pull_and_open_finishes_and_releases_idle_poll(gallery, monkeypatch, tmp
     controller.service.download = download
     controller.service.environment_path = lambda _: None
     def stage(_):
-        job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': str(path)}
+        job['stagedImport'] = {'id': 'stage', 'state': 'ready', 'projectPath': str(path),
+                               'projectId': 'project', 'projectStamp': module.file_stamp(path)}
         return 'stage'
     controller.service.stage_download = stage
-    def link(*args):
-        calls.append(('link', args))
+    def link(*args, **kwargs):
+        calls.append(('link', args, kwargs))
         job['linkOperation'] = {'id': 'link', 'state': 'ready'}
         return 'link'
     controller.service.link_download = link
@@ -272,7 +282,7 @@ def test_watchdog_maps_localized_callback_labels_to_action_ids(gallery, monkeypa
     controller.command('resume', 'stuck')
     title, message, buttons, selected = prompts[0]
     assert all(text.startswith('FR:') for text in [title, message, *buttons])
-    selected('FR:asset_manager.gallery.action.' + action if action in ('cancel', 'retry', 'keep_waiting') else action)
+    selected('FR:projects.gallery.action.' + action if action in ('cancel', 'retry', 'keep_waiting') else action)
     assert calls == ([] if expected is None else [expected])
 
 
@@ -303,12 +313,12 @@ def test_closed_update_uses_saved_file_proof_without_live_capture(gallery, monke
     assert calls[0][0] == ('patch' if patch else 'replace') and len(calls) == 1
     if patch:
         assert calls[0][1] == ('scene', {'contentRevision': 'c', 'metadataRevision': 'm'}, details)
-        assert calls[0][2] == {'commit_uuid': 'new', 'content_stamp': saved}
+        assert calls[0][2] == {'commit_uuid': 'new', 'content_stamp': saved, 'project_id': 'project'}
         assert controller._export_pending is None
     else:
         assert controller._export_pending[1]['_contentStamp'] == saved
     if not saved:
-        assert controller._reupload_reason['message'] == 'asset_manager.gallery.info.reupload_encoding'
+        assert controller._reupload_reason['message'] == 'projects.gallery.info.reupload_encoding'
 
 
 @pytest.mark.parametrize('field', [None, 'portalOwnedHosts'])
@@ -343,10 +353,12 @@ def refresh_account(gallery, tmp_path, monkeypatch):
             if path == '/api/gallery/v1/me':
                 return dict(self.capabilities, id=self.owner)
             assert path == '/api/gallery/v1/splats'
-            return {'scenes': [{'id': self.owner + '-scene', 'status': 'ready',
-                                'contentRevision': 'c', 'metadataRevision': 'm'}]}
+            return {'scenes': [{'id': str(uuid.uuid5(uuid.NAMESPACE_URL, self.owner + '-scene')),
+                                'status': 'ready', 'contentRevision': 'c', 'metadataRevision': 'm',
+                                'viewerSettings': {}}]}
 
     account = RefreshAccount()
+    account.owner = str(uuid.uuid5(uuid.NAMESPACE_URL, 'gallery-test-owner-one'))
     service = sync.GallerySync(account, tmp_path / 'fresh-journal')
     assert not service._journal.exists()
     controller.service = service
@@ -379,7 +391,7 @@ def test_sign_in_refresh_checks_me_before_accepting_or_refusing(refresh_account,
     paths = [call[-1] for call in run.calls]
     assert paths == ['/api/gallery/v1/me'] + (['/api/gallery/v1/splats'] if supported else [])
     if supported:
-        assert [scene['id'] for scene in state['scenes']] == ['one-scene']
+        assert [scene['id'] for scene in state['scenes']] == [str(uuid.uuid5(uuid.NAMESPACE_URL, run.account.owner + '-scene'))]
         assert ui['message'] == 'Gallery is up to date.'
     else:
         assert state['scenes'] == []
@@ -399,7 +411,8 @@ def test_new_identity_refresh_fetches_me_and_listing(refresh_account, initially_
     run.account.signed_in = True
     run.refresh()
     if change == 'account':
-        run.account.email, run.account.owner = 'two@example.com', 'two'
+        run.account.email = 'two@example.com'
+        run.account.owner = str(uuid.uuid5(uuid.NAMESPACE_URL, 'gallery-test-owner-two'))
     else:
         run.account.connected_since = 'second'
     run.account.capabilities = supported
@@ -409,7 +422,7 @@ def test_new_identity_refresh_fetches_me_and_listing(refresh_account, initially_
     state = run.service.snapshot()
     assert state['connected'] and state['refresh_ok'] and not state['unsupported']
     assert [call[-1] for call in run.calls] == ['/api/gallery/v1/me', '/api/gallery/v1/splats']
-    assert [scene['id'] for scene in state['scenes']] == [run.account.owner + '-scene']
+    assert [scene['id'] for scene in state['scenes']] == [str(uuid.uuid5(uuid.NAMESPACE_URL, run.account.owner + '-scene'))]
     assert not run.controller.snapshot()['offline']
     assert run.controller.snapshot()['message'] == 'Gallery is up to date.'
 

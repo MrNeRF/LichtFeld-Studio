@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from lfs_plugins.asset_index import (
     AssetIndex,
     AssetObservation,
@@ -135,15 +137,41 @@ def test_v5_owner_catalog_migrates_once_with_distinct_backup(tmp_path):
     assert backup.read_bytes() == backup_bytes
 
 
-def test_display_name_and_health_fixes_cover_panel_contract(tmp_path):
-    project = SimpleNamespace(name="Stem", name_origin="stem", path=str(tmp_path / "project.licht"))
-    assert display_name(project) == tmp_path.name
-    project.name_origin = "user"
-    assert display_name(project) == "Stem"
+@pytest.mark.parametrize(
+    ("name", "name_origin", "expected"),
+    [
+        ("Named by user", "user", "Named by user"),
+        ("Legacy catalog name", "", "Legacy catalog name"),
+        ("Stem", "stem", "project"),
+    ],
+)
+def test_display_name_prefers_explicit_name_then_filename(
+    tmp_path, name, name_origin, expected
+):
+    project = SimpleNamespace(
+        name=name,
+        name_origin=name_origin,
+        path=str(tmp_path / "assets" / "project.licht"),
+    )
+
+    assert display_name(project) == expected
+
+
+def test_health_fixes_cover_panel_contract():
     assert fix_action_for_health("MISSING") == "locate"
     assert fix_action_for_health("UNREADABLE") == "verify"
     assert fix_action_for_health("REPAIR_ONLY") == "repair"
     assert fix_action_for_health("UNSUPPORTED_NEWER") == "update"
+
+
+def test_project_file_does_not_inherit_parent_directory_as_display_name(tmp_path):
+    project = SimpleNamespace(
+        name="project",
+        name_origin="stem",
+        path=str(tmp_path / "assets" / "project.licht"),
+    )
+
+    assert display_name(project) == "project"
 
 
 def test_unknown_catalog_fields_survive_a_v6_save_and_generated_name_is_not_stored(tmp_path):

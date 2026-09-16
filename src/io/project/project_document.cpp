@@ -3455,8 +3455,12 @@ namespace lfs::io::project {
         std::vector<std::byte> dataset_preview;
         std::span<const std::byte> preview_png = options.preview_png;
 #if !defined(LFS_FORMAT_TEST_TARGET)
+        const bool has_existing_preview =
+            impl_->source_reader &&
+            impl_->source_reader->preview().has_value();
         if (!is_autosave && options.regenerate_dataset_preview &&
-            !options.remove_preview &&
+            !options.remove_preview && !has_existing_preview &&
+            preview_png.empty() &&
             !options.leave_unbound &&
             (options.commit.kind == CommitKind::Explicit ||
              options.commit.kind == CommitKind::Recovered)) {

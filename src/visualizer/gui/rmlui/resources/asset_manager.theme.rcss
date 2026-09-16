@@ -240,8 +240,8 @@
     border-bottom-color: @{border};
 }
 
-.asset-card-placeholder {
-    color: @{text_dim};
+.asset-thumbnail-placeholder {
+    background-color: @{darken(primary,0.40)};
 }
 
 .asset-thumb-project {

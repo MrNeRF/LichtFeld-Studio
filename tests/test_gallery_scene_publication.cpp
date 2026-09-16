@@ -15,14 +15,24 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 namespace {
 
@@ -87,6 +97,63 @@ namespace {
         std::vector<std::byte> bytes(static_cast<std::size_t>(value.size()));
         if (!bytes.empty())
             require_status(value.read_at(0, bytes));
+        return bytes;
+    }
+
+    // Windows export workers have a small stack. Exercise that constraint on
+    // every platform, including Linux where the default stack hides regressions.
+    void on_small_stack(const std::function<void()>& operation) {
+        struct Work {
+            const std::function<void()>& operation;
+            std::exception_ptr error;
+            void run() noexcept {
+                try {
+                    operation();
+                } catch (...) {
+                    error = std::current_exception();
+                }
+            }
+        } work{operation, {}};
+        constexpr std::size_t stack_bytes = 512 * 1024;
+#ifdef _WIN32
+        const auto thread = CreateThread(
+            nullptr, stack_bytes,
+            [](void* data) -> DWORD {
+                static_cast<Work*>(data)->run();
+                return 0;
+            },
+            &work, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+        if (!thread)
+            throw std::runtime_error("Could not create publication test worker");
+        const auto waited = WaitForSingleObject(thread, INFINITE);
+        CloseHandle(thread);
+        if (waited != WAIT_OBJECT_0)
+            std::terminate(); // Do not unwind while the worker may still reference this stack.
+#else
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0)
+            throw std::runtime_error("Could not initialize publication test worker");
+        const auto configured = pthread_attr_setstacksize(&attributes, stack_bytes);
+        pthread_t thread;
+        const auto created = configured == 0
+                                 ? pthread_create(&thread, &attributes, [](void* data) -> void* {
+                                       static_cast<Work*>(data)->run();
+                                       return nullptr; }, &work)
+                                 : configured;
+        pthread_attr_destroy(&attributes);
+        if (created != 0)
+            throw std::runtime_error("Could not create publication test worker");
+        if (pthread_join(thread, nullptr) != 0)
+            std::terminate(); // Do not unwind while the worker may still reference this stack.
+#endif
+        if (work.error)
+            std::rethrow_exception(work.error);
+    }
+
+    std::vector<std::byte> multi_buffer_asset() {
+        std::vector<std::byte> bytes(2 * 1024 * 1024 + 37);
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+            bytes[i] = static_cast<std::byte>((i * 17 + i / 1024) % 251);
         return bytes;
     }
 
@@ -187,6 +254,45 @@ TEST(GalleryScenePublicationTest, UnchangedEncodedAssetIsByteIdenticalAfterPubli
     EXPECT_EQ(published.sidecar, "0.sog");
     EXPECT_EQ(published.dsrc, original);
     EXPECT_EQ(read_file_bytes(request.path / "0.sog"), original);
+}
+
+TEST(GalleryScenePublicationStackTest, EncodedCopyFitsWorkerStackAndPreservesEveryByte) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto bytes = multi_buffer_asset();
+            const auto source = owned_asset("sog", bytes, fixed_uuid(111));
+            const auto destination = temporary.path / "copied.sog";
+            on_small_stack([&] { copyLazyChunkToFile(source.bytes, destination); });
+            EXPECT_EQ(read_file_bytes(destination), bytes);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
+TEST(GalleryScenePublicationStackTest, PublicationFitsWorkerStackAndPreservesEmbeddedSource) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto bytes = multi_buffer_asset();
+            auto request = base_request(temporary.path / "worker.scene", ExportFormat::GALLERY_SOG);
+            GalleryScenePublishNode node;
+            node.snapshot.row_count = 8;
+            node.snapshot.active_sh_degree = 0;
+            node.snapshot.world_transform = glm::mat4{1.0f};
+            node.name = "encoded";
+            node.encoded = owned_asset("sog", bytes, fixed_uuid(112));
+            request.nodes.push_back(std::move(node));
+            on_small_stack([&] { writeGalleryScenePublication(request, {}, {}); });
+            const auto published = read_published_node(request.path);
+            EXPECT_EQ(published.dsrc, bytes);
+            EXPECT_EQ(read_file_bytes(request.path / "0.sog"), bytes);
+            EXPECT_FALSE(request.materialized_payload);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
 
 TEST(GalleryScenePublicationTest, StudioDefaultKeepsCleanSogInsteadOfExpandingToPly) {

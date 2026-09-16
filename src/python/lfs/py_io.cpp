@@ -975,6 +975,14 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
+        m.def("preview_from_image_file", [](const std::filesystem::path& project_path, const std::filesystem::path& image_path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_image_file(project_path, image_path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("project_path"), nb::arg("image_path"));
+
         m.def("set_project_license", [](const std::filesystem::path& path, const std::string& identifier, const std::string& notice) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {

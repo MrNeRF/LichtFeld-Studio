@@ -204,6 +204,10 @@ namespace lfs::io::project {
     preview_from_first_embedded_image(const std::filesystem::path& path);
 
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
+    preview_from_image_file(const std::filesystem::path& project_path,
+                            const std::filesystem::path& image_path);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     set_project_license(const std::filesystem::path& path,
                         const std::string& identifier,
                         const std::string& notice = {});

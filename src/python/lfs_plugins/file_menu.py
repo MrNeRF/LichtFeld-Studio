@@ -140,9 +140,18 @@ def _new_project(discard_changes: bool, stop_training: bool = False):
     return lf.new_project(discard_changes)
 
 
-def _open_recent_checked(path: str, stop_training: bool = False) -> None:
+def _open_recent_checked(
+    path: str,
+    stop_training: bool = False,
+    keep_asset_manager_open: bool = False,
+) -> None:
     try:
-        _open_project(path, True, stop_training)
+        _open_project(
+            path,
+            True,
+            stop_training,
+            keep_asset_manager_open=keep_asset_manager_open,
+        )
     except FileNotFoundError:
         # NotFoundError subclasses FileNotFoundError (see startup_recent_panel).
         _offer_remove_missing_recent(path)
@@ -155,14 +164,25 @@ def _open_recent_checked(path: str, stop_training: bool = False) -> None:
         )
 
 
-def _open_recent_project(path: str) -> None:
+def open_recent_project_with_confirmation(
+    path: str,
+    *,
+    keep_asset_manager_open: bool = False,
+) -> None:
+    path = str(path)
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
     confirm_discard_work_then(
         lf.ui.tr("menu.file.open_project"),
-        lambda stop_training: _open_recent_checked(path, stop_training),
+        lambda stop_training: _open_recent_checked(
+            path, stop_training, keep_asset_manager_open
+        ),
     )
+
+
+def _open_recent_project(path: str) -> None:
+    open_recent_project_with_confirmation(path)
 
 
 def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
@@ -529,6 +549,132 @@ def _can_compact_project() -> bool:
     return _project_has_path()
 
 
+def _publish_current_project_to_gallery() -> None:
+    """Open the shared Gallery review for the active saved project."""
+    from .gallery_messages import tr as gallery_tr
+
+    title = lf.ui.tr("menu.file.publish_to_gallery")
+    try:
+        if not _project_has_path():
+            raise ValueError(gallery_tr("error.save_first"))
+        poll = lf.project_poll_write()
+        raw_path = str(poll.get("path") or "")
+        if not raw_path:
+            raise ValueError(gallery_tr("error.save_first"))
+        path = str(Path(raw_path).resolve())
+        project_path = Path(path)
+        if not project_path.is_file():
+            raise FileNotFoundError(f"The saved project file was not found: {path}")
+
+        card = lf.io.inspect_project_card(path)
+        project_id = str(card.project_uuid)
+        if not project_id:
+            raise ValueError(gallery_tr("error.project_changed"))
+
+        from .gallery_controller import get_gallery_controller
+        from .gallery_file_panel import open_gallery_file_panel
+
+        controller = get_gallery_controller()
+        state = controller.snapshot()
+        link = state.get("links", {}).get(project_id)
+        scene = None
+        if link:
+            scene = next((row for row in state.get("scenes", [])
+                          if row.get("id") == link.get("sceneId")), None)
+            if scene is None:
+                raise ValueError(gallery_tr("error.refresh"))
+        linked_fields = ((link or {}).get("localFields") or (link or {}).get("sharedFields")
+                         or scene or {})
+        project_name = str(getattr(card, "title", None) or project_path.stem)
+        asset = {
+            "id": project_id,
+            "path": path,
+            "name": project_name,
+            "commit_uuid": str(card.commit_uuid),
+            "file_uuid": str(card.file_uuid),
+            "file_size_bytes": int(card.physical_file_size),
+            "has_preview": bool(card.has_preview),
+            "exists": True,
+            "status": "AVAILABLE",
+            "publication": {},
+        }
+        fields = {
+            "title": str(linked_fields.get("title") or project_name),
+            "description": str(linked_fields.get("description") or ""),
+            "visibility": linked_fields.get("visibility", "private"),
+            "upload_format": controller.upload_format,
+        }
+        from .gallery_actions import gallery_quota
+        quota_bytes, used_bytes, remaining_bytes = gallery_quota(state)
+        quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}",
+                            quota=f"{quota_bytes / 1e9:g}")
+                 if quota_bytes is not None else "")
+        warning = (gallery_tr("quota.warning")
+                   if remaining_bytes is not None and asset["file_size_bytes"] > remaining_bytes
+                   else "")
+
+        # Use the same primary verb as Asset Manager. A linked project may be
+        # locally newer, remotely newer, divergent, or not checked; treating
+        # every link as an update can bypass the corresponding Gallery action.
+        publish_new = False
+        action = "publish"
+        if link:
+            from .gallery_actions import gallery_actions
+            from .gallery_controller import asset_sync_state
+
+            facts = asset_sync_state(
+                asset,
+                link,
+                scene,
+                state.get("jobs", ()),
+                checked=bool(state.get("checkedAt")),
+                established=state.get("established", state.get("connected", True)),
+            )
+            for key in ("signed_in", "busy", "relink_required", "unsupported", "source_formats",
+                        "quotaBytes", "usedBytes", "reservedBytes", "hdrBackgrounds"):
+                if key in state:
+                    facts[key] = state[key]
+            primary = next((item for item in gallery_actions(asset, facts) if item["primary"]), None)
+            if not primary:
+                raise ValueError(gallery_tr("error.refresh"))
+            if not primary["enabled"]:
+                raise ValueError(primary["reason"] or gallery_tr("error.refresh"))
+
+            action = primary["id"]
+            details = {key: fields[key] for key in ("title", "description", "visibility")}
+            if action == "check":
+                controller.refresh()
+                lf.ui.message_dialog(title, gallery_tr("error.refresh"), "info")
+                return
+            if action in ("resolve", "apply"):
+                controller.resolve_asset(asset, details, apply_only=action == "apply")
+                return
+            if action in ("open", "copy"):
+                # File → Publish remains a publishing workflow when the link
+                # is already current: the review can still update its metadata.
+                action = "update"
+            if action == "publish_again":
+                publish_new = True
+                action = "publish"
+            elif action not in ("publish", "update"):
+                raise ValueError(gallery_tr("error.refresh"))
+
+        open_gallery_file_panel(
+            controller=controller,
+            asset=asset,
+            scene=scene,
+            action=action,
+            fields=fields,
+            quota=quota,
+            warning=warning,
+            publish_new=publish_new,
+            expected_project_path=path,
+        )
+    except Exception as exc:
+        message = str(exc).strip() or title
+        lf.ui.message_dialog(title, message, "error")
+
+
 @register_menu
 class FileMenu:
     """File menu for the menu bar."""
@@ -579,6 +725,11 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
+            menu_action(
+                lf.ui.tr("menu.file.publish_to_gallery"),
+                _publish_current_project_to_gallery,
+                enabled=_can_compact_project(),
+            ),
             menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
             menu_operator(
                 CompactProjectOperator,
