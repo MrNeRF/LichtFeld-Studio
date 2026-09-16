@@ -542,6 +542,13 @@ namespace lfs::python {
             .def_ro("commit_kind", &project::ProjectInspectorCard::commit_kind)
             .def_ro("diagnostic", &project::ProjectInspectorCard::diagnostic);
 
+        nb::class_<project::ProjectThumbnailSourceAvailability>(
+            m, "ProjectThumbnailSourceAvailability")
+            .def_ro("first_dataset_image",
+                    &project::ProjectThumbnailSourceAvailability::first_dataset_image)
+            .def_ro("first_embedded_image",
+                    &project::ProjectThumbnailSourceAvailability::first_embedded_image);
+
         nb::class_<project::ProjectInspectorSave>(m, "ProjectInspectorSave")
             .def_ro("sequence", &project::ProjectInspectorSave::sequence)
             .def_ro("generation", &project::ProjectInspectorSave::generation)
@@ -943,6 +950,14 @@ namespace lfs::python {
                         static_cast<const std::byte*>(png.data()), png.size()));
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("png_bytes"));
+
+        m.def("inspect_project_thumbnail_sources", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectThumbnailSourceAvailability>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_thumbnail_sources(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
 
         m.def("preview_from_first_dataset_image", [](const std::filesystem::path& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;

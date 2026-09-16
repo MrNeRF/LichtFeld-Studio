@@ -7,8 +7,10 @@ import time
 from lfs_plugins.project_inspector import (
     InspectionFactsPipeline,
     details_rows,
+    dialog_model,
     inspection_cache_key,
     operation_actions,
+    thumbnail_source_options,
 )
 
 
@@ -99,6 +101,47 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
 def test_context_actions_open_contents_and_file_operations():
     actions = {row["action"] for row in operation_actions(_entry())}
     assert actions == {"contents", "export_as", "update_thumbnail", "rename"}
+
+
+def test_thumbnail_source_options_only_offer_sources_available_for_target(tmp_path):
+    target = tmp_path / "project.licht"
+    entry = _entry(path=str(target))
+
+    options = thumbnail_source_options(
+        entry,
+        viewport_available=True,
+        dataset_available=True,
+        embedded_available=True,
+    )
+    assert options == ["viewport", "first_dataset", "first_embedded", "image_file"]
+    assert dialog_model(
+        "update_thumbnail",
+        entry=entry,
+        viewport_available=True,
+        dataset_available=True,
+        embedded_available=True,
+    )["source"] == "first_dataset"
+
+    # A PLY-only project, a mismatched active scene, or undecodable embedded
+    # content all arrive as false native availability flags.
+    ply_only = _entry(path=str(target))
+    options = thumbnail_source_options(ply_only)
+    assert options == ["image_file"]
+    assert dialog_model("update_thumbnail", entry=ply_only)["source"] == "image_file"
+
+    from lfs_plugins.project_dialog import form_content
+
+    body, _buttons = form_content(
+        "update_thumbnail",
+        {"sources": ["image_file"], "source": "image_file"},
+        tr=lambda key: key,
+        confirm_label="Update",
+        busy=False,
+    )
+    assert 'value="image_file" selected' in body
+    assert "projects.dialog.first_dataset_image" not in body
+    assert "projects.dialog.first_embedded_image" not in body
+    assert "projects.dialog.current_viewport" not in body
 
 
 def _wait(predicate, timeout=2.0):

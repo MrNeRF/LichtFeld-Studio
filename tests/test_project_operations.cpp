@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 namespace {
@@ -263,6 +264,55 @@ namespace {
         static_cast<void>(require_result(clear_project_license(path)));
         details = require_result(inspect_project_details(path));
         EXPECT_FALSE(details.license.has_value());
+    }
+
+    TEST(ProjectOperations, ThumbnailSourceAvailabilityRequiresDecodableImagePayload) {
+        TemporaryDirectory temporary;
+        const auto path = make_document(temporary.path / "thumbnail-sources.licht");
+        const auto initial = require_result(inspect_project_thumbnail_sources(path));
+        EXPECT_FALSE(initial.first_dataset_image);
+        EXPECT_FALSE(initial.first_embedded_image);
+
+        const auto image_path = temporary.path / "not-an-image.bin";
+        const std::vector<std::byte> invalid_image{
+            std::byte{'n'}, std::byte{'o'}, std::byte{'t'}, std::byte{'i'},
+            std::byte{'m'}, std::byte{'a'}, std::byte{'g'}, std::byte{'e'}};
+        {
+            std::ofstream output(image_path, std::ios::binary);
+            ASSERT_TRUE(output.good());
+            output.write(reinterpret_cast<const char*>(invalid_image.data()),
+                         static_cast<std::streamsize>(invalid_image.size()));
+            ASSERT_TRUE(output.good());
+        }
+
+        auto document = require_result(ProjectDocument::open(path));
+        const EmbeddedDatasetEntry image_entry{
+            .rel_path = "images/frame.png",
+            .kind = "image",
+            .chunk_uuid = fixed_uuid(2180),
+            .bytes = invalid_image.size(),
+            .xxh3_128 = xxh3_128(invalid_image),
+        };
+        const EmbeddedDatasetManifest manifest{
+            .schema_version = 1,
+            .images_folder = "images",
+            .complete = true,
+            .entries = {image_entry},
+        };
+        const std::array sources{
+            DatasetEmbedSource{.entry = image_entry, .source_path = image_path},
+        };
+        ProjectDocumentSaveOptions options;
+        options.file_uuid = fixed_uuid(2181);
+        options.index_compression = IndexCompression::StoredForDeterministicTests;
+        options.disk_reserve_bytes = 0;
+        static_cast<void>(require_result(document.embed_dataset_batch(
+            manifest, std::span(sources), options)));
+
+        const auto with_invalid_image = require_result(
+            inspect_project_thumbnail_sources(path));
+        EXPECT_FALSE(with_invalid_image.first_dataset_image);
+        EXPECT_FALSE(with_invalid_image.first_embedded_image);
     }
 
     TEST(ProjectOperations, MutationsUseTheClosedFileWriterLockMessage) {

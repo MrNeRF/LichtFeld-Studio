@@ -1657,6 +1657,40 @@ def test_placeholder_label_uses_first_two_words(panel_module):
     assert "display: block;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
     assert "width: 100%;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
 
+
+def test_viewport_thumbnail_capture_refuses_a_different_active_project(panel_module):
+    panel_module.lf.project_poll_write = lambda: {
+        "path": "/tmp/other-project.licht"
+    }
+    exports = []
+    panel_module.lf.export_viewport_image = lambda *args: exports.append(args)
+
+    with pytest.raises(RuntimeError, match="no longer belongs to this project"):
+        panel_module.AssetManagerPanel._capture_viewport_preview(
+            "/tmp/target-project.licht", "target"
+        )
+    assert exports == []
+
+
+def test_thumbnail_source_probe_rejects_unavailable_embedded_and_empty_viewport(panel_module):
+    panel_module.lf.project_poll_write = lambda: {
+        "path": "/tmp/target-project.licht"
+    }
+    panel_module.lf.get_render_scene = lambda: SimpleNamespace(total_gaussian_count=0)
+    panel_module.lf.export_viewport_image = lambda *_args: None
+    panel_module.lf.io = SimpleNamespace(
+        inspect_project_thumbnail_sources=lambda _path: SimpleNamespace(
+            first_dataset_image=False,
+            first_embedded_image=False,
+        )
+    )
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+
+    assert panel._thumbnail_source_availability("/tmp/target-project.licht") == (False, False)
+    assert not panel._has_renderable_project_viewport("/tmp/target-project.licht")
+    panel_module.lf.get_render_scene = lambda: SimpleNamespace(total_gaussian_count=3)
+    assert panel._has_renderable_project_viewport("/tmp/target-project.licht")
+
 def test_data_if_model_fields_are_boolean_bindings(panel_module):
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()

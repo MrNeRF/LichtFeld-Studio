@@ -317,14 +317,52 @@ def operation_actions(entry: Any) -> list[dict[str, Any]]:
     ]
 
 
-def dialog_model(kind: str, *, entry: Any = None, details: Any = None) -> dict[str, Any]:
+def thumbnail_source_options(
+    entry: Any,
+    *,
+    dataset_available: bool = False,
+    embedded_available: bool = False,
+    viewport_available: bool = False,
+) -> list[str]:
+    """Return thumbnail sources that are available for this exact project."""
+    options: list[str] = []
+    if viewport_available:
+        options.append("viewport")
+    if dataset_available:
+        options.append("first_dataset")
+    if embedded_available:
+        options.append("first_embedded")
+
+    options.append("image_file")
+    return options
+
+
+def dialog_model(
+    kind: str,
+    *,
+    entry: Any = None,
+    details: Any = None,
+    dataset_available: bool = False,
+    embedded_available: bool = False,
+    viewport_available: bool = False,
+) -> dict[str, Any]:
     """Return a stable model for each Inspector dialog kind."""
     kind = str(kind or "")
     base = {"kind": kind, "name": str(value(entry, "name", "") or ""), "path": str(value(entry, "path", "") or "")}
     if kind == "export_as":
         base.update({"format": "sog", "destination": "", "formats": ["ply", "sog", "ssog", "spz"]})
     elif kind == "update_thumbnail":
-        base.update({"sources": ["viewport", "first_dataset", "first_embedded", "image_file"], "source": "first_dataset"})
+        sources = thumbnail_source_options(
+            entry,
+            dataset_available=dataset_available,
+            embedded_available=embedded_available,
+            viewport_available=viewport_available,
+        )
+        preferred = next(
+            (source for source in ("first_dataset", "first_embedded", "viewport") if source in sources),
+            "image_file",
+        )
+        base.update({"sources": sources, "source": preferred})
     elif kind == "license":
         license_obj = value(details, "license", None)
         base.update(license_fields(license_obj))

@@ -45,6 +45,7 @@ from .project_inspector import (
     license_value,
     details_rows,
     operation_actions,
+    thumbnail_source_options,
 )
 from .project_dialog import form_content
 from .asset_watch import (
@@ -986,6 +987,50 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not callable(function):
             raise RuntimeError(f"Project operation is unavailable: {name}")
         return function(*args, **kwargs)
+
+    @staticmethod
+    def _active_project_path() -> str:
+        poll = getattr(lf, "project_poll_write", None)
+        if not callable(poll):
+            return ""
+        try:
+            state = poll()
+            return str(state.get("path") or "") if isinstance(state, dict) else ""
+        except Exception:
+            _log.debug("Could not read the active project path for thumbnail source validation", exc_info=True)
+            return ""
+
+    @staticmethod
+    def _thumbnail_source_availability(path: str) -> tuple[bool, bool]:
+        """Decode-probe image sources only while opening or confirming the dialog."""
+        try:
+            available = AssetManagerPanel._native_io_call(
+                "inspect_project_thumbnail_sources", path
+            )
+            return (
+                bool(getattr(available, "first_dataset_image", False)),
+                bool(getattr(available, "first_embedded_image", False)),
+            )
+        except Exception:
+            _log.debug("Could not inspect project thumbnail sources path=%s", path, exc_info=True)
+            return False, False
+
+    @staticmethod
+    def _has_renderable_project_viewport(path: str) -> bool:
+        active_path = AssetManagerPanel._active_project_path()
+        if not path or not active_path:
+            return False
+        try:
+            if Path(path).resolve() != Path(active_path).resolve():
+                return False
+            scene_getter = getattr(lf, "get_render_scene", None)
+            exporter = getattr(lf, "export_viewport_image", None)
+            if not callable(scene_getter) or not callable(exporter):
+                return False
+            scene = scene_getter()
+            return scene is not None and int(getattr(scene, "total_gaussian_count", 0) or 0) > 0
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
 
     def _ensure_inspection_pipeline(self) -> InspectionFactsPipeline:
         if self._inspection_pipeline is None:
@@ -2271,11 +2316,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._dirty_selection()
             self._dirty_fields("inspector_expanded")
             return
-        data = dialog_model(
-            action,
-            entry=asset,
-            details=details,
-        )
+        if action == "update_thumbnail":
+            dataset_available, embedded_available = self._thumbnail_source_availability(
+                str(asset.get("path") or "")
+            )
+            data = dialog_model(
+                action,
+                entry=asset,
+                details=details,
+                dataset_available=dataset_available,
+                embedded_available=embedded_available,
+                viewport_available=self._has_renderable_project_viewport(
+                    str(asset.get("path") or "")
+                ),
+            )
+        else:
+            data = dialog_model(action, entry=asset, details=details)
         data["name"] = self._get_asset_display_name(asset)
         self._set_dialog(action, data)
 
@@ -2304,6 +2360,26 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel), backup=False)
         elif action == "update_thumbnail":
+            details = self._inspection_by_asset.get(asset["id"], {}).get("details")
+            dataset_available, embedded_available = self._thumbnail_source_availability(path)
+            sources = thumbnail_source_options(
+                asset,
+                dataset_available=dataset_available,
+                embedded_available=embedded_available,
+                viewport_available=self._has_renderable_project_viewport(path),
+            )
+            if data.get("source") not in sources:
+                data["sources"] = sources
+                data["source"] = next(
+                    (
+                        source
+                        for source in ("first_dataset", "first_embedded", "viewport")
+                        if source in sources
+                    ),
+                    "image_file",
+                )
+                self._refresh_project_form()
+                return
             self._start_thumbnail_operation(asset)
         elif action == "license":
             try:
@@ -2376,6 +2452,29 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     @staticmethod
     def _capture_viewport_preview(path: str, project_id: str) -> Any:
         from .asset_storage import preview_capture
+
+        active_path = AssetManagerPanel._active_project_path()
+        renderable_viewport = False
+        try:
+            scene_getter = getattr(lf, "get_render_scene", None)
+            scene = scene_getter() if callable(scene_getter) else None
+            exporter = getattr(lf, "export_viewport_image", None)
+            renderable_viewport = (
+                scene is not None
+                and int(getattr(scene, "total_gaussian_count", 0) or 0) > 0
+                and callable(exporter)
+            )
+        except (RuntimeError, TypeError, ValueError):
+            pass
+        if "viewport" not in thumbnail_source_options(
+            {"path": path},
+            viewport_available=(
+                renderable_viewport
+                and bool(active_path)
+                and Path(path).resolve() == Path(active_path).resolve()
+            ),
+        ):
+            raise RuntimeError("The current viewport no longer belongs to this project")
 
         with preview_capture(project_id) as target:
             exporter = getattr(lf, "export_viewport_image", None)

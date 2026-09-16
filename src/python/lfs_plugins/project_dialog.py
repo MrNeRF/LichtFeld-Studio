@@ -45,7 +45,8 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
         buttons = [button("projects.dialog.choose_destination")]
     elif kind == "update_thumbnail":
         keys = {"viewport": "projects.dialog.current_viewport", "first_dataset": "projects.dialog.first_dataset_image", "first_embedded": "projects.dialog.first_embedded_image", "image_file": "projects.dialog.image_file"}
-        body += choice("source", "projects.dialog.source", [(key, tr(value)) for key, value in keys.items()])
+        sources = data.get("sources") or ["image_file"]
+        body += choice("source", "projects.dialog.source", [(key, tr(keys[key])) for key in sources if key in keys])
         if data.get("gallery_cover_available"):
             body += (f'<label class="modal-check"><input name="use_gallery_cover" type="checkbox" value="yes"'
                      f'{" checked" if data.get("use_gallery_cover") else ""}{" disabled" if data.get("gallery_cover_blocked") else ""}/>'

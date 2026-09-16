@@ -189,6 +189,14 @@ namespace lfs::io::project {
     set_project_preview(const std::filesystem::path& path,
                         std::span<const std::byte> png_bytes);
 
+    struct LFS_IO_API ProjectThumbnailSourceAvailability {
+        bool first_dataset_image = false;
+        bool first_embedded_image = false;
+    };
+
+    [[nodiscard]] LFS_IO_API lfs::Result<ProjectThumbnailSourceAvailability>
+    inspect_project_thumbnail_sources(const std::filesystem::path& path);
+
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     preview_from_first_dataset_image(const std::filesystem::path& path);
 
