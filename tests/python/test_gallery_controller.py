@@ -1179,6 +1179,66 @@ def test_file_menu_review_submits_only_for_original_project_and_account(gallery,
         assert kwargs == {"update": False, "publish_as_new": False}
 
 
+def test_file_menu_update_handoff_keeps_real_conflict_review_open(gallery, monkeypatch, tmp_path):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+
+    controller, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    panel_module = import_module("lfs_plugins.gallery_file_panel")
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved project")
+    scene_row = scene()
+    scene_row.update(title="Gallery title", contentRevision="remote-content",
+                     metadataRevision="remote-meta", contentLength=4096)
+    link = dict(
+        sceneId=scene_row["id"], commitUuid="base-commit",
+        contentRevision="base-content", metadataRevision="base-meta",
+        localFields={"title": "Local title", "description": "", "visibility": "private"},
+        sharedFields={"title": "Base title", "description": "", "visibility": "private"},
+    )
+    state.update(links={"project": link}, scenes=[scene_row], signed_in=True, busy=False)
+    controller._state = state
+    controller.service.root = tmp_path
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    controller._panel_busy = lambda: False
+    controller._project_identity = lambda: ("project", str(project))
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(project)}, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module, "capture_view", lambda _lf: {})
+    enabled = []
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda _id: None, raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda _id, value: enabled.append(value), raising=False)
+    monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
+
+    panel = GalleryFilePanel()
+    asset = {"id": "project", "path": str(project), "name": "Project",
+             "commit_uuid": "local-commit", "publication": {}}
+    panel.show(
+        controller=controller,
+        asset=asset,
+        scene=scene_row,
+        action="update",
+        fields={"title": "Local title", "description": "", "visibility": "private",
+                "upload_format": "sog"},
+        expected_project_path=str(project),
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda identifier: panel if identifier == panel.id else None,
+                        raising=False)
+
+    # The panel invokes the real controller route. The stale linked state opens
+    # resolve_asset(), which synchronously replaces this review with conflict choices.
+    panel._submit()
+
+    assert controller._decision_pending
+    assert panel._review is not None
+    assert panel._review["mode"] == "conflict"
+    assert panel._review["action"] == "conflict"
+    assert any(row["id"] == "content" for row in panel._review["groups"])
+    assert enabled[-1] is True
+
+
 def test_file_menu_review_does_not_reuse_an_asset_manager_review(gallery, monkeypatch, tmp_path):
     from lfs_plugins.gallery_file_panel import GalleryFilePanel
 

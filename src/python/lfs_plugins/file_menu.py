@@ -592,14 +592,63 @@ def _publish_current_project_to_gallery() -> None:
         warning = (gallery_tr("quota.warning")
                    if remaining_bytes is not None and asset["file_size_bytes"] > remaining_bytes
                    else "")
+
+        # Use the same primary verb as Asset Manager. A linked project may be
+        # locally newer, remotely newer, divergent, or not checked; treating
+        # every link as an update can bypass the corresponding Gallery action.
+        publish_new = False
+        action = "publish"
+        if link:
+            from .gallery_actions import gallery_actions
+            from .gallery_controller import asset_sync_state
+
+            facts = asset_sync_state(
+                asset,
+                link,
+                scene,
+                state.get("jobs", ()),
+                checked=bool(state.get("checkedAt")),
+                established=state.get("established", state.get("connected", True)),
+            )
+            for key in ("signed_in", "busy", "relink_required", "unsupported", "source_formats",
+                        "quotaBytes", "usedBytes", "reservedBytes", "hdrBackgrounds"):
+                if key in state:
+                    facts[key] = state[key]
+            primary = next((item for item in gallery_actions(asset, facts) if item["primary"]), None)
+            if not primary:
+                raise ValueError(gallery_tr("error.refresh"))
+            if not primary["enabled"]:
+                raise ValueError(primary["reason"] or gallery_tr("error.refresh"))
+
+            action = primary["id"]
+            details = {key: fields[key] for key in ("title", "description", "visibility")}
+            if action == "check":
+                controller.refresh()
+                return
+            if action in ("resolve", "apply"):
+                controller.resolve_asset(asset, details, apply_only=action == "apply")
+                return
+            if action in ("open", "copy"):
+                controller.open_portal(scene, action)
+                if action == "open" and facts.get("presentationChanged") and not controller.service.busy:
+                    controller.service.acknowledge_presentation(project_id, scene)
+                    controller._schedule_poll()
+                return
+            if action == "publish_again":
+                publish_new = True
+                action = "publish"
+            elif action not in ("publish", "update"):
+                raise ValueError(gallery_tr("error.refresh"))
+
         open_gallery_file_panel(
             controller=controller,
             asset=asset,
             scene=scene,
-            action="update" if link else "publish",
+            action=action,
             fields=fields,
             quota=quota,
             warning=warning,
+            publish_new=publish_new,
             expected_project_path=path,
         )
     except Exception as exc:

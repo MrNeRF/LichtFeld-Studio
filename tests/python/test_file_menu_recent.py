@@ -7,6 +7,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -271,6 +273,65 @@ def test_file_menu_publishes_current_project_from_review_without_asset_index(
     assert review["fields"]["title"] == "project"
     assert review["fields"]["upload_format"] == "sog"
     assert review["expected_project_path"] == str(project.resolve())
+
+
+@pytest.mark.parametrize(
+    "state_name,expected",
+    [("local", "update"), ("remote", "apply"), ("diverged", "resolve"),
+     ("unknown", "check"), ("equal", "open")],
+)
+def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_path, state_name, expected):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid="project-id", commit_uuid="commit-id", file_uuid="file-id",
+            title="Project", physical_file_size=5, has_preview=False,
+        )
+    )
+    scene = {"id": "scene-id", "title": "Project", "contentLength": 10}
+    link = {"sceneId": "scene-id"}
+    calls = []
+    controller = SimpleNamespace(
+        upload_format="sog",
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False),
+        snapshot=lambda: {"links": {"project-id": link}, "scenes": [scene]},
+        refresh=lambda: calls.append(("check",)),
+        resolve_asset=lambda asset, details, **kwargs: calls.append(("resolve", kwargs)),
+        open_portal=lambda selected, action: calls.append((action, selected["id"])),
+        _schedule_poll=lambda: calls.append(("schedule",)),
+    )
+    controller_module = ModuleType("lfs_plugins.gallery_controller")
+    controller_module.get_gallery_controller = lambda: controller
+    controller_module.asset_sync_state = lambda *args, **kwargs: {
+        "relationship": "linked", "linked": True, "freshness": state_name,
+        "state": state_name, "activity": "idle", "active": False,
+        "job": {}, "sceneReady": True, "presentationChanged": False,
+    }
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_controller", controller_module)
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+
+    item = next(item for item in file_menu.FileMenu().menu_items()
+                if item.get("label") == "tr:menu.file.publish_to_gallery")
+    item["callback"]()
+
+    if expected == "update":
+        assert len(opened) == 1 and opened[0]["action"] == "update"
+        assert calls == []
+    elif expected == "apply":
+        assert calls == [("resolve", {"apply_only": True})] and opened == []
+    elif expected == "resolve":
+        assert calls == [("resolve", {"apply_only": False})] and opened == []
+    elif expected == "check":
+        assert calls == [("check",)] and opened == []
+    else:
+        assert calls == [("open", "scene-id")] and opened == []
 
 
 def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):

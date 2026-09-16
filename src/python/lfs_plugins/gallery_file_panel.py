@@ -263,7 +263,12 @@ class GalleryFilePanel(Panel):
                 controller.upload_format = self._fields["upload_format"]
                 controller.publish_asset(review["asset"], details, self._fields["upload_format"],
                                          update=review["action"] == "update", publish_as_new=review["publish_new"])
-            self._close(True)
+            # Publishing an update can hand off to conflict resolution, which
+            # replaces this panel's review synchronously. Only close the review
+            # that submitted; closing whatever is current would dismiss the
+            # newly opened conflict choices.
+            if self._review is review:
+                self._close(True)
         except Exception as exc:
             log_failure("_submit", exc, path=getattr(self, "_path", ""))
             self._error = localize_message(str(exc))
