@@ -142,4 +142,32 @@ namespace {
         EXPECT_EQ(card_after.commit_uuid, card_before.commit_uuid);
     }
 
+    TEST(ProjectThumbnailSources, InvalidEmbeddedManifestDoesNotHideExternalSource) {
+        TemporaryDirectory temporary;
+        const auto project_path = make_project_with_external_image(
+            temporary.path, fixed_uuid(2210), fixed_uuid(2211));
+        auto document = require_result(ProjectDocument::open(project_path));
+        using Json = lfs::io::JsonChapterDom::Json;
+        require_status(document->edit_parameters().dom().set_json(
+            "dataset.embedded_dataset", Json{{"schema_version", 1}}));
+        ProjectDocumentSaveOptions options;
+        options.file_uuid = fixed_uuid(2212);
+        options.index_compression = IndexCompression::StoredForDeterministicTests;
+        options.disk_reserve_bytes = 0;
+        static_cast<void>(require_result(document->save(project_path, options)));
+
+        const auto bytes_before = read_file_bytes(project_path);
+        const auto card_before = require_result(inspect_project_card(project_path));
+        const auto availability = require_result(
+            inspect_project_thumbnail_sources(project_path));
+        const auto bytes_after = read_file_bytes(project_path);
+        const auto card_after = require_result(inspect_project_card(project_path));
+
+        EXPECT_TRUE(availability.first_dataset_image);
+        EXPECT_FALSE(availability.first_embedded_image);
+        EXPECT_EQ(bytes_after, bytes_before);
+        EXPECT_EQ(card_after.generation, card_before.generation);
+        EXPECT_EQ(card_after.commit_uuid, card_before.commit_uuid);
+    }
+
 } // namespace

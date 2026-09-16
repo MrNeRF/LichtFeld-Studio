@@ -2519,16 +2519,22 @@ namespace lfs::io::project {
         auto& document = *opened;
         ProjectThumbnailSourceAvailability availability;
 
-        if (const auto first = first_dataset_image(
-                document.project(), document.references(),
-                document.parameters(), path.parent_path())) {
-            availability.first_dataset_image =
-                static_cast<bool>(dataset_preview_png(*first));
+        try {
+            if (const auto first = first_dataset_image(
+                    document.project(), document.references(),
+                    document.parameters(), path.parent_path())) {
+                availability.first_dataset_image =
+                    static_cast<bool>(dataset_preview_png(*first));
+            }
+        } catch (...) {
+            // Failure to inspect an optional source must leave the other
+            // thumbnail choices available.
+            availability.first_dataset_image = false;
         }
 
         auto manifest = document.parameters().embedded_dataset();
         if (!manifest) {
-            return std::move(manifest).error();
+            return availability;
         }
         if (*manifest) {
             const auto first_image = std::ranges::find_if(
