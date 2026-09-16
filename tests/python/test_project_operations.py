@@ -322,11 +322,13 @@ def test_contents_removals_persist_until_compaction(native_io, tmp_path):
     assert 'contents_removals' not in native_io.inspect_project_details(path).manifest
 
 
-def test_restore_same_path_preserves_identity_and_history(native_io,tmp_path):
+def test_restore_same_path_preserves_identity_and_history(native_io, tmp_path, monkeypatch):
     if not hasattr(native_io, 'undo_contents_removal'):
         pytest.skip('in-place Restore requires the rebuilt Contents native module')
     source=_fixture()
     if not source.is_file():pytest.skip(f'operations fixture is unavailable: {source}')
+    home = tmp_path / 'home'
+    monkeypatch.setenv('LFS_HOME', str(home))
     path=tmp_path/'restore.licht'
     shutil.copy2(source,path)
     native_io.set_project_title(path,'Old title')
@@ -342,7 +344,6 @@ def test_restore_same_path_preserves_identity_and_history(native_io,tmp_path):
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
     assert len(list(tmp_path.glob('*.licht')))==1
     assert not list(tmp_path.glob('*.bak'))
-    home = Path(os.environ['LFS_HOME'])
     assert (home / 'data/backups/contents' / str(old.project_uuid)).is_dir()
 
 
@@ -506,6 +507,7 @@ KilledOperations(io, root).run("project-kill", {"id": str(card.project_uuid), "p
 
 
 def test_contents_recovery_refuses_a_different_project(native_io, tmp_path):
+    import os
     from lfs_plugins.project_operations import ProjectOperations
     source = _fixture()
     if not source.is_file():
@@ -517,7 +519,10 @@ def test_contents_recovery_refuses_a_different_project(native_io, tmp_path):
     store = ProjectOperations(native_io, tmp_path / 'store')
     store._put(dict(id='project-changed', asset_id=str(card.project_uuid), path=str(path), title='Edit',
         status='running', input_commit=str(card.commit_uuid), backup_path=str(backup)))
-    replacement = native_io.restore_save(path, card.generation, path)
+    replacement_path = tmp_path / 'replacement.licht'
+    replacement = native_io.restore_save(path, card.generation, replacement_path)
+    assert replacement.project_uuid != card.project_uuid
+    os.replace(replacement_path, path)
     before = path.read_bytes()
     rows = store.recover()
     assert 'project changed' in rows['project-changed']['reason']
