@@ -70,6 +70,7 @@ set(TENSOR_SOURCES
         nn/models/moge2.cpp
         nn/models/sam2.cpp
         nn/models/lpips.cpp
+        nn/models/romav1.cpp
 )
 
 if(LFS_TENSOR_VULKAN)

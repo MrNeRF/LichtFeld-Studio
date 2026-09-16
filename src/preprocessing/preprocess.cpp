@@ -98,6 +98,22 @@ namespace {
         kSam2ModelSha256,
         kSam2ModelDownloadMessage,
     };
+    constexpr std::string_view kRomaV1ModelFile = "romav1.lfw";
+    constexpr std::string_view kRomaV1ModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-romav1-v1/romav1.lfw";
+    constexpr std::string_view kRomaV1ModelSha256 =
+        "9405046ae904c84345d6926d66187abbd3a8728ecc50921f4c430220623d54fc";
+    constexpr std::string_view kRomaV1ModelDownloadMessage =
+        "Downloading RoMa v1 dense matcher weights (MIT, (c) Johan Edstedt et al.; DINOv2 "
+        "backbone Apache-2.0, (c) Meta)";
+
+    constexpr CachedWeightSpec kRomaV1Weights{
+        kRomaV1ModelFile,
+        kRomaV1ModelUrl,
+        kRomaV1ModelSha256,
+        kRomaV1ModelDownloadMessage,
+    };
+
     constexpr std::string_view kLpipsModelFile = "lpips-vgg16-v0.1.lfw";
     constexpr std::string_view kLpipsModelUrl =
         "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-lpips-v1/lpips-vgg16-v0.1.lfw";
@@ -1312,6 +1328,14 @@ namespace lfs::preprocessing {
             return 1;
         }
         return 0;
+    }
+
+    std::filesystem::path ensure_romav1_weights(bool no_download) {
+        return ensure_cached_weights(kRomaV1Weights, no_download);
+    }
+
+    std::filesystem::path romav1_weights_cache_path() {
+        return cached_weight_path(kRomaV1ModelFile);
     }
 
     std::filesystem::path ensure_sam2_weights(bool no_download) {

@@ -7,6 +7,7 @@ set(LFS_NN_CUDA_SOURCES
     conv.cu
     conv3x3_mma.cu
     lpips_kernels.cu
+    dense_match_kernels.cu
     elementwise.cu
 )
 

@@ -34,4 +34,10 @@ namespace lfs::preprocessing {
 
     std::filesystem::path ensure_sam2_weights(bool no_download = false);
 
+    // Downloads on first use, like the other cached models.
+    std::filesystem::path ensure_romav1_weights(bool no_download = false);
+
+    // Where those weights are cached, whether or not they are there yet.
+    std::filesystem::path romav1_weights_cache_path();
+
 } // namespace lfs::preprocessing

@@ -555,6 +555,7 @@ set(TEST_FILES
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_moge2.cpp
+    test_romav1.cpp
     test_sam2.cpp
     test_lpips.cpp
     test_ppisp_controller.cpp
@@ -1064,6 +1065,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_dense_matching.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py

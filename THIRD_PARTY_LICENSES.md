@@ -63,8 +63,10 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## ML Inference & Models
 | Project | Description | License |
 |---------|-------------|---------|
-
 | [MoGe-2](https://github.com/microsoft/MoGe) | Monocular geometry estimation, depth/normal maps. Code and [model weights](https://huggingface.co/Ruicheng/moge-2-vitb-normal) © Microsoft, MIT; DINOv2 backbone components © Meta AI, Apache-2.0. Model downloaded at first use of `preprocess`, redistributed with attribution via GitHub release assets | MIT / Apache-2.0 |
+| [RoMa v1](https://github.com/Parskatt/RoMa) | Dense feature matching for densification. Architecture and [model weights](https://github.com/Parskatt/RoMa/releases) © Johan Edstedt et al., MIT. Weights converted to our `.lfw` format, redistributed with attribution via GitHub release assets and cached under `~/.lichtfeld` | MIT |
+| [DINOv2](https://github.com/facebookresearch/dinov2) | ViT-L/14 image backbone inside the RoMa v1 matcher, © Meta AI. Backbone weights ship as part of the converted RoMa checkpoint | Apache-2.0 |
+| [torchvision VGG19-BN](https://github.com/pytorch/vision) | Fine-feature stem inside the RoMa v1 matcher, © Soumith Chintala and the torchvision authors. Stem weights ship as part of the converted RoMa checkpoint | BSD-3-Clause |
 
 ## Video Encoding
 | Project | Description | License |

@@ -4,6 +4,7 @@
 
 #include "core/nn/models/lpips.hpp"
 #include "core/nn/models/moge2.hpp"
+#include "core/nn/models/romav1.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/nn/ops.hpp"
 #include "core/nn/weight_file.hpp"

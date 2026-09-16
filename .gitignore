@@ -26,6 +26,7 @@ tests/data/param_json_golden/*
 !tests/data/nn/
 tests/data/nn/*
 !tests/data/nn/moge2_ref_fixture.json
+!tests/data/nn/romav1_ref_fixture.json
 !tests/data/nn/lpips_ref_fixture.json
 *.pt
 *.py
