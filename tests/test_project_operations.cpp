@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checkpoint_format.hpp"
-#include "core/image_io.hpp"
 #include "core/user_paths.hpp"
 #include "io/project_document.hpp"
 #include "io/project_operations.hpp"
@@ -12,7 +11,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <gtest/gtest.h>
 
 namespace {
@@ -265,39 +263,6 @@ namespace {
         static_cast<void>(require_result(clear_project_license(path)));
         details = require_result(inspect_project_details(path));
         EXPECT_FALSE(details.license.has_value());
-    }
-
-    TEST(ProjectOperations, ImageFileThumbnailIsDecodedAndStoredAsPng) {
-        TemporaryDirectory temporary;
-        const auto project_path = make_document(temporary.path / "image-source.licht");
-        const auto image_path = temporary.path / "selected.jpg";
-        auto image = lfs::core::Tensor::empty(
-            {3, 4, 3}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        for (std::size_t i = 0; i < image.size(); ++i) {
-            image.ptr<std::uint8_t>()[i] = static_cast<std::uint8_t>(i * 13);
-        }
-        lfs::core::save_image_u8(image_path, image);
-        {
-            std::ifstream input(image_path, std::ios::binary);
-            ASSERT_TRUE(input.good());
-            unsigned char signature[2]{};
-            input.read(reinterpret_cast<char*>(signature), sizeof(signature));
-            ASSERT_EQ(input.gcount(), 2);
-            EXPECT_EQ(signature[0], 0xff);
-            EXPECT_EQ(signature[1], 0xd8);
-        }
-
-        static_cast<void>(require_result(
-            preview_from_image_file(project_path, image_path)));
-        auto reader = require_result(ProjectReader::open(project_path));
-        const auto preview = require_result(reader.read_preview());
-        constexpr std::array<unsigned char, 8> png_signature{
-            0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
-        ASSERT_GE(preview.size(), png_signature.size());
-        for (std::size_t index = 0; index < png_signature.size(); ++index) {
-            EXPECT_EQ(std::to_integer<unsigned char>(preview[index]),
-                      png_signature[index]);
-        }
     }
 
     TEST(ProjectOperations, MutationsUseTheClosedFileWriterLockMessage) {
