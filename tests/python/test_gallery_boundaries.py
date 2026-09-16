@@ -32,6 +32,8 @@ def test_copy_link_fetches_current_url_and_rejects_unsafe_or_stale_results(galle
     workers, callbacks, copies, requests = [], [], [], []
     def request(*args, **kwargs):
         requests.append((args, kwargs))
+        if args[0] == 'GET':
+            return {'links': []}
         return {'url': url}
     controller.service.account = SimpleNamespace(base_url='https://portal.example', request_json_authenticated=request)
     monkeypatch.setattr(threading, 'Thread', lambda target, **kw: SimpleNamespace(start=lambda: workers.append(target)))
@@ -43,8 +45,12 @@ def test_copy_link_fetches_current_url_and_rejects_unsafe_or_stale_results(galle
     controller.open_portal(scene, 'copy')
     assert len(workers) == 1 and not copies and not requests
     workers.pop()()
-    assert requests == [(('POST', '/api/gallery/v1/splats/' + scene['id'] + '/share-link', {}),
-                         {'expected_session': state['identity'][1:3]})]
+    share_links_path = '/api/gallery/v1/splats/' + scene['id'] + '/share-links'
+    assert requests == [
+        (('GET', share_links_path, None), {'expected_session': state['identity'][1:3]}),
+        (('POST', share_links_path, {'expiresIn': 'never'}),
+         {'expected_session': state['identity'][1:3]}),
+    ]
     if switched:
         state['identity'] = ('https://portal.example', 'another-owner', 'another-session', True)
     callbacks.pop()()
@@ -270,24 +276,30 @@ def test_signout_file_fallback_deletes_hidden_keychain(tmp_path, monkeypatch):
     assert not path.exists() and not path.with_suffix('.dpapi').exists()
     assert not account.snapshot().signed_in
 
-@pytest.mark.parametrize('kind', ['toast', 'undo'])
-def test_queued_expiry_never_dirties_unmounted_or_remounted_panel(convenience, panel_module, monkeypatch, kind):
+def test_queued_toast_expiry_never_dirties_unmounted_or_remounted_panel(convenience, panel_module, monkeypatch):
     panel, _, _ = convenience
     queued = []
     monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', queued.append)
-    if kind == 'toast':
-        panel._show_gallery_toast('Published')
-    else:
-        panel._set_gallery_undo(lambda: None)
-    timer = getattr(panel, '_gallery_' + kind + '_timer')
+    panel._show_gallery_toast('Published')
+    timer = panel._gallery_toast_timer
     timer.function()  # The timer has already posted when unmount starts.
     panel.on_unmount(SimpleNamespace(remove_data_model=lambda _: None))
-    assert timer.finished.is_set() and getattr(panel, '_gallery_' + kind + '_timer') is None
+    assert timer.finished.is_set() and panel._gallery_toast_timer is None
     monkeypatch.setattr(panel, '_request_model_update', lambda: pytest.fail('Dirty after unmount'))
     queued.pop()()
     panel._panel_mounted = True  # A new mount must not accept old callbacks either.
     timer.function()
     queued.pop()()
+
+
+def test_undo_remains_available_without_an_expiry_timer(convenience, panel_module):
+    panel, _, _ = convenience
+    calls = []
+    panel._set_gallery_undo(lambda: calls.append('undo'))
+    assert panel._gallery_undo is not None
+    assert panel._gallery_undo_timer is None
+    panel._gallery_command('undo')
+    assert calls == ['undo'] and panel._gallery_undo is None
 
 def test_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
     panel, _, _ = convenience
@@ -305,7 +317,8 @@ def test_native_drop_handoff_and_python_pull_open(convenience, monkeypatch):
     adapter = (root/'src/python/lfs/rml_python_panel_adapter.cpp').read_text()
     assert 'application/x-lichtfeld-gallery-scene' in native
     assert 'panel->onViewportDrop(released->type, released->data)' in native
-    assert 'panel_instance_.attr("gallery_viewport_drop")(data)' in adapter
+    assert '"gallery_viewport_drop"' in adapter
+    assert 'panel_instance_.attr(hook)(data)' in adapter
 
 def test_native_registry_exposes_defaults_and_preferences_rows():
     root = Path(__file__).parents[2]
