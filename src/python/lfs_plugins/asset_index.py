@@ -210,9 +210,6 @@ def display_name(entry: Any) -> str:
     path = str(_entry_value(entry, "path", "") or "")
     if name and (origin == "user" or (origin == "" and name != Path(path).stem)):
         return name
-    path_name = Path(path).name
-    if path_name.casefold() == "project.licht":
-        return Path(path).parent.name or Path(path).stem
     return Path(path).stem or name
 
 

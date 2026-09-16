@@ -459,6 +459,37 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
 
+def test_project_card_name_uses_project_filename_not_assets_parent(panel_module):
+    asset = _project(
+        name="project",
+        name_origin="stem",
+        path="/work/garden/assets/project.licht",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    row = panel.get_filtered_assets()[0]
+
+    assert row["display_name"] == "project"
+
+
+def test_inspected_native_title_overrides_filename_name(panel_module):
+    asset = _project(
+        name="project",
+        name_origin="stem",
+        path="/work/garden/assets/project.licht",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {
+        "details": SimpleNamespace(card=SimpleNamespace(title="Inspected title"))
+    }
+
+    row = panel.get_filtered_assets()[0]
+
+    assert row["display_name"] == "Inspected title"
+
+
 def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
