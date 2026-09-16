@@ -23,6 +23,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
+#include "workspace/viewport_workspace.hpp"
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -90,6 +91,10 @@ namespace lfs::vis {
         [[nodiscard]] bool isProcessingRenderWork() const {
             assert(isOnViewerThread());
             return processing_render_work_;
+        }
+        [[nodiscard]] bool isProcessingActiveFrameWork() const {
+            assert(isOnViewerThread());
+            return processing_active_frame_work_;
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         void set_evaluation_weights_preparer(
@@ -189,8 +194,14 @@ namespace lfs::vis {
         [[nodiscard]] const JobRegistry& jobs() const noexcept {
             return job_registry_;
         }
-        const Viewport& getViewport() const { return viewport_; }
-        Viewport& getViewport() { return viewport_; }
+        const Viewport& getViewport() const;
+        Viewport& getViewport();
+        [[nodiscard]] ViewportWorkspace* getViewportWorkspace() noexcept override {
+            return &viewport_workspace_;
+        }
+        [[nodiscard]] const ViewportWorkspace* getViewportWorkspace() const noexcept override {
+            return &viewport_workspace_;
+        }
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
         captureProjectSession(
@@ -371,6 +382,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
+        friend class VisualizerImplResetTest_RenderWorkPhasesKeepResourceMutationsOutOfActiveFrame_Test;
+        friend class VisualizerImplResetTest_RenderWorkPhasesCancelDeferredAndActiveWorkOnShutdown_Test;
         friend class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
         friend class VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
@@ -544,7 +557,9 @@ namespace lfs::vis {
         void setupPythonBridge();
         void setupViewContextBridge();
         void beginShutdown(std::string_view reason = "Viewer is shutting down");
-        void processRenderWorkQueue();
+        // Run resource mutations outside the active command buffer.
+        // Only composited capture runs before GUI submission.
+        void processRenderWorkQueue(bool active_frame_only = false);
         [[nodiscard]] bool hasPendingWork() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool inputFrameRequestsRender() const;
@@ -616,6 +631,7 @@ namespace lfs::vis {
 
         // Core components
         Viewport viewport_;
+        ViewportWorkspace viewport_workspace_;
         std::unique_ptr<WindowManager> window_manager_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;
@@ -646,6 +662,7 @@ namespace lfs::vis {
         bool accepting_work_ = true;
         bool shutdown_started_ = false;
         bool processing_render_work_ = false;
+        bool processing_active_frame_work_ = false;
 
         std::mutex shutdown_callback_mutex_;
         std::function<void()> shutdown_requested_callback_;

@@ -402,6 +402,27 @@ namespace lfs::vis::gui {
         el_menu_backdrop_->SetProperty("display", "none");
     }
 
+    void RmlSequencerOverlay::cancelTransientEditing() {
+        hideContextMenu();
+        context_menu_open_ = false;
+        time_edit_active_ = false;
+        focal_edit_active_ = false;
+        wants_input_ = false;
+        has_text_focus_ = false;
+        skip_next_click_ = false;
+        pending_actions_.clear();
+        pending_time_edit_.reset();
+        pending_focal_edit_.reset();
+        if (el_time_input_)
+            el_time_input_->Blur();
+        if (el_focal_input_)
+            el_focal_input_->Blur();
+        for (auto* element : {el_time_popup_, el_focal_popup_, el_popup_backdrop_}) {
+            if (element)
+                element->SetProperty("display", "none");
+        }
+    }
+
     void RmlSequencerOverlay::showTimeEdit(size_t index, float current_time) {
         if (!ensureContextReady())
             return;

@@ -19,6 +19,7 @@
 #include "passes/vulkan_mesh_pass.hpp"
 #include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
+#include "render_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
@@ -34,6 +35,7 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include "workspace/viewport_workspace.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -292,6 +294,10 @@ namespace lfs::vis {
         // reconstruction pipeline never receives a reduced-resolution image.
         void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
+        // Presentation reports the focused (or explicitly chosen) view. Other
+        // views keep local status so a fallback on one pane does not jitter all.
+        void reportWorkspaceSceneUpscalerRuntimeSelection(
+            ViewId view, SceneUpscalerSelection selection);
 
         // Entering computes ortho_scale so the view at the pivot matches the current
         // lens. Leaving ortho keeps the focal length the user set.
@@ -685,6 +691,30 @@ namespace lfs::vis {
             vulkan_mesh_frame_ = {};
         }
 
+        // One published native raster for a workspace view. Color/depth are
+        // ViewId-keyed external images; geometry uses the same pane camera.
+        struct WorkspaceVulkanFrame {
+            enum class Source { None,
+                                Gaussian,
+                                PointCloud };
+            Source source = Source::None;
+            PaneSnapshot pane{};
+            VulkanFrameResult color{};
+            VulkanMeshFrame geometry{};
+            lfs::rendering::FrameView unjittered_view{};
+            bool fresh = false;
+            std::string diagnostic;
+        };
+
+        // Independent per-ViewId rasters of one shared model. Sequential submits,
+        // no split_view compositor. GUI consumes one presentation pass per ViewId.
+        std::vector<WorkspaceVulkanFrame> renderWorkspaceVulkanFrames(
+            const RenderContext& context,
+            const WorkspaceFrameSnapshot& snapshot,
+            std::optional<ViewId> interaction_view = std::nullopt);
+        [[nodiscard]] std::optional<WorkspaceVulkanFrame> getWorkspaceVulkanFrame(ViewId id) const;
+        [[nodiscard]] std::vector<WorkspaceVulkanFrame> getWorkspaceVulkanFrames() const;
+
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             viewport_overlay_service_.setPreviewSelection(preview, add_mode);
@@ -767,6 +797,14 @@ namespace lfs::vis {
         void clearVulkanViewportImageState(glm::ivec2 size = {0, 0},
                                            bool flip_y = false,
                                            glm::ivec2 alloc_size = {0, 0});
+        [[nodiscard]] VulkanMeshFrame makePaneMeshFrame(
+            const FrameContext& frame_ctx,
+            const RenderSettings& settings,
+            const lfs::rendering::FrameView& view) const;
+        void retireClosedWorkspaceViews(const WorkspaceFrameSnapshot& snapshot);
+        void clearWorkspacePublishedFrames();
+        [[nodiscard]] WorkspaceVulkanFrame previousWorkspaceFrame(
+            ViewId id, const PaneSnapshot& pane, std::string diagnostic) const;
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -1124,6 +1162,29 @@ namespace lfs::vis {
         mutable std::mutex camera_metrics_mutex_;
         mutable std::mutex vulkan_mesh_frame_mutex_;
         VulkanMeshFrame vulkan_mesh_frame_;
+
+        struct WorkspaceViewRuntime {
+            PaneSnapshot last_pane{};
+            glm::ivec2 last_render_extent{0, 0};
+            glm::ivec2 last_output_extent{0, 0};
+            std::uint64_t last_scene_revision = 0;
+            std::uint64_t last_selection_revision = 0;
+            std::uint64_t last_settings_fingerprint = 0;
+            std::uint64_t consumed_camera_cut_generation = 0;
+            TemporalConvergenceController convergence;
+            SceneUpscalerSelection upscaler_status{};
+            WorkspaceVulkanFrame published{};
+            bool has_published = false;
+        };
+        mutable std::mutex workspace_frames_mutex_;
+        std::unordered_map<ViewId, WorkspaceViewRuntime> workspace_views_;
+        std::uint64_t workspace_scene_revision_ = 1;
+        std::uint64_t workspace_selection_revision_ = 1;
+        std::uint64_t workspace_settings_fingerprint_ = 0;
+        std::size_t workspace_model_ptr_ = 0;
+        ViewId workspace_focused_view_ = kInvalidViewId;
+        bool workspace_lod_follow_up_ = false;
+        bool workspace_retry_raster_ = false;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
         std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;

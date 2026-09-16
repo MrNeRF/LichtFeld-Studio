@@ -25,6 +25,9 @@ namespace lfs::vis::gui {
                               const std::string& rml_path = "rmlui/im_mode_panel.rml");
         ~RmlImModePanelAdapter() override;
 
+        [[nodiscard]] bool supportsAreaInstances() const override { return true; }
+        [[nodiscard]] std::shared_ptr<IPanel> createAreaInstance(
+            std::string_view instance_id) const override;
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {

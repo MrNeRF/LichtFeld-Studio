@@ -2052,11 +2052,12 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     monkeypatch.setattr(module, "histogram_mode_available", lambda _context: False)
 
     module.reset_overlay_state()
-    module.bind_overlay_model(model)
-    module.attach_overlay_model_handle(model.handle)
+    doc = _DocumentStub()
+    module.bind_overlay_model(model, doc)
+    module.attach_overlay_model_handle(model.handle, doc)
     model.handle.record_updates.clear()
 
-    module.update_overlay(SimpleNamespace())
+    module.update_overlay(doc)
 
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
     primary_buttons = model.handle.record_updates["utility_primary_buttons"]
@@ -2347,9 +2348,10 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
     )
 
     module.reset_overlay_state()
-    module.bind_overlay_model(model)
-    module.attach_overlay_model_handle(model.handle)
-    module.update_overlay(SimpleNamespace())
+    doc = _DocumentStub()
+    module.bind_overlay_model(model, doc)
+    module.attach_overlay_model_handle(model.handle, doc)
+    module.update_overlay(doc)
     model.handle.record_updates.clear()
 
     model.bound_events["toolbar_action"](None, None, ["tool", "builtin.translate"])

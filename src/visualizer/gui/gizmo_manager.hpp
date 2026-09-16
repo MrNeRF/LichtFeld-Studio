@@ -12,6 +12,7 @@
 #include "gui/ui_context.hpp"
 #include "rendering/rendering_types.hpp"
 #include "selection/selection_service.hpp"
+#include "workspace/view_id.hpp"
 #include <chrono>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -182,6 +183,9 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
+            // Workspace drags retain the stable view identity only.  The camera
+            // pointer is resolved from the current workspace snapshot each frame.
+            std::optional<ViewId> viewport_gizmo_active_view_;
             SplitViewPanelId viewport_gizmo_active_panel_ = SplitViewPanelId::Left;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};
             bool show_viewport_gizmo_ = true;

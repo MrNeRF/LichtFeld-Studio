@@ -49,7 +49,9 @@ namespace lfs::python {
             return false;
         }
 
-        void unload_document_impl() {
+        void unload_document_impl(void* document_ptr) {
+            if (!document_ptr)
+                return;
             if (!can_acquire_gil()) {
                 LOG_DEBUG("Viewport overlay document unload skipped: Python not ready");
                 return;
@@ -59,7 +61,8 @@ namespace lfs::python {
             try {
                 auto overlays = nb::module_::import_("lfs_plugins.overlays");
                 if (nb::hasattr(overlays, "on_document_unloaded"))
-                    overlays.attr("on_document_unloaded")();
+                    overlays.attr("on_document_unloaded")(
+                        PyRmlDocument(static_cast<Rml::ElementDocument*>(document_ptr)));
             } catch (const std::exception& e) {
                 LOG_ERROR("Viewport overlay document unload failed: {}", e.what());
             }

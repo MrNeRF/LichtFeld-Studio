@@ -29,6 +29,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer_impl.hpp"
+#include "workspace/workspace_serialization.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2331,6 +2332,15 @@ namespace lfs::vis::project {
                 lfs::ErrorCode::InvalidArgument, reconstruction_json.error().message,
                 "SEQR.preferences.reconstruction");
         }
+        gui_manager->captureAreaEditorState();
+        auto workspace_json =
+            workspaceStateToJson(viewer.getViewportWorkspace()->exportState());
+        if (!workspace_json) {
+            return fail<lfs::io::project::ProjectSessionChapters>(
+                lfs::ErrorCode::ContractViolation,
+                "Viewport workspace state is not internally valid",
+                "VIEW.workspace");
+        }
         auto project_render_settings =
             renderSettingsToProjectJson(settings);
         if (!settings.environment_map_path.empty() &&
@@ -2382,6 +2392,7 @@ namespace lfs::vis::project {
             {"long_axis_fov_degrees", nullptr},
             {"render_settings",
              std::move(project_render_settings)},
+            {"workspace", std::move(*workspace_json)},
             {"panel_cameras",
              Json::array({
                  panelCameraProjectStateToJson(
@@ -3308,6 +3319,24 @@ namespace lfs::vis::project {
                     lfs::core::path_to_utf8(
                         *environment_map_path);
             }
+
+            // Save workspace state before split-mode restore can modify its active camera,
+            // so malformed workspace data can be rolled back.
+            const auto workspace_json = root.find("workspace");
+            const bool has_workspace_payload = workspace_json != root.end();
+            std::optional<WorkspacePersistentState> workspace_before_payload;
+            std::optional<WorkspacePersistentState> restored_workspace;
+            if (has_workspace_payload) {
+                if (auto* const workspace = viewer.getViewportWorkspace())
+                    workspace_before_payload = workspace->exportState();
+                if (auto workspace_state = workspaceStateFromJson(*workspace_json);
+                    workspace_state) {
+                    restored_workspace = std::move(*workspace_state);
+                } else {
+                    LOG_WARN("Ignoring malformed VIEW.workspace restore: {}",
+                             workspace_state.error().detail());
+                }
+            }
             const auto desired_split =
                 restored->split_view_mode;
             const auto saved_split_offset =
@@ -3320,11 +3349,13 @@ namespace lfs::vis::project {
                     restored->raster_backend);
             rendering->updateSettings(*restored);
 
-            // The service transition creates/copies secondary panel state;
-            // saved cameras therefore apply only after this call.
-            rendering->restoreSplitViewMode(
-                desired_split,
-                viewer.getViewport());
+            // Restore saved cameras after the split transition creates secondary state.
+            // Skip the transition for malformed workspace data to preserve existing cameras.
+            if (!has_workspace_payload || restored_workspace) {
+                rendering->restoreSplitViewMode(
+                    desired_split,
+                    viewer.getViewport());
+            }
             auto split_settings =
                 rendering->getSettings();
             split_settings.split_view_offset =
@@ -3383,16 +3414,20 @@ namespace lfs::vis::project {
                     camera_id.value_or(-1));
             }
 
-            if (const auto primary_json =
-                    panel_camera_json(
-                        root, "primary")) {
-                if (auto camera =
-                        panelCameraProjectStateFromJson(
-                            *primary_json);
-                    camera) {
-                    applyPanelCameraProjectState(
-                        viewer.getViewport(),
-                        *camera);
+            bool legacy_primary_applied = false;
+            if (!has_workspace_payload) {
+                if (const auto primary_json =
+                        panel_camera_json(
+                            root, "primary")) {
+                    if (auto camera =
+                            panelCameraProjectStateFromJson(
+                                *primary_json);
+                        camera) {
+                        applyPanelCameraProjectState(
+                            viewer.getViewport(),
+                            *camera);
+                        legacy_primary_applied = true;
+                    }
                 }
             }
             if (const auto secondary_json =
@@ -3406,6 +3441,34 @@ namespace lfs::vis::project {
                         rendering
                             ->projectSecondaryViewport(),
                         *camera);
+                }
+            }
+
+            bool workspace_restored = false;
+            if (restored_workspace && viewer.getViewportWorkspace()) {
+                if (auto status = viewer.getViewportWorkspace()->importState(*restored_workspace);
+                    status) {
+                    workspace_restored = true;
+                    gui_manager->resetAreaEditors();
+                } else {
+                    LOG_WARN("Ignoring invalid VIEW.workspace restore: {}",
+                             status.error().detail());
+                }
+            }
+            if (restored_workspace && !workspace_restored && workspace_before_payload) {
+                if (auto status = viewer.getViewportWorkspace()->importState(*workspace_before_payload);
+                    !status) {
+                    LOG_ERROR("Could not roll back workspace after invalid VIEW.workspace restore: {}",
+                              status.error().detail());
+                }
+            }
+            if (!workspace_restored && !has_workspace_payload && legacy_primary_applied &&
+                viewer.getViewportWorkspace()) {
+                if (auto status = initializeWorkspacePrimaryFromLegacy(
+                        *viewer.getViewportWorkspace(), viewer.getViewport(), rendering->getSettings());
+                    !status) {
+                    LOG_WARN("Could not initialize workspace from legacy VIEW camera: {}",
+                             status.error().detail());
                 }
             }
 

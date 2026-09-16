@@ -1,0 +1,102 @@
+/* The header host spans the area so its selector can open below the row.
+ * Override the panel host theme's opaque body without covering area content. */
+#area-header {
+    background-color: transparent;
+    decorator: none;
+}
+
+body {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    pointer-events: none;
+}
+
+.area-header {
+    width: 100%;
+    height: 26dp;
+    min-height: 26dp;
+    display: flex;
+    align-items: center;
+    padding: 0 4dp;
+    box-sizing: border-box;
+    border-bottom-width: 1dp;
+    pointer-events: auto;
+}
+
+.editor-select {
+    width: 112dp;
+    height: 20dp;
+    min-height: 20dp;
+    min-width: 0;
+    flex: 0 1 112dp;
+    font-size: 11dp;
+    border-radius: 3dp;
+}
+
+.area-spacer {
+    flex: 1;
+}
+
+.area-action {
+    width: 22dp;
+    min-width: 22dp;
+    height: 22dp;
+    min-height: 22dp;
+    margin-left: 1dp;
+    padding: 2dp;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border-width: 0;
+    border-radius: 4dp;
+    background-color: transparent;
+    cursor: pointer;
+}
+
+.area-action:focus-visible {
+    border-width: 1dp;
+}
+
+.area-action img {
+    width: 16dp;
+    height: 16dp;
+    pointer-events: none;
+}
+
+.hidden {
+    display: none;
+}
+
+.area-close {
+    margin-right: -1dp;
+}
+
+/* The selector and three actions need about 190dp. Keep maximize available
+ * in narrow leaves, then remove close once the selector would be squeezed
+ * below a usable width. The host toggles these classes from the real area
+ * width so nested panes behave the same as the main viewport. */
+#area-header.compact .editor-select {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+}
+
+#area-header.compact #projection {
+    display: none;
+}
+
+#area-header.narrow #close {
+    display: none;
+}
+
+.editor-select selectbox {
+    min-width: 180dp;
+    max-height: 280dp;
+    overflow-y: auto;
+}
+
+.editor-select option {
+    white-space: nowrap;
+}

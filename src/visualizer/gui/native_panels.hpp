@@ -84,6 +84,9 @@ namespace lfs::vis::gui::native_panels {
     class SequencerPanel : public IPanel {
     public:
         SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout);
+        [[nodiscard]] bool supportsAreaInstances() const override { return seq_ != nullptr; }
+        [[nodiscard]] std::shared_ptr<IPanel> createAreaInstance(
+            std::string_view instance_id) const override;
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {

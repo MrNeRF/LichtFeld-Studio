@@ -276,6 +276,7 @@ namespace lfs::vis::gui {
                                            gui::RmlUIManager* rml_manager)
         : viewer_(viewer),
           ui_state_(ui_state),
+          rml_manager_(rml_manager),
           panel_(std::make_unique<RmlSequencerPanel>(controller_, ui_state_, rml_manager)),
           overlay_(std::make_unique<RmlSequencerOverlay>(controller_, rml_manager)),
           scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {}
@@ -297,6 +298,126 @@ namespace lfs::vis::gui {
             panel_->setTimelineView(zoom, pan);
     }
 
+    SequencerUIManager::AreaOverlayOwnerPtr
+    SequencerUIManager::createAreaOverlayOwner(
+        RmlSequencerPanel* const panel, panels::SequencerUIState* const ui_state) {
+        return std::make_shared<AreaOverlayOwner>(AreaOverlayOwner{
+            .panel = panel,
+            .ui_state = ui_state,
+            .alive = true,
+        });
+    }
+
+    void SequencerUIManager::releaseAreaOverlayOwner(
+        const AreaOverlayOwnerPtr& owner) {
+        if (!owner)
+            return;
+        owner->alive = false;
+        owner->panel = nullptr;
+        owner->ui_state = nullptr;
+        if (active_area_overlay_owner_ == owner) {
+            if (overlay_)
+                overlay_->cancelTransientEditing();
+            active_area_overlay_owner_.reset();
+        }
+    }
+
+    void SequencerUIManager::processAreaPanelRequests(
+        RmlSequencerPanel& panel, panels::SequencerUIState& ui_state,
+        AreaOverlayOwnerPtr owner, const float mouse_x, const float mouse_y) {
+        if (panel.consumeSavePathRequest()) {
+            const auto path = gui::SaveJsonFileDialog("camera_path");
+            if (!path.empty()) {
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.saveToJson(path_utf8))
+                    LOG_INFO("Camera path saved to {}", path_utf8);
+                else
+                    LOG_ERROR("Failed to save camera path to {}", path_utf8);
+            }
+        }
+
+        if (panel.consumeLoadPathRequest()) {
+            const auto path = gui::OpenJsonFileDialog();
+            if (!path.empty()) {
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.loadFromJson(path_utf8)) {
+                    LOG_INFO("Camera path loaded from {}", path_utf8);
+                    lfs::core::events::state::KeyframeListChanged{
+                        .count = controller_.timeline().realKeyframeCount()}
+                        .emit();
+                } else {
+                    LOG_ERROR("Failed to load camera path from {}", path_utf8);
+                }
+            }
+        }
+
+        if (panel.consumeLoadSequenceRequest()) {
+            const auto path = gui::PickFolderDialog();
+            if (!path.empty())
+                loadPlySequenceFromDirectory(path);
+        }
+
+        if (panel.consumeExportRequest() && controller_.timeline().realKeyframeCount() > 0) {
+            ui_state.videoExportRequest(
+                        ui_state.outputWidth(), ui_state.outputHeight(),
+                        ui_state.framerate, ui_state.quality)
+                .emit();
+        }
+
+        if (panel.consumeClearRequest() &&
+            (controller_.timeline().realKeyframeCount() > 0 ||
+             controller_.timeline().hasAnimationClip() || controller_.hasPlySequence())) {
+            stopPlySequenceStreaming();
+            controller_.clear();
+            last_ply_sequence_frame_ = std::nullopt;
+            loaded_ply_sequence_frames_.clear();
+            lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
+            LOG_INFO("Sequencer cleared");
+        }
+
+        if (const auto timeline_menu = panel.consumeContextMenu(); timeline_menu.open) {
+            active_area_overlay_owner_ = owner;
+            if (overlay_)
+                overlay_->showContextMenu(mouse_x, mouse_y,
+                                          timeline_menu.keyframe, timeline_menu.time,
+                                          viewport_edit_mode_);
+        }
+
+        if (const auto time_request = panel.consumeTimeEditRequest(); time_request.active) {
+            active_area_overlay_owner_ = owner;
+            if (overlay_)
+                overlay_->showTimeEdit(time_request.keyframe_index, time_request.current_time);
+        }
+
+        if (const auto focal_request = panel.consumeFocalEditRequest(); focal_request.active) {
+            active_area_overlay_owner_ = owner;
+            if (overlay_)
+                overlay_->showFocalEdit(focal_request.keyframe_index, focal_request.current_focal_mm);
+        }
+
+        if (const auto transport = panel.consumeTransportContextMenu();
+            transport.target != TransportContextMenuRequest::Target::NONE) {
+            active_area_overlay_owner_ = owner;
+            processTransportContextMenu(transport, ui_state, owner);
+        }
+
+        // Consume hidden dock/close controls without changing the shared sequencer panel.
+        if (panel.consumeDockToggleRequest())
+            LOG_DEBUG("Ignoring Sequencer dock toggle from an area editor");
+        if (panel.consumeClosePanelRequest())
+            LOG_DEBUG("Ignoring Sequencer close request from an area editor");
+    }
+
+    void SequencerUIManager::processAreaOverlay(const lfs::vis::PanelInputState& input) {
+        if (!overlay_)
+            return;
+        overlay_->processInput(input);
+        handleOverlayActions();
+        if (overlay_->wantsInput())
+            guiFocusState().want_capture_mouse = true;
+        overlay_->render(input.screen_w, input.screen_h);
+    }
+
     void SequencerUIManager::destroyGraphicsResources() {
         stopPlySequenceStreaming();
         last_ply_sequence_frame_ = std::nullopt;
@@ -311,6 +432,13 @@ namespace lfs::vis::gui {
         pip_needs_update_ = true;
         line_renderer_.destroyResources();
         film_strip_.destroyGraphicsResources();
+    }
+
+    void SequencerUIManager::shutdown() {
+        destroyGraphicsResources();
+        active_area_overlay_owner_.reset();
+        overlay_.reset();
+        panel_.reset();
     }
 
     void SequencerUIManager::reloadRmlResources() {
@@ -1254,6 +1382,113 @@ namespace lfs::vis::gui {
             cache_write_failures);
     }
 
+    void SequencerUIManager::processTransportContextMenu(
+        const TransportContextMenuRequest& ctx_req,
+        panels::SequencerUIState& ui_state,
+        const AreaOverlayOwnerPtr& owner) {
+        if (ctx_req.target == TransportContextMenuRequest::Target::NONE)
+            return;
+        auto* const gui = viewer_->getGuiManager();
+        if (!gui)
+            return;
+        auto& cm = gui->globalContextMenu();
+        std::vector<gui::ContextMenuItem> items;
+        using Target = TransportContextMenuRequest::Target;
+        switch (ctx_req.target) {
+        case Target::SNAP: {
+            items.push_back({LOC("context_menu.snap_interval"), "", false, true});
+            constexpr std::array<float, 4> values = {0.25f, 0.5f, 1.0f, 2.0f};
+            constexpr std::array<const char*, 4> labels = {"0.25s", "0.5s", "1s", "2s"};
+            for (size_t i = 0; i < values.size(); ++i)
+                items.push_back({labels[i], std::format("snap_{}", values[i]), false, false,
+                                 false, std::abs(ui_state.snap_interval - values[i]) < 0.01f});
+            break;
+        }
+        case Target::PREVIEW: {
+            items.push_back({LOC("context_menu.preview_scale"), "", false, true});
+            constexpr std::array<float, 5> values = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
+            constexpr std::array<const char*, 5> labels = {"0.5x", "0.75x", "1.0x", "1.5x", "2.0x"};
+            for (size_t i = 0; i < values.size(); ++i)
+                items.push_back({labels[i], std::format("scale_{}", values[i]), false, false,
+                                 false, std::abs(ui_state.pip_preview_scale - values[i]) < 0.01f});
+            break;
+        }
+        case Target::FORMAT: {
+            items.push_back({LOC("context_menu.video_format"), "", false, true});
+            using lfs::io::video::VideoPreset;
+            for (int p = 0; p <= static_cast<int>(VideoPreset::CUSTOM); ++p) {
+                const auto preset = static_cast<VideoPreset>(p);
+                const auto info = lfs::io::video::getPresetInfo(preset);
+                items.push_back({info.name, std::format("preset_{}", p), false, false,
+                                 false, ui_state.preset == preset});
+            }
+            break;
+        }
+        case Target::CLEAR:
+            items.push_back({LOC("context_menu.clear_confirm"), "", false, true});
+            items.push_back({LOC("context_menu.confirm"), "clear_confirm"});
+            items.push_back({LOC("context_menu.cancel"), "clear_cancel"});
+            break;
+        default:
+            break;
+        }
+        if (items.empty())
+            return;
+
+        const auto target = ctx_req.target;
+        cm.request(std::move(items), ctx_req.screen_x, ctx_req.screen_y,
+                   [this, target, owner](std::string_view action) {
+                       auto* state = &ui_state_;
+                       if (owner && owner->alive && owner->ui_state)
+                           state = owner->ui_state;
+                       using Target = TransportContextMenuRequest::Target;
+                       switch (target) {
+                       case Target::SNAP:
+                           if (action.starts_with("snap_"))
+                               state->snap_interval = std::stof(std::string(action.substr(5)));
+                           break;
+                       case Target::PREVIEW:
+                           if (action.starts_with("scale_"))
+                               state->pip_preview_scale = std::stof(std::string(action.substr(6)));
+                           break;
+                       case Target::FORMAT:
+                           if (action.starts_with("preset_")) {
+                               using lfs::io::video::VideoPreset;
+                               const auto next = static_cast<VideoPreset>(
+                                   std::stoi(std::string(action.substr(7))));
+                               if (next == VideoPreset::CUSTOM) {
+                                   state->custom_width = state->outputWidth();
+                                   state->custom_height = state->outputHeight();
+                                   if (state->preset != VideoPreset::CUSTOM)
+                                       state->framerate = lfs::io::video::getPresetInfo(state->preset).framerate;
+                               } else {
+                                   const auto info = lfs::io::video::getPresetInfo(next);
+                                   state->custom_width = info.width;
+                                   state->custom_height = info.height;
+                                   state->framerate = info.framerate;
+                               }
+                               state->preset = next;
+                           }
+                           break;
+                       case Target::CLEAR:
+                           if (action == "clear_confirm" &&
+                               (controller_.timeline().realKeyframeCount() > 0 ||
+                                controller_.timeline().hasAnimationClip() ||
+                                controller_.hasPlySequence())) {
+                               stopPlySequenceStreaming();
+                               controller_.clear();
+                               last_ply_sequence_frame_ = std::nullopt;
+                               loaded_ply_sequence_frames_.clear();
+                               lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
+                               LOG_INFO("Sequencer cleared");
+                           }
+                           break;
+                       case Target::NONE:
+                           break;
+                       }
+                   });
+    }
+
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport,
                                                   const float panel_x, const float panel_y,
                                                   const float panel_width, const float panel_height,
@@ -1366,112 +1601,7 @@ namespace lfs::vis::gui {
             LOG_INFO("Sequencer cleared");
         }
 
-        auto ctx_req = panel_->consumeTransportContextMenu();
-        if (ctx_req.target != TransportContextMenuRequest::Target::NONE) {
-            auto& cm = viewer_->getGuiManager()->globalContextMenu();
-            std::vector<gui::ContextMenuItem> items;
-
-            using Target = TransportContextMenuRequest::Target;
-            switch (ctx_req.target) {
-            case Target::SNAP: {
-                items.push_back({LOC("context_menu.snap_interval"), "", false, true});
-                constexpr std::array<float, 4> snap_values = {0.25f, 0.5f, 1.0f, 2.0f};
-                constexpr std::array<const char*, 4> snap_labels = {"0.25s", "0.5s", "1s", "2s"};
-                for (size_t i = 0; i < snap_values.size(); ++i) {
-                    bool active = std::abs(ui_state_.snap_interval - snap_values[i]) < 0.01f;
-                    items.push_back({snap_labels[i],
-                                     std::format("snap_{}", snap_values[i]),
-                                     false, false, false, active});
-                }
-                break;
-            }
-            case Target::PREVIEW: {
-                items.push_back({LOC("context_menu.preview_scale"), "", false, true});
-                constexpr std::array<float, 5> scale_values = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
-                constexpr std::array<const char*, 5> scale_labels = {"0.5x", "0.75x", "1.0x", "1.5x", "2.0x"};
-                for (size_t i = 0; i < scale_values.size(); ++i) {
-                    bool active = std::abs(ui_state_.pip_preview_scale - scale_values[i]) < 0.01f;
-                    items.push_back({scale_labels[i],
-                                     std::format("scale_{}", scale_values[i]),
-                                     false, false, false, active});
-                }
-                break;
-            }
-            case Target::FORMAT: {
-                items.push_back({LOC("context_menu.video_format"), "", false, true});
-                using lfs::io::video::VideoPreset;
-                for (int p = 0; p <= static_cast<int>(VideoPreset::CUSTOM); ++p) {
-                    const auto preset = static_cast<VideoPreset>(p);
-                    const auto info = lfs::io::video::getPresetInfo(preset);
-                    bool active = ui_state_.preset == preset;
-                    items.push_back({info.name,
-                                     std::format("preset_{}", p),
-                                     false, false, false, active});
-                }
-                break;
-            }
-            case Target::CLEAR: {
-                items.push_back({LOC("context_menu.clear_confirm"), "", false, true});
-                items.push_back({LOC("context_menu.confirm"), "clear_confirm"});
-                items.push_back({LOC("context_menu.cancel"), "clear_cancel"});
-                break;
-            }
-            default:
-                break;
-            }
-
-            if (!items.empty()) {
-                const auto target = ctx_req.target;
-                cm.request(std::move(items), ctx_req.screen_x, ctx_req.screen_y,
-                           [this, target](std::string_view action) {
-                               switch (target) {
-                               case Target::SNAP:
-                                   if (action.starts_with("snap_"))
-                                       ui_state_.snap_interval = std::stof(std::string(action.substr(5)));
-                                   break;
-                               case Target::PREVIEW:
-                                   if (action.starts_with("scale_"))
-                                       ui_state_.pip_preview_scale = std::stof(std::string(action.substr(6)));
-                                   break;
-                               case Target::FORMAT:
-                                   if (action.starts_with("preset_")) {
-                                       using lfs::io::video::VideoPreset;
-                                       const int idx = std::stoi(std::string(action.substr(7)));
-                                       const auto next = static_cast<VideoPreset>(idx);
-                                       if (next == VideoPreset::CUSTOM) {
-                                           ui_state_.custom_width = ui_state_.outputWidth();
-                                           ui_state_.custom_height = ui_state_.outputHeight();
-                                           if (ui_state_.preset != VideoPreset::CUSTOM)
-                                               ui_state_.framerate =
-                                                   lfs::io::video::getPresetInfo(ui_state_.preset).framerate;
-                                           ui_state_.preset = next;
-                                       } else {
-                                           ui_state_.preset = next;
-                                           const auto info = lfs::io::video::getPresetInfo(next);
-                                           ui_state_.custom_width = info.width;
-                                           ui_state_.custom_height = info.height;
-                                           ui_state_.framerate = info.framerate;
-                                       }
-                                   }
-                                   break;
-                               case Target::CLEAR:
-                                   if (action == "clear_confirm" &&
-                                       (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
-                                        controller_.hasPlySequence())) {
-                                       stopPlySequenceStreaming();
-                                       controller_.clear();
-                                       last_ply_sequence_frame_ = std::nullopt;
-                                       loaded_ply_sequence_frames_.clear();
-                                       lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
-                                       LOG_INFO("Sequencer cleared");
-                                   }
-                                   break;
-                               case Target::NONE:
-                                   break;
-                               }
-                           });
-            }
-        }
+        processTransportContextMenu(panel_->consumeTransportContextMenu(), ui_state_);
 
         applyPlySequenceFrame();
     }
@@ -2257,9 +2387,16 @@ namespace lfs::vis::gui {
             case Action::EDIT_FOCAL_LENGTH:
                 keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
-                panel_->openFocalLengthEdit(
-                    action->keyframe_index,
-                    controller_.timeline().keyframes()[action->keyframe_index].focal_length_mm);
+                if (action->keyframe_index < controller_.timeline().keyframes().size()) {
+                    auto* target_panel = panel_.get();
+                    if (active_area_overlay_owner_ && active_area_overlay_owner_->alive &&
+                        active_area_overlay_owner_->panel)
+                        target_panel = active_area_overlay_owner_->panel;
+                    if (target_panel)
+                        target_panel->openFocalLengthEdit(
+                            action->keyframe_index,
+                            controller_.timeline().keyframes()[action->keyframe_index].focal_length_mm);
+                }
                 break;
             case Action::SET_TRANSLATE:
                 keyframe_gizmo_active_ = false;

@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -26,9 +27,31 @@ namespace lfs::vis::terminal {
 
 namespace lfs::vis::gui {
     struct PanelInputState;
+    class RmlUIManager;
 } // namespace lfs::vis::gui
 
 namespace lfs::vis::gui::panels {
+
+    // Owns one retained console document and its local view state. Python
+    // execution and document services remain in PythonConsoleState.
+    class LFS_VIS_API PythonConsolePane {
+    public:
+        PythonConsolePane(lfs::vis::gui::RmlUIManager* manager, std::string context_name);
+        ~PythonConsolePane();
+
+        PythonConsolePane(const PythonConsolePane&) = delete;
+        PythonConsolePane& operator=(const PythonConsolePane&) = delete;
+
+        bool render(const UIContext& ctx, float x, float y, float w, float h,
+                    const PanelInputState* input);
+        [[nodiscard]] std::string captureChromeJson() const;
+        void applyChromeJson(std::string_view json);
+        [[nodiscard]] bool needsAnimationFrame() const;
+        void releaseRendererResources();
+
+    private:
+        void* impl_ = nullptr;
+    };
 
     class LFS_VIS_API PythonConsoleState {
     public:

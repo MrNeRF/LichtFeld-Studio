@@ -3,6 +3,7 @@
 """Viewport toolbars rendered from a retained RmlUI data model."""
 
 import math
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,18 +27,42 @@ _TOOLBAR_HIDDEN_STATES = ("starting", "running", "paused", "stopping", "complete
 _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
-_toolbar_controller = None
+# Each retained viewport document owns its controller.  Keeping this mapping
+# here is important: the Rml event handle and the mounted tool panels are tied
+# to a particular document and must never be rebound when another pane syncs.
+_toolbar_controllers = {}
+_toolbar_controller = None  # compatibility alias for older reload helpers
 _MISSING = object()
 _CROP_ROI_DEFAULT = 0.1
 _SEQUENCER_PANEL_ID = "native.sequencer"
 _HISTOGRAM_PANEL_ID = "lfs.histogram"
 
 
+def overlay_document_key(doc):
+    """Return a stable key stored on the native document DOM."""
+    body = doc.get_element_by_id("overlay-body")
+    if body is None:
+        return None
+
+    root = doc.get_element_by_id("dm-root") or body
+    key = root.get_attribute(_OVERLAY_DOC_KEY_ATTR, "")
+    if not key and root is not body:
+        key = body.get_attribute(_OVERLAY_DOC_KEY_ATTR, "")
+    if key:
+        return key
+
+    key = "python-" + uuid.uuid4().hex
+    root.set_attribute(_OVERLAY_DOC_KEY_ATTR, key)
+    if root is not body:
+        body.set_attribute(_OVERLAY_DOC_KEY_ATTR, key)
+    return key
+
+
 def __lfs_after_reload__(runtime):
     from . import overlays
 
-    if overlays._document_controller is not None:
-        overlays._document_controller.reset()
+    for controller in tuple(getattr(overlays, "_document_controllers", {}).values()):
+        controller.reset()
     runtime.ui.request_redraw()
 
 
@@ -1547,19 +1572,7 @@ class _ViewportToolbarController:
         self._sync_tool_overlays_now()
 
     def _mount_key(self, doc):
-        body = doc.get_element_by_id("overlay-body")
-        if body is None:
-            return None
-
-        root = doc.get_element_by_id("dm-root") or body
-        key = root.get_attribute(_OVERLAY_DOC_KEY_ATTR, "")
-        if key:
-            return key
-
-        key = str(self._next_doc_key)
-        self._next_doc_key += 1
-        root.set_attribute(_OVERLAY_DOC_KEY_ATTR, key)
-        return key
+        return overlay_document_key(doc)
 
     def _sync_toolbar_state(self, doc=None):
         if self._handle is None:
@@ -1896,23 +1909,45 @@ def _ensure_controller():
     global _toolbar_controller
     if _toolbar_controller is None:
         _toolbar_controller = _ViewportToolbarController()
+    return _toolbar_controller
 
 
-def bind_overlay_model(model):
-    _ensure_controller()
-    _toolbar_controller.bind_model(model)
+def _controller_for_doc(doc):
+    global _toolbar_controller
+    key = overlay_document_key(doc) if doc is not None else "__legacy__"
+    if key is None:
+        key = "__legacy__"
+    controller = _toolbar_controllers.get(key)
+    if controller is None:
+        controller = _ViewportToolbarController()
+        _toolbar_controllers[key] = controller
+    _toolbar_controller = controller
+    return controller
 
 
-def attach_overlay_model_handle(handle):
-    _ensure_controller()
-    _toolbar_controller.attach_handle(handle)
+def bind_overlay_model(model, doc=None):
+    _controller_for_doc(doc).bind_model(model)
+
+
+def attach_overlay_model_handle(handle, doc=None):
+    _controller_for_doc(doc).attach_handle(handle)
 
 
 def update_overlay(doc):
-    _ensure_controller()
-    return _toolbar_controller.update(doc)
+    return _controller_for_doc(doc).update(doc)
 
 
-def reset_overlay_state():
-    if _toolbar_controller is not None:
-        _toolbar_controller.reset()
+def reset_overlay_state(doc=None):
+    if doc is None:
+        for controller in tuple(_toolbar_controllers.values()):
+            controller.reset()
+        _toolbar_controllers.clear()
+        if _toolbar_controller is not None:
+            _toolbar_controller.reset()
+        return
+    key = doc if isinstance(doc, str) else overlay_document_key(doc)
+    if key is None:
+        return
+    controller = _toolbar_controllers.pop(key, None)
+    if controller is not None:
+        controller.reset()

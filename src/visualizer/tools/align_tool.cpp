@@ -9,7 +9,10 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rendering/workspace_render_request.hpp"
 #include "theme/theme.hpp"
+#include "visualizer_impl.hpp"
+#include "workspace/view_id.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -50,12 +53,59 @@ namespace lfs::vis::tools {
         struct PanelProjection {
             lfs::vis::RenderingManager::ViewerPanelInfo info{};
             Viewport viewport;
+            std::optional<ViewId> workspace_view_id;
             float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
             bool orthographic = false;
             float ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
             float screen_scale_x = 1.0f;
             float screen_scale_y = 1.0f;
         };
+
+        [[nodiscard]] std::optional<PanelProjection>
+        resolveWorkspacePanelProjection(const ToolContext& ctx,
+                                        const glm::vec2& screen_point) {
+            auto* const rm = ctx.getRenderingManager();
+            auto* const gm = ctx.getGuiManager();
+            if (!rm || !gm || rm->getWorkspaceVulkanFrames().empty())
+                return std::nullopt;
+
+            const auto snapshot = gm->workspaceSnapshot();
+            std::optional<ViewId> view_id;
+            if (auto* const viewer = gm->getViewer(); viewer && viewer->getInputController()) {
+                view_id = viewer->getInputController()->workspaceInteractionView(
+                    screen_point.x, screen_point.y);
+            }
+            if (!view_id)
+                view_id = snapshot.focused;
+            if (!view_id)
+                return std::nullopt;
+            const auto pane = std::ranges::find(snapshot.panes, *view_id, &PaneSnapshot::id);
+            if (pane == snapshot.panes.end() || pane->rect.empty())
+                return std::nullopt;
+            const auto frame = rm->getWorkspaceVulkanFrame(*view_id);
+            if (!frame || frame->unjittered_view.size.x <= 0 || frame->unjittered_view.size.y <= 0)
+                return std::nullopt;
+
+            const auto& view = frame->unjittered_view;
+            PanelProjection projection{};
+            projection.workspace_view_id = *view_id;
+            projection.info.x = static_cast<float>(pane->rect.x);
+            projection.info.y = static_cast<float>(pane->rect.y);
+            projection.info.width = static_cast<float>(pane->rect.width);
+            projection.info.height = static_cast<float>(pane->rect.height);
+            projection.info.render_width = view.size.x;
+            projection.info.render_height = view.size.y;
+            projection.viewport = Viewport(view.size.x, view.size.y);
+            projection.viewport.setViewMatrix(view.rotation, view.translation);
+            projection.viewport.frameBufferSize = view.size;
+            projection.viewport.ortho_scale_override = view.ortho_scale;
+            projection.focal_length_mm = view.focal_length_mm;
+            projection.orthographic = view.orthographic;
+            projection.ortho_scale = view.ortho_scale;
+            projection.screen_scale_x = projection.info.width / static_cast<float>(view.size.x);
+            projection.screen_scale_y = projection.info.height / static_cast<float>(view.size.y);
+            return projection;
+        }
 
         [[nodiscard]] std::optional<PanelProjection> resolvePanelProjection(const ToolContext& ctx,
                                                                             const glm::vec2& screen_point,
@@ -64,6 +114,9 @@ namespace lfs::vis::tools {
             if (!rm) {
                 return std::nullopt;
             }
+
+            if (const auto workspace = resolveWorkspacePanelProjection(ctx, screen_point))
+                return workspace;
 
             const auto& bounds = ctx.getViewportBounds();
             const glm::vec2 viewport_pos(bounds.x, bounds.y);
@@ -242,10 +295,20 @@ namespace lfs::vis::tools {
 
         if (picked_points.size() < 3 && rendering_manager) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
-            const float depth = rendering_manager->getDepthAtPixel(
-                static_cast<int>(render_point.x),
-                static_cast<int>(render_point.y),
-                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
+            const float depth = panel_proj.workspace_view_id
+                                    ? rendering_manager->renderExpectedDepthAtPixel({.scene_manager = tool_context_->getSceneManager(),
+                                                                                     .viewport = &panel_proj.viewport,
+                                                                                     .render_size = panel_proj.viewport.windowSize,
+                                                                                     .pixel = {static_cast<int>(render_point.x),
+                                                                                               static_cast<int>(render_point.y)},
+                                                                                     .focal_length_mm = panel_proj.focal_length_mm,
+                                                                                     .orthographic = panel_proj.orthographic,
+                                                                                     .ortho_scale = panel_proj.ortho_scale,
+                                                                                     .panel = std::nullopt})
+                                    : rendering_manager->getDepthAtPixel(
+                                          static_cast<int>(render_point.x),
+                                          static_cast<int>(render_point.y),
+                                          panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
 
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 preview_point = panel_proj.viewport.unprojectPixel(
@@ -274,10 +337,20 @@ namespace lfs::vis::tools {
 
         if (picked_points.size() == 2 && rendering_manager) {
             const glm::vec2 render_point = screenToRender(panel_proj, mouse_pos);
-            const float depth = rendering_manager->getDepthAtPixel(
-                static_cast<int>(render_point.x),
-                static_cast<int>(render_point.y),
-                panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
+            const float depth = panel_proj.workspace_view_id
+                                    ? rendering_manager->renderExpectedDepthAtPixel({.scene_manager = tool_context_->getSceneManager(),
+                                                                                     .viewport = &panel_proj.viewport,
+                                                                                     .render_size = panel_proj.viewport.windowSize,
+                                                                                     .pixel = {static_cast<int>(render_point.x),
+                                                                                               static_cast<int>(render_point.y)},
+                                                                                     .focal_length_mm = panel_proj.focal_length_mm,
+                                                                                     .orthographic = panel_proj.orthographic,
+                                                                                     .ortho_scale = panel_proj.ortho_scale,
+                                                                                     .panel = std::nullopt})
+                                    : rendering_manager->getDepthAtPixel(
+                                          static_cast<int>(render_point.x),
+                                          static_cast<int>(render_point.y),
+                                          panel_proj_opt ? std::optional<SplitViewPanelId>(panel_proj.info.panel) : std::nullopt);
 
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 p2 = panel_proj.viewport.unprojectPixel(

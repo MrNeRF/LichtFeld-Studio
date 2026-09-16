@@ -1011,6 +1011,7 @@ public:
 
     Viewport(size_t width = 1280, size_t height = 720) {
         windowSize = glm::ivec2(width, height);
+        frameBufferSize = windowSize;
         camera = CameraMotion();
         camera.setZoomSpeed(lfs::vis::UserPreferences::instance().zoomSpeed());
         camera.setWasdSpeed(lfs::vis::UserPreferences::instance().navigationSpeed());

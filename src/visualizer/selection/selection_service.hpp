@@ -7,13 +7,16 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "operation/undo_entry.hpp"
+#include "rendering/depth_window_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include "rendering/selection_ops.hpp"
+#include "workspace/viewport_workspace.hpp"
 #include <array>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <expected>
+#include <functional>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -79,6 +82,7 @@ namespace lfs::vis {
             [[nodiscard]] friend bool operator==(const ViewerLayout&, const ViewerLayout&) = default;
         };
 
+        std::optional<ViewId> workspace_view_id;
         rendering::ViewportData viewport{};
         bool equirectangular = false;
         float far_plane = rendering::DEFAULT_FAR_PLANE;
@@ -87,6 +91,9 @@ namespace lfs::vis {
         // synthetic-intrinsics viewport. Populated for the explicit-camera lane (M2) and the
         // GT compare panel (M3).
         std::optional<rendering::CameraIntrinsics> containment_intrinsics;
+        // Workspace panes carry independent depth windows. When populated,
+        // applyDepthFilter uses this state instead of shared RenderSettings.
+        std::optional<DepthWindowState> depth_window;
         std::optional<ViewerLayout> viewer_layout;
         std::optional<SplitViewPanelId> panel;
 
@@ -206,6 +213,12 @@ namespace lfs::vis {
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
+        // Optional pointer-free projection supplied by the authoritative
+        // workspace pane. It overrides legacy RenderingManager panel lookup
+        // for viewer-derived selection and is cleared in comparison/legacy modes.
+        using WorkspaceProjectionResolver = std::function<std::optional<SelectionProjectionContext>(
+            std::optional<glm::vec2>, std::optional<ViewId>)>;
+        void setWorkspaceProjectionResolver(WorkspaceProjectionResolver resolver);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
         void setTestingPanel(SplitViewPanelId panel);
@@ -247,6 +260,7 @@ namespace lfs::vis {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             ViewportInfo info;
             const Viewport* viewport = nullptr;
+            std::optional<SelectionProjectionContext> workspace_context;
 
             [[nodiscard]] bool valid() const { return viewport != nullptr && info.valid(); }
         };
@@ -300,7 +314,8 @@ namespace lfs::vis {
                                                            const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
-            std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
+            std::optional<SplitViewPanelId> panel_override = std::nullopt,
+            std::optional<ViewId> workspace_override = std::nullopt) const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);
@@ -418,6 +433,8 @@ namespace lfs::vis {
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;
         std::optional<SplitViewPanelId> testing_panel_;
+        WorkspaceProjectionResolver workspace_projection_resolver_;
+        mutable std::unique_ptr<Viewport> workspace_viewport_cache_;
         mutable bool passive_ring_preview_key_valid_ = false;
         mutable std::size_t passive_ring_preview_key_ = 0;
         mutable bool passive_ring_has_hit_ = false;

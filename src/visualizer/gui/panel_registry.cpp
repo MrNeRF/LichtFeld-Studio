@@ -1458,6 +1458,16 @@ apply_registered_chrome:
         return nullptr;
     }
 
+    std::shared_ptr<IPanel> PanelRegistry::create_area_instance(
+        const std::string& panel_id, const std::string_view instance_id) const {
+        // Factories can run Python constructors and reenter the registry.
+        // Retain the prototype while invoking it outside the registry mutex.
+        const auto prototype = get_panel_instance(panel_id);
+        if (!prototype || !prototype->supportsAreaInstances() || instance_id.empty())
+            return nullptr;
+        return prototype->createAreaInstance(instance_id);
+    }
+
     std::vector<PanelProjectState>
     PanelRegistry::capture_project_state() const {
         std::lock_guard lock(mutex_);

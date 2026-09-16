@@ -10,6 +10,9 @@
 #include "input/input_bindings.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
+#include "workspace/corner_split_interaction.hpp"
+#include "workspace/pane_interaction.hpp"
+#include "workspace/viewport_workspace.hpp"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -75,6 +78,21 @@ namespace lfs::vis {
 
         void setViewer(Visualizer* viewer) { viewer_ = viewer; }
 
+        // Workspace input is opt-in so GT/PLY and legacy split-view callers
+        // continue to use viewport_ and RenderingManager panel resolution.
+        void bindWorkspace(ViewportWorkspace* workspace);
+        void setWorkspaceFrameSnapshot(WorkspaceFrameSnapshot snapshot);
+        [[nodiscard]] const WorkspaceFrameSnapshot* workspaceFrameSnapshot() const noexcept {
+            return workspace_snapshot_ ? &*workspace_snapshot_ : nullptr;
+        }
+        [[nodiscard]] std::optional<CornerSplitPreview> workspaceCornerSplitPreview() const noexcept {
+            return corner_split_.preview();
+        }
+        // Returns the pane that owns the current pointer interaction. During a
+        // captured gesture this remains the initiating ViewId while the pointer
+        // crosses panes or splitters; otherwise it is the current hover hit.
+        [[nodiscard]] std::optional<ViewId> workspaceInteractionView(double x, double y) const;
+
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
             viewport_bounds_ = {x, y, w, h};
@@ -110,7 +128,14 @@ namespace lfs::vis {
             setCameraNavigationMode(mode);
             camera_view_snap_enabled_ =
                 view_snap_enabled;
-            viewport_.camera.clearTransientMotion();
+            if (workspace_) {
+                for (const auto view : workspace_->layout().leafIds()) {
+                    if (auto* const camera = workspace_->findCamera(view))
+                        camera->camera.clearTransientMotion();
+                }
+            } else {
+                viewport_.camera.clearTransientMotion();
+            }
             clearViewportDragState();
             clearWasdMomentumViewport();
             depth_range_initialized_ = true;
@@ -128,15 +153,27 @@ namespace lfs::vis {
                                      drag_mode_ == DragMode::Pan ||
                                      drag_mode_ == DragMode::Rotate;
             auto& keyboard_camera = activeKeyboardViewport().camera;
+            const auto tracked_camera = [this](const std::optional<ViewId>& view,
+                                               Viewport* fallback) -> Viewport* {
+                if (workspace_ && view)
+                    return workspaceCamera(*view);
+                return fallback;
+            };
+            auto* const orbit_camera = tracked_camera(orbit_coast_workspace_view_,
+                                                      orbit_coast_viewport_);
+            auto* const pan_camera = tracked_camera(pan_coast_workspace_view_,
+                                                    pan_coast_viewport_);
+            auto* const wasd_camera = tracked_camera(wasd_momentum_workspace_view_,
+                                                     wasd_momentum_viewport_);
             const bool orbit_coasting =
-                orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
+                orbit_camera && orbit_camera->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                pan_coast_viewport_ && pan_coast_viewport_->camera.hasPanMomentum();
+                pan_camera && pan_camera->camera.hasPanMomentum();
             const bool wasd_coasting =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
+                (wasd_camera && wasd_camera->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
+                (wasd_camera && wasd_camera->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
@@ -155,6 +192,7 @@ namespace lfs::vis {
         [[nodiscard]] bool isNodeRectDragging() const { return is_node_rect_dragging_; }
         [[nodiscard]] glm::vec2 getNodeRectStart() const { return node_rect_start_; }
         [[nodiscard]] glm::vec2 getNodeRectEnd() const { return node_rect_end_; }
+        [[nodiscard]] std::optional<ViewRect> workspaceNodeSelectionClipRect() const;
 
         // Event handlers (called by WindowManager)
         void handleMouseButton(int button, int action, double x, double y);
@@ -175,6 +213,7 @@ namespace lfs::vis {
     private:
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
+            ViewId view_id = kInvalidViewId;
             Viewport* viewport = nullptr;
             float local_x = 0.0f;
             float local_y = 0.0f;
@@ -224,6 +263,19 @@ namespace lfs::vis {
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
+        [[nodiscard]] bool workspaceInputActive() const noexcept {
+            return workspace_ != nullptr && workspace_snapshot_.has_value();
+        }
+        [[nodiscard]] Viewport* workspaceCamera(ViewId view) const noexcept;
+        [[nodiscard]] std::optional<PaneHit> workspacePointerHit(double x, double y) const;
+        // Camera gesture APIs consume coordinates local to their viewport. The
+        // window event coordinates are global, so captured workspace gestures
+        // must be converted against the initiating pane on every move.
+        [[nodiscard]] std::optional<glm::vec2> workspacePointerLocal(double x, double y) const;
+        [[nodiscard]] std::optional<SplitterRect> workspaceSplitterAt(double x, double y) const;
+        void beginWorkspaceCapture(double x, double y, PaneGestureKind kind);
+        void releaseWorkspaceCapture() noexcept;
+        void cancelWorkspaceInteractionWithoutDereference() noexcept;
         [[nodiscard]] SplitViewPanelId splitPanelForScreenX(double x) const;
         [[nodiscard]] std::optional<PanelInteractionState> resolvePanelInteraction(double x, double y);
         void focusSplitPanel(SplitViewPanelId panel);
@@ -249,6 +301,10 @@ namespace lfs::vis {
         // Core state
         SDL_Window* window_;
         Viewport& viewport_;
+        ViewportWorkspace* workspace_ = nullptr;
+        std::optional<WorkspaceFrameSnapshot> workspace_snapshot_;
+        mutable PaneInteraction pane_interaction_;
+        CornerSplitInteraction corner_split_;
         mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys
@@ -281,10 +337,16 @@ namespace lfs::vis {
         glm::dvec2 last_mouse_pos_{0, 0};
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
+        double splitter_start_y_ = 0.0;
+        LayoutNodeId workspace_splitter_ = kInvalidLayoutNodeId;
         Viewport* drag_viewport_ = nullptr;
         Viewport* orbit_coast_viewport_ = nullptr;
         Viewport* pan_coast_viewport_ = nullptr;
         Viewport* wasd_momentum_viewport_ = nullptr;
+        std::optional<ViewId> drag_workspace_view_;
+        std::optional<ViewId> orbit_coast_workspace_view_;
+        std::optional<ViewId> pan_coast_workspace_view_;
+        std::optional<ViewId> wasd_momentum_workspace_view_;
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
         // speed and caps pan distance by splat size; 0 means "recompute" (after scene

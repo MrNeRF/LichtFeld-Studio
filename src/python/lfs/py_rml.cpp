@@ -14,8 +14,11 @@
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/StyleSheetSpecification.h>
 #include <RmlUi/Core/Tween.h>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
+#include <format>
 #include <limits>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
@@ -29,6 +32,14 @@ namespace lfs::python {
     Rml::Variant python_to_variant(const nb::handle& obj);
 
     namespace {
+        [[nodiscard]] std::string model_key(const std::string& name,
+                                            const Rml::Context* const context) {
+            // A data-model name is only unique within one Rml context. Keep
+            // the context identity in every native side table so identical
+            // first-party model names can coexist in split viewport panes.
+            return std::format("{}@{}", reinterpret_cast<std::uintptr_t>(context), name);
+        }
+
         class GilSafeNbObject {
         public:
             GilSafeNbObject() = default;
@@ -86,6 +97,7 @@ namespace lfs::python {
         std::unordered_map<std::string, Rml::DataModelHandle> s_active_handles;
         std::unordered_map<std::string, Rml::Context*> s_model_contexts;
         std::unordered_map<std::string, Rml::ElementDocument*> s_model_documents;
+        std::unordered_map<std::string, std::string> s_model_names;
         std::unordered_set<Rml::Context*> s_string_array_type_contexts;
         std::unordered_set<Rml::Context*> s_record_array_type_contexts;
         std::unordered_set<Rml::Context*> s_builtin_transform_contexts;
@@ -250,16 +262,18 @@ namespace lfs::python {
         // before the panel document is loaded) only register their context. Resolve
         // the owning document lazily from the context and cache it, so dirty/update
         // invalidation can find it.
-        Rml::ElementDocument* resolve_model_document(const std::string& model_name) {
-            if (auto it = s_model_documents.find(model_name);
+        Rml::ElementDocument* resolve_model_document(const std::string& model_name,
+                                                     Rml::Context* const context) {
+            const auto key = model_key(model_name, context);
+            if (auto it = s_model_documents.find(key);
                 it != s_model_documents.end() && it->second)
                 return it->second;
-            if (auto cit = s_model_contexts.find(model_name);
+            if (auto cit = s_model_contexts.find(key);
                 cit != s_model_contexts.end() && cit->second) {
                 Rml::Context* ctx = cit->second;
                 if (ctx->GetNumDocuments() > 0) {
                     if (Rml::ElementDocument* doc = ctx->GetDocument(0)) {
-                        s_model_documents[model_name] = doc;
+                        s_model_documents[key] = doc;
                         return doc;
                     }
                 }
@@ -267,14 +281,16 @@ namespace lfs::python {
             return nullptr;
         }
 
-        void mark_model_document_dirty(const std::string& model_name) {
-            if (auto* doc = resolve_model_document(model_name))
+        void mark_model_document_dirty(const std::string& model_name,
+                                       Rml::Context* const context) {
+            if (auto* doc = resolve_model_document(model_name, context))
                 s_dirty_documents.insert(doc);
             request_redraw();
         }
 
-        void request_model_document_update(const std::string& model_name) {
-            if (auto* doc = resolve_model_document(model_name))
+        void request_model_document_update(const std::string& model_name,
+                                           Rml::Context* const context) {
+            if (auto* doc = resolve_model_document(model_name, context))
                 s_update_requested_documents.insert(doc);
             request_redraw();
         }
@@ -392,16 +408,20 @@ namespace lfs::python {
         auto ctor = ctx_->CreateDataModel(name);
         if (!ctor)
             return nb::none();
-        s_model_contexts[name] = ctx_;
+        const auto key = model_key(name, ctx_);
+        s_model_contexts[key] = ctx_;
+        s_model_names[key] = name;
         register_builtin_transforms(ctor, ctx_);
         return nb::cast(PyDataModelConstructor(std::move(ctor), name, ctx_));
     }
 
     bool PyRmlContext::remove_data_model(const std::string& name) {
-        s_model_storage.erase(name);
-        s_active_handles.erase(name);
-        s_model_contexts.erase(name);
-        s_model_documents.erase(name);
+        const auto key = model_key(name, ctx_);
+        s_model_storage.erase(key);
+        s_active_handles.erase(key);
+        s_model_contexts.erase(key);
+        s_model_documents.erase(key);
+        s_model_names.erase(key);
         return ctx_->RemoveDataModel(name);
     }
 
@@ -849,8 +869,10 @@ namespace lfs::python {
         auto ctor = ctx->CreateDataModel(name);
         if (!ctor)
             return nb::none();
-        s_model_contexts[name] = ctx;
-        s_model_documents[name] = doc_;
+        const auto key = model_key(name, ctx);
+        s_model_contexts[key] = ctx;
+        s_model_documents[key] = doc_;
+        s_model_names[key] = name;
         register_builtin_transforms(ctor, ctx);
         return nb::cast(PyDataModelConstructor(std::move(ctor), name, ctx));
     }
@@ -858,10 +880,12 @@ namespace lfs::python {
     bool PyRmlDocument::remove_data_model(const std::string& name) {
         auto* ctx = doc_->GetContext();
         assert(ctx);
-        s_model_storage.erase(name);
-        s_active_handles.erase(name);
-        s_model_contexts.erase(name);
-        s_model_documents.erase(name);
+        const auto key = model_key(name, ctx);
+        s_model_storage.erase(key);
+        s_active_handles.erase(key);
+        s_model_contexts.erase(key);
+        s_model_documents.erase(key);
+        s_model_names.erase(key);
         return ctx->RemoveDataModel(name);
     }
 
@@ -869,16 +893,16 @@ namespace lfs::python {
 
     void PyDataModelHandle::dirty(const std::string& name) {
         handle_.DirtyVariable(name);
-        mark_model_document_dirty(model_name_);
+        mark_model_document_dirty(model_name_, context_);
     }
 
     void PyDataModelHandle::dirty_all() {
         handle_.DirtyAllVariables();
-        mark_model_document_dirty(model_name_);
+        mark_model_document_dirty(model_name_, context_);
     }
 
     void PyDataModelHandle::request_update() {
-        request_model_document_update(model_name_);
+        request_model_document_update(model_name_, context_);
     }
 
     bool PyDataModelHandle::is_dirty(const std::string& name) {
@@ -886,7 +910,7 @@ namespace lfs::python {
     }
 
     void PyDataModelHandle::update_string_list(const std::string& name, nb::list items) {
-        auto model_it = s_model_storage.find(model_name_);
+        auto model_it = s_model_storage.find(model_key(model_name_, context_));
         assert(model_it != s_model_storage.end());
         auto arr_it = model_it->second.string_arrays.find(name);
         assert(arr_it != model_it->second.string_arrays.end());
@@ -898,11 +922,11 @@ namespace lfs::python {
             return;
         arr_it->second = std::move(updated);
         handle_.DirtyVariable(name);
-        mark_model_document_dirty(model_name_);
+        mark_model_document_dirty(model_name_, context_);
     }
 
     void PyDataModelHandle::update_record_list(const std::string& name, nb::list items) {
-        auto model_it = s_model_storage.find(model_name_);
+        auto model_it = s_model_storage.find(model_key(model_name_, context_));
         assert(model_it != s_model_storage.end());
         auto arr_it = model_it->second.record_arrays.find(name);
         assert(arr_it != model_it->second.record_arrays.end());
@@ -916,7 +940,7 @@ namespace lfs::python {
             return;
         arr_it->second = std::move(updated);
         handle_.DirtyVariable(name);
-        mark_model_document_dirty(model_name_);
+        mark_model_document_dirty(model_name_, context_);
     }
 
     // --- PyDataModelConstructor ---
@@ -1010,7 +1034,7 @@ namespace lfs::python {
                 return;
             s_string_array_type_contexts.insert(context_);
         }
-        auto& storage = s_model_storage[model_name_];
+        auto& storage = s_model_storage[model_key(model_name_, context_)];
         storage.string_arrays[name]; // create empty vector
         ctor_.Bind(name, &storage.string_arrays[name]);
     }
@@ -1018,14 +1042,14 @@ namespace lfs::python {
     void PyDataModelConstructor::bind_record_list(const std::string& name) {
         if (!ensure_record_types_registered(ctor_, context_))
             return;
-        auto& storage = s_model_storage[model_name_];
+        auto& storage = s_model_storage[model_key(model_name_, context_)];
         storage.record_arrays[name];
         ctor_.Bind(name, &storage.record_arrays[name]);
     }
 
     PyDataModelHandle PyDataModelConstructor::get_handle() {
         auto handle = ctor_.GetModelHandle();
-        s_active_handles[model_name_] = handle;
+        s_active_handles[model_key(model_name_, context_)] = handle;
         return PyDataModelHandle(handle, model_name_, context_);
     }
 
@@ -1114,16 +1138,26 @@ namespace lfs::python {
     void RmlDocumentRegistry::register_document(const std::string& name,
                                                 Rml::ElementDocument* doc) {
         auto it = documents_.find(name);
-        if (it != documents_.end() && it->second != doc)
-            release_rml_document_state(it->second);
+        if (it != documents_.end() && it->second == doc)
+            return;
+        Rml::ElementDocument* const replaced =
+            it != documents_.end() ? it->second : nullptr;
         documents_[name] = doc;
+        if (replaced && !std::ranges::any_of(documents_, [&](const auto& entry) {
+                return entry.first != name && entry.second == replaced;
+            }))
+            release_rml_document_state(replaced);
     }
 
     void RmlDocumentRegistry::unregister_document(const std::string& name) {
         auto it = documents_.find(name);
         if (it != documents_.end()) {
-            release_rml_document_state(it->second);
+            Rml::ElementDocument* const removed = it->second;
             documents_.erase(it);
+            if (!std::ranges::any_of(documents_, [removed](const auto& entry) {
+                    return entry.second == removed;
+                }))
+                release_rml_document_state(removed);
         }
     }
 
@@ -1150,8 +1184,10 @@ namespace lfs::python {
             s_active_handles.erase(name);
             s_model_contexts.erase(name);
             s_model_documents.erase(name);
-            if (ctx)
-                ctx->RemoveDataModel(name);
+            const auto model_name = s_model_names.find(name);
+            if (ctx && model_name != s_model_names.end())
+                ctx->RemoveDataModel(model_name->second);
+            s_model_names.erase(name);
         }
     }
 
@@ -1165,6 +1201,7 @@ namespace lfs::python {
             s_model_storage.erase(entry.first);
             s_active_handles.erase(entry.first);
             s_model_documents.erase(entry.first);
+            s_model_names.erase(entry.first);
             return true;
         });
 

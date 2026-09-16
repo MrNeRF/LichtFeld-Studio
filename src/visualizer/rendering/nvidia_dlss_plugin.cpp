@@ -126,6 +126,7 @@ namespace lfs::vis {
         std::optional<OptimalSettingsCache> optimal_settings_cache;
         bool loading_enabled = true;
         bool runtime_initialized = false;
+        std::optional<NvidiaDlssViewIdentityAllocator> view_identity_allocator;
         std::optional<std::thread::id> ngx_thread_id;
         bool ngx_thread_mismatch_warned = false;
 
@@ -452,6 +453,27 @@ namespace lfs::vis {
         return settings;
     }
 
+    std::optional<std::uint32_t> NvidiaDlssPlugin::acquireViewIdentity() {
+        std::scoped_lock lock(impl_->mutex);
+        if (!impl_->probeLocked())
+            return std::nullopt;
+        if (!impl_->view_identity_allocator) {
+            impl_->view_identity_allocator.emplace(
+                lfs_scene_upscaler_plugin_api_v1_supports_dynamic_view_ids(impl_->api) != 0);
+        }
+        return impl_->view_identity_allocator->acquire();
+    }
+
+    void NvidiaDlssPlugin::releaseViewIdentity(const std::uint32_t view) {
+        std::scoped_lock lock(impl_->mutex);
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(view))
+            return;
+        if (impl_->runtime_initialized && impl_->api != nullptr && impl_->plugin != nullptr)
+            impl_->api->release_feature(impl_->plugin, view);
+        impl_->view_identity_allocator->release(view);
+    }
+
     bool NvidiaDlssPlugin::createFeature(
         const VkCommandBuffer command_buffer,
         const LfsSceneUpscalerFeatureConfigV1& config) {
@@ -459,6 +481,11 @@ namespace lfs::vis {
         impl_->noteNgxCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(config.view)) {
+            impl_->diagnostic = "DLSS feature identity was not allocated by the host";
+            return false;
+        }
         if (impl_->api->create_feature(impl_->plugin, command_buffer, &config) !=
             LFS_SCENE_UPSCALER_PLUGIN_OK) {
             impl_->diagnostic = impl_->pluginErrorLocked();
@@ -472,6 +499,11 @@ namespace lfs::vis {
         impl_->noteNgxCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
+        if (!impl_->view_identity_allocator ||
+            !impl_->view_identity_allocator->owns(evaluation.view)) {
+            impl_->diagnostic = "DLSS evaluation identity was not allocated by the host";
+            return false;
+        }
         if (impl_->api->evaluate(impl_->plugin, &evaluation) !=
             LFS_SCENE_UPSCALER_PLUGIN_OK) {
             impl_->diagnostic = impl_->pluginErrorLocked();
@@ -481,9 +513,7 @@ namespace lfs::vis {
     }
 
     void NvidiaDlssPlugin::releaseFeature(const std::uint32_t view) {
-        std::scoped_lock lock(impl_->mutex);
-        if (impl_->runtime_initialized)
-            impl_->api->release_feature(impl_->plugin, view);
+        releaseViewIdentity(view);
     }
 
     void NvidiaDlssPlugin::shutdownRuntime() {

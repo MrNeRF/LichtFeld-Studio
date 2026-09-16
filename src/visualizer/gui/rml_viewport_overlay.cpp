@@ -31,10 +31,12 @@
 #include <format>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
     namespace {
+        RmlViewportOverlay* g_active_document_overlay = nullptr;
         [[nodiscard]] bool isInteractiveViewportOverlayElement(const Rml::Element* const element) {
             if (!element)
                 return false;
@@ -150,11 +152,13 @@ namespace lfs::vis::gui {
         return sources.empty() ? "unknown" : sources;
     }
 
-    void RmlViewportOverlay::init(RmlUIManager* mgr) {
+    void RmlViewportOverlay::init(RmlUIManager* mgr, std::string context_name) {
         assert(mgr);
         rml_manager_ = mgr;
+        if (!context_name.empty())
+            context_name_ = std::move(context_name);
 
-        rml_context_ = rml_manager_->createContext("viewport_overlay", 800, 600);
+        rml_context_ = rml_manager_->createContext(context_name_, 800, 600);
         if (!rml_context_) {
             LOG_ERROR("RmlViewportOverlay: failed to create RML context");
             return;
@@ -167,6 +171,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
+            if (auto* const body = document_->GetElementById("overlay-body"))
+                body->SetAttribute("data-viewport-toolbar-doc-key", context_name_);
             cacheBodyTemplate();
             document_->Show();
             bindReactiveStore();
@@ -186,9 +192,10 @@ namespace lfs::vis::gui {
     }
 
     void RmlViewportOverlay::shutdown() {
-        lfs::python::notify_viewport_overlay_document_unloaded();
+        setActiveDocument(false);
+        lfs::python::notify_viewport_overlay_document_unloaded(document_);
         if (doc_registered_)
-            lfs::python::unregister_rml_document("viewport_overlay");
+            lfs::python::unregister_rml_document(context_name_.c_str());
         doc_registered_ = false;
         gt_metrics_config_subscription_.reset();
         camera_metrics_subscription_.reset();
@@ -201,7 +208,7 @@ namespace lfs::vis::gui {
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
-            rml_manager_->destroyContext("viewport_overlay");
+            rml_manager_->destroyContext(context_name_);
         rml_context_ = nullptr;
         document_ = nullptr;
         body_el_ = nullptr;
@@ -215,13 +222,42 @@ namespace lfs::vis::gui {
         last_valid_input_origin_.reset();
     }
 
+    void RmlViewportOverlay::setActiveDocument(const bool active) {
+        // The legacy overlay already owns this registry name. Refresh the
+        // alias when asked to make it active, but never remove its primary
+        // registration from the false path.
+        if (context_name_ == "viewport_overlay") {
+            if (active && document_)
+                lfs::python::register_rml_document("viewport_overlay", document_);
+            return;
+        }
+        if (active) {
+            if (!document_)
+                return;
+            if (g_active_document_overlay && g_active_document_overlay != this)
+                g_active_document_overlay->active_document_alias_ = false;
+            lfs::python::register_rml_document("viewport_overlay", document_);
+            active_document_alias_ = true;
+            g_active_document_overlay = this;
+        } else if (active_document_alias_) {
+            if (g_active_document_overlay == this) {
+                lfs::python::unregister_rml_document("viewport_overlay");
+                g_active_document_overlay = nullptr;
+            }
+            active_document_alias_ = false;
+        }
+    }
+
     void RmlViewportOverlay::reloadResources() {
         if (!rml_context_)
             return;
 
-        lfs::python::notify_viewport_overlay_document_unloaded();
+        const bool was_active = active_document_alias_;
+        if (was_active)
+            setActiveDocument(false);
+        lfs::python::notify_viewport_overlay_document_unloaded(document_);
         if (doc_registered_)
-            lfs::python::unregister_rml_document("viewport_overlay");
+            lfs::python::unregister_rml_document(context_name_.c_str());
         doc_registered_ = false;
 
         if (rml_manager_)
@@ -263,6 +299,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
                 return;
             }
+            if (auto* const body = document_->GetElementById("overlay-body"))
+                body->SetAttribute("data-viewport-toolbar-doc-key", context_name_);
             cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
@@ -1027,7 +1065,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlViewportOverlay::processInput(const PanelInputState& input,
-                                          const ViewportOverlayInputBlockers& blockers) {
+                                          const ViewportOverlayInputBlockers& blockers,
+                                          const bool keyboard_enabled) {
         wants_input_ = false;
         // Clear before any early return: GuiManager consumes only this frame's
         // left-press classifications, in arrival order.
@@ -1095,7 +1134,8 @@ namespace lfs::vis::gui {
         bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
         bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
-        const bool focused_text_target = rml_input::wantsTextInput(focused_before);
+        const bool focused_text_target = keyboard_enabled &&
+                                         rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
             !keyboard_event && !vram_drag_capture && !toolbar_drag_capture) {
             wants_input_ = hovered_interactive_ || focused_text_target;
@@ -1298,64 +1338,62 @@ namespace lfs::vis::gui {
         // Forward keyboard + text input whenever an RmlUi element on this context owns focus
         // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
         // over_interactive, because a text input keeps focus even when the mouse roams away.
-        if (auto* focused = rml_context_->GetFocusElement()) {
-            // Selects do not request text input, but must still receive keys and Escape.
-            // Admit them explicitly, as the sidebar's hasFocusedKeyboardTarget does.
-            const bool text_focus = publishOverlayTextFocus(focused);
-            const bool select_focus = !text_focus && rml_input::isSelectRelatedElement(focused);
-            if (text_focus || select_focus) {
-                wants_input_ = true;
-                // Numpad digit and period scancodes must be suppressed from
-                // ProcessKeyDown / ProcessKeyUp when a text input is focused,
-                // otherwise RmlUi treats them as navigation keys (Home, End,
-                // arrows, etc.). The actual digit text arrives via
-                // ProcessTextInput below. This mirrors the fix in
-                // rml_panel_host.cpp for the sidebar text inputs.
-                auto isNumpadTextKey = [text_focus](int sc) {
-                    return text_focus &&
-                           ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
-                            sc == SDL_SCANCODE_KP_PERIOD);
-                };
-                // RmlUi text inputs do not handle Escape; cancel and blur as the sidebar
-                // host does. During IME composition, leave Escape to abort the composition.
-                auto* const text_input_handler =
-                    rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
-                const bool composing = text_input_handler && text_input_handler->isComposing();
-                bool escape_requested = false;
-                for (const int sc : input.keys_pressed) {
-                    if (sc == SDL_SCANCODE_ESCAPE) {
-                        if (rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(),
-                                                            composing)) {
-                            escape_requested = true;
-                            continue;
+        if (keyboard_enabled) {
+            if (auto* focused = rml_context_->GetFocusElement()) {
+                // Selects do not request text input, but must still receive keys and Escape.
+                // Admit them explicitly, as the sidebar's hasFocusedKeyboardTarget does.
+                const bool text_focus = publishOverlayTextFocus(focused);
+                const bool select_focus = !text_focus && rml_input::isSelectRelatedElement(focused);
+                if (text_focus || select_focus) {
+                    wants_input_ = true;
+                    // With text focus, numpad digits arrive through ProcessTextInput.
+                    // Suppress their navigation scancodes, as in rml_panel_host.cpp.
+                    auto isNumpadTextKey = [text_focus](int sc) {
+                        return text_focus &&
+                               ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
+                                sc == SDL_SCANCODE_KP_PERIOD);
+                    };
+                    // RmlUi text inputs do not handle Escape; cancel and blur as the sidebar
+                    // host does. During IME composition, leave Escape to abort the composition.
+                    auto* const text_input_handler =
+                        rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
+                    const bool composing = text_input_handler && text_input_handler->isComposing();
+                    bool escape_requested = false;
+                    for (const int sc : input.keys_pressed) {
+                        if (sc == SDL_SCANCODE_ESCAPE) {
+                            if (rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(),
+                                                                composing)) {
+                                escape_requested = true;
+                                continue;
+                            }
+                            if (composing)
+                                continue;
                         }
-                        if (composing)
+                        if (isNumpadTextKey(sc))
                             continue;
+                        const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                        if (rml_key != Rml::Input::KI_UNKNOWN) {
+                            markRenderNeeded(RenderReason::Keyboard);
+                            rml_context_->ProcessKeyDown(rml_key, mods);
+                        }
                     }
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                    if (escape_requested && rml_input::cancelFocusedElement(*rml_context_))
                         markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyDown(rml_key, mods);
+                    for (const int sc : input.keys_released) {
+                        if ((escape_requested || composing) && sc == SDL_SCANCODE_ESCAPE)
+                            continue;
+                        if (isNumpadTextKey(sc))
+                            continue;
+                        const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                        if (rml_key != Rml::Input::KI_UNKNOWN) {
+                            markRenderNeeded(RenderReason::Keyboard);
+                            rml_context_->ProcessKeyUp(rml_key, mods);
+                        }
                     }
-                }
-                if (escape_requested && rml_input::cancelFocusedElement(*rml_context_))
-                    markRenderNeeded(RenderReason::Keyboard);
-                for (const int sc : input.keys_released) {
-                    if ((escape_requested || composing) && sc == SDL_SCANCODE_ESCAPE)
-                        continue;
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                    for (uint32_t cp : input.text_codepoints) {
                         markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyUp(rml_key, mods);
+                        rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
                     }
-                }
-                for (uint32_t cp : input.text_codepoints) {
-                    markRenderNeeded(RenderReason::Keyboard);
-                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
                 }
             }
         }
@@ -1618,7 +1656,7 @@ namespace lfs::vis::gui {
             return;
 
         if (!doc_registered_) {
-            lfs::python::register_rml_document("viewport_overlay", document_);
+            lfs::python::register_rml_document(context_name_.c_str(), document_);
             doc_registered_ = true;
         }
 

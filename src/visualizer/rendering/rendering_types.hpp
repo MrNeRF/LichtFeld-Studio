@@ -34,6 +34,23 @@ namespace lfs::vis {
     inline constexpr float DEFAULT_LOD_POOL_VRAM_FRACTION = 0.15f; // out-of-core page pool share of free VRAM
     inline constexpr int DEFAULT_LOD_FADE_FRAMES = 12;             // fade-in of newly streamed pages (0 = off)
 
+    // LOD pixel scale is world units per pixel: at unit depth for perspective,
+    // or the inverse of pixels per world unit for orthographic views.
+    [[nodiscard]] inline float lodPixelScaleLimit(const lfs::rendering::FrameView& view) {
+        if (view.orthographic) {
+            return std::isfinite(view.ortho_scale) && view.ortho_scale > 1.0e-5f
+                       ? 1.0f / view.ortho_scale
+                       : DEFAULT_LOD_PIXEL_SCALE_LIMIT;
+        }
+        if (view.size.y <= 0 || !std::isfinite(view.focal_length_mm) ||
+            view.focal_length_mm <= 0.0f) {
+            return DEFAULT_LOD_PIXEL_SCALE_LIMIT;
+        }
+        const float half_tan_fov = std::tan(
+            glm::radians(lfs::rendering::focalLengthToVFov(view.focal_length_mm)) * 0.5f);
+        return (2.0f * half_tan_fov) / static_cast<float>(view.size.y);
+    }
+
     enum class SplitViewMode {
         Disabled,
         PLYComparison,

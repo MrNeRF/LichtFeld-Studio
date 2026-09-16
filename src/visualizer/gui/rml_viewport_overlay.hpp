@@ -153,8 +153,15 @@ namespace lfs::vis::gui {
         RmlViewportOverlay(const RmlViewportOverlay&) = delete;
         RmlViewportOverlay& operator=(const RmlViewportOverlay&) = delete;
 
-        void init(RmlUIManager* mgr);
+        // `context_name` identifies this viewport's retained RML document. The
+        // default keeps the legacy single-viewport registration intact; area
+        // workspaces pass one stable name per ViewId.
+        void init(RmlUIManager* mgr, std::string context_name = "viewport_overlay");
         LFS_VIS_API void shutdown();
+        // Make this document the compatibility `viewport_overlay` registry
+        // target used by legacy Python callers. Area workspaces call this for
+        // the focused viewport before dispatching shared actions.
+        void setActiveDocument(bool active = true);
         LFS_VIS_API void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void setViewportContentOffset(float x);
         void setToolbarPanels(float primary_x, float primary_width,
@@ -174,7 +181,8 @@ namespace lfs::vis::gui {
         // Shared production routing boundary: input is the original frame,
         // never a masked copy with sentinel coordinates or removed events.
         LFS_VIS_API void processInput(const PanelInputState& input,
-                                      const ViewportOverlayInputBlockers& blockers = {});
+                                      const ViewportOverlayInputBlockers& blockers = {},
+                                      bool keyboard_enabled = true);
         bool wantsInput() const { return wants_input_; }
         // Left DOWNs from the last processInput(), classified at their own points
         // in arrival order; empty with no left press or an early blocked return.
@@ -253,6 +261,7 @@ namespace lfs::vis::gui {
         friend class lfs::vis::RmlViewportInputRoutingTest;
 
         RmlUIManager* rml_manager_ = nullptr;
+        std::string context_name_ = "viewport_overlay";
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::Element* body_el_ = nullptr;
@@ -304,6 +313,7 @@ namespace lfs::vis::gui {
         // context destruction (rml_pointer_dispatch.hpp).
         bool pointer_down_delivered_[3] = {};
         bool doc_registered_ = false;
+        bool active_document_alias_ = false;
         bool render_needed_ = true;
         std::uint32_t render_reason_bits_ = static_cast<std::uint32_t>(RenderReason::Initial);
         bool document_sync_dirty_ = true;
