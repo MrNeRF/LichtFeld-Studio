@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace lfs::vis::gui {
     namespace {
@@ -349,7 +350,7 @@ namespace lfs::vis::gui {
         std::ofstream output(destination, std::ios::binary | std::ios::trunc);
         output.exceptions(std::ios::badbit | std::ios::failbit);
         const auto copied = source.visit_stream([&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             std::uint64_t offset = 0;
             while (offset < size) {
                 throwIfCanceled(canceled, "Scene preparation canceled.");
@@ -608,7 +609,7 @@ namespace lfs::vis::gui {
                 throw std::runtime_error(std::string(target.error().user_message()));
             std::ifstream input(file, std::ios::binary);
             input.exceptions(std::ios::badbit);
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             uint64_t copied = 0;
             while (input) {
                 throwIfCanceled(canceled, "Project preparation canceled.");
