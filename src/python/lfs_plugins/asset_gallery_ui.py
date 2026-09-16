@@ -192,7 +192,9 @@ class GalleryAssetMixin:
             facts.update(state="unknown", originMatch=True)
         facts["replacedBytes"] = (self._gallery_scene(asset) or {}).get("contentLength", 0) if link else 0
         facts["jobs"] = jobs
-        facts["actions"] = gallery_actions(asset, facts)
+        # Recent-only rows have a path and display name, but no catalog identity
+        # that the Gallery controller can safely act on.
+        facts["actions"] = [] if asset.get("recent_only") else gallery_actions(asset, facts)
         facts["action"] = facts["actions"][0]["id"] if facts["actions"] else ""
         return facts
 
@@ -303,6 +305,8 @@ class GalleryAssetMixin:
         self._request_model_update()
 
     def _gallery_verb_enabled(self, asset, verb):
+        if asset.get("recent_only"):
+            return False
         return any(action["id"] == verb and action["enabled"] for action in self._gallery_facts(asset)["actions"])
 
     def _gallery_counts(self):
@@ -433,6 +437,13 @@ class GalleryAssetMixin:
                 for index, action in enumerate(self._gallery_facts(asset)["actions"])]
 
     def _gallery_command(self, action, args=()):
+        global_action = action.startswith("toast_") or action in {
+            "update_all", "refresh", "open_recovery", "undo", "publish_many", "update_many",
+        }
+        if not global_action:
+            asset = self._get_selected_asset()
+            if asset and asset.get("recent_only"):
+                return
         try:
             self._controller()._failure_notice = ""
             if not action.startswith("toast_"):
@@ -782,7 +793,7 @@ class GalleryAssetMixin:
         if self._gallery_state.get("unsupported"):
             return ""
         asset = self._get_selected_asset()
-        if not asset:
+        if not asset or asset.get("recent_only"):
             return ""
         return self._gallery_badge(asset)["gallery_action"]
 

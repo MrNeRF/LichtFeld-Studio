@@ -752,6 +752,48 @@ def test_recent_scope_includes_projects_outside_the_asset_index(panel_module):
     assert panel._filtered_assets() == []
 
 
+@pytest.mark.parametrize("signed_in", [False, True], ids=["disconnected", "connected"])
+def test_recent_only_project_has_no_gallery_inspector_action(
+    panel_module, monkeypatch, tmp_path, signed_in
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    panel._gallery_state = {
+        "identity": ("account", "owner") if signed_in else None,
+        "signed_in": signed_in,
+        "connected": signed_in,
+        "checkedAt": 1 if signed_in else 0,
+        "links": {},
+        "scenes": [],
+        "jobs": [],
+    }
+    recent = panel._filtered_assets()[0]
+    assert recent["recent_only"] is True
+    assert panel._select_asset_id(recent["id"])
+
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings["inspector_has_gallery_action"]() is False
+    assert model.func_bindings["inspector_gallery_action_label"]() == ""
+    assert model.func_bindings["inspector_gallery_action_enabled"]() is False
+    assert panel._gallery_badge(recent)["gallery_has_action"] is False
+    assert panel._selected_gallery_action() == ""
+
+    controller_calls = []
+    panel._controller = lambda: controller_calls.append(True) or SimpleNamespace(
+        _failure_notice=""
+    )
+    monkeypatch.setattr(panel, "_open_gallery_review", lambda *_args: None)
+    panel._gallery_command("primary")
+    assert controller_calls == []
+
+
 def test_recent_scope_resolves_path_aliases(panel_module, tmp_path):
     watched = tmp_path / "watched"
     watched.mkdir()
