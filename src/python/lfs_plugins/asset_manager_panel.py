@@ -2360,7 +2360,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel), backup=False)
         elif action == "update_thumbnail":
-            details = self._inspection_by_asset.get(asset["id"], {}).get("details")
             dataset_available, embedded_available = self._thumbnail_source_availability(path)
             sources = thumbnail_source_options(
                 asset,

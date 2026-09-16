@@ -2542,8 +2542,14 @@ namespace lfs::io::project {
                 if (payload) {
                     auto bytes = read_lazy_payload(*payload);
                     if (bytes) {
-                        availability.first_embedded_image =
-                            static_cast<bool>(encode_image_bytes(*bytes));
+                        try {
+                            availability.first_embedded_image =
+                                static_cast<bool>(encode_image_bytes(*bytes));
+                        } catch (...) {
+                            // A corrupt optional embedded image must not hide a
+                            // usable external dataset image source.
+                            availability.first_embedded_image = false;
+                        }
                     }
                 }
             }
