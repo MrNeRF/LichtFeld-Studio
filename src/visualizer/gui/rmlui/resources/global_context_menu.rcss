@@ -28,3 +28,7 @@ body {
     height: 16dp;
     flex: 0 0 16dp;
 }
+
+.context-menu-label {
+    white-space: normal;
+}

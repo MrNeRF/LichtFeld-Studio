@@ -766,6 +766,7 @@ progress fill {
     display: none;
     position: absolute;
     z-index: 100;
+    box-sizing: border-box;
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
@@ -787,6 +788,7 @@ progress fill {
     font-size: 12dp;
     width: 100%;
     text-align: left;
+    white-space: normal;
     background-color: transparent;
     border-width: 0;
     transition: background-color 0.1s quadratic-out;
