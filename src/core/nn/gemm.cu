@@ -639,8 +639,11 @@ namespace lfs::core::nn::kernels {
             const int warp_n = warp_id % kWarpN;
             const int lane = tid % 32;
 
-            __shared__ __align__(16) __half As[2][BM][BK];
-            __shared__ __align__(16) __half Bs[2][BN][BK];
+            // Pad the shared rows so the 16-byte WMMA fragment loads spread across
+            // banks instead of landing on two of them.
+            constexpr int SK = BK + 8;
+            __shared__ __align__(16) __half As[2][BM][SK];
+            __shared__ __align__(16) __half Bs[2][BN][SK];
 
             fragment<matrix_a, WM, WN, WK, __half, row_major> a_frag[kFragM];
             fragment<matrix_b, WM, WN, WK, __half, col_major> b_frag[kFragN];
@@ -704,11 +707,11 @@ namespace lfs::core::nn::kernels {
                 for (int kk = 0; kk < BK; kk += WK) {
 #pragma unroll
                     for (int fi = 0; fi < kFragM; ++fi) {
-                        load_matrix_sync(a_frag[fi], &As[stage][am + fi * WM][kk], BK);
+                        load_matrix_sync(a_frag[fi], &As[stage][am + fi * WM][kk], SK);
                     }
 #pragma unroll
                     for (int fj = 0; fj < kFragN; ++fj) {
-                        load_matrix_sync(b_frag[fj], &Bs[stage][bn + fj * WN][kk], BK);
+                        load_matrix_sync(b_frag[fj], &Bs[stage][bn + fj * WN][kk], SK);
                     }
 #pragma unroll
                     for (int fi = 0; fi < kFragM; ++fi) {
