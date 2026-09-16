@@ -624,16 +624,15 @@ def _publish_current_project_to_gallery() -> None:
             details = {key: fields[key] for key in ("title", "description", "visibility")}
             if action == "check":
                 controller.refresh()
+                lf.ui.message_dialog(title, gallery_tr("error.refresh"), "info")
                 return
             if action in ("resolve", "apply"):
                 controller.resolve_asset(asset, details, apply_only=action == "apply")
                 return
             if action in ("open", "copy"):
-                controller.open_portal(scene, action)
-                if action == "open" and facts.get("presentationChanged") and not controller.service.busy:
-                    controller.service.acknowledge_presentation(project_id, scene)
-                    controller._schedule_poll()
-                return
+                # File → Publish remains a publishing workflow when the link
+                # is already current: the review can still update its metadata.
+                action = "update"
             if action == "publish_again":
                 publish_new = True
                 action = "publish"

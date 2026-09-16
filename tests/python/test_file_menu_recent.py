@@ -278,7 +278,7 @@ def test_file_menu_publishes_current_project_from_review_without_asset_index(
 @pytest.mark.parametrize(
     "state_name,expected",
     [("local", "update"), ("remote", "apply"), ("diverged", "resolve"),
-     ("unknown", "check"), ("equal", "open")],
+     ("unknown", "check"), ("equal", "update")],
 )
 def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_path, state_name, expected):
     project = tmp_path / "project.licht"
@@ -330,8 +330,7 @@ def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_p
         assert calls == [("resolve", {"apply_only": False})] and opened == []
     elif expected == "check":
         assert calls == [("check",)] and opened == []
-    else:
-        assert calls == [("open", "scene-id")] and opened == []
+        assert file_menu.lf.message_dialogs[-1][2] == "info"
 
 
 def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):
