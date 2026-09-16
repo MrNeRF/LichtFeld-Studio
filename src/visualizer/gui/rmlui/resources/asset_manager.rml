@@ -208,7 +208,7 @@
                            data-style-decorator="asset.thumbnail_decorator" data-style-height="asset_card_thumbnail_height">
                         <span class="asset-health-badge" data-if="asset.health_badge" data-attr-class="'asset-health-badge ' + asset.health_tone" data-attr-title="asset.health_label"><span>!</span></span>
                         <span class="gallery-activity" data-if="asset.gallery_ring" data-attr-title="asset.gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="asset.gallery_progress_value"/></span>
-                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-thumbnail-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder" aria-hidden="true"><img src="../icon/scene/splat.png" alt=""/></span>
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row"><span class="asset-card-title" data-attr-title="asset.display_name">{{asset.display_name}}</span></div>
@@ -245,7 +245,7 @@
                       <div class="asset-list-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
                         <span class="asset-health-badge" data-if="asset.health_badge" data-attr-class="'asset-health-badge ' + asset.health_tone" data-attr-title="asset.health_label"><span>!</span></span>
                         <span class="gallery-activity" data-if="asset.gallery_ring" data-attr-title="asset.gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="asset.gallery_progress_value"/></span>
-                        <span class="asset-card-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
+                        <span class="asset-thumbnail-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder" aria-hidden="true"><img src="../icon/scene/splat.png" alt=""/></span>
                       </div>
                       <span class="asset-col asset-col-name" data-style-width="asset_list_name_width">
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
@@ -427,7 +427,7 @@
           </div>
           <div class="asset-quick-look-thumb asset-thumb-project"
                data-style-decorator="quick_look_thumbnail">
-            <span class="asset-card-placeholder" data-attr-title="quick_look_placeholder" data-if="!quick_look_has_thumbnail">{{quick_look_placeholder}}</span>
+            <span class="asset-thumbnail-placeholder" data-attr-title="selected_asset_name" data-if="!quick_look_has_thumbnail" aria-hidden="true"><img src="../icon/scene/splat.png" alt=""/></span>
           </div>
           <div class="asset-quick-look-facts">
             <span>{{selected_asset_size}}</span><span>{{selected_asset_modified}}</span>

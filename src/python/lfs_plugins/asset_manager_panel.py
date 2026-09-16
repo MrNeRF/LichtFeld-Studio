@@ -522,7 +522,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             lambda: self._quick_look_visible and bool(self.get_selected_asset_id()),
         )
         model.bind_func("quick_look_thumbnail", self.get_selected_asset_thumbnail_decorator)
-        model.bind_func("quick_look_placeholder", self.get_selected_asset_placeholder)
         model.bind_func(
             "quick_look_has_thumbnail",
             lambda: self.get_selected_asset_thumbnail_decorator() != "none",
@@ -1299,10 +1298,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }.get(status, "projects.status.unverified")
         return tr(key)
 
-    @staticmethod
-    def _placeholder_label(display_name: str) -> str:
-        return " ".join(str(display_name or "").split()[:2])[:24]
-
     def _get_asset_display_name(self, asset: Dict[str, Any]) -> str:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
@@ -1383,6 +1378,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             else:
                 element = header.parent().insert_before("div", header)
             element.set_id("asset-info-thumbnail")
+        placeholder = element.query_selector(".asset-thumbnail-placeholder")
+        if placeholder is None:
+            placeholder = element.append_child("span")
+            placeholder.set_class_names("asset-thumbnail-placeholder asset-info-thumbnail-placeholder")
+            placeholder.set_attribute("aria-hidden", "true")
+            image = placeholder.append_child("img")
+            image.set_attribute("src", "../icon/scene/splat.png")
+            image.set_attribute("alt", "")
+        placeholder_title = self._get_asset_display_name(asset) if asset else ""
+        placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title
+        if placeholder_title_changed:
+            placeholder.set_attribute("title", placeholder_title)
         # The Inspector owns a 12 dp scroll gutter. The band alone uses the
         # small landscape preview; the column fills its own content width.
         width = (max(0.0, self._inspector_width - 12.0) if self._layout_class == "wide"
@@ -1402,9 +1409,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 release(self._info_thumbnail_source)
             self._info_thumbnail_source = source
             element.set_property("decorator", decorator)
-        if changed or created:
-            element.set_property("display", "block" if source else "none")
-        return changed or created or geometry_changed
+        placeholder_display = "none" if source else "flex"
+        placeholder_display_changed = placeholder.get_property("display") != placeholder_display
+        if placeholder_display_changed:
+            placeholder.set_property("display", placeholder_display)
+        element_display = "flex" if asset else "none"
+        visibility_changed = element.get_property("display") != element_display
+        if visibility_changed:
+            element.set_property("display", element_display)
+        return (changed or created or geometry_changed or placeholder_title_changed or
+                placeholder_display_changed or visibility_changed)
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
@@ -1437,7 +1451,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             **asset,
             **self._gallery_badge(asset),
             "display_name": display_name,
-            "placeholder_label": self._placeholder_label(display_name),
             "id": asset_id,
             "folder_name": folder_name,
             "size_label": self._format_size(asset.get("file_size_bytes", 0)),
@@ -1791,15 +1804,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._get_selected_asset()
         return self._thumbnail_decorator(self._asset_with_poster(asset)) if asset else "none"
 
-    def get_selected_asset_placeholder(self) -> str:
-        asset = self._get_selected_asset()
-        return self._project_status_label(asset) if asset else ""
-
     def open_quick_look(self, _handle=None, _ev=None, _args=None) -> None:
         if self.get_selected_asset_id():
             self._quick_look_visible = True
             self._dirty_fields(
-                "quick_look_visible", "quick_look_thumbnail", "quick_look_placeholder"
+                "quick_look_visible", "quick_look_thumbnail"
             )
 
     def close_quick_look(self, _handle=None, _ev=None, _args=None) -> None:
@@ -2044,7 +2053,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "selected_asset_expected_path",
             "quick_look_visible",
             "quick_look_thumbnail",
-            "quick_look_placeholder",
             "quick_look_has_thumbnail",
             "inspector_saved", "inspector_saved_at", "inspector_opened",
             "inspector_iteration", "inspector_strategy", "inspector_resumable",

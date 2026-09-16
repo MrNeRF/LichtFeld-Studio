@@ -1633,29 +1633,25 @@ def test_completed_save_outside_folder_is_ignored(panel_module):
     assert panel._refresh_after_project_write() is False
     assert registered == []
 
-def test_placeholder_label_uses_first_two_words(panel_module):
+def test_missing_thumbnails_use_the_project_icon(panel_module):
     panel = panel_module.AssetManagerPanel()
     row = panel._format_asset_for_ui(
         _project(name="Bicycle Scene Extra Words", has_preview=False)
     )
-    assert row["placeholder_label"] == "Bicycle Scene"
     assert row["has_preview"] is False
     assert row["shows_placeholder"] is True
-
-    truncated = panel._format_asset_for_ui(
-        _project(name="Supercalifragilisticexpialidocious Wonderful", has_preview=False)
-    )
-    assert truncated["placeholder_label"] == "Supercalifragilisticexpi"
-    assert len(truncated["placeholder_label"]) == 24
+    assert "placeholder_label" not in row
 
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+    theme = (root / "src/visualizer/gui/rmlui/resources/asset_manager.theme.rcss").read_text()
     assert 'data-if="asset.shows_placeholder"' in rml
-    assert 'data-if="!asset.has_preview"' not in rml
-    assert "{{asset.placeholder_label}}" in rml
-    assert "display: block;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
-    assert "width: 100%;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
+    assert rml.count('../icon/scene/splat.png') == 3  # gallery, list, and quick look
+    assert "{{asset.placeholder_label}}" not in rml
+    assert "{{quick_look_placeholder}}" not in rml
+    assert ".asset-thumbnail-placeholder > img" in rcss
+    assert "background-color: @{darken(primary,0.40)};" in theme
 
 def test_data_if_model_fields_are_boolean_bindings(panel_module):
     root = Path(__file__).resolve().parents[2]
@@ -2236,21 +2232,99 @@ def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
     panel._gallery_state["posters"] = {"remote-only": str(poster)}
     panel._selected_folder_id = panel_module.SCOPE_PUBLISHED
     panel._select_asset_id("remote:remote-only")
-    properties, elements = {}, {}
+    elements = {}
     class Element:
+        def __init__(self, tag="div"):
+            self.tag = tag
+            self.properties = {}
+            self.attributes = {}
+            self.classes = ""
+            self.children = []
         def set_id(self, value):
             elements[value] = self
         def set_property(self, key, value):
-            properties[key] = value
-    header = SimpleNamespace(parent=lambda: SimpleNamespace(insert_before=lambda *args: Element()))
-    doc = SimpleNamespace(query_selector=lambda selector: header, get_element_by_id=elements.get)
+            changed = self.properties.get(key) != value
+            self.properties[key] = value
+            return changed
+        def get_property(self, key):
+            return self.properties.get(key, "")
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+        def get_attribute(self, key, default=""):
+            return self.attributes.get(key, default)
+        def set_class_names(self, value):
+            self.classes = value
+        def append_child(self, tag):
+            child = Element(tag)
+            self.children.append(child)
+            return child
+        def query_selector(self, selector):
+            if selector == ".asset-thumbnail-placeholder":
+                return next((child for child in self.children if "asset-thumbnail-placeholder" in child.classes), None)
+            return None
+    thumbnail = Element()
+    header_parent = SimpleNamespace(insert_before=lambda *args: thumbnail)
+    header = SimpleNamespace(parent=lambda: header_parent)
+    doc = SimpleNamespace(query_selector=lambda selector: header if selector == ".asset-info-header" else None,
+                          get_element_by_id=elements.get)
     assert panel._sync_info_thumbnail(doc)
-    assert properties["display"] == "block" and "kind=image" in properties["decorator"]
+    assert thumbnail.properties["display"] == "flex" and "kind=image" in thumbnail.properties["decorator"]
+    placeholder = thumbnail.children[0]
+    assert placeholder.properties["display"] == "none"
+    assert thumbnail.children[0].children[0].attributes["src"] == "../icon/scene/splat.png"
+    assert panel._sync_info_thumbnail(doc) is False
     source = panel._info_thumbnail_source
     panel._selected_asset_ids.clear()
     assert panel._sync_info_thumbnail(doc)
-    assert properties["display"] == "none"
+    assert thumbnail.properties["display"] == "none"
+    assert placeholder.properties["display"] == "flex"
     assert source in panel_module.lf._test_state.released_textures
+
+
+def test_info_thumbnail_shows_project_icon_without_a_preview(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    local["has_preview"] = False
+    panel._select_asset_id(local["id"])
+    elements = {}
+    class Element:
+        def __init__(self, tag="div"):
+            self.tag = tag
+            self.properties = {}
+            self.attributes = {}
+            self.classes = ""
+            self.children = []
+        def set_id(self, value):
+            elements[value] = self
+        def set_property(self, key, value):
+            changed = self.properties.get(key) != value
+            self.properties[key] = value
+            return changed
+        def get_property(self, key):
+            return self.properties.get(key, "")
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+        def get_attribute(self, key, default=""):
+            return self.attributes.get(key, default)
+        def set_class_names(self, value):
+            self.classes = value
+        def append_child(self, tag):
+            child = Element(tag)
+            self.children.append(child)
+            return child
+        def query_selector(self, selector):
+            if selector == ".asset-thumbnail-placeholder":
+                return next((child for child in self.children if "asset-thumbnail-placeholder" in child.classes), None)
+            return None
+    thumbnail = Element()
+    header = SimpleNamespace(parent=lambda: SimpleNamespace(insert_before=lambda *args: thumbnail))
+    doc = SimpleNamespace(query_selector=lambda selector: header if selector == ".asset-info-header" else None,
+                          get_element_by_id=elements.get)
+
+    assert panel._sync_info_thumbnail(doc)
+    placeholder = thumbnail.children[0]
+    assert thumbnail.properties["display"] == "flex"
+    assert placeholder.properties["display"] == "flex"
+    assert placeholder.attributes["title"] == panel._get_asset_display_name(local)
 
 def test_translated_message_has_no_english_append(panel_module):
     from lfs_plugins.gallery_messages import localize_message
