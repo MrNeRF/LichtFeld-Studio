@@ -5005,28 +5005,36 @@ namespace lfs::training {
                             return std::move(staged)
                                 .error();
                         }
-                        if (const auto first =
-                                lfs::io::project::
-                                    first_dataset_image(
-                                        chapters
-                                            ->parameters
-                                            .dataset)) {
-                            auto encoded =
-                                lfs::io::project::
-                                    dataset_preview_png(
-                                        *first);
-                            if (encoded) {
-                                LOG_INFO(
-                                    "Embedded dataset image as project preview: {}",
-                                    lfs::core::path_to_utf8(
-                                        *first));
-                                preview_png =
-                                    std::move(*encoded);
-                            } else {
-                                LOG_WARN(
-                                    "Could not encode dataset image as project preview: {}",
-                                    lfs::format_for_developer(
-                                        encoded.error()));
+                        const auto* source_reader =
+                            document->source_reader();
+                        const bool has_existing_preview =
+                            source_reader &&
+                            source_reader->preview().has_value();
+                        if (preview_png.empty() &&
+                            !has_existing_preview) {
+                            if (const auto first =
+                                    lfs::io::project::
+                                        first_dataset_image(
+                                            chapters
+                                                ->parameters
+                                                .dataset)) {
+                                auto encoded =
+                                    lfs::io::project::
+                                        dataset_preview_png(
+                                            *first);
+                                if (encoded) {
+                                    LOG_INFO(
+                                        "Embedded dataset image as project preview: {}",
+                                        lfs::core::path_to_utf8(
+                                            *first));
+                                    preview_png =
+                                        std::move(*encoded);
+                                } else {
+                                    LOG_WARN(
+                                        "Could not encode dataset image as project preview: {}",
+                                        lfs::format_for_developer(
+                                            encoded.error()));
+                                }
                             }
                         }
 
