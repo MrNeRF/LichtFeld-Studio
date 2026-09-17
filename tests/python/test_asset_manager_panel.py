@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
+import inspect
 import re
 import sys
 import threading
@@ -349,6 +350,12 @@ def test_panel_contract_polls_preference_and_remains_left_dock(panel_module, mon
     assert panel._host_geometry == (760, 600)
     assert panel._layout_signature is None
     assert updates == [True]
+    panel.on_host_geometry_changed(1140.4, 900.4, 1.5)
+    assert updates == [True]
+    panel._layout_signature = ("stable",)
+    panel.on_host_geometry_changed(1170, 900, 1.5)
+    assert panel._layout_signature == ("stable",)
+    assert updates == [True, True]
 
 def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
     panel = panel_module.AssetManagerPanel()
@@ -1012,6 +1019,22 @@ def test_gallery_checked_completion_is_not_a_notice_or_toast(panel_module):
     assert panel._gallery_state["message"] == ""
     assert panel._gallery_toast is None
 
+
+def test_relink_notice_survives_identity_change_and_is_not_repeated_per_row(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    message = "Use the Portal button to approve gallery access. Your local work is safe."
+
+    panel._gallery_changed({
+        "identity": "account", "signed_in": True, "relink_required": True,
+        "message": message, "scenes": [], "links": {}, "jobs": [],
+    })
+
+    badge = panel._gallery_badge(asset)
+    assert panel._gallery_notice_text() == message
+    assert badge["gallery_label"] == ""
+    assert badge["gallery_has_badge"] is False
+
 def test_gallery_batches_use_only_visible_filtered_rows(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     other = _project(id="other", project_uuid="other", name="Garden", path="/tmp/garden.licht", folder_id="archive")
@@ -1051,6 +1074,79 @@ def test_gallery_grid_geometry_uses_dp_and_subtracts_column_gaps(panel_module, m
     assert panel._gallery_columns() == columns
     panel._window_assets([_project(id=str(index), project_uuid=str(index)) for index in range(12)])
     assert panel._asset_card_slot_width == pytest.approx(slot)
+
+
+def test_width_only_viewport_changes_do_not_rebuild_list_rows(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    scroll = _Element()
+    scroll.scroll_top = 0
+    scroll.client_height = 400
+    scroll.client_width = 500
+    panel._doc = _Document({"asset-gallery-scroll": scroll})
+    panel._view_mode = "list"
+    assert panel._sync_asset_window_viewport() is True
+    panel._handle.dirty_fields.clear()
+
+    scroll.client_width = 503
+    assert panel._sync_asset_window_viewport() is False
+    assert panel._asset_window_client_width == 503
+    assert panel._handle.dirty_fields == []
+
+    scroll.client_width = 512
+    assert panel._sync_asset_window_viewport() is False
+    assert panel._handle.dirty_fields == []
+    assert "assets" not in panel._handle.dirty_fields
+
+    panel._view_mode = "gallery"
+    scroll.client_width = 530
+    assert panel._sync_asset_window_viewport() is False
+    scroll.client_width = 700
+    assert panel._sync_asset_window_viewport() is True
+
+
+def test_thumbnail_size_is_shared_across_responsive_breakpoints(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._layout_class = "compact"
+    panel.set_thumbnail_size(224)
+    panel._layout_class = "wide"
+
+    assert panel.get_thumbnail_size() == 224
+    assert panel.capture_chrome()["thumbnail_size"] == 224
+
+    restored = panel_module.AssetManagerPanel()
+    restored.apply_chrome({"thumbnail_size": 224})
+    assert restored.get_thumbnail_size() == 224
+
+    migrated = panel_module.AssetManagerPanel()
+    migrated.apply_chrome({"thumbnail_sizes": {"compact": 112, "wide": 240}})
+    assert migrated.get_thumbnail_size() == 240
+
+
+def test_move_to_trash_uses_platform_helper_before_catalog_removal(panel_module, monkeypatch):
+    asset = _project(path="C:/projects/example.licht")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    actions = []
+    source = inspect.getsource(panel_module._move_to_trash)
+    monkeypatch.setattr(panel_module, "_move_to_trash", lambda path: actions.append(("trash", path)))
+    monkeypatch.setattr(panel, "_library_command", lambda name, *args, **_kwargs: actions.append((name, *args)) or True)
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **_kwargs: actions.append(("refresh",)))
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "confirm_dialog",
+        lambda _title, _message, buttons, callback, _tone: callback(buttons[-1]),
+        raising=False,
+    )
+
+    panel.on_move_asset_to_trash(None, None, [asset["id"]])
+
+    assert actions[:2] == [
+        ("trash", "C:/projects/example.licht"),
+        ("delete_asset", asset["id"]),
+    ]
+    assert "SHFileOperationW" in source
+    assert 'platform != "nt"' in source
 
 @pytest.mark.parametrize("status,action", [("MISSING", "locate"), ("UNREADABLE", ""), ("UNSUPPORTED", ""), ("REPAIR_ONLY", ""), ("UNSUPPORTED_NEWER", "")])
 def test_file_problems_hide_gallery_verbs(panel_module, status, action):
@@ -1155,6 +1251,50 @@ def test_precise_scroll_moves_gallery_container(panel_module):
 
     assert scroll.scroll_top == 152.0
     assert event.stopped is True
+
+
+def test_scroll_refreshes_only_when_the_virtual_record_window_changes(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    scroll = _Element()
+    scroll.scroll_top = 0.0
+    scroll.client_height = 400.0
+    scroll.client_width = 500.0
+    panel._doc = _Document({"asset-gallery-scroll": scroll})
+    panel._view_mode = "list"
+    assert panel._sync_asset_window_viewport() is True
+    panel._handle.dirty_fields.clear()
+
+    scroll.scroll_top = 32.0
+    panel._on_asset_scroll(_Event(scroll))
+    assert panel._asset_window_refresh_pending is False
+    assert panel._handle.dirty_fields == []
+
+    scroll.scroll_top = 240.0
+    panel._on_asset_scroll(_Event(scroll))
+    assert panel._asset_window_refresh_pending is True
+    assert "__update__" in panel._handle.dirty_fields
+
+
+def test_horizontal_host_resize_uses_native_name_flex(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    scroll = _Element()
+    scroll.client_width = 500.0
+    panel._doc = _Document({"asset-gallery-scroll": scroll})
+    panel._view_mode = "list"
+    assert panel._sync_asset_window_viewport() is True
+    panel._handle.dirty_fields.clear()
+
+    scroll.client_width = 520.0
+    assert panel._sync_asset_window_viewport() is False
+    assert panel._handle.dirty_fields == []
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "asset_manager.rml").read_text()
+    rcss = (resources / "asset_manager.rcss").read_text()
+    assert 'class="asset-col asset-col-name" data-style-width=' not in rml
+    assert ".asset-list-header .asset-col-name, .asset-list-row .asset-col-name { flex: 1 1 0dp; width: auto; }" in rcss
 
 def test_mount_binds_stable_delegated_handlers(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2329,6 +2469,40 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     assert panel._layout_class == "compact"
     assert panel._main_min_height == 0.0
 
+
+def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_module):
+    first = _project(id="first", project_uuid="first", name="First")
+    second = _project(id="second", project_uuid="second", name="Second")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={"first": first, "second": second})
+    panel._selected_asset_ids = {"first"}
+    panel._selection_cursor_id = "first"
+    panel._update_selection_type()
+    panel._layout_class = "wide"
+    panel._inspector_expanded = True
+
+    assert panel._select_asset_id("second") is True
+    assert panel._inspector_expanded is False
+    panel.open_project_operation(args=["contents"])
+    assert panel._inspector_expanded is True
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "asset_manager.rml").read_text()
+    rcss = (resources / "asset_manager.rcss").read_text()
+    theme_rcss = (resources / "asset_manager.theme.rcss").read_text()
+    assert 'data-style-padding-bottom="inspector_reserved_height"' not in rml
+    assert ".asset-shell.inspector-expanded .asset-inspector { display: flex; }" in rcss
+    assert ".asset-inspector { position: absolute; display: none;" in rcss
+    assert "border-left-width: 1dp; z-index: 10;" in rcss
+    inspector_theme = theme_rcss.split(".asset-inspector {", 1)[1].split("\n}", 1)[0]
+    assert "background-color: @{surface};" in inspector_theme
+    assert "border-left-color: @{border};" in inspector_theme
+    assert ".asset-inspector-content {\n    background-color: @{surface};" in theme_rcss
+    label_rule = rcss.split(".parameter-label {", 1)[1].split("}", 1)[0]
+    assert "overflow: visible" not in label_rule
+    assert ".asset-shell.is-medium .inspector-resize-handle { display: none; }" in rcss
+    assert ".asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }" in rcss
+
 def test_P13_space_opens_quick_look_from_panel_key_handler(panel_module):
     asset = _project(name="Bonsai")
     panel = panel_module.AssetManagerPanel()
@@ -2399,8 +2573,9 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, width, modifi
         for column, value in widths.items():
             binding = f'asset_list_{column}_width'
             cell = f'./span[@class="asset-col asset-col-{column}"]'
-            assert header.find(cell).get('data-style-width') == binding
-            assert row.find(cell).get('data-style-width') == binding
+            expected_binding = None if column == 'name' else binding
+            assert header.find(cell).get('data-style-width') == expected_binding
+            assert row.find(cell).get('data-style-width') == expected_binding
             assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))

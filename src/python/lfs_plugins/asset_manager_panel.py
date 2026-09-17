@@ -69,6 +69,7 @@ ASSET_LIST_ROW_HEIGHT_DP = 48.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
 ASSET_WINDOW_OVERSCAN_ROWS = 2
+ASSET_WINDOW_BATCH_ROWS = 4
 ASSET_LIST_FALLBACK_ROWS = 24
 ASSET_GALLERY_FALLBACK_ROWS = 8
 _RML_PATH_SAFE_CHARS = "/:._-~"
@@ -77,6 +78,36 @@ SCOPE_ALL = "__all__"
 SCOPE_RECENT = "__recent__"
 PROJECT_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-project"
 _folder_scan_completed_in_process = False
+
+
+def _move_to_trash(path: str, *, platform: str = os.name) -> None:
+    """Move one project to the platform recycle bin without deleting it."""
+    if platform != "nt":
+        subprocess.run(["gio", "trash", path], check=True, capture_output=True)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", wintypes.WORD),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    operation = SHFILEOPSTRUCTW()
+    operation.wFunc = 3  # FO_DELETE
+    operation.pFrom = str(Path(path).resolve()) + "\0\0"
+    operation.fFlags = 0x0004 | 0x0010 | 0x0040 | 0x0400  # silent, no confirm, recycle, no error UI
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    if result or operation.fAnyOperationsAborted:
+        raise OSError(result or 1, "The project was not moved to the Recycle Bin", path)
 
 try:
     from .asset_index import (
@@ -154,12 +185,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_expanded = False
         self._quick_look_visible = False
         self._thumbnail_menu_visible = False
-        self._thumbnail_sizes = {
-            "compact": 112.0,
-            "narrow": 136.0,
-            "medium": 168.0,
-            "wide": 168.0,
-        }
+        self._thumbnail_size = 168.0
         self._layout_class = ""
         self._content_width = 0.0
         self._host_geometry = None
@@ -180,6 +206,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._asset_window_scroll_top = 0.0
         self._asset_window_client_height = 0.0
         self._asset_window_client_width = 0.0
+        self._responsive_width_signature = None
         self._asset_list_top_spacer_height = 0.0
         self._asset_list_bottom_spacer_height = 0.0
         self._asset_gallery_top_spacer_height = 0.0
@@ -262,7 +289,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "navigator_widths": dict(self._navigator_widths),
             "inspector_width": self._inspector_width,
             "inspector_height": self._inspector_preferred_height,
-            "thumbnail_sizes": dict(self._thumbnail_sizes),
+            "thumbnail_size": self._thumbnail_size,
             "list_column_overrides": dict(self._list_column_overrides),
             "inspector_sections": dict(self._inspector_sections),
             "operations_expanded": self._operations_expanded,
@@ -311,12 +338,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     setattr(self, "_" + key, min(high, max(low, float(number))))
                 elif not hasattr(self, "_" + key):
                     setattr(self, "_" + key, default)
-            sizes = payload.get("thumbnail_sizes")
-            if isinstance(sizes, dict):
-                for name in ("compact", "narrow", "medium", "wide"):
-                    number = sizes.get(name)
-                    if isinstance(number, (int, float)) and math.isfinite(number):
-                        self._thumbnail_sizes[name] = min(320.0, max(112.0, float(number)))
+            number = payload.get("thumbnail_size")
+            if not isinstance(number, (int, float)):
+                # Migrate the former per-breakpoint preference deterministically.
+                sizes = payload.get("thumbnail_sizes")
+                number = sizes.get("wide") if isinstance(sizes, dict) else None
+            if isinstance(number, (int, float)) and math.isfinite(number):
+                self._thumbnail_size = min(320.0, max(112.0, float(number)))
             overrides = payload.get("list_column_overrides")
             if isinstance(overrides, dict):
                 self._list_column_overrides = {
@@ -752,8 +780,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._select_folder_id(str(value or SCOPE_ALL))
 
     def get_thumbnail_size(self) -> float:
-        name = self._layout_class or breakpoint_for_width(self._content_width or 1100.0)
-        return self._thumbnail_sizes.get(name, 168.0)
+        return self._thumbnail_size
 
     def get_navigator_style_width(self) -> str:
         if self._layout_class in ("compact", "narrow"):
@@ -761,15 +788,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return f"{self._navigator_width:.1f}dp"
 
     def get_inspector_style_width(self) -> str:
-        if self._layout_class != "wide":
+        if self._layout_class in ("compact", "narrow"):
             return "auto"
         return f"{self._inspector_width:.1f}dp"
 
     def get_inspector_style_height(self) -> str:
-        if self._layout_class == "wide":
+        if self._layout_class in ("medium", "wide"):
             return "auto"
-        if self._layout_class in ("compact", "narrow"):
-            return "32dp"
         return f"{self._inspector_band_height():.1f}dp"
 
     def _inspector_band_height(self) -> float:
@@ -791,10 +816,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             number = min(320.0, max(112.0, float(value)))
         except (TypeError, ValueError):
             return
-        name = self._layout_class or breakpoint_for_width(self._content_width or 1100.0)
-        if abs(self._thumbnail_sizes.get(name, number) - number) < 0.1:
+        if abs(self._thumbnail_size - number) < 0.1:
             return
-        self._thumbnail_sizes[name] = number
+        self._thumbnail_size = number
         self._reset_scroll()
         self._refresh_records(assets=True)
         self._dirty_fields("thumbnail_size")
@@ -1684,12 +1708,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 columns = gallery_columns(self._asset_window_client_width)
                 self._asset_card_slot_width = gallery_slot_width(self._asset_window_client_width)
                 row_height = ASSET_GALLERY_ROW_HEIGHT_DP
-            start_row = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+            first_row = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+            start_row = first_row // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
             visible_rows = (
                 math.ceil(client_height / row_height)
                 if client_height > 0
                 else ASSET_GALLERY_FALLBACK_ROWS
-            ) + ASSET_WINDOW_OVERSCAN_ROWS * 2
+            ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
             start = min(total, start_row * columns)
             end = min(total, (start_row + visible_rows) * columns)
             total_rows = math.ceil(total / columns) if total else 0
@@ -1700,12 +1725,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_list_bottom_spacer_height = 0.0
         else:
             row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
-            start = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+            first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+            start = first // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
             visible = (
                 math.ceil(client_height / row_height)
                 if client_height > 0
                 else ASSET_LIST_FALLBACK_ROWS
-            ) + ASSET_WINDOW_OVERSCAN_ROWS * 2
+            ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
             end = min(total, start + visible)
             self._asset_list_top_spacer_height = start * row_height
             self._asset_list_bottom_spacer_height = max(0, total - end) * row_height
@@ -1935,8 +1961,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_fields("is_gallery_view", "is_list_view")
 
     def toggle_inspector(self, _handle=None, _ev=None, _args=None):
-        if self._layout_class not in ("compact", "narrow"):
-            return
         self._inspector_expanded = not self._inspector_expanded
         self._dirty_fields("inspector_expanded")
 
@@ -2010,10 +2034,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._dirty_fields("thumbnail_menu_visible")
 
     def reset_thumbnail_size(self, _handle=None, _ev=None, _args=None) -> None:
-        self.set_thumbnail_size({
-            "compact": 112.0, "narrow": 136.0,
-            "medium": 168.0, "wide": 168.0,
-        }.get(self._layout_class, 168.0))
+        self.set_thumbnail_size(168.0)
 
     def _add_folder_from_path(self, directory: str, *, recursive: bool = True) -> Optional[str]:
         if not self._asset_index or not directory.strip():
@@ -2144,6 +2165,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             str(asset.get("id") or asset.get("project_uuid") or "")
             for asset in self._filtered_assets()
         ]
+        previous_selection = set(self._selected_asset_ids)
         if range_select and self._selection_anchor_id in visible_ids:
             start = visible_ids.index(self._selection_anchor_id)
             end = visible_ids.index(asset_id)
@@ -2160,6 +2182,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._selection_cursor_id = (
             asset_id if asset_id in self._selected_asset_ids else next(iter(self._selected_asset_ids), None)
         )
+        if self._selected_asset_ids != previous_selection and self._inspector_expanded:
+            self._inspector_expanded = False
+            self._dirty_fields("inspector_expanded")
         self._update_selection_type()
         self._sync_asset_selection_dom(container, row_element)
         self._dirty_selection()
@@ -2889,7 +2914,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if button != label:
                 return
             try:
-                subprocess.run(["gio", "trash", path], check=True, capture_output=True)
+                _move_to_trash(path)
                 self._library_command("delete_asset", asset_id)
                 self._selected_asset_ids.discard(asset_id)
                 if self._selection_cursor_id == asset_id:
@@ -3443,12 +3468,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             width = self._content_width
         if width > 0:
             layout_metrics = breakpoint_metrics(width)
-            layout_changed = (
-                layout_metrics["breakpoint"] != self._layout_class
-                or abs(width - self._content_width) > 0.5
-                or scale_changed
-            )
-            if layout_changed:
+            breakpoint_changed = layout_metrics["breakpoint"] != self._layout_class
+            width_changed = abs(width - self._content_width) > 0.5
+            if breakpoint_changed or scale_changed:
                 self._layout_class = layout_metrics["breakpoint"]
                 self._content_width = width
                 if layout_metrics["navigator_mode"] == "column":
@@ -3456,8 +3478,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 if self._layout_class == "wide":
                     self._inspector_width = min(420.0, max(INSPECTOR_COLUMN_MIN, self._inspector_width))
                 self._dirty_layout_fields()
-            elif abs(width - self._content_width) > 0.5:
+            elif width_changed:
                 self._content_width = width
+                # The results viewport below owns continuous-width bindings.
+                # Waiting for its measured width avoids a stale first update
+                # followed by a second update on every host-resize frame.
         if not self._folder_layout_initialized:
             self._folder_layout_initialized = True
             self._folders_collapsed = height < 640
@@ -3471,7 +3496,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         content = 16.0 + measured("asset-sidebar-local-content", local, content=True) + measured("asset-sidebar-gallery", 132.0) + 8.0
         toolbar = measured("asset-popup-toolbar", 114.0) + 1.0
         header = measured("asset-results-header", 48.0) + 1.0
-        signature = (scale, width, self._layout_class, self._is_floating, height, content, toolbar, header,
+        # Width-specific bindings are updated above. The vertical composition
+        # only changes at a breakpoint, not for every pixel inside one.
+        signature = (scale, self._layout_class, self._is_floating, height, content, toolbar, header,
                      self._info_preferred_height, self._folders_collapsed)
         if signature == self._layout_signature:
             return False
@@ -3512,8 +3539,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_host_geometry_changed(self, width: float, height: float, scale: float) -> None:
         """Use native host bounds, which cannot grow with overflowing children."""
-        self._host_geometry = (width / scale, height / scale)
-        self._layout_signature = None
+        geometry = (width / scale, height / scale)
+        if self._host_geometry and all(
+                abs(before - after) <= 0.5
+                for before, after in zip(self._host_geometry, geometry)):
+            return
+        previous = self._host_geometry
+        self._host_geometry = geometry
+        if (previous is None or abs(previous[1] - geometry[1]) > 0.5
+                or breakpoint_for_width(previous[0]) != breakpoint_for_width(geometry[0])):
+            self._layout_signature = None
         self._request_model_update()
 
     def _sync_asset_window_viewport(self, doc=None) -> bool:
@@ -3534,8 +3569,64 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_window_client_height,
             self._asset_window_client_width,
         )
+        old_window = self._asset_window_viewport_signature(*old)
         self._asset_window_scroll_top, self._asset_window_client_height, self._asset_window_client_width = values
-        return any(abs(before - after) > 0.5 for before, after in zip(old, values))
+        width_changed = abs(old[2] - values[2]) > 0.5
+        if width_changed:
+            # Updating every width binding for every native pixel is expensive:
+            # each binding is applied to the header and every visible row. Keep
+            # structural changes exact, but coalesce continuous geometry to an
+            # 8 dp bucket while the host is being dragged.
+            columns = list_column_widths(
+                values[2], self._list_column_overrides, self._text_column_metrics
+            )
+            signature = (
+                self._view_mode,
+                round(values[2], 1) if self._view_mode == "gallery" else None,
+                columns["gallery"], columns["size"],
+                columns["modified"], columns["folder"],
+            )
+            if signature != self._responsive_width_signature:
+                self._responsive_width_signature = signature
+                if self._view_mode == "gallery":
+                    self._dirty_fields("asset_card_slot_width", "asset_card_thumbnail_height")
+                else:
+                    self._dirty_fields(
+                        "asset_list_wide", "asset_list_show_size", "asset_list_show_folder",
+                        "asset_list_gallery_compact", "asset_list_gallery_width",
+                        "asset_list_size_width", "asset_list_modified_width",
+                        "asset_list_folder_width",
+                    )
+        return old_window != self._asset_window_viewport_signature(*values)
+
+    def _asset_window_viewport_signature(
+        self, scroll_top: float, client_height: float, client_width: float
+    ) -> tuple:
+        """Geometry that actually changes the virtualized record window."""
+        if self._view_mode == "gallery":
+            columns = grid_columns(client_width, self.get_thumbnail_size())
+            slot_width = grid_slot_width(client_width, self.get_thumbnail_size())
+            row_height = card_geometry(max(1.0, slot_width - 2.0))["height"] + 14.0
+            first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+            start = first // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
+            visible = (
+                math.ceil(client_height / row_height)
+                if client_height > 0
+                else ASSET_GALLERY_FALLBACK_ROWS
+            ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
+            return "gallery", columns, start, visible
+        gallery_visible = list_columns(
+            client_width, self._text_column_metrics, self._list_column_overrides
+        )["gallery"] != 32
+        row_height = list_row_height(gallery_column_visible=gallery_visible)
+        first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
+        start = first // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
+        visible = (
+            math.ceil(client_height / row_height)
+            if client_height > 0
+            else ASSET_LIST_FALLBACK_ROWS
+        ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
+        return "list", row_height, start, visible
 
     def _bind_dom_event_listeners(self, doc) -> None:
         shell = doc.get_element_by_id("asset-shell")
@@ -3564,8 +3655,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_scroll_event_suppressed = False
             if abs(current - self._asset_scroll_suppressed_top) <= 0.01:
                 return
-        self._asset_window_refresh_pending = True
-        self._request_model_update()
+        if self._sync_asset_window_viewport():
+            self._asset_window_refresh_pending = True
+            self._request_model_update()
 
     def _on_gallery_precise_scroll(self, event) -> None:
         scroll = event.current_target()
@@ -3581,8 +3673,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             scroll.scroll_top = new_top
             self._asset_scroll_event_suppressed = True
             self._asset_scroll_suppressed_top = new_top
-        self._asset_window_refresh_pending = True
-        self._request_model_update()
+        if self._sync_asset_window_viewport():
+            self._asset_window_refresh_pending = True
+            self._request_model_update()
         self._stop_event(event)
 
     def _on_asset_manager_click(self, event) -> None:
@@ -4158,8 +4251,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         delta_y = (mouse_y - self._resize_start_y) / self._ui_scale()
         if region == "navigator":
             metrics = breakpoint_metrics(self._content_width or 1100.0)
-            self._navigator_width = min(metrics["navigator_max"], max(
+            target = min(metrics["navigator_max"], max(
                 metrics["navigator_min"], self._resize_start_navigator + delta_x))
+            self._navigator_width = target
             self._navigator_widths[self._layout_class] = self._navigator_width
             self._dirty_fields("navigator_width", "navigator_style_width")
         elif region == "inspector":
@@ -4190,7 +4284,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 maximum = min(280.0, self._list_column_width(column) + max(0.0, self._list_column_width("name") - minimum_name))
                 minimum = (self._text_column_metrics or {}).get(column, 32.0)
                 self._list_column_overrides.pop("name", None)
-            self._list_column_overrides[column] = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
+            target = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
+            self._list_column_overrides[column] = target
             self._dirty_fields(
                 "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))

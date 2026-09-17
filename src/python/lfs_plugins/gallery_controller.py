@@ -47,6 +47,7 @@ class GalleryController:
         self._transfer_ui_epoch = 0
         self._refresh_pending = False
         self._refresh_requested = False
+        self._refresh_force_requested = False
         self._share_copy_pending = None
         self.checked_at = 0.0
         self.offline = False
@@ -814,7 +815,7 @@ class GalleryController:
             return "preparing"
         return "idle"
 
-    def refresh(self):
+    def refresh(self, *, force=False):
         self._check_identity()
         if self._refresh_pending and self.service.busy:
             return
@@ -824,11 +825,17 @@ class GalleryController:
             self._refresh_model()
             return
         self._refresh_requested = True
+        self._refresh_force_requested = self._refresh_force_requested or force
         if not self.service.busy:
             self._refresh_requested = False
             self._message = ""
             self._refresh_pending = True
-            self.service.refresh()
+            force = self._refresh_force_requested
+            self._refresh_force_requested = False
+            if force:
+                self.service.refresh(force=True)
+            else:
+                self.service.refresh()
         self._schedule_poll()
 
     def _schedule_poll(self):
@@ -875,7 +882,7 @@ class GalleryController:
             self._message = friendly_error(exc)
             self._failure_notice = self._message
         if self._refresh_requested and not self.service.busy:
-            self.refresh()
+            self.refresh(force=self._refresh_force_requested)
         if self._refresh_pending and not self.service.busy:
             self._refresh_pending = False
             state = self.service.snapshot()

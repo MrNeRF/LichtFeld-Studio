@@ -450,9 +450,16 @@ class GallerySync:
                         self._check_journal_ready()
                         action()
                 except Exception as exc:
-                    log_failure("worker", exc, operation=operation or "transfer")
+                    relink_required = (
+                        isinstance(exc, PortalHTTPError)
+                        and exc.error == "gallery_relink_required"
+                    )
+                    if relink_required:
+                        log_stage("relink_required", operation=operation or "transfer")
+                    else:
+                        log_failure("worker", exc, operation=operation or "transfer")
                     with self._lock:
-                        self._relink_identity = identity if isinstance(exc, PortalHTTPError) and exc.error == "gallery_relink_required" else None
+                        self._relink_identity = identity if relink_required else None
                         self.message = friendly_error(exc)
                         self._action_failure = dict(id=str(uuid.uuid4()), identity=identity, message=self.message)
                 finally:
@@ -479,10 +486,19 @@ class GallerySync:
             action()
         self._launch(checked, operation="metadata")
 
-    def refresh(self):
+    def refresh(self, *, force=False):
         if self.busy and self._operation == "refresh":
             return
+        if not force and self._relink_identity == self.identity():
+            return
         if self._unsupported_identity == self.identity():
+            return
+        snap = self.account.snapshot()
+        if snap.signed_in and (not snap.email or not snap.connected_since):
+            # Sign-in state is published before the account profile/session is
+            # necessarily complete. The account subscription will request a
+            # fresh sync when those fields arrive; this is a wait state, not a
+            # worker failure and must not produce a traceback or user error.
             return
         self._unsupported_identity = None
         self._refresh_ok = False
@@ -491,7 +507,7 @@ class GallerySync:
             if not snap.signed_in:
                 raise ValueError("Sign in with your LichtFeld account first.")
             if not snap.email or not snap.connected_since:
-                raise ValueError("Your account details are still loading. Refresh your account, then retry.")
+                return
             session = (snap.email, snap.connected_since)
             origin = self.account.base_url
             client = PortalGalleryClient(self.account, expected_session=session)

@@ -83,7 +83,7 @@
         </div>
       </div>
 
-      <div id="asset-main-row" data-style-min-height="main_min_height" data-style-padding-bottom="inspector_reserved_height">
+      <div id="asset-main-row" data-style-min-height="main_min_height">
         <nav id="asset-sidebar" class="asset-navigator" data-style-width="navigator_style_width">
           <div class="asset-navigator-scope">
             <select id="asset-scope-select" data-value="selected_folder_id" aria-label="{{panel_label}}">
@@ -189,7 +189,7 @@
                data-class-show-folder="asset_list_show_folder"
                data-class-gallery-compact="asset_list_gallery_compact">
             <span class="asset-list-thumb asset-list-header-spacer" aria-hidden="true"></span>
-            <span class="asset-col asset-col-name" data-style-width="asset_list_name_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('name')" data-attr-title="col_name_label"><span class="asset-list-header-label">{{col_name_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
+            <span class="asset-col asset-col-name"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('name')" data-attr-title="col_name_label"><span class="asset-list-header-label">{{col_name_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:name"></span></span>
             <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('gallery')" data-attr-title="col_gallery_label"><span class="asset-list-header-label">{{col_gallery_label}}</span><img class="asset-list-header-gallery-icon" src="../icon/gallery-cloud.png"/></button><span class="asset-list-column-handle" data-resize="list-column:gallery"></span></span>
             <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('size')" data-attr-title="col_size_label"><span class="asset-list-header-label">{{col_size_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:size"></span></span>
             <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width"><button class="asset-button asset-button--text asset-button--toolbar24 asset-list-sort" data-event-click="sort_list_column('modified')" data-attr-title="col_modified_label"><span class="asset-list-header-label">{{col_modified_label}}</span></button><span class="asset-list-column-handle" data-resize="list-column:modified"></span></span>
@@ -247,7 +247,7 @@
                         <span class="gallery-activity" data-if="asset.gallery_ring" data-attr-title="asset.gallery_tooltip"><img src="../icon/gallery-progress-ring.png"/><progress direction="clockwise" start-edge="top" data-attr-value="asset.gallery_progress_value"/></span>
                         <span class="asset-thumbnail-placeholder" data-attr-title="asset.display_name" data-if="asset.shows_placeholder" aria-hidden="true"><img src="../icon/scene/splat.png" alt=""/></span>
                       </div>
-                      <span class="asset-col asset-col-name" data-style-width="asset_list_name_width">
+                      <span class="asset-col asset-col-name">
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
                         <span class="asset-list-secondary text-muted" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span>
                       </span>
@@ -297,7 +297,7 @@
               <div class="asset-info-asset-layout">
                 <div class="asset-info-details">
                   <div class="inspector-header asset-info-header">
-                    <span class="inspector-title" data-attr-title="selected_asset_name">{{selected_asset_name}}</span>
+                    <div class="inspector-title-row"><span class="inspector-title" data-attr-title="selected_asset_name">{{selected_asset_name}}</span><button class="asset-button asset-button--small-icon inspector-close" type="button" data-event-click="toggle_inspector" data-tooltip="common.close" aria-label="{{close_label}}"><span class="asset-button-glyph">&#215;</span></button></div>
                     <span class="inspector-path" data-attr-title="selected_asset_path">{{selected_asset_path}}</span>
                     <div class="inspector-actions">
                       <button class="btn btn--primary asset-button--toolbar24" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>

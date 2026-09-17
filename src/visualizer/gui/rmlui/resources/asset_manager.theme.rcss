@@ -294,6 +294,16 @@
 
 /* ── Info Panel ──────────────────────────────────────────── */
 
+.asset-inspector {
+    background-color: @{surface};
+    border-left-color: @{border};
+    color: @{text};
+}
+
+.asset-inspector-content {
+    background-color: @{surface};
+}
+
 .parameter-row {
     border-bottom-color: @{border};
 }

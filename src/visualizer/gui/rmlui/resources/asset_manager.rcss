@@ -1080,6 +1080,7 @@
 .asset-col-gallery { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 4dp; }
 .asset-list-header .asset-col-gallery { display: flex; }
 .asset-list-header .asset-col, .asset-list-row .asset-col { flex: 0 0 auto; min-width: 0; max-width: none; box-sizing: border-box; height: 24dp; line-height: 24dp; }
+.asset-list-header .asset-col-name, .asset-list-row .asset-col-name { flex: 1 1 0dp; width: auto; }
 .asset-list-header .asset-col { position: relative; display: flex; flex-direction: row; align-items: center; height: 24dp; padding: 0; font-family: Inter; font-size: 12dp; font-weight: 400; }
 .asset-list-column-handle {
     position: absolute;
@@ -1106,7 +1107,8 @@
 .asset-list-row .asset-col-gallery > span { display: block; flex: 1 1 0dp; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
-.asset-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
+.asset-inspector { position: absolute; display: none; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; border-left-width: 1dp; z-index: 10; }
+.asset-shell.inspector-expanded .asset-inspector { display: flex; }
 .inspector-strip { box-sizing: border-box; position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; overflow: hidden; }
 .inspector-strip-name { flex: 1 1 0dp; width: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-strip-meta { flex: 0 1 56dp; width: 56dp; min-width: 0; max-width: 56dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10dp; }
@@ -1117,6 +1119,9 @@
 .asset-info-details { box-sizing: border-box; width: 100%; min-width: 0; flex: 0 0 auto; }
 #asset-info-thumbnail { margin: 0; padding: 0; min-width: 0; min-height: 0; flex-shrink: 0; }
 .inspector-header { box-sizing: border-box; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8dp; padding: 8dp 12dp; margin: 0; min-width: 0; border-bottom-width: 1dp; }
+.inspector-title-row { display: flex; align-items: center; gap: 8dp; min-width: 0; }
+.inspector-title-row .inspector-title { flex: 1 1 0dp; width: 0; }
+.inspector-close { flex: 0 0 24dp; }
 .inspector-title, .inspector-path { display: block; min-width: 0; width: 100%; height: 16dp; min-height: 16dp; line-height: 16dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-title { font-size: 12dp; font-weight: bold; }
 .inspector-path { font-size: 10dp; }
@@ -1137,7 +1142,7 @@
 .parameter-label, .parameter-value { display: block; box-sizing: border-box; height: 24dp; min-height: 24dp; line-height: 24dp; padding: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Covers the longest label in all ten locales at 12 dp, including French
    automatic save (160 dp). Keep the value column separate and ellipsized. */
-.parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp; font-size: 12dp; overflow: visible; }
+.parameter-label { flex: 0 0 168dp; width: 168dp; min-width: 168dp; font-size: 12dp; }
 .inspector-problem-status { display: block; flex: 0 0 auto; line-height: 18dp; white-space: normal; }
 .inspector-problem > .btn { max-width: 100%; height: auto; min-height: 24dp; white-space: normal; }
 .parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
@@ -1154,19 +1159,16 @@
 .asset-shell.is-wide .asset-results-stack { flex-direction: row; }
 .asset-shell.is-floating #asset-popup { min-width: 260dp; min-height: 360dp; }
 .asset-shell.is-wide .asset-navigator { flex: 0 0 auto; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
-.asset-shell.is-wide .inspector-resize-handle { display: block; }
-.asset-shell.is-wide .asset-inspector { flex: 0 0 auto; min-width: 240dp; max-width: 420dp; }
+.asset-shell.is-wide .inspector-resize-handle { display: none; }
+.asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector { right: 0; top: 0; bottom: 0; min-width: 320dp; max-width: 420dp; }
 .asset-shell.is-wide .asset-info-asset-layout,
 .asset-shell.is-narrow .asset-info-asset-layout,
 .asset-shell.is-compact .asset-info-asset-layout { flex-direction: column; }
 .asset-shell.is-wide .asset-inspector > .asset-resize-handle--horizontal { display: none; }
 .asset-shell.is-medium #asset-main-row { flex-direction: row; }
-.asset-shell.is-medium .asset-results-stack { flex-direction: column; }
+.asset-shell.is-medium .asset-results-stack { flex-direction: row; }
 .asset-shell.is-medium .asset-navigator { flex: 0 0 auto; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
-.asset-shell.is-medium .asset-inspector { position: absolute; left: 0; right: 0; bottom: 0; width: auto; flex: 0 0 auto; overflow: visible; }
-.asset-shell.is-medium .asset-info-asset-layout { padding: 8dp 16dp; align-items: flex-start; }
-.asset-shell.is-medium .asset-info-details { flex: 1 1 0dp; width: auto; }
-.asset-shell.is-medium .inspector-header { padding: 0; margin: 0 0 8dp; border-width: 0; }
+.asset-shell.is-medium .asset-info-asset-layout { flex-direction: column; }
 
 .asset-shell.is-medium .inspector-resize-handle { display: none; }
 .asset-shell.is-medium .asset-inspector > .asset-resize-handle { position: absolute; left: 0; right: 0; top: -8dp; height: 12dp; margin: 0; }
@@ -1177,11 +1179,10 @@
 .asset-shell.is-narrow .asset-sidebar-inner, .asset-shell.is-compact .asset-sidebar-inner { display: none; }
 .asset-shell.is-narrow .asset-navigator-scope, .asset-shell.is-compact .asset-navigator-scope { display: block; }
 .asset-shell.is-narrow .asset-resize-handle--vertical, .asset-shell.is-compact .asset-resize-handle--vertical { display: none; }
-.asset-shell.is-narrow .asset-inspector, .asset-shell.is-compact .asset-inspector { width: auto; height: 32dp; flex: 0 0 32dp; overflow: visible; }
+.asset-shell.is-narrow .asset-inspector, .asset-shell.is-compact .asset-inspector { left: 0; right: 0; bottom: 0; width: auto; overflow: hidden; }
 .asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }
-.asset-shell.is-narrow .inspector-strip, .asset-shell.is-compact .inspector-strip { display: flex; }
-.asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { position: absolute; left: 0; right: 0; bottom: 32dp; height: 200dp; display: none; z-index: 3; }
-.asset-shell.is-narrow.inspector-expanded .asset-inspector-content, .asset-shell.is-compact.inspector-expanded .asset-inspector-content { display: block; }
+.asset-shell.is-narrow .inspector-strip, .asset-shell.is-compact .inspector-strip { display: none; }
+.asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { display: flex; }
 .asset-shell.is-compact .asset-toolbar-filter, .asset-shell.is-compact .asset-sort-button { display: none; }
 .asset-shell.is-compact .asset-toolbar-view { display: block; }
 .asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-compact .asset-thumbnail-slider, .asset-shell.is-compact .asset-check-gallery { display: none; }

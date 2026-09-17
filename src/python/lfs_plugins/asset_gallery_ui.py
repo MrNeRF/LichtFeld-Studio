@@ -78,11 +78,6 @@ class GalleryAssetMixin:
         if snapshot.get("message") in ("Gallery checked.", tr("info.checked")):
             snapshot = {**snapshot, "message": ""}
         self._gallery_state = snapshot
-        if snapshot.get("actionError") and (snapshot.get("actionError") != previous.get("actionError")
-                or snapshot.get("actionErrorId") != previous.get("actionErrorId")):
-            self._gallery_notice = snapshot["actionError"]
-        if snapshot.get("relink_required"):
-            self._gallery_notice = snapshot.get("message", "")
         if previous_identity != snapshot.get("identity"):
             self._gallery_undo = None
             self._gallery_batch = []
@@ -92,6 +87,13 @@ class GalleryAssetMixin:
             self._gallery_pulled_job = None
             self._gallery_toast = None
             self._gallery_completion_id = (snapshot.get("completion") or {}).get("id")
+        if snapshot.get("actionError") and (snapshot.get("actionError") != previous.get("actionError")
+                or snapshot.get("actionErrorId") != previous.get("actionErrorId")):
+            self._gallery_notice = snapshot["actionError"]
+        if snapshot.get("relink_required"):
+            # Identity changes reset transient notices above. Relink is durable
+            # account state and must remain visible until access is approved.
+            self._gallery_notice = snapshot.get("message", "")
         self._gallery_completions(previous, snapshot)
         pulled = snapshot.get("pulledProject")
         if pulled and pulled["jobId"] != self._gallery_pulled_job and self._asset_index:
@@ -239,8 +241,12 @@ class GalleryAssetMixin:
         facts["reason"] = localize_message(facts["reason"]) if facts["reason"] else ""
         state_key = "state." + (facts["activity"] if facts["active"] else facts["state"])
         label = tr(state_key, percent=facts["progress"])
+        relink_pending = bool(self._gallery_state.get("relink_required"))
+        if relink_pending and not facts["active"]:
+            # Relink is one account-level condition, not a fault on every row.
+            label = ""
         known_label = last_known_gallery_label(asset, self._gallery_state)
-        if (asset.get("id") in self._gallery_state.get("links", {}) and known_label is None
+        if (not relink_pending and asset.get("id") in self._gallery_state.get("links", {}) and known_label is None
                 and not facts["active"] and facts["activity"] not in ("paused", "interrupted", "error")):
             label = tr("state.not_checked")
         if facts.get("viewingCopy"):
@@ -282,7 +288,7 @@ class GalleryAssetMixin:
                 "gallery_indeterminate": indeterminate,
                 "gallery_icon": "../icon/gallery-" + facts["icon"] + ".png",
                 "gallery_tone": "gallery-tone-" + facts["tone"],
-                "gallery_has_badge": not facts["health_icon"] and not facts["active"],
+                "gallery_has_badge": not relink_pending and not facts["health_icon"] and not facts["active"],
                 "gallery_has_action": bool(gallery_action), "gallery_action": gallery_action, "gallery_action_label": action_label,
                 "gallery_action_enabled": primary.get("enabled", False), "gallery_action_reason": primary.get("reason", ""),
                 "gallery_progress": facts["progress"], "gallery_active": facts["active"],
@@ -466,7 +472,7 @@ class GalleryAssetMixin:
                 self._controller().update_all(self._gallery_update_candidates())
                 return
             if action == "refresh":
-                self._controller().refresh()
+                self._controller().refresh(force=True)
                 return
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")

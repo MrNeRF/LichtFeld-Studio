@@ -45,6 +45,55 @@ def connected(tmp_path, monkeypatch):
     service._save()
     return service
 
+
+def test_relink_latches_automatic_refresh_but_manual_retry_is_allowed(tmp_path, monkeypatch):
+    calls = []
+    stages = []
+
+    class RelinkClient(Client):
+        def _request(self, *args):
+            calls.append(args)
+            raise gallery_sync.PortalHTTPError(403, "gallery_relink_required")
+
+    monkeypatch.setattr(gallery_sync, "PortalGalleryClient", RelinkClient)
+    monkeypatch.setattr(gallery_sync, "log_stage", lambda name, **values: stages.append((name, values)))
+    monkeypatch.setattr(gallery_sync, "log_failure", lambda *_args, **_kwargs: pytest.fail(
+        "An expected relink response must not emit an error traceback"
+    ))
+    service = gallery_sync.GallerySync(Account(), tmp_path)
+
+    service.refresh()
+    finish(service)
+    assert service.snapshot()["relink_required"] is True
+    assert len(calls) == 1
+    assert stages == [("relink_required", {"operation": "refresh"})]
+
+    service.refresh()
+    assert len(calls) == 1
+
+    service.refresh(force=True)
+    finish(service)
+    assert len(calls) == 2
+
+
+def test_refresh_waits_silently_for_complete_account_details(tmp_path, monkeypatch):
+    failures = []
+
+    class LoadingAccount(Account):
+        email = ""
+
+        def snapshot(self):
+            return SimpleNamespace(signed_in=True, email=self.email, connected_since="")
+
+    monkeypatch.setattr(gallery_sync, "log_failure", lambda *args, **kwargs: failures.append((args, kwargs)))
+    service = gallery_sync.GallerySync(LoadingAccount(), tmp_path)
+
+    service.refresh()
+
+    assert service._thread is None
+    assert service.snapshot()["actionFailure"] is None
+    assert failures == []
+
 def test_identity_reads_current_account_without_traversing_private_history(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     expected = service.snapshot()["identity"]
@@ -469,7 +518,7 @@ def test_empty_profile_never_binds_a_gallery_account(tmp_path, monkeypatch):
     account.email = ""
     service = gallery_sync.GallerySync(account, tmp_path)
     service.refresh()
-    finish(service)
+    assert service._thread is None
     assert service._owner is None
     assert not service.snapshot()["connected"]
     assert not (tmp_path / "sync.json").exists()
