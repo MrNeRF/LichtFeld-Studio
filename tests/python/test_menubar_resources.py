@@ -527,11 +527,19 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
             "@{alpha(text,0.90)}",
         ),
+        ".asset-quick-look": ("@{modal.backdrop}",),
+        ".asset-quick-look-card": ("@{surface}",),
+        ".asset-resize-handle:hover,\n.asset-resize-handle:active,\n.asset-resize-handle:focus": (
+            "@{alpha(primary,0.45)}",
+        ),
+        ".asset-list-column-handle:hover": (
+            "@{primary}",
+            "@{alpha(primary,0.18)}",
+        ),
+        ".contents-remove img": ("@{text}",),
         "#asset-sidebar": ("@{alpha(background,0.32)}", "@{border}"),
         ".asset-card": ("@{surface_bright}", "@{border}"),
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
-        "#asset-info-panel": ("@{alpha(background,0.32)}", "@{border}"),
-        ".asset-info-warning": ("@{alpha(error,0.10)}", "@{error}"),
     }
     for selector, expected_tokens in required_theme_rules.items():
         body = theme_rcss.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
