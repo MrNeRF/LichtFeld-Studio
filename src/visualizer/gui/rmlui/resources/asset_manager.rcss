@@ -1065,6 +1065,10 @@
 .asset-list-row { position: relative; height: 40dp; min-height: 40dp; padding: 0 8dp; border-width: 0; border-bottom-width: 1dp; }
 .asset-list-header .asset-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .asset-list-header-spacer { visibility: hidden; }
+.asset-list-menu-spacer { flex: 0 0 32dp; width: 32dp; min-width: 32dp; visibility: hidden; }
+.asset-list-menu { flex: 0 0 24dp; width: 24dp; min-width: 24dp; visibility: hidden; margin: 0 4dp; border-color: transparent; }
+.asset-list-menu img { width: 16dp; height: 16dp; }
+.asset-list-row:hover .asset-list-menu, .asset-list-row:focus .asset-list-menu, .asset-list-row.is-selected .asset-list-menu { visibility: visible; }
 .asset-list-header-label { display: block; height: 24dp; line-height: 24dp; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-list-row .asset-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .asset-col-name { flex: 1 1 0dp; min-width: 120dp; display: flex; flex-direction: column; justify-content: center; }

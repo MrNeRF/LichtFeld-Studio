@@ -26,7 +26,7 @@
     <div class="gallery-conflict" data-if="is_conflict">
       <span class="text-muted">@tr:projects.gallery.conflict.choose_parts</span>
       <div class="gallery-choice-row" data-for="part : choices">
-        <div class="gallery-choice-description"><span class="gallery-choice-title" data-attr-title="part.label">{{part.label}}</span><span class="text-muted gallery-choice-difference" data-attr-title="part.values">{{part.difference}}</span></div>
+        <div class="gallery-choice-description"><span class="gallery-choice-title" data-attr-title="part.label">{{part.label}}</span><span class="text-muted gallery-choice-difference" data-attr-title="part.difference">{{part.difference}}</span></div>
         <div class="gallery-segmented">
           <button class="btn btn--secondary" data-class-is-active="part.choice == 'mine'" data-event-click="choose(part.id, 'mine')" title="@tr:projects.gallery.conflict.mine">@tr:projects.gallery.conflict.mine</button>
           <button class="btn btn--secondary" data-class-is-active="part.choice == 'gallery'" data-event-click="choose(part.id, 'gallery')" title="@tr:projects.gallery.conflict.portal">@tr:projects.gallery.conflict.portal</button>

@@ -1080,6 +1080,11 @@ def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
     assert rows["content"]["choice"] == "mine" and not rows["content"]["can_both"]
     assert rows["track"]["can_both"]
 
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    conflict_rml = (resources / "gallery_file_panel.rml").read_text()
+    assert 'data-attr-title="part.difference"' in conflict_rml
+    assert 'data-attr-title="part.values"' not in conflict_rml
+
 
 def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery

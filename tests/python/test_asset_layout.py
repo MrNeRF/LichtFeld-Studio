@@ -3,10 +3,12 @@ import math
 import pytest
 
 from lfs_plugins.asset_layout import (
+    LIST_ACTION_COLUMN_WIDTH,
     breakpoint_for_width,
     breakpoint_metrics,
     grid_columns,
     grid_slot_width,
+    list_column_widths,
 )
 
 
@@ -33,3 +35,10 @@ def test_grid_subtracts_gap_and_limits_card_stretch(width):
     )
     assert slot == pytest.approx(math.floor(expected * 10) / 10)
     assert columns * slot + (columns - 1) * 12 <= logical_width - 24
+
+
+@pytest.mark.parametrize("width", [260, 360, 560, 700, 1100])
+def test_list_columns_reserve_the_row_action_column(width):
+    widths = list_column_widths(width)
+    fixed_chrome = 24 + 16 + 32 + 8 + LIST_ACTION_COLUMN_WIDTH
+    assert sum(widths.values()) + fixed_chrome <= width + 0.1

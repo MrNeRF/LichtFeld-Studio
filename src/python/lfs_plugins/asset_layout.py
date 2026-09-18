@@ -17,6 +17,7 @@ BREAKPOINT_NARROW_MAX = 640.0
 BREAKPOINT_MEDIUM_MAX = 900.0
 GRID_GAP = 12.0
 GRID_HORIZONTAL_PADDING = 24.0
+LIST_ACTION_COLUMN_WIDTH = 32.0
 THUMBNAIL_MIN = 112.0
 THUMBNAIL_MAX = 320.0
 INSPECTOR_COLUMN_MIN = 320.0
@@ -183,8 +184,11 @@ def list_column_widths(width, overrides=None, measured=None):
     for key, threshold in (("size", 360), ("modified", 560), ("folder", 700)):
         if width < threshold:
             widths[key] = 0.0
-    # 24 dp shell inset, 16 dp row inset, thumbnail 32 dp, and its 8 dp gap.
-    available = max(0.0, float(width) - 24.0 - 16.0 - 32.0 - 8.0)
+    # Reserve shell/row insets, the thumbnail and gap, and the row action column.
+    available = max(
+        0.0,
+        float(width) - 24.0 - 16.0 - 32.0 - 8.0 - LIST_ACTION_COLUMN_WIDTH,
+    )
     name_minimum = min(max(80.0, float((overrides or {}).get("name", 80.0))), max(80.0, available - 32.0))
     for key in ("folder", "modified", "size"):
         if sum(widths.values()) + name_minimum > available:

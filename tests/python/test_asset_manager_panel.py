@@ -539,6 +539,29 @@ def test_gallery_more_button_uses_same_shared_menu(panel_module):
     assert len(panel_module.lf._test_state.context_menus) == 1
     assert event.stopped is True
 
+
+def test_list_view_exposes_the_same_more_menu_affordance(panel_module):
+    import xml.etree.ElementTree as ET
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    root = ET.fromstring((resources / "asset_manager.rml").read_text())
+    row = root.find('.//div[@class="asset-list-row"]')
+    assert row is not None
+    button = row.find('.//button[@data-asset-action="menu"]')
+    assert button is not None
+    assert button.get("data-attr-data-asset-id") == "asset.id"
+    children = list(row)
+    assert children.index(button) == next(
+        index for index, child in enumerate(children)
+        if "asset-col-folder" in child.get("class", "")
+    ) + 1
+
+    rcss = (resources / "asset_manager.rcss").read_text()
+    assert ".asset-list-menu-spacer { flex: 0 0 32dp; width: 32dp; min-width: 32dp;" in rcss
+    assert ".asset-list-menu { flex: 0 0 24dp; width: 24dp; min-width: 24dp;" in rcss
+    assert ".asset-list-row:hover .asset-list-menu" in rcss
+    assert ".asset-list-row.is-selected .asset-list-menu" in rcss
+
 def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(
@@ -2404,7 +2427,8 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, width, modifi
             assert model.func_bindings[binding]() == f'{value:.1f}dp'
         columns = list_columns(width)
         visible = 2 + sum(columns[key] for key in ('size', 'modified', 'folder'))
-        assert sum(widths.values()) + 24 + 16 + 32 + 8 <= width + 0.1
+        # Fixed chrome includes the dedicated 32 dp column after Size.
+        assert sum(widths.values()) + 24 + 16 + 32 + 8 + 32 <= width + 0.1
         assert widths['name'] >= 80
         measured = dict(gallery=220, size=87, modified=132, folder=180)
         fitted = list_column_widths(width, overrides, measured)

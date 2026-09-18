@@ -284,6 +284,23 @@
     background-color: @{surface_bright};
 }
 
+.asset-list-menu {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.asset-list-menu img {
+    image-color: @{alpha(text,0.90)};
+}
+
+.asset-list-menu:hover {
+    background-color: @{surface_bright};
+}
+
+.asset-list-menu:hover img {
+    image-color: @{text};
+}
+
 .asset-list-header {
     background-color: @{blend(surface_bright,background,0.18)};
     border-color: @{border};
