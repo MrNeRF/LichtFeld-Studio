@@ -20,6 +20,15 @@ def test_breakpoints_use_frozen_boundaries(width, name):
     assert breakpoint_metrics(width)["breakpoint"] == name
 
 
+@pytest.mark.parametrize("width", [420, 500, 639])
+def test_narrow_inspector_metrics_describe_the_overlay(width):
+    metrics = breakpoint_metrics(width)
+    assert metrics["inspector_placement"] == "overlay"
+    assert metrics["inspector_default"] == 200.0
+    assert metrics["inspector_min"] == 120.0
+    assert metrics["inspector_max"] == 450.0
+
+
 @pytest.mark.parametrize("width", [260, 500, 760, 1100])
 def test_grid_subtracts_gap_and_limits_card_stretch(width):
     logical_width = width

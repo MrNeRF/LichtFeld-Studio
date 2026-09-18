@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,9 +14,10 @@ class Account:
     base_url = "https://portal.example"
     email = "one@example.com"
     owner = "one"
+    busy = False
 
     def snapshot(self):
-        return SimpleNamespace(signed_in=True, email=self.email, connected_since="session")
+        return SimpleNamespace(signed_in=True, email=self.email, connected_since="session", linking=False)
 
 class Client:
     def __init__(self, account, **kwargs):
@@ -76,21 +78,91 @@ def test_relink_latches_automatic_refresh_but_manual_retry_is_allowed(tmp_path, 
     assert len(calls) == 2
 
 
-def test_refresh_waits_silently_for_complete_account_details(tmp_path, monkeypatch):
+@pytest.mark.parametrize("in_worker", [False, True])
+@pytest.mark.parametrize("missing", ["email", "connected_since"])
+def test_refresh_reports_settled_incomplete_account_without_worker_failure(tmp_path, monkeypatch, in_worker, missing):
+    failures = []
+    snap = SimpleNamespace(signed_in=True, email="one@example.com", connected_since="session", linking=False, error="")
+    account = Account()
+    account.snapshot = lambda: snap
+    service = gallery_sync.GallerySync(account, tmp_path)
+    service.message = ""
+    service._refresh_ok = True
+    version = service.version
+    monkeypatch.setattr(gallery_sync, "log_failure", lambda *args, **kwargs: failures.append((args, kwargs)))
+    if in_worker:
+        launch = service._launch
+        def changed(action, **kwargs):
+            setattr(snap, missing, "")
+            launch(action, **kwargs)
+        monkeypatch.setattr(service, "_launch", changed)
+    else:
+        setattr(snap, missing, "")
+
+    service.refresh(force=True)
+    if in_worker:
+        finish(service)
+    else:
+        assert service._thread is None
+
+    state = service.snapshot()
+    assert state["message"] == "projects.gallery.error.account_loading"
+    assert state["actionFailure"]["message"] == state["message"]
+    assert state["actionFailure"]["identity"] == service.identity()
+    assert state["refresh_ok"] is False
+    assert state["version"] > version
+    assert failures == []
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"])
+def test_incomplete_account_sentinel_resolves_through_translation(monkeypatch, locale):
+    import lichtfeld as lf
+    from lfs_plugins.gallery_messages import localize_message
+
+    path = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales" / f"{locale}.json"
+    translations = json.loads(path.read_text())
+    calls = []
+    def translate(key):
+        calls.append(key)
+        return translations[key]
+    monkeypatch.setattr(lf.ui, "tr", translate)
+    message = "projects.gallery.error.account_loading"
+    assert localize_message(message) == translations[message]
+    assert translations[message] != translations["projects.gallery.error.access"]
+    assert calls == [message]
+
+
+@pytest.mark.parametrize("in_worker", [False, True])
+@pytest.mark.parametrize("pending", ["linking", "busy"])
+def test_refresh_waits_silently_for_complete_account_details(tmp_path, monkeypatch, in_worker, pending):
     failures = []
 
     class LoadingAccount(Account):
         email = ""
 
         def snapshot(self):
-            return SimpleNamespace(signed_in=True, email=self.email, connected_since="")
+            return SimpleNamespace(signed_in=True, email=self.email, connected_since="", linking=pending == "linking")
 
     monkeypatch.setattr(gallery_sync, "log_failure", lambda *args, **kwargs: failures.append((args, kwargs)))
     service = gallery_sync.GallerySync(LoadingAccount(), tmp_path)
+    service.message = ""
+    service.account.busy = pending == "busy"
+    if in_worker:
+        snapshot = service.account.snapshot
+        service.account.snapshot = Account().snapshot
+        launch = service._launch
+        def changed(action, **kwargs):
+            service.account.snapshot = snapshot
+            launch(action, **kwargs)
+        monkeypatch.setattr(service, "_launch", changed)
 
-    service.refresh()
+    service.refresh(force=True)
 
-    assert service._thread is None
+    if in_worker:
+        finish(service)
+    else:
+        assert service._thread is None
+    assert service.snapshot()["message"] == ""
     assert service.snapshot()["actionFailure"] is None
     assert failures == []
 

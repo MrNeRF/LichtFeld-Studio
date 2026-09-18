@@ -2648,6 +2648,7 @@
   "gallery.transfer.phase.preparing": "Szene wird vorbereitet",
   "gallery.transfer.phase.applying": "Galerieänderungen anwenden",
   "projects.gallery.error.account_changed": "Das Konto hat sich geändert. Prüfen Sie die Galerie, bevor Sie fortfahren.",
+  "projects.gallery.error.account_loading": "Ihre Kontodaten werden noch geladen. Aktualisieren Sie Ihr Konto und versuchen Sie es erneut.",
   "projects.gallery.error.access": "Der Galeriezugriff ist nicht verfügbar.",
   "projects.gallery.error.save": "Das Projekt konnte nicht gespeichert werden. Sicherung oder Download bleiben erhalten; beheben Sie den Speicherfehler.",
   "projects.gallery.error.link": "Prüfen Sie die Galerieverknüpfung dieses Projekts.",

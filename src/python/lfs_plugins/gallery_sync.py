@@ -486,6 +486,16 @@ class GallerySync:
             action()
         self._launch(checked, operation="metadata")
 
+    def _report_incomplete_account(self, snap):
+        if snap.linking or self.account.busy:
+            return
+        with self._lock:
+            self.message = "projects.gallery.error.account_loading"
+            self._action_failure = dict(id=str(uuid.uuid4()), identity=self.identity(), message=self.message)
+            self._refresh_ok = False
+            # Publish direct returns too; workers also advance version on completion.
+            self.version += 1
+
     def refresh(self, *, force=False):
         if self.busy and self._operation == "refresh":
             return
@@ -495,10 +505,7 @@ class GallerySync:
             return
         snap = self.account.snapshot()
         if snap.signed_in and (not snap.email or not snap.connected_since):
-            # Sign-in state is published before the account profile/session is
-            # necessarily complete. The account subscription will request a
-            # fresh sync when those fields arrive; this is a wait state, not a
-            # worker failure and must not produce a traceback or user error.
+            self._report_incomplete_account(snap)
             return
         self._unsupported_identity = None
         self._refresh_ok = False
@@ -507,6 +514,7 @@ class GallerySync:
             if not snap.signed_in:
                 raise ValueError("Sign in with your LichtFeld account first.")
             if not snap.email or not snap.connected_since:
+                self._report_incomplete_account(snap)
                 return
             session = (snap.email, snap.connected_since)
             origin = self.account.base_url

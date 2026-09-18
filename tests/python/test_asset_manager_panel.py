@@ -523,6 +523,7 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     assert menu["position"] == (120.0, 220.0)
     assert [item["action"] for item in menu["items"]] == [
         "load",
+        "inspector",
         "gallery:publish",
         "rename",
         "show_in_folder",
@@ -530,6 +531,44 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
         "trash",
     ]
     assert event.stopped is True
+
+@pytest.mark.parametrize("status", ["AVAILABLE", "MISSING", "IDENTITY_MISMATCH", "UNREADABLE", "UNSUPPORTED_NEWER", "REPAIR_ONLY"])
+@pytest.mark.parametrize("has_details", [False, True])
+def test_context_menu_opens_inspector_for_local_project(panel_module, status, has_details):
+    panel = panel_module.AssetManagerPanel()
+    panel._panel_mounted = False
+    panel._handle = _Handle()
+    asset = _project(status=status, exists=status != "MISSING", available=status == "AVAILABLE")
+    other = _project(id="other", project_uuid="other")
+    panel._asset_index = _index(assets={asset["id"]: asset, "other": other})
+    if has_details:
+        panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    panel._select_asset_id("other")
+    panel._inspector_expanded = True
+    panel.open_project_operation = lambda *_args: pytest.fail("Inspector must not open a project operation")
+
+    assert panel._show_asset_context_menu(asset["id"]) is True
+    menu = panel_module.lf._test_state.context_menus[-1]
+    item = next(item for item in menu["items"] if item["action"] == "inspector")
+    assert item["label"] == "projects.inspector.title"
+    actions = [entry["action"] for entry in menu["items"]]
+    expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
+    assert actions[:len(expected_prefix)] == expected_prefix
+    assert not menu["items"][0].get("separator_before", False)
+    assert not item.get("separator_before", False)
+    for entry in menu["items"]:
+        if entry["action"] in ("show_in_folder", "trash") or entry["action"].startswith("gallery:"):
+            assert entry["separator_before"] is True
+    menu["on_action"](item["action"])
+
+    assert panel._selected_asset_ids == {asset["id"]}
+    assert panel._selection_type == "asset"
+    assert panel.get_selected_asset_id() == asset["id"]
+    assert panel._inspector_expanded is True
+    assert "inspector_expanded" in panel._handle.dirty_fields
+    menu["on_action"](item["action"])
+    assert panel._inspector_expanded is True
+
 
 def test_gallery_more_button_uses_same_shared_menu(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -1961,6 +2000,7 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
     asset = _project()
     assert [item["action"] for item in panel._asset_context_menu_items(asset)] == [
         "load",
+        "inspector",
         "gallery:publish",
         "rename",
         "show_in_folder",
@@ -2287,6 +2327,44 @@ def test_on_update_publishes_new_catalog_rows(panel_module):
         second["id"],
     }
 
+def test_catalog_epoch_removal_repairs_selection_and_closes_inspector(panel_module, monkeypatch):
+    asset = _project()
+    epoch = {"value": 1}
+    panel = panel_module.AssetManagerPanel()
+    panel._panel_mounted = False
+    panel._handle = _Handle()
+    panel._asset_index = _index(assets={asset["id"]: asset}, catalog_epoch=lambda: epoch["value"])
+    panel._catalog_epoch_seen = 1
+    panel._selected_folder_id = panel_module.SCOPE_ALL
+    panel._select_asset_id(asset["id"])
+    panel._inspector_expanded = True
+    panel._refresh_records(assets=True, folders=True)
+    refreshes = []
+    inspections = []
+    refresh = panel._refresh_records
+    def refresh_records(**kwargs):
+        refreshes.append((kwargs, panel.get_selected_asset_id(), panel._selection_type, panel._inspector_expanded))
+        refresh(**kwargs)
+    monkeypatch.setattr(panel, "_refresh_records", refresh_records)
+    monkeypatch.setattr(panel, "_start_inspection_refresh", lambda: inspections.append(
+        (panel.get_selected_asset_id(), list(panel._handle.records["assets"]))
+    ))
+
+    panel._asset_index.assets.clear()
+    epoch["value"] = 2
+    assert panel._publish_catalog_if_changed() is True
+
+    assert panel._selected_asset_ids == set()
+    assert panel._selection_cursor_id is None
+    assert panel._selection_anchor_id is None
+    assert panel._selection_type == "none"
+    assert panel._inspector_expanded is False
+    assert refreshes == [({"assets": True, "folders": True}, "", "none", False)]
+    assert inspections == [("", [])]
+    assert panel._publish_catalog_if_changed() is False
+    assert len(refreshes) == len(inspections) == 1
+
+
 def _gallery_fixture(panel_module):
     from lfs_plugins.gallery_sync import shared_fields
     panel = panel_module.AssetManagerPanel()
@@ -2337,7 +2415,7 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel._select_folder_id('__gallery_attention__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
     actions = [i['action'] for i in panel._asset_context_menu_items(local)]
-    assert actions[0:2] == ['load','gallery:resolve']
+    assert actions[0:3] == ['load','inspector','gallery:resolve']
     assert 'gallery:update' not in actions and 'gallery:publish' not in actions
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
@@ -2510,6 +2588,31 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     panel._sync_panel_layout()
     assert panel._layout_class == "compact"
     assert panel._main_min_height == 0.0
+
+
+@pytest.mark.parametrize("height,expected", [(200.0, "120.0dp"), (700.0, "200.0dp")])
+def test_narrow_inspector_resize_reset_restores_overlay_height(panel_module, height, expected):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._layout_class = "narrow"
+    panel._content_width = 500.0
+    panel._host_geometry = (500.0, height)
+    panel._inspector_expanded = True
+    panel._inspector_preferred_height = 120.0
+    shell = _Element()
+    popup = _Element()
+    popup.client_width = 500.0
+    popup.client_height = height
+    panel._doc = _Document({"asset-popup": popup, "asset-shell": shell})
+    handle = _Element({"data-resize": "inspector-height"}, parent=shell)
+    event = _Event(shell, handle)
+
+    panel._on_asset_manager_double_click(event)
+
+    assert panel._inspector_preferred_height == 200.0
+    assert panel.get_inspector_style_height() == expected
+    assert panel._inspector_expanded is True
+    assert event.stopped is True
 
 
 def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_module):

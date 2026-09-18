@@ -571,6 +571,12 @@ class PortalAccountService:
             self._clear_current_credentials()
             self._set_signed_out("local_credentials_removal_failed" if removal_failed else "")
 
+    @property
+    def busy(self) -> bool:
+        """Whether an account operation is in flight."""
+        return any(thread is not None and thread.is_alive()
+                   for thread in (self._flow_thread, self._sync_thread, self._sign_out_thread))
+
     def wait_for_idle(self, timeout: float = 5.0) -> None:
         """Join current workers; intended for deterministic shutdown and tests."""
         deadline = time.monotonic() + timeout

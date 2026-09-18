@@ -2648,6 +2648,7 @@
   "gallery.transfer.phase.preparing": "正在准备场景",
   "gallery.transfer.phase.applying": "正在应用图库更改",
   "projects.gallery.error.account_changed": "账户已更改，请先检查图库再继续。",
+  "projects.gallery.error.account_loading": "账户信息仍在加载中。请刷新账户后重试。",
   "projects.gallery.error.access": "无法访问图库。",
   "projects.gallery.error.save": "项目无法保存。备份或下载文件已保留，请先解决保存错误。",
   "projects.gallery.error.link": "请检查此项目的图库关联。",

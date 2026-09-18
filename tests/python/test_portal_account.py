@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -73,6 +74,24 @@ def token_pair(access="access-new", refresh="refresh-new"):
         "refresh_expires_in": 90 * 24 * 60 * 60,
         "token_type": "Bearer",
     }
+
+
+@pytest.mark.parametrize("worker", ["_flow_thread", "_sync_thread", "_sign_out_thread"])
+def test_busy_tracks_account_worker_lifetime(tmp_path, worker):
+    account = portal_account.PortalAccountService(credentials_path=tmp_path / "credentials.json")
+    assert account.busy is False
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait)
+    setattr(account, worker, thread)
+    assert account.busy is False
+    thread.start()
+    try:
+        assert account.busy is True
+    finally:
+        release.set()
+        account.wait_for_idle()
+    assert not thread.is_alive()
+    assert account.busy is False
 
 
 def test_gallery_request_rejects_different_session_before_network(tmp_path, monkeypatch):

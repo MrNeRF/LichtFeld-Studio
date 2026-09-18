@@ -2814,6 +2814,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         items: List[Dict[str, Any]] = []
         if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})
+        if not asset.get("remote_only"):
+            items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
         items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
             return items
@@ -2867,6 +2869,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._gallery_command(action.split(":", 1)[1])
         elif action == "load":
             self._load_asset(asset_id)
+        elif action == "inspector":
+            if self._select_asset_id(asset_id):
+                self._inspector_expanded = True
+                self._dirty_fields("inspector_expanded")
         elif action == "use_found_location":
             self.on_use_found_location(None, None, [asset_id])
         elif action == "rename":
@@ -3253,6 +3259,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False
         self._catalog_epoch_seen = epoch
         self._invalidate_recent_scope_cache()
+        self._repair_selection()
         self._refresh_records(assets=True, folders=True)
         self._dirty_selection()
         self._start_inspection_refresh()
