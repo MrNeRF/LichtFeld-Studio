@@ -773,7 +773,14 @@ TEST(GsplatIntersectionCount, RejectsOverflowWithActionableTypedError) {
         const std::string message(status.error().user_message());
         EXPECT_NE(message.find(std::to_string(count)), std::string::npos);
         EXPECT_NE(message.find("2147483647"), std::string::npos);
-        EXPECT_NE(message.find("Projected splats"), std::string::npos);
+        EXPECT_NE(message.find("lower working resolution"), std::string::npos);
+        EXPECT_NE(message.find("lower max_cap"), std::string::npos);
+        EXPECT_NE(message.find("reduce initial points"), std::string::npos);
+        EXPECT_NE(message.find("renderer capacity limit"), std::string::npos);
+        EXPECT_NE(message.find("many ordinary splats"), std::string::npos);
+        EXPECT_NE(message.find("If diagnostics show that splat footprints have grown"), std::string::npos);
+        EXPECT_LT(message.find("lower max_cap"), message.find("scale_reg="));
+        EXPECT_EQ(message.find('\n'), std::string::npos);
         EXPECT_NE(message.find("resize_factor"), std::string::npos);
         EXPECT_NE(message.find("scale_reg=0.005-0.01"), std::string::npos);
         EXPECT_NE(message.find("scaling_lr/scaling_lr_end=0.0005-0.001"), std::string::npos);

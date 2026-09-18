@@ -31,11 +31,14 @@ namespace gsplat_lfs {
         }
         const auto message = std::format(
             "gsplat intersection count {} is outside the supported range [0, {}]. "
-            "Projected splats cover too many image tiles. "
-            "Restart with a higher dataset resize_factor (try 2 or 4). "
-            "If splats grow too large during training, try scale_reg=0.005-0.01 "
+            "Restart at a lower working resolution (increase dataset resize_factor, try 2 or 4) "
+            "or with a smaller model (lower max_cap; reduce initial points for a first-frame failure). "
+            "This is a renderer capacity limit: many ordinary splats can exceed it, "
+            "without the scene being broken or splats growing abnormally. "
+            "If diagnostics show that splat footprints have grown during training, "
+            "consider scale_reg=0.005-0.01 "
             "and scaling_lr/scaling_lr_end=0.0005-0.001. "
-            "These training adjustments cannot prevent an initial-frame failure. "
+            "These regularization and learning-rate changes cannot prevent an initial-frame failure. "
             "init_scaling does not affect MRNF initialization.",
             count, kMaxIntersectionCount);
         return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
