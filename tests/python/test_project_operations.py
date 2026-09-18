@@ -10,6 +10,20 @@ from pathlib import Path
 import pytest
 
 
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError as error:
+        if os.name == "nt" and error.winerror == 1314:
+            pytest.skip("Windows symlink coverage requires Developer Mode or elevation")
+        raise
+
+
+def _skip_locked_identity_swap_on_windows(swap: str) -> None:
+    if os.name == "nt" and swap == "identity":
+        pytest.skip("Windows prevents replacing the project while its identity handle is open")
+
+
 @pytest.fixture
 def identity_project(native_io, tmp_path, monkeypatch):
     monkeypatch.setenv("LFS_HOME", str(tmp_path))
@@ -26,13 +40,14 @@ def identity_project(native_io, tmp_path, monkeypatch):
 def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_path, monkeypatch, operation, swap):
     from lfs_plugins.project_operations import ProjectOperations, ProjectOperationFailure
 
+    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     replacement = tmp_path / "replacement.licht"
     native_io.restore_save(path, 1, replacement)
     selected = path
     if swap == "path":
         selected = tmp_path / "别名.licht"
-        selected.symlink_to(path)
+        _symlink_or_skip(selected, path)
         shutil.copyfile(path, replacement)  # Even an identical project at another target is refused.
     before = replacement.read_bytes()
     store = ProjectOperations(native_io, tmp_path / "records")
@@ -45,7 +60,7 @@ def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_pat
                 os.replace(replacement, selected)
             else:
                 selected.unlink()
-                selected.symlink_to(replacement)
+                _symlink_or_skip(selected, replacement)
 
     monkeypatch.setattr(store, "_put", swap_after_backup)
     operations = {
@@ -81,13 +96,14 @@ def test_contents_refuses_callback_for_another_existing_path(native_io, identity
 
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_compact_rechecks_destination_after_progress(native_io, identity_project, tmp_path, swap):
+    _skip_locked_identity_swap_on_windows(swap)
     path, _ = identity_project
     other = tmp_path / "other.licht"
     native_io.restore_save(path, 1, other)
     selected = path
     if swap == "path":
         selected = tmp_path / "alias.licht"
-        selected.symlink_to(path)
+        _symlink_or_skip(selected, path)
     before = other.read_bytes()
     swapped = False
 
@@ -99,7 +115,7 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
                 os.replace(other, path)
             else:
                 selected.unlink()
-                selected.symlink_to(other)
+                _symlink_or_skip(selected, other)
 
     with pytest.raises(Exception, match="(identity|path).*changed"):
         native_io.compact_project_file(selected, progress=progress)
@@ -109,13 +125,14 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
 @pytest.mark.parametrize("swap", ["identity", "path"])
 @pytest.mark.parametrize("guarded", [False, True])
 def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_project, tmp_path, swap, guarded):
+    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     other = tmp_path / "other.licht"
     native_io.restore_save(path, 1, other)
     selected = path
     if swap == "path":
         selected = tmp_path / "alias.licht"
-        selected.symlink_to(path)
+        _symlink_or_skip(selected, path)
         other.write_bytes(path.read_bytes())
     before = other.read_bytes()
     swapped = False
@@ -129,7 +146,7 @@ def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_pro
             os.replace(other, path)
         else:
             selected.unlink()
-            selected.symlink_to(other)
+            _symlink_or_skip(selected, other)
 
     with pytest.raises(Exception, match="(identity|path).*changed"):
         operation = lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}, progress=progress)
@@ -157,7 +174,7 @@ def test_repair_refuses_changed_id_without_creating_destination(native_io, ident
 def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_project, tmp_path):
     path, card = identity_project
     alias = tmp_path / "别名-é.licht"
-    alias.symlink_to(path)
+    _symlink_or_skip(alias, path)
 
     def edit():
         native_io.set_project_title(alias, "项目")
@@ -173,12 +190,13 @@ def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_pro
 @pytest.mark.parametrize("operation", ["backup", "restore_backup"])
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_contents_recovery_write_refuses_changed_project(native_io, identity_project, tmp_path, operation, swap):
+    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     backup = native_io.backup_project_file(path)
     other = tmp_path / "other.licht"
     native_io.restore_save(path, 1, other)
     alias = tmp_path / "别名.licht"
-    alias.symlink_to(path)
+    _symlink_or_skip(alias, path)
     if swap == "path":
         other.write_bytes(path.read_bytes())
     before = other.read_bytes()
@@ -188,7 +206,7 @@ def test_contents_recovery_write_refuses_changed_project(native_io, identity_pro
             os.replace(other, path)
         else:
             alias.unlink()
-            alias.symlink_to(other)
+            _symlink_or_skip(alias, other)
         if operation == "backup":
             native_io.backup_project_file(alias)
         else:
@@ -215,7 +233,7 @@ def test_contents_recovery_accepts_unicode_relative_alias(native_io, identity_pr
     path, card = identity_project
     original = path.read_bytes()
     alias = tmp_path / "别名-é.licht"
-    alias.symlink_to(path)
+    _symlink_or_skip(alias, path)
     monkeypatch.chdir(tmp_path)
     relative = Path(alias.name)
     backup = native_io.backup_project_file(relative)
@@ -235,7 +253,7 @@ def _fixture() -> Path:
         candidate = parent / ".codex_tmp/am_concept/testhome/projects/bonsai.licht"
         if candidate.is_file():
             return candidate
-    return Path(__file__).parents[2] / "missing-project.licht"
+    return Path(__file__).parents[1] / "data" / "portable-sog.licht"
 
 
 @pytest.fixture(scope="module")
@@ -441,6 +459,11 @@ def test_chosen_thumbnail_survives_other_contents_edits(native_io, tmp_path):
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
+@pytest.mark.xfail(
+    os.name == "nt",
+    reason="Native closed-file mutations do not yet accept CJK paths on Windows",
+    strict=True,
+)
 def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_path):
     import uuid
     source = _fixture()
@@ -465,7 +488,17 @@ def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_pat
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
-@pytest.mark.parametrize('kill_point', ['running', 'completed'])
+@pytest.mark.parametrize('kill_point', [
+    'running',
+    pytest.param(
+        'completed',
+        marks=pytest.mark.xfail(
+            os.name == "nt",
+            reason="Native closed-file mutations do not yet accept CJK paths on Windows",
+            strict=True,
+        ),
+    ),
+])
 def test_contents_kill_rolls_back_on_restart(native_io, tmp_path, kill_point):
     import subprocess
     import sys

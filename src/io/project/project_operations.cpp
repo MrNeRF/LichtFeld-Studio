@@ -1298,12 +1298,6 @@ namespace lfs::io::project {
                 if (key == project_row->first) {
                     if (auto written = writer.write_chunk(key, restored_project); !written)
                         return std::move(written).error();
-                } else if (key.fourcc == FOURCC_THMB) {
-                    auto preview = selected_reader->read_chunk(row);
-                    if (!preview)
-                        return std::move(preview).error();
-                    if (auto written = writer.set_preview(*preview); !written)
-                        return std::move(written).error();
                 } else if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row); !copied) {
                     return std::move(copied).error();
                 }
@@ -1409,7 +1403,10 @@ namespace lfs::io::project {
                     !written) {
                     return std::move(written).error();
                 }
-            } else if (old_key.fourcc == FOURCC_THMB) {
+            } else if (old_key.fourcc == FOURCC_THMB &&
+                       selected_reader->preview().has_value() &&
+                       row.payload_offset == selected_reader->preview()->offset &&
+                       row.stored_bytes == selected_reader->preview()->bytes) {
                 auto preview = selected_reader->read_chunk(row);
                 if (!preview) {
                     return std::move(preview).error();

@@ -66,6 +66,51 @@ namespace {
         EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
     }
 
+    TEST(ProjectOperations, RestoreSaveWithRetainedThumbnailChunks) {
+        TemporaryDirectory temporary;
+        const auto source = make_document(temporary.path / "thumbnail-history.licht");
+        const auto selected_preview = std::vector<std::byte>{
+            std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        const auto retained_thumbnail = std::vector<std::byte>{
+            std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
+        {
+            auto reader = require_result(ProjectReader::open(source));
+            auto writer = require_result(ProjectWriter::append(source));
+            require_status(writer.plan_commit());
+            std::uint64_t planned_bytes = selected_preview.size() + retained_thumbnail.size();
+            for (const auto& row : reader.chunks()) {
+                if (row.is_live())
+                    planned_bytes += row.stored_bytes;
+            }
+            require_status(writer.preflight(planned_bytes));
+            for (const auto& row : reader.chunks()) {
+                if (row.is_live())
+                    require_status(writer.copy_chunk_verbatim(reader, row));
+            }
+            require_status(writer.write_chunk(
+                ChunkKey{FOURCC_THMB, fixed_uuid(1001)}, retained_thumbnail));
+            require_status(writer.set_preview(selected_preview));
+            require_status(writer.commit());
+        }
+
+        const auto restored_path = temporary.path / "restored-thumbnail-history.licht";
+        static_cast<void>(require_result(restore_save(source, 2, restored_path)));
+        auto restored_reader = require_result(ProjectReader::open(restored_path));
+        EXPECT_EQ(require_result(restored_reader.read_preview()), selected_preview);
+        EXPECT_EQ(std::ranges::count_if(restored_reader.chunks(), [](const auto& row) {
+                      return row.is_live() && row.key.fourcc == FOURCC_THMB;
+                  }),
+                  2);
+
+        static_cast<void>(require_result(restore_save(source, 2, source)));
+        auto source_reader = require_result(ProjectReader::open(source));
+        EXPECT_EQ(require_result(source_reader.read_preview()), selected_preview);
+        EXPECT_EQ(std::ranges::count_if(source_reader.chunks(), [](const auto& row) {
+                      return row.is_live() && row.key.fourcc == FOURCC_THMB;
+                  }),
+                  2);
+    }
+
     TEST(ProjectOperations, RebindCheckpointKeepsRecoveryCopy) {
         TemporaryDirectory temporary;
         const auto path = temporary.path / "resume.licht";
