@@ -617,6 +617,13 @@ namespace lfs::training {
             ctx.render_tile_height = tile_height;
 
             return std::pair{render_output, ctx};
+        } catch (const lfs::Exception& exception) {
+            arena.end_frame(frame_id, core::getCurrentCUDAStream());
+            auto error = exception.error();
+            lfs::SmallFields fields;
+            fields.add("camera", viewpoint_camera.image_name());
+            throw lfs::Exception(std::move(error).with_context(
+                "gsplat_rasterize_forward", LFS_SOURCE_SITE_CURRENT(), std::move(fields)));
         } catch (...) {
             // Isect buffers belong to the TLS VMM cache; only unwind the arena.
             // End on the same stream begin_frame used (same guard → same value),

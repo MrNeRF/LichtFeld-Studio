@@ -16,6 +16,7 @@
 #include "training/components/ppisp.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
+#include "training/rasterization/gsplat/IntersectionCount.h"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
@@ -28,6 +29,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -751,6 +753,124 @@ TEST(GsplatRasterizerEdgeScores, GutAndFastGsHavePositiveScoreCorrelation) {
     ASSERT_GT(fast_variance, 0.0f);
     const float correlation = covariance / std::sqrt(gut_variance * fast_variance);
     EXPECT_GT(correlation, 0.75f);
+}
+
+// These count checks do not allocate tensors or call CUDA.
+TEST(GsplatIntersectionCount, AcceptsRepresentableCounts) {
+    for (const int64_t count : {int64_t{0}, int64_t{1}, gsplat_lfs::kMaxIntersectionCount}) {
+        EXPECT_TRUE(gsplat_lfs::validate_intersection_count(count)) << count;
+    }
+}
+
+TEST(GsplatIntersectionCount, RejectsOverflowWithActionableTypedError) {
+    for (const int64_t count : {gsplat_lfs::kMaxIntersectionCount + 1,
+                                int64_t{2241098778}, std::numeric_limits<int64_t>::max()}) {
+        const auto status = gsplat_lfs::validate_intersection_count(count);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().code(), lfs::ErrorCode::BoundsViolation);
+        EXPECT_EQ(status.error().domain(), lfs::ErrorDomain::Rendering);
+        EXPECT_EQ(status.error().retryability(), lfs::Retryability::NotRetryable);
+        const std::string message(status.error().user_message());
+        EXPECT_NE(message.find(std::to_string(count)), std::string::npos);
+        EXPECT_NE(message.find("2147483647"), std::string::npos);
+        EXPECT_NE(message.find("Projected splats"), std::string::npos);
+        EXPECT_NE(message.find("resize_factor"), std::string::npos);
+        EXPECT_NE(message.find("scale_reg=0.005-0.01"), std::string::npos);
+        EXPECT_NE(message.find("scaling_lr/scaling_lr_end=0.0005-0.001"), std::string::npos);
+        EXPECT_NE(message.find("init_scaling does not affect MRNF"), std::string::npos);
+    }
+}
+
+TEST(GsplatIntersectionCount, RejectsNegativeCount) {
+    for (const int64_t count : {int64_t{-1}, std::numeric_limits<int64_t>::min()}) {
+        const auto status = gsplat_lfs::validate_intersection_count(count);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().code(), lfs::ErrorCode::Internal);
+    }
+}
+
+TEST(GsplatIntersectionCount, RoundedCapacityCannotOverflowSignedSortCount) {
+    const size_t limit = static_cast<size_t>(gsplat_lfs::kMaxIntersectionCount);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(0), 0u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(1024), 1024u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit), limit);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 1), limit);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536), limit);
+    // Rounding padding is disposable; an actual count above the limit is not.
+    EXPECT_FALSE(gsplat_lfs::validate_intersection_count(static_cast<int64_t>(limit + 1)));
+}
+
+TEST(GsplatRasterizerErrors, IntersectionOverflowStopsBeforeGrowthOnColdAndWarmCache) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    struct CacheCleanup {
+        ~CacheCleanup() { (void)gsplat_lfs::release_intersect_thread_local_cache(); }
+    } cleanup;
+
+    // Each splat covers exactly 256*256 tiles. The count pass needs only O(N)
+    // storage, but emitting all 32769*65536 pairs would exceed INT32_MAX.
+    constexpr uint32_t n = 32769;
+    constexpr uint32_t tiles = 256;
+    constexpr int64_t count = int64_t{n} * tiles * tiles;
+    static_assert(count > gsplat_lfs::kMaxIntersectionCount);
+    auto means2d = Tensor::full({n, 2}, 2048.0f, Device::CUDA);
+    auto radii = Tensor::full({n, 2}, 2048, Device::CUDA, DataType::Int32);
+    auto depths = Tensor::full({n}, 1.0f, Device::CUDA);
+    auto per_gauss = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+    const auto stream = getCurrentCUDAStream();
+
+    for (const bool warm : {false, true}) {
+        SCOPED_TRACE(warm ? "warm cache" : "cold cache");
+        ASSERT_TRUE(gsplat_lfs::release_intersect_thread_local_cache());
+        auto offsets = Tensor::full({tiles * tiles + 1}, -123, Device::CUDA, DataType::Int32);
+        const auto intersect = [&](const uint32_t splats, int32_t* output_offsets) {
+            return gsplat_lfs::intersect_tile(
+                means2d.ptr<float>(), radii.ptr<int32_t>(), depths.ptr<float>(),
+                nullptr, nullptr, 1, splats, 16, tiles, tiles, true,
+                per_gauss.ptr<int32_t>(), stream, output_offsets);
+        };
+        int32_t warm_sort_capacity = 0;
+        if (warm) {
+            const auto result = intersect(1, nullptr);
+            ASSERT_EQ(result.n_isects, tiles * tiles);
+            warm_sort_capacity = result.n_sort;
+        }
+        try {
+            (void)intersect(n, offsets.ptr<int32_t>());
+            FAIL() << "Expected a typed intersection-count failure";
+        } catch (const lfs::Exception& error) {
+            EXPECT_EQ(error.error().code(), lfs::ErrorCode::BoundsViolation);
+            EXPECT_NE(error.error().user_message().find(std::to_string(count)), std::string_view::npos);
+        }
+        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+        const auto offsets_cpu = offsets.cpu();
+        for (size_t i = 0; i < offsets_cpu.numel(); ++i) {
+            const int32_t offset = offsets_cpu.ptr<int32_t>()[i];
+            if (warm) {
+                // Speculation may emit only the existing capacity before the
+                // count is rejected; those offsets must stay within that buffer.
+                ASSERT_GE(offset, 0) << i;
+                ASSERT_LE(offset, warm_sort_capacity) << i;
+                if (i > 0) {
+                    ASSERT_GE(offset, offsets_cpu.ptr<int32_t>()[i - 1]) << i;
+                }
+            } else {
+                ASSERT_EQ(offset, -123) << i;
+            }
+        }
+        if (warm) {
+            EXPECT_EQ(offsets_cpu.ptr<int32_t>()[tiles * tiles], warm_sort_capacity);
+        }
+        // The rejected frame must leave the cache usable for a subsequent call.
+        const auto result = intersect(1, offsets.ptr<int32_t>());
+        EXPECT_EQ(result.n_isects, tiles * tiles);
+        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+        const auto recovered_offsets = offsets.cpu();
+        EXPECT_EQ(recovered_offsets.ptr<int32_t>()[0], 0);
+        EXPECT_EQ(recovered_offsets.ptr<int32_t>()[tiles * tiles], tiles * tiles);
+    }
 }
 
 TEST(GsplatRasterizerErrors, GutArenaExhaustionPreservesTypedResourceError) {

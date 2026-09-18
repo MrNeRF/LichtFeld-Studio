@@ -4,6 +4,7 @@
 
 #include "Intersect.h"
 #include "Common.h"
+#include "IntersectionCount.h"
 #include "Ops.h"
 #include "core/cuda/vmm_device_buffer.hpp"
 
@@ -537,9 +538,9 @@ namespace gsplat_lfs {
                                    "gsplat intersection-count stream sync");
             }
             const int64_t n = *cache.h_n_isects_pinned;
-            LFS_ASSERT_MSG(
-                n >= 0 && n <= std::numeric_limits<int32_t>::max(),
-                std::format("gsplat intersection count {} exceeds int32 range", n));
+            if (auto status = validate_intersection_count(n); !status) {
+                throw lfs::Exception(std::move(status).error());
+            }
             return n;
         };
 
@@ -555,8 +556,8 @@ namespace gsplat_lfs {
 
         auto fill_and_sort_capacity = [&](const size_t cap) {
             cache.ensure_isect_buffers(cap);
-            cache.ensure_sort_buffers(cache.isect_capacity, stream);
-            const size_t sort_n = cache.isect_capacity;
+            const size_t sort_n = intersection_sort_capacity(cache.isect_capacity);
+            cache.ensure_sort_buffers(sort_n, stream);
             launch_fill_isect_sentinels_kernel(
                 cache.isect_ids(), cache.flatten_ids(),
                 static_cast<int64_t>(sort_n), sentinel_key, stream);
