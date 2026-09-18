@@ -375,6 +375,7 @@ namespace lfs::io::project {
             std::uint64_t physical_size = 0;
             SuperblockInfo superblock;
             ParsedHead selected;
+            std::vector<HeadInfo> published_heads;
             std::vector<std::string> warnings;
             OpenState open_state = OpenState::Open;
             ReaderOptions options;
@@ -2624,6 +2625,11 @@ namespace lfs::io::project {
             state->physical_size = physical_size;
             state->superblock = *superblock;
             state->selected = selected;
+            for (const auto& attempt : attempts) {
+                if (attempt.head.has_value()) {
+                    state->published_heads.push_back(attempt.head->info);
+                }
+            }
             state->warnings = std::move(warnings);
             state->options = options;
             state->open_state = selected.compatibility_error.has_value()
@@ -2811,12 +2817,22 @@ namespace lfs::io::project {
         }
         state->selected.commit = *found;
         state->selected.chunks = std::move(index->chunks);
-        state->selected.info.generation = found->info.generation;
-        state->selected.info.commit_uuid = found->info.commit_uuid;
-        state->selected.info.commit_offset = found->info.offset;
-        state->selected.info.committed_file_end = found->info.committed_file_end;
-        state->selected.info.commit_crc32c_echo = found->info.crc32c;
-        state->selected.info.preview.reset();
+        const auto published = std::ranges::find_if(
+            state->published_heads,
+            [&](const HeadInfo& head) {
+                return head.generation == found->info.generation &&
+                       head.commit_uuid == found->info.commit_uuid;
+            });
+        state->selected.info =
+            published != state->published_heads.end()
+                ? *published
+                : HeadInfo{
+                      .generation = found->info.generation,
+                      .commit_uuid = found->info.commit_uuid,
+                      .commit_offset = found->info.offset,
+                      .committed_file_end = found->info.committed_file_end,
+                      .commit_crc32c_echo = found->info.crc32c,
+                  };
         return ProjectReader(std::make_shared<Impl>(std::move(state)));
     }
 

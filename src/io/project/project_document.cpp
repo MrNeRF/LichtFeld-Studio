@@ -3999,6 +3999,20 @@ namespace lfs::io::project {
         writer_setup_finished = std::chrono::steady_clock::now();
 
         ProjectDocumentSaveReport report;
+        std::optional<ChunkKey> rewritten_preview_key;
+        if (!preview_png.empty() && impl_->source_reader &&
+            impl_->source_reader->preview().has_value()) {
+            const auto& locator = *impl_->source_reader->preview();
+            const auto row = std::ranges::find_if(
+                impl_->source_reader->chunks(), [&locator](const ChunkInfo& candidate) {
+                    return candidate.is_live() &&
+                           candidate.key.fourcc == FOURCC_THMB &&
+                           candidate.payload_offset == locator.offset &&
+                           candidate.stored_bytes == locator.bytes;
+                });
+            assert(row != impl_->source_reader->chunks().end());
+            rewritten_preview_key = row->key;
+        }
         if (!preview_png.empty()) {
             if (auto result = writer->set_preview(preview_png);
                 !result) {
@@ -4020,8 +4034,7 @@ namespace lfs::io::project {
                 }
                 continue;
             }
-            if (!preview_png.empty() &&
-                key.fourcc == FOURCC_THMB) {
+            if (!preview_png.empty() && rewritten_preview_key == key) {
                 continue;
             }
             if (desired.contains(key)) {

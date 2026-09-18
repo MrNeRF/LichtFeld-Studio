@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 namespace {
@@ -43,6 +44,19 @@ namespace {
         auto document = require_result(ProjectDocument::create(fixed_uuid(1000), 1'700'000'000'000'000'000));
         static_cast<void>(require_result(save_document(document, path)));
         return path;
+    }
+
+    void flip_byte(const fs::path& path, const std::uint64_t offset) {
+        std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(stream);
+        stream.seekg(static_cast<std::streamoff>(offset));
+        char byte = 0;
+        stream.read(&byte, 1);
+        ASSERT_EQ(stream.gcount(), 1);
+        stream.seekp(static_cast<std::streamoff>(offset));
+        byte ^= static_cast<char>(0x5a);
+        stream.write(&byte, 1);
+        ASSERT_TRUE(stream);
     }
 
     TEST(ProjectOperations, RestoreOlderSaveRekeysAndRefusesCollision) {
@@ -94,34 +108,11 @@ namespace {
             require_status(writer.set_preview(selected_preview));
             require_status(writer.commit());
         }
-        {
-            auto reader = require_result(ProjectReader::open(source));
-            ASSERT_TRUE(reader.preview().has_value());
-            const auto preview_locator = *reader.preview();
-            const auto is_current_preview = [&preview_locator](const ChunkInfo& row) {
-                return row.is_live() && row.key.fourcc == FOURCC_THMB &&
-                       row.payload_offset == preview_locator.offset &&
-                       row.stored_bytes == preview_locator.bytes;
-            };
-            const auto preview_row = std::ranges::find_if(
-                reader.chunks(), is_current_preview);
-            ASSERT_NE(preview_row, reader.chunks().end());
+        static_cast<void>(require_result(set_project_preview(source, newer_preview)));
 
-            auto writer = require_result(ProjectWriter::append(source));
-            require_status(writer.plan_commit());
-            std::uint64_t planned_bytes = newer_preview.size();
-            for (const auto& row : reader.chunks()) {
-                if (row.is_live() && !is_current_preview(row))
-                    planned_bytes += row.stored_bytes;
-            }
-            require_status(writer.preflight(planned_bytes));
-            for (const auto& row : reader.chunks()) {
-                if (row.is_live() && !is_current_preview(row))
-                    require_status(writer.copy_chunk_verbatim(reader, row));
-            }
-            require_status(writer.set_preview(newer_preview));
-            require_status(writer.commit());
-        }
+        auto historical_reader = require_result(ProjectReader::open_generation(source, 2));
+        ASSERT_TRUE(historical_reader.preview().has_value());
+        EXPECT_EQ(require_result(historical_reader.read_preview()), selected_preview);
 
         const auto restored_path = temporary.path / "restored-thumbnail-history.licht";
         static_cast<void>(require_result(restore_save(source, 2, restored_path)));
@@ -139,6 +130,26 @@ namespace {
                       return row.is_live() && row.key.fourcc == FOURCC_THMB;
                   }),
                   2);
+
+        const auto ambiguous_destination = temporary.path / "ambiguous-preview.licht";
+        const auto ambiguous = restore_save(source, 2, ambiguous_destination);
+        ASSERT_FALSE(ambiguous);
+        EXPECT_EQ(ambiguous.error().code(), lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(ambiguous.error().user_message(),
+                  "The selected save's preview is ambiguous.");
+        EXPECT_FALSE(fs::exists(ambiguous_destination));
+
+        const auto damaged = temporary.path / "damaged-thumbnail-history.licht";
+        fs::copy_file(source, damaged);
+        flip_byte(damaged, HEAD_SLOT_OFFSETS[0] + 200);
+        flip_byte(damaged, HEAD_SLOT_OFFSETS[1] + 200);
+        const auto repaired_path = temporary.path / "repaired-thumbnail-history.licht";
+        const auto repaired = repair_project(damaged, repaired_path);
+        ASSERT_FALSE(repaired);
+        EXPECT_EQ(repaired.error().code(), lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(repaired.error().user_message(),
+                  "The recovered project preview is ambiguous.");
+        EXPECT_FALSE(fs::exists(repaired_path));
     }
 
     TEST(ProjectOperations, RebindCheckpointKeepsRecoveryCopy) {

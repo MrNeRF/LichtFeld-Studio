@@ -1237,46 +1237,33 @@ namespace lfs::io::project {
             return std::move(selected_reader).error();
         }
         const ChunkInfo* selected_preview_row = nullptr;
-        std::optional<ChunkKey> append_preview_key;
-        if (reader->preview().has_value()) {
-            const auto& locator = *reader->preview();
-            const auto current_preview = std::ranges::find_if(
-                reader->chunks(), [&locator](const ChunkInfo& row) {
+        if (selected_reader->preview().has_value()) {
+            const auto& locator = *selected_reader->preview();
+            const auto selected = std::ranges::find_if(
+                selected_rows, [&locator](const auto& entry) {
+                    const auto& row = entry.second;
                     return row.key.fourcc == FOURCC_THMB &&
                            row.payload_offset == locator.offset &&
                            row.stored_bytes == locator.bytes;
                 });
-            if (current_preview != reader->chunks().end()) {
-                append_preview_key = current_preview->key;
-                if (generation == reader->commit().generation) {
-                    const auto selected = selected_rows.find(current_preview->key);
-                    if (selected != selected_rows.end() &&
-                        selected->second.payload_offset == locator.offset &&
-                        selected->second.stored_bytes == locator.bytes)
-                        selected_preview_row = &selected->second;
-                }
+            if (selected == selected_rows.end()) {
+                return fail<ProjectInspectorCard>(
+                    lfs::ErrorCode::DataLoss, path,
+                    "The selected save has an invalid preview reference.",
+                    "the published historical preview locator does not match a live THMB row",
+                    "restore.preview");
             }
-        }
-        if (selected_preview_row == nullptr && append_preview_key.has_value()) {
-            const auto matching_key = selected_rows.find(*append_preview_key);
-            if (matching_key != selected_rows.end())
-                selected_preview_row = &matching_key->second;
-        }
-        if (selected_preview_row == nullptr) {
-            const auto canonical = selected_rows.find(
-                ChunkKey{FOURCC_THMB, reader->superblock().project_uuid});
-            if (canonical != selected_rows.end())
-                selected_preview_row = &canonical->second;
-        }
-        if (selected_preview_row == nullptr) {
+            selected_preview_row = &selected->second;
+        } else {
             for (const auto& [key, row] : selected_rows) {
                 if (key.fourcc != FOURCC_THMB)
                     continue;
-                if (selected_preview_row != nullptr) {
-                    selected_preview_row = nullptr;
-                    break;
-                }
-                selected_preview_row = &row;
+                (void)row;
+                return fail<ProjectInspectorCard>(
+                    lfs::ErrorCode::FailedPrecondition, path,
+                    "The selected save's preview is ambiguous.",
+                    "its historical head locator is no longer published while THMB rows remain",
+                    "restore.preview");
             }
         }
         const auto is_selected_preview = [selected_preview_row](const ChunkInfo& row) {
@@ -1348,19 +1335,14 @@ namespace lfs::io::project {
                     if (auto written = writer.write_chunk(key, restored_project); !written)
                         return std::move(written).error();
                 } else if (is_selected_preview(row)) {
-                    auto preview = selected_reader->read_chunk(row);
-                    if (!preview)
-                        return std::move(preview).error();
-                    if (auto written = writer.set_preview(*preview); !written)
-                        return std::move(written).error();
+                    if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row); !copied)
+                        return std::move(copied).error();
                 } else if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row); !copied) {
                     return std::move(copied).error();
                 }
             }
             for (const auto& row : reader->chunks()) {
-                if (row.is_live() && !selected_rows.contains(row.key) &&
-                    !(selected_preview_row != nullptr && append_preview_key.has_value() &&
-                      row.key == *append_preview_key)) {
+                if (row.is_live() && !selected_rows.contains(row.key)) {
                     if (auto erased = writer.erase(row.key); !erased)
                         return std::move(erased).error();
                 }
@@ -1461,12 +1443,17 @@ namespace lfs::io::project {
                     return std::move(written).error();
                 }
             } else if (is_selected_preview(row)) {
-                auto preview = selected_reader->read_chunk(row);
-                if (!preview) {
-                    return std::move(preview).error();
-                }
-                if (auto written = writer.set_preview(*preview); !written) {
-                    return std::move(written).error();
+                if (new_key != old_key) {
+                    auto preview = selected_reader->read_chunk(row);
+                    if (!preview) {
+                        return std::move(preview).error();
+                    }
+                    if (auto written = writer.set_preview(*preview); !written) {
+                        return std::move(written).error();
+                    }
+                } else if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row);
+                           !copied) {
+                    return std::move(copied).error();
                 }
             } else if (new_key != old_key) {
                 auto bytes = selected_reader->read_chunk(row);
@@ -2429,6 +2416,28 @@ namespace lfs::io::project {
                                              "The project identity changed before repair started.",
                                              "recovered source does not match the selected project", "repair.identity");
         const auto& source_commit = reader->commit();
+        const ChunkInfo* repair_preview_row = nullptr;
+        for (const auto& row : reader->chunks()) {
+            if (!row.is_live() || row.key.fourcc != FOURCC_THMB) {
+                continue;
+            }
+            if (reader->preview().has_value()) {
+                const auto& locator = *reader->preview();
+                if (row.payload_offset == locator.offset &&
+                    row.stored_bytes == locator.bytes) {
+                    repair_preview_row = &row;
+                }
+                continue;
+            }
+            if (repair_preview_row != nullptr) {
+                return fail<ProjectRepairResult>(
+                    lfs::ErrorCode::FailedPrecondition, path,
+                    "The recovered project preview is ambiguous.",
+                    "the repaired head has no preview locator and multiple THMB rows remain",
+                    "repair.preview");
+            }
+            repair_preview_row = &row;
+        }
         std::uint64_t planned_bytes = 0;
         for (const auto& row : reader->chunks()) {
             if (row.is_live()) {
@@ -2472,7 +2481,7 @@ namespace lfs::io::project {
             if (!row.is_live()) {
                 continue;
             }
-            if (row.key.fourcc == FOURCC_THMB) {
+            if (repair_preview_row == &row && !reader->preview().has_value()) {
                 auto preview = reader->read_chunk(row);
                 if (!preview) {
                     return std::move(preview).error();

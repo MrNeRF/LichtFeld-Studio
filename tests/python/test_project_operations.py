@@ -19,15 +19,32 @@ def _symlink_or_skip(link: Path, target: Path) -> None:
         raise
 
 
+def _windows_denied_identity_swap(error: BaseException) -> bool:
+    current: BaseException | None = error
+    while current is not None:
+        if (
+            os.name == "nt"
+            and isinstance(current, PermissionError)
+            and current.winerror == 5
+        ):
+            return True
+        current = current.__cause__
+    return False
+
+
+def _assert_changed_or_platform_refused(error: BaseException) -> None:
+    assert "changed" in str(error) or _windows_denied_identity_swap(error)
+
+
 def _skip_locked_identity_swap_on_windows(swap: str) -> None:
     if os.name == "nt" and swap == "identity":
-        pytest.skip("Windows prevents replacing the project while its identity handle is open")
+        pytest.skip("Windows denies replacement while the operation pins the project identity")
 
 
 @pytest.fixture
 def identity_project(native_io, tmp_path, monkeypatch):
     monkeypatch.setenv("LFS_HOME", str(tmp_path))
-    path = tmp_path / "项目-é.licht"
+    path = tmp_path / "project.licht"
     shutil.copyfile(Path(__file__).parents[1] / "data" / "portable-sog.licht", path)
     return path, native_io.inspect_project_card(path)
 
@@ -75,11 +92,13 @@ def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_pat
         "rename": lambda: native_io.set_project_title(selected, "Changed"),
         "dataset_reference": lambda: native_io.set_dataset_reference(selected, tmp_path),
     }
-    with pytest.raises(ProjectOperationFailure, match="(identity|path).*changed") as failure:
+    with pytest.raises(ProjectOperationFailure) as failure:
         store.run("guarded", {"path": str(selected), "id": str(card.project_uuid),
                   "commit_uuid": str(card.commit_uuid)}, operation, operations[operation])
+    platform_refused = _windows_denied_identity_swap(failure.value)
+    _assert_changed_or_platform_refused(failure.value)
     assert failure.value.record["status"] == "failed"
-    assert "changed" in store.recover()["guarded"]["reason"]
+    assert "changed" in store.recover()["guarded"]["reason"] or platform_refused
     assert selected.read_bytes() == before
 
 
@@ -117,8 +136,9 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
                 selected.unlink()
                 _symlink_or_skip(selected, other)
 
-    with pytest.raises(Exception, match="(identity|path).*changed"):
+    with pytest.raises(Exception) as failure:
         native_io.compact_project_file(selected, progress=progress)
+    _assert_changed_or_platform_refused(failure.value)
     assert swapped and selected.read_bytes() == before
 
 
@@ -148,12 +168,13 @@ def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_pro
             selected.unlink()
             _symlink_or_skip(selected, other)
 
-    with pytest.raises(Exception, match="(identity|path).*changed"):
+    with pytest.raises(Exception) as failure:
         operation = lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}, progress=progress)
         if guarded:
             native_io.run_project_operation(selected, str(card.project_uuid), str(card.commit_uuid), operation)
         else:
             operation()
+    _assert_changed_or_platform_refused(failure.value)
     assert swapped and selected.read_bytes() == before
 
 
@@ -212,8 +233,9 @@ def test_contents_recovery_write_refuses_changed_project(native_io, identity_pro
         else:
             native_io.restore_project_backup(alias, backup, str(card.project_uuid), str(card.commit_uuid))
 
-    with pytest.raises(Exception, match="(identity|path).*changed"):
+    with pytest.raises(Exception) as failure:
         native_io.run_project_operation(alias, str(card.project_uuid), str(card.commit_uuid), write_recovery)
+    _assert_changed_or_platform_refused(failure.value)
     assert alias.read_bytes() == before
 
 
@@ -459,17 +481,12 @@ def test_chosen_thumbnail_survives_other_contents_edits(native_io, tmp_path):
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
-@pytest.mark.xfail(
-    os.name == "nt",
-    reason="Native closed-file mutations do not yet accept CJK paths on Windows",
-    strict=True,
-)
 def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_path):
     import uuid
     source = _fixture()
     if not source.is_file():
         pytest.skip('native project fixture unavailable')
-    path = tmp_path / '项目.licht'
+    path = tmp_path / 'guarded.licht'
     shutil.copy2(source, path)
     card = native_io.inspect_project_card(path)
     called = []
@@ -488,13 +505,27 @@ def test_operation_guard_rejects_replaced_identity_and_commit(native_io, tmp_pat
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
+@pytest.mark.xfail(
+    os.name == "nt",
+    reason="Native closed-file mutations do not yet accept CJK paths on Windows",
+    strict=True,
+)
+def test_closed_file_mutation_accepts_unicode_path(native_io, tmp_path):
+    path = tmp_path / "项目.licht"
+    shutil.copy2(_fixture(), path)
+
+    changed = native_io.set_project_title(path, "Changed")
+
+    assert changed.title == "Changed"
+
+
 @pytest.mark.parametrize('kill_point', [
     'running',
     pytest.param(
         'completed',
         marks=pytest.mark.xfail(
             os.name == "nt",
-            reason="Native closed-file mutations do not yet accept CJK paths on Windows",
+            reason="Windows denies atomic recovery replacement while identity is pinned",
             strict=True,
         ),
     ),
@@ -506,7 +537,7 @@ def test_contents_kill_rolls_back_on_restart(native_io, tmp_path, kill_point):
     source = _fixture()
     if not source.is_file():
         pytest.skip('native project fixture unavailable')
-    path = tmp_path / '中断.licht'
+    path = tmp_path / 'interrupted.licht'
     shutil.copy2(source, path)
     before = native_io.inspect_project_card(path)
     root = tmp_path / 'store'
@@ -527,8 +558,12 @@ KilledOperations(io, root).run("project-kill", {"id": str(card.project_uuid), "p
     "commit_uuid": str(card.commit_uuid)}, "Set license",
     lambda: io.set_project_license(path, "CC0-1.0", "kill marker"))
 '''
+    child_environment = os.environ.copy()
+    child_environment["PYTHONPATH"] = os.pathsep.join(
+        str(entry) for entry in sys.path if entry
+    )
     child = subprocess.run([sys.executable, '-c', code, str(path), str(root), kill_point],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, timeout=60, env=child_environment)
     assert child.returncode == 37, child.stderr
     rows = ProjectOperations(native_io, root).recover()
     assert rows['project-kill']['status'] == 'failed'
