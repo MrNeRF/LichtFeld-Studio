@@ -94,7 +94,34 @@ namespace {
             require_status(writer.set_preview(selected_preview));
             require_status(writer.commit());
         }
-        static_cast<void>(require_result(set_project_preview(source, newer_preview)));
+        {
+            auto reader = require_result(ProjectReader::open(source));
+            ASSERT_TRUE(reader.preview().has_value());
+            const auto preview_locator = *reader.preview();
+            const auto is_current_preview = [&preview_locator](const ChunkInfo& row) {
+                return row.is_live() && row.key.fourcc == FOURCC_THMB &&
+                       row.payload_offset == preview_locator.offset &&
+                       row.stored_bytes == preview_locator.bytes;
+            };
+            const auto preview_row = std::ranges::find_if(
+                reader.chunks(), is_current_preview);
+            ASSERT_NE(preview_row, reader.chunks().end());
+
+            auto writer = require_result(ProjectWriter::append(source));
+            require_status(writer.plan_commit());
+            std::uint64_t planned_bytes = newer_preview.size();
+            for (const auto& row : reader.chunks()) {
+                if (row.is_live() && !is_current_preview(row))
+                    planned_bytes += row.stored_bytes;
+            }
+            require_status(writer.preflight(planned_bytes));
+            for (const auto& row : reader.chunks()) {
+                if (row.is_live() && !is_current_preview(row))
+                    require_status(writer.copy_chunk_verbatim(reader, row));
+            }
+            require_status(writer.set_preview(newer_preview));
+            require_status(writer.commit());
+        }
 
         const auto restored_path = temporary.path / "restored-thumbnail-history.licht";
         static_cast<void>(require_result(restore_save(source, 2, restored_path)));
