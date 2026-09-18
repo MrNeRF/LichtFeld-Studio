@@ -1526,7 +1526,11 @@ def test_settings_undo_survives_its_follow_up_upload(tmp_path, monkeypatch):
                                    _commitUuid="after"), "project")
     finish(service)
     update = service._job(job_id)["localUpdate"]
-    assert gallery_sync.same_undo_link(service.snapshot()["links"]["project"], update["appliedLink"])
+    # A saved undo record may predate the removal of visibility from shared fields.
+    update["appliedLink"]["localFields"] = dict(fields, visibility="private")
+    current = service.snapshot()["links"]["project"]
+    assert gallery_sync.same_undo_link(current, update["appliedLink"])
+    assert not gallery_sync.same_undo_link(dict(current, sharedFields=dict(fields, title="Changed")), update["appliedLink"])
     assert update["previousLink"] == before
     service.restore_local_backup(str(path), update["backupPath"], gallery_sync.file_stamp(path))
     finish(service)
@@ -1611,3 +1615,12 @@ def test_handoff_sigkill_keeps_one_durable_link(tmp_path, monkeypatch, kill_poin
     assert set(restarted.snapshot()['links']) == {'new'}
     assert restarted.snapshot()['jobs'][0]['handoff']['state'] == 'completed'
     assert not restarted.snapshot().get('handoffIntents')
+
+
+def test_server_private_visibility_is_preserved_but_not_shared():
+    remote = dict(id="scene", title="Scene", description="", visibility="private",
+        viewerSettings={}, contentRevision="c", metadataRevision="m")
+    link = gallery_sync.exchange_link(remote, "saved")
+    journal = dict(version=3, accounts={"owner": dict(links={"project": link}, jobs=[])})
+    gallery_sync._validate_journal(journal)
+    assert (link["sharedFields"], link["metadata"]) == (dict(title="Scene", description="", viewerSettings={}), remote)

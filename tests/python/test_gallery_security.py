@@ -410,7 +410,7 @@ def test_transient_attempt_counts_are_durable(tmp_path, monkeypatch):
     assert next(iter(saved['accounts'].values()))['jobs'][0]['attempts'] == 2
 
 @pytest.mark.parametrize('was_public,target', [(False, 'public'), (True, 'public'), (True, 'private')])
-def test_public_visibility_and_public_updates_always_confirm(gallery, monkeypatch, was_public, target):
+def test_legacy_visibility_does_not_prompt_or_enter_updates(gallery, monkeypatch, was_public, target):
     controller, state, actions = gallery
     monkeypatch.setattr(controller, '_project_identity', lambda: ('project', '/project.licht'))
     prompts = []
@@ -422,12 +422,11 @@ def test_public_visibility_and_public_updates_always_confirm(gallery, monkeypatc
     monkeypatch.setattr(module.lf.ui, 'confirm_dialog', lambda *a: prompts.append(a), raising=False)
     monkeypatch.setattr(controller, '_publish', lambda *a, **kw: actions.append((a, kw)))
     controller._review_publish(remote, {'title': 'Scene', 'description': '', 'visibility': target}, 'sog', False, update=True)
-    assert prompts and not actions
-    prompts[0][-1](prompts[0][-2][-1])
-    assert len(actions) == 1
+    assert not prompts and len(actions) == 1
+    assert "visibility" not in actions[0][0][0]
 
 @pytest.mark.parametrize('action', ['remove', 'publish_new'])
-def test_remove_and_publish_as_new_keep_public_scene_safe(gallery, monkeypatch, panel_module, action):
+def test_remove_and_publish_as_new_keep_published_scene_safe(gallery, monkeypatch, panel_module, action):
     controller, state, actions = gallery
     manager, local, remote = _gallery_fixture(panel_module)
     remote['visibility'] = 'public'
@@ -454,7 +453,7 @@ def test_remove_and_publish_as_new_keep_public_scene_safe(gallery, monkeypatch, 
         assert not prompts and not actions
         assert len(reviews) == 1 and reviews[0]['publish_new']
         assert reviews[0]['scene'] == remote
-        assert reviews[0]['fields']['visibility'] == 'private'
+        assert 'visibility' not in reviews[0]['fields']
 
 def test_watchdog_resume_offers_retry_and_keep_waiting(gallery, monkeypatch):
     controller, state, actions = gallery

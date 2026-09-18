@@ -165,7 +165,7 @@ def test_outage_stops_update_batch_until_another_user_action(gallery):
     state['jobs'] = [{'id': 'upload', 'project': 'project', 'status': 'paused', 'message': 'Paused (connection lost)'}]
     controller._advance_update_all()
     assert not controller._update_queue
-    assert controller._batch_approval is None
+    assert not hasattr(controller, "_batch_approval")
 
 
 def test_domainless_link_is_rejected_as_a_whole():
@@ -308,7 +308,7 @@ def test_closed_update_uses_saved_file_proof_without_live_capture(gallery, monke
     monkeypatch.setattr(gallery_project_facts, 'saved_content_stamp', lambda path: saved)
     monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
     controller.service.edit = lambda *args, **kwargs: calls.append(('patch', args, kwargs))
-    details = {'title': 'Changed title', 'description': '', 'visibility': 'private'}
+    details = {'title': 'Changed title', 'description': ''}
     controller.publish_asset(asset, details, 'sog', update=True)
     assert calls[0][0] == ('patch' if patch else 'replace') and len(calls) == 1
     if patch:

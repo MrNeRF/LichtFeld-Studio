@@ -116,8 +116,6 @@ class GalleryFilePanel(Panel):
         value = str(value)
         if name == "upload_format" and value not in ("studio", "sog", "ssog", "spz"):
             return
-        if name == "visibility" and value not in ("private", "public"):
-            return
         self._fields[name] = value
         self._error = ""
         self._dirty()
@@ -186,7 +184,7 @@ class GalleryFilePanel(Panel):
         model = ctx.create_data_model("gallery_file")
         if model is None:
             return
-        for name in ("title", "description", "visibility", "upload_format", "pull_folder", "pull_name", "use_cover"):
+        for name in ("title", "description", "upload_format", "pull_folder", "pull_name", "use_cover"):
             model.bind(name, lambda n=name: self._fields.get(n, False if n == "use_cover" else ""), lambda v, n=name: self._set(n, v))
         values = {
             "panel_label": self._panel_label,
@@ -218,7 +216,7 @@ class GalleryFilePanel(Panel):
         model.bind_event("choose", lambda _h, _e, args: self._choose(args))
         model.bind_event("replacement", lambda _h, _e, args: self._replacement(args))
         model.bind_func("cancel_label", lambda: tr("replacement.later") if (self._review or {}).get("mode") == "replacement" else tr("action.cancel"))
-        for key in ("review.title", "review.description", "review.visibility", "review.upload_as", "review.private", "review.public",
+        for key in ("review.title", "review.description", "review.upload_as",
                     "format.studio", "format.sog", "format.ssog", "format.spz", "info.folder", "info.filename", "action.cancel"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
         model.bind_event("submit", lambda _h, _e, _args: self._submit())
@@ -258,7 +256,7 @@ class GalleryFilePanel(Panel):
                 controller._decision_pending = False
                 review["on_submit"]({row["id"]: row["choice"] for row in review["groups"]})
             else:
-                details = {k: self._fields[k].strip() for k in ("title", "description", "visibility")}
+                details = {k: self._fields[k].strip() for k in ("title", "description")}
                 details["useEmbeddedPreview"] = bool(self._fields.get("use_cover", False))
                 controller.upload_format = self._fields["upload_format"]
                 controller.publish_asset(review["asset"], details, self._fields["upload_format"],

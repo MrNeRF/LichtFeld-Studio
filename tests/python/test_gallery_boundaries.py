@@ -40,7 +40,7 @@ def test_copy_link_fetches_current_url_and_rejects_unsafe_or_stale_results(galle
     monkeypatch.setattr(panel_module.lf.ui, 'schedule_on_ui_thread', callbacks.append, raising=False)
     monkeypatch.setattr(panel_module.lf.ui, 'set_clipboard_text', copies.append, raising=False)
     monkeypatch.setattr(controller, '_schedule_poll', lambda: None)
-    scene = {'id': str(uuid.uuid4()), 'visibility': 'public', 'viewerUrl': 'https://portal.example/stale'}
+    scene = {'id': str(uuid.uuid4()), 'visibility': 'private', 'viewerUrl': 'https://portal.example/stale'}
     controller.open_portal(scene, 'copy')
     controller.open_portal(scene, 'copy')
     assert len(workers) == 1 and not copies and not requests
@@ -295,7 +295,7 @@ def test_queued_toast_expiry_never_dirties_unmounted_or_remounted_panel(convenie
 def test_undo_remains_available_without_an_expiry_timer(convenience, panel_module):
     panel, _, _ = convenience
     calls = []
-    panel._set_gallery_undo(lambda: calls.append('undo'))
+    panel._set_gallery_undo(lambda: calls.append('undo'), kind='operation')
     assert panel._gallery_undo is not None
     assert panel._gallery_undo_timer is None
     panel._gallery_command('undo')

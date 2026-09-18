@@ -420,18 +420,36 @@ def test_change_feed_walk_pins_sequence_and_rejects_repeated_cursor():
 
 def test_origin_lookup_and_share_links_are_owner_scoped():
     identifier, calls = str(uuid.uuid4()), []
+    link = {"id": "link", "url": "https://portal.example/gallery/share/example/", "expiresAt": None}
+    active, status = False, None
     def request(method, path, body=None):
         calls.append((method, path, body))
         if "originProjectUuid" in path:
             return {"scenes": [], "nextCursor": None, "changeSequence": 1}
         if method == "GET":
-            return {"links": []}
-        return {"id": "link", "url": "https://portal.example/gallery/share/example/", "expiresAt": None}
+            if status is not None:
+                raise PortalHTTPError(status, "unavailable")
+            return {"links": [dict(link, active=True)] if active else []}
+        return link
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
     client.list_scenes(origin_project_uuid=identifier)
-    assert client.share_link_details(identifier)["expiresAt"] is None
-    assert calls[0][1].endswith("originProjectUuid=" + identifier)
-    assert calls[-1][2] == {"expiresIn": "never"}
+    assert calls.pop()[1].endswith("originProjectUuid=" + identifier)
+    path = "/api/gallery/v1/splats/" + identifier
+    assert client.share_link_details(identifier) == link
+    assert calls == [("GET", path + "/share-links", None), ("POST", path + "/share-links", {"expiresIn": "never"})]
+    calls.clear()
+    active = True
+    assert client.share_link_details(identifier) == dict(link, active=True)
+    assert calls == [("GET", path + "/share-links", None)]
+    for status in (404, 405):
+        calls.clear()
+        assert client.share_link_details(identifier) == link
+        assert calls == [("GET", path + "/share-links", None), ("POST", path + "/share-link", {})]
+    calls.clear()
+    status = 403
+    with pytest.raises(PortalHTTPError):
+        client.share_link_details(identifier)
+    assert calls == [("GET", path + "/share-links", None)]
 
 
 def test_pinned_download_uses_authenticated_ranges_and_checks_digest(tmp_path, monkeypatch):

@@ -8,7 +8,6 @@
       <input id="gallery-file-title" type="text" maxlength="120" data-value="title" data-attr-title="title"/>
       <label for="gallery-file-description">{{g_review_description}}</label>
       <textarea id="gallery-file-description" rows="3" maxlength="5000" data-value="description" data-attr-title="description"/>
-      <div class="setting-row"><span>{{g_review_visibility}}</span><select data-value="visibility"><option value="private">{{g_review_private}}</option><option value="public">{{g_review_public}}</option></select></div>
       <div class="gallery-file-fields" data-if="show_format">
         <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
         <span class="text-muted">{{format_hint}}</span>

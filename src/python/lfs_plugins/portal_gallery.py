@@ -216,6 +216,7 @@ class PortalGalleryClient:
             cursor = next_since
 
     def share_link_details(self, scene_id):
+        # Keep fallbacks for older portals: app and portal deployments are independent.
         path = f"/splats/{_identifier(scene_id)}/share-links"
         try:
             payload = self._request("GET", path)

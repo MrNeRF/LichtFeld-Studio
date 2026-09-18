@@ -58,7 +58,6 @@
         <div class="section-content" data-if="gallery_expanded">
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.format</span>
             <select class="preferences-select" data-value="gallery_uploadFormat"><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">SOG</option><option value="ssog">SSOG</option><option value="spz">SPZ</option></select></div>
-          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.gallery.ask_public</span><input type="checkbox" data-checked="gallery_askBeforePublic" /></div>
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.cache</span><input class="preferences-select" type="text" data-value="gallery_posterCacheMiB" /></div>
           <span class="preferences-description">{{gallery_preferences_error}}</span>
         </div>

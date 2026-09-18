@@ -25,12 +25,11 @@ def convenience(panel_module, monkeypatch):
 
 def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     from lfs_plugins.gallery_preferences import read_preferences, set_preference
-    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"spz"}')
-    assert read_preferences(tmp_path) == dict(uploadFormat='spz', askBeforePublic=True, posterCacheMiB=64)
+    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"spz","askBeforePublic":true}')
+    assert read_preferences(tmp_path) == dict(uploadFormat='spz', posterCacheMiB=64)
     set_preference('posterCacheMiB', 128, tmp_path)
-    set_preference('askBeforePublic', False, tmp_path)
     set_preference('uploadFormat', 'ssog', tmp_path)
-    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=False, posterCacheMiB=128)
+    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', posterCacheMiB=128)
 
 @pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097),
      ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
@@ -148,7 +147,7 @@ def _batch_assets(state):
         assets.append(dict(id=identifier, path=f'/tmp/{identifier}.licht', commit_uuid='new', exists=True))
     return assets
 
-def test_update_all_one_public_confirmation_continues_after_item_failure(gallery, monkeypatch, tmp_path):
+def test_update_all_without_visibility_confirmation_continues_after_item_failure(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
     controller.service.root = tmp_path
     assets = _batch_assets(state)
@@ -156,16 +155,13 @@ def test_update_all_one_public_confirmation_continues_after_item_failure(gallery
     monkeypatch.setattr(controller, 'confirm_action', lambda key, titles, callback: confirmations.append((key, titles, callback)))
     def publish(asset, details, format, *, update):
         scene = next(s for s in state['scenes'] if s['title'] == details['title'])
-        assert controller._batch_public_approved(scene, details)
+        assert "visibility" not in details
         started.append(asset['id'])
         if len(started) == 1:
             raise ValueError('Missing source payload')
     monkeypatch.setattr(controller, 'publish_asset', publish)
     controller.update_all(assets)
-    assert len(confirmations) == 1
-    assert confirmations[0][:2] == ('confirm.update_all', 'Public 0\nPublic 1')
-    assert started == []
-    confirmations[0][2]()
+    assert confirmations == []
     controller._advance_update_all()
     assert started == ['project0', 'project1']
     failures = [j for j in controller.snapshot()['jobs'] if j.get('batchFailure')]
@@ -182,9 +178,12 @@ def test_update_all_revalidates_account_and_reviewed_revision(gallery, monkeypat
     confirmations, started = [], []
     monkeypatch.setattr(controller, 'confirm_action', lambda key, title, callback: confirmations.append(callback))
     monkeypatch.setattr(controller, 'publish_asset', lambda *args, **kwargs: started.append(args[0]['id']))
+    advance = controller._advance_update_all
+    monkeypatch.setattr(controller, '_advance_update_all', lambda: None)
     controller.update_all(assets)
     state['scenes'][0]['metadataRevision'] = 'changed'
-    confirmations[0]()
+    monkeypatch.setattr(controller, '_advance_update_all', advance)
+    advance()
     assert started == [] and controller._batch_rows[0]['project'] == 'project0'
     state['identity'] = ('other', 'account')
     controller._advance_update_all()
@@ -293,7 +292,7 @@ def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch,
     # Exercise the same preference helper used by the Preferences setters without
     # coupling this suite to a second native-module fixture.
     from lfs_plugins.gallery_preferences import set_preference, read_preferences
-    for key, value in [('uploadFormat','studio'), ('askBeforePublic',False), ('posterCacheMiB',32)]:
+    for key, value in [('uploadFormat','studio'), ('posterCacheMiB',32)]:
         set_preference(key, value, tmp_path)
     assert read_preferences(tmp_path)['posterCacheMiB'] == 32
     import xml.etree.ElementTree as ET
@@ -301,7 +300,8 @@ def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch,
     group = rml.find('.//*[@data-if="gallery_expanded"]')
     assert group is not None
     bindings = {e.get('data-value') or e.get('data-checked') for e in group.iter()}
-    assert {'gallery_uploadFormat','gallery_askBeforePublic','gallery_posterCacheMiB'} <= bindings
+    assert {'gallery_uploadFormat','gallery_posterCacheMiB'} <= bindings
+    assert 'gallery_askBeforePublic' not in bindings
 
 def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
@@ -344,3 +344,21 @@ def test_remote_card_starts_typed_native_drag(convenience, panel_module):
     assert label == 'Remote only' and event.stopped
     panel._on_asset_drag_end(event)
     assert panel_module.lf._test_state.drag_ends == [token]
+
+
+def test_published_scene_offers_copy_share_link_in_inspector(convenience, monkeypatch):
+    import xml.etree.ElementTree as ET
+    panel, asset, _ = convenience
+    model = _BindingModel()
+    events = {}
+    model.bind_event = lambda name, handler: events.update({name: handler})
+    panel.on_bind_model(_BindingContext(model))
+    rml = ET.fromstring((Path(__file__).parents[2] / 'src/visualizer/gui/rmlui/resources/asset_manager.rml').read_text())
+    button = rml.find('.//*[@data-event-click="gallery_copy"]')
+    assert button is not None
+    assert model.func_bindings[button.get('data-if')]() is True
+    assert model.func_bindings['g_action_copy']() == 'Copy share link'
+    calls = []
+    monkeypatch.setattr(panel, '_controller', lambda: SimpleNamespace(open_portal=lambda *args: calls.append(args)))
+    events['gallery_copy'](None, None, [])
+    assert calls == [(panel._gallery_scene(asset), 'copy')]

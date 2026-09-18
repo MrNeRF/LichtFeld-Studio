@@ -374,6 +374,7 @@ class GalleryAssetMixin:
                 self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason")
                 or self._gallery_facts(self._get_selected_asset()).get("reason"))),
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
+            "gallery_can_copy": lambda: self._gallery_verb_enabled(self._get_selected_asset() or {}, "copy"),
             "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),
             "gallery_linked": lambda: self._has_gallery_link(),
             "gallery_notice": self._gallery_notice_text,
@@ -381,7 +382,6 @@ class GalleryAssetMixin:
             "gallery_needs_recovery": lambda: self._gallery_state.get("storage_issue", False),
             "gallery_exchange_summary": lambda: " · ".join(filter(None, (self._gallery_published_summary(), self._gallery_checked_label()))),
             "gallery_selected_format": lambda: ((self._get_selected_asset() or {}).get("source_format") or "licht").upper(),
-            "gallery_selected_visibility": lambda: tr("review." + (self._gallery_scene(self._get_selected_asset() or {}) or {}).get("visibility", "private")),
             "gallery_multi_summary": lambda: tr("multi.summary", **self._gallery_counts()),
             "gallery_publish_many": lambda: tr("multi.publish", count=self._gallery_counts()["ready"]),
             "gallery_update_many": lambda: tr("multi.update", count=self._gallery_counts()["linked"]),
@@ -394,10 +394,10 @@ class GalleryAssetMixin:
         for name, getter in values.items():
             model.bind_func(name, getter)
         for key in ("sidebar.title", "sidebar.published", "sidebar.attention",
-                    "review.visibility", "action.open", "action.copy",
+                    "action.open", "action.copy",
                     "info.format", "state.remote_only", "action.open_local", "action.open_recovery"):
             model.bind_func("g_" + key.replace(".", "_"), lambda k=key: tr(k))
-        for action in ("toast_open", "toast_portal", "toast_copy", "update_all", "refresh", "undo",
+        for action in ("toast_open", "toast_portal", "toast_copy", "copy", "update_all", "refresh", "undo",
                        "publish_many", "update_many", "open_recovery"):
             model.bind_event("gallery_" + action, lambda _h, _e, args, a=action: self._gallery_command(a, args))
         model.bind_event("transfer_open_recovery", lambda _h, _e, args: self._transfer_command("open_recovery", args))
@@ -709,7 +709,7 @@ class GalleryAssetMixin:
         controller._message = ""
         controller.confirm_action(key, self._gallery_details()["title"], continuation)
 
-    def _set_gallery_undo(self, action, *, kind="visibility"):
+    def _set_gallery_undo(self, action, *, kind):
         self._gallery_undo_kind = kind
         if self._gallery_undo_timer:
             self._gallery_undo_timer.cancel()
@@ -730,7 +730,7 @@ class GalleryAssetMixin:
         link = self._gallery_state.get("links", {}).get(asset.get("id"), {})
         fields = link.get("localFields") or link.get("sharedFields") or scene
         return {"title": fields.get("title", display_name(asset)),
-                "description": fields.get("description", ""), "visibility": fields.get("visibility", "private")}
+                "description": fields.get("description", "")}
 
     def _gallery_thumbnail_callback(self, asset):
         import copy
@@ -854,8 +854,6 @@ class GalleryAssetMixin:
                 latest = max(checkpoints, key=lambda item: value(item, "source_generation", 0))
                 asset["publication"] = dict(asset.get("publication", {}), estimatedPoints=value(latest, "gaussians", 0),
                                             shDegree=value(latest, "sh_degree", 3))
-        if publish_new:
-            fields["visibility"] = "private"
         open_gallery_file_panel(controller=controller, asset=dict(asset, name=display_name(asset)),
             scene=self._gallery_scene(asset), action=action,
             fields=fields,

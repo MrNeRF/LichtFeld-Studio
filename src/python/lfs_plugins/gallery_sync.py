@@ -35,7 +35,7 @@ MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 def shared_fields(scene):
     """Fields shared with LichtFeld Studio; cover, highlights and broad revision excluded."""
     return copy.deepcopy({key: scene.get(key, {} if key == "viewerSettings" else "")
-                          for key in ("title", "description", "visibility", "viewerSettings")})
+                          for key in ("title", "description", "viewerSettings")})
 
 
 def exchange_link(scene, commit_uuid=""):
@@ -1985,6 +1985,9 @@ def get_gallery_sync():
 
 
 def same_undo_link(current, applied):
+    def fields(link):
+        saved = link.get("localFields") or link.get("sharedFields")
+        # Links written by older builds still include visibility in their saved fields.
+        return {k: v for k, v in saved.items() if k != "visibility"} if saved is not None else None
     return (all(current.get(key) == applied.get(key) for key in ("sceneId", "commitUuid"))
-            and (current.get("localFields") or current.get("sharedFields")) ==
-                (applied.get("localFields") or applied.get("sharedFields")))
+            and fields(current) == fields(applied))

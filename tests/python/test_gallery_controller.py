@@ -454,20 +454,22 @@ def test_gallery_does_not_cancel_or_consume_another_export(gallery, tmp_path, mo
     assert not export.exists()
     assert "prepare your upload again" in panel._message
 
-def test_making_scene_public_requires_review_and_keeps_captured_details(gallery, monkeypatch):
+@pytest.mark.parametrize("remote", [None, scene()])
+def test_publish_without_visibility_keeps_captured_details(gallery, monkeypatch, remote):
     controller, state, actions = gallery
     monkeypatch.setattr(controller, "_project_identity", lambda: ("project", "/project.licht"))
     prompts = []
-    monkeypatch.setattr(import_module("lfs_plugins.gallery_controller").lf.ui, "confirm_dialog", lambda *args: prompts.append(args), raising=False)
-    details = dict(title="My scene", description="Private description", visibility="public")
-    monkeypatch.setattr(import_module("lfs_plugins.gallery_controller"), "capture_view", lambda _: {})
+    module = import_module("lfs_plugins.gallery_controller")
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: prompts.append(args), raising=False)
+    details = dict(title="My scene", description="Description")
+    monkeypatch.setattr(module, "capture_view", lambda _: {})
     monkeypatch.setattr(controller, "_publish", lambda metadata, **kw: actions.append(metadata))
-    controller._review_publish(scene(), details, "sog", False, update=True)
-    assert actions == [] and len(prompts) == 1
-    assert prompts[0][1].endswith("confirm.public")
-    details["title"] = "Another title entered after confirmation"
-    prompts[0][-1](prompts[0][-2][-1])
-    assert {k: actions[0][k] for k in details} == dict(title="My scene", description="Private description", visibility="public")
+    controller._review_publish(remote, details, "sog", False, update=bool(remote))
+    details["title"] = "Another title entered after submission"
+    assert not prompts and len(actions) == 1
+    assert actions[0] == dict(title="My scene", description="Description", viewerSettings={},
+        **({"replaceSceneId": remote["id"], "baseRevisions": {"content": "original", "metadata": "original"}} if remote else {}))
+
 
 def test_unlink_confirmation_and_cancel_never_save_the_project(gallery, panel_module, monkeypatch):
     controller, _, actions = gallery
@@ -945,7 +947,7 @@ def test_closed_project_prepares_saved_file_without_opening(gallery, monkeypatch
         monkeypatch.setattr(module.lf, name, lambda *a, **kw: pytest.fail('Closed publication touched the live document'), raising=False)
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
     monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
-    details = {'title': 'Saved title', 'description': 'Reviewed description', 'visibility': 'private'}
+    details = {'title': 'Saved title', 'description': 'Reviewed description'}
     panel.publish_asset(asset, details, upload_format)
     export, metadata, project, _ = panel._export_pending
     assert actions == [(asset['path'], str(export), 'ply' if upload_format == 'studio' else upload_format, 'reviewed-commit')]
@@ -1090,9 +1092,9 @@ def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
                   viewerSettings={"exposure": 3, "cameraPath": {"duration": 5}}, contentRevision="new")
     rows = {r["id"]: r for r in conflict_groups({"commit_uuid": "local"},
         dict(sharedFields=base, contentRevision="old", commitUuid="old"), mine, remote)}
-    assert set(rows) == {"text", "visibility", "view", "track", "content"}
+    assert set(rows) == {"text", "view", "track", "content"}
     assert "Mine" in rows["text"]["mine_value"] and "Edited there" in rows["text"]["gallery_value"]
-    assert rows["text"]["choice"] == "mine" and rows["visibility"]["choice"] == "gallery"
+    assert rows["text"]["choice"] == "mine"
     assert rows["content"]["choice"] == "mine" and not rows["content"]["can_both"]
     assert rows["track"]["can_both"]
 
@@ -1170,7 +1172,7 @@ def test_file_menu_review_submits_only_for_original_project_and_account(gallery,
         asset={"id": "project", "path": str(original), "name": "original", "publication": {}},
         scene=None,
         action="publish",
-        fields={"title": "Original", "description": "", "visibility": "private", "upload_format": "sog"},
+        fields={"title": "Original", "description": "", "upload_format": "sog"},
         expected_project_path=str(original),
     )
 
@@ -1309,18 +1311,20 @@ def test_replacement_buttons_wait_for_the_account_and_transfer(gallery):
     assert not actions
 
 
-def test_replacement_confirmation_names_the_existing_public_scene(gallery, monkeypatch, tmp_path):
+def test_replacement_prepares_the_existing_scene_without_visibility(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     remote = dict(scene(), visibility="public")
     state.update(source_formats=["licht"], scenes=[remote])
     panel._state = state
     panel.service.root = tmp_path
     monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
-    monkeypatch.setattr(panel, "_public_confirmation", lambda scene, action, **_: actions.append(scene))
+    monkeypatch.setattr(panel, "_patch_saved_update", lambda metadata, *args, **kwargs: actions.append(metadata) or True)
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_controller").lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
     panel._publish_closed_asset(dict(id="project", path="/project.licht"), remote, "sog",
         update=False, publish_as_new=False,
         handoff=dict(sceneId=remote["id"], baseRevisions={"content": "original", "metadata": "original"}))
-    assert actions == [remote]
+    assert len(actions) == 1 and actions[0]["replaceSceneId"] == remote["id"]
+    assert "visibility" not in actions[0]
 
 
 @pytest.mark.parametrize("health,tone", [
@@ -1336,3 +1340,21 @@ def test_file_health_has_an_independent_glyph(gallery, health, tone):
     assert facts["action"] == ("locate" if health == "MISSING" else "")
     assert [action["id"] for action in facts["actions"]] == (["locate"] if health == "MISSING" else [])
     assert facts["progress"] == 43
+
+
+def test_text_only_conflict_ignores_server_visibility(gallery):
+    from lfs_plugins.gallery_controller import conflict_groups
+    local = dict(title="Mine", description="", viewerSettings={})
+    remote = dict(local, title="Gallery", visibility="private", contentRevision="c")
+    rows = conflict_groups({"commit_uuid": "saved"},
+        dict(sharedFields=dict(remote), commitUuid="saved", contentRevision="c"), local, remote)
+    assert [row["id"] for row in rows] == ["text"]
+
+
+def test_saved_legacy_visibility_does_not_mark_local_changes(gallery):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    fields = dict(title="Scene", description="", viewerSettings={})
+    remote = dict(fields, id="scene", visibility="private", contentRevision="c", metadataRevision="m")
+    link = dict(sceneId="scene", commitUuid="saved", contentRevision="c", metadataRevision="m",
+        sharedFields=dict(fields, visibility="public"), localFields=fields)
+    assert asset_sync_state({"id": "project", "commit_uuid": "saved"}, link, remote)["freshness"] == "equal"
