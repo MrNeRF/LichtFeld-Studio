@@ -46,7 +46,7 @@ namespace gsplat_lfs {
         float* renders,
         float* alphas,
         int32_t* last_ids,
-        cudaStream_t stream) {
+        cudaStream_t stream, TileRange tiles) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -66,7 +66,7 @@ namespace gsplat_lfs {
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
             tile_offsets, flatten_ids,                               \
-            renders, alphas, last_ids, stream);                      \
+            renders, alphas, last_ids, stream, tiles);               \
         break;
 
         switch (channels) {
@@ -140,7 +140,7 @@ namespace gsplat_lfs {
         const float* densification_error_map,
         const float* edge_weight_map,
         float* edge_score_out,
-        cudaStream_t stream) {
+        cudaStream_t stream, TileRange tiles) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -171,7 +171,7 @@ namespace gsplat_lfs {
             v_render_colors, v_render_alphas,                        \
             v_means, v_quats, v_scales, v_colors, v_opacities,       \
             densification_info, densification_error_map,             \
-            edge_weight_map, edge_score_out, stream);                \
+            edge_weight_map, edge_score_out, stream, tiles);         \
         break;
 
         switch (channels) {
@@ -273,18 +273,13 @@ namespace gsplat_lfs {
             result.radii, result.means2d, result.depths, result.conics,
             result.compensations, stream);
 
-        // Step 2: Tile intersection
-        auto isect_result = intersect_tile(
-            result.means2d, result.radii, result.depths,
-            nullptr, nullptr,
-            C, N, tile_size, tile_width, tile_height,
-            true,
-            result.tiles_per_gauss, stream, result.tile_offsets);
-
-        result.n_isects = isect_result.n_isects;
-        result.n_sort = isect_result.n_sort;
-        result.isect_ids = isect_result.isect_ids;
-        result.flatten_ids = isect_result.flatten_ids;
+        // The first call retains the existing speculative warm-cache path.
+        auto intersect = [&](TileRange tiles) {
+            return intersect_tile(result.means2d, result.radii, result.depths,
+                                  nullptr, nullptr, C, N, tile_size, tile_width, tile_height,
+                                  true, result.tiles_per_gauss, stream, result.tile_offsets, tiles);
+        };
+        const auto whole = intersect({});
 
         // Step 3: Compute viewing directions and evaluate SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
@@ -297,22 +292,50 @@ namespace gsplat_lfs {
                 result.colors, stream);
         }
 
-        // Step 4: Rasterize to pixels. Last-tile range_end is tile_offsets[n_tiles]
-        // (extra slot), so n_isects is only the empty-launch skip.
-        const uint32_t raster_n_isects =
-            isect_result.n_sort > 0 ? static_cast<uint32_t>(isect_result.n_sort)
-                                    : static_cast<uint32_t>(result.n_isects);
-        rasterize_to_pixels_from_world_3dgs_fwd(
-            means, quats, scaled_scales, result.colors, opacities,
-            backgrounds, bg_images, masks,
-            C, N, raster_n_isects, channels,
-            image_width, image_height, tile_size,
-            viewmats0, viewmats1, Ks, camera_model,
-            ut_params, rs_type,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            result.tile_offsets, result.flatten_ids,
-            result.render_colors, result.render_alphas, result.last_ids,
-            stream);
+        auto render = [&](const IntersectTileResult& batch, TileRange tiles) {
+            result.isect_ids = batch.isect_ids;
+            result.flatten_ids = batch.flatten_ids;
+            result.n_sort = batch.n_sort;
+            const uint32_t raster_n_isects = static_cast<uint32_t>(batch.n_sort);
+            rasterize_to_pixels_from_world_3dgs_fwd(
+                means, quats, scaled_scales, result.colors, opacities,
+                backgrounds, bg_images, masks,
+                C, N, raster_n_isects, channels,
+                image_width, image_height, tile_size,
+                viewmats0, viewmats1, Ks, camera_model,
+                ut_params, rs_type,
+                radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                result.tile_offsets, result.flatten_ids,
+                result.render_colors, result.render_alphas, result.last_ids,
+                stream, tiles);
+        };
+        result.n_isects = whole.n_isects;
+        result.batches.clear();
+        if (whole.n_isects == 0 || whole.n_sort > 0) {
+            render(whole, {});
+            return;
+        }
+        // Only the exceptional path counts additional ranges. Recursion depth
+        // is at most 31; every successful leaf fits the bounded pair cache.
+        auto visit = [&](auto&& self, TileRange tiles) -> void {
+            const auto batch = intersect(tiles);
+            if (batch.n_isects > 0 && batch.n_sort == 0) {
+                LFS_ASSERT(tiles.end - tiles.begin > 1);
+                const uint32_t mid = tiles.begin + (tiles.end - tiles.begin) / 2;
+                self(self, {tiles.begin, mid});
+                self(self, {mid, tiles.end});
+                return;
+            }
+            result.batches.push_back({tiles, batch.n_isects});
+            render(batch, tiles);
+        };
+        const uint32_t mid = tile_width * tile_height / 2;
+        visit(visit, {0, mid});
+        visit(visit, {mid, tile_width * tile_height});
+        // All lists have been consumed. Backward replays the saved leaves.
+        result.isect_ids = nullptr;
+        result.flatten_ids = nullptr;
+        result.n_sort = 0;
     }
 
     //=========================================================================
@@ -374,7 +397,8 @@ namespace gsplat_lfs {
         const float* densification_error_map,
         const float* edge_weight_map,
         float* edge_score_out,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss) {
         // Determine output channels
         uint32_t channels = 3;
         if (render_mode == 1 || render_mode == 2) {
@@ -396,21 +420,40 @@ namespace gsplat_lfs {
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
 
-        rasterize_to_pixels_from_world_3dgs_bwd(
-            means, quats, scales, colors, opacities,
-            backgrounds, bg_images, masks,
-            C, N, n_isects, channels,
-            image_width, image_height, tile_size,
-            viewmats0, viewmats1, Ks, camera_model,
-            ut_params, rs_type,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            tile_offsets, flatten_ids,
-            render_alphas, last_ids,
-            v_render_colors, v_render_alphas,
-            v_means, v_quats, v_scales, v_colors, v_opacities,
-            densification_info, densification_error_map,
-            edge_weight_map, edge_score_out,
-            stream);
+        auto render_backward = [&](TileRange tiles) {
+            rasterize_to_pixels_from_world_3dgs_bwd(
+                means, quats, scales, colors, opacities,
+                backgrounds, bg_images, masks,
+                C, N, n_isects, channels,
+                image_width, image_height, tile_size,
+                viewmats0, viewmats1, Ks, camera_model,
+                ut_params, rs_type,
+                radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                tile_offsets, flatten_ids,
+                render_alphas, last_ids,
+                v_render_colors, v_render_alphas,
+                v_means, v_quats, v_scales, v_colors, v_opacities,
+                densification_info, densification_error_map,
+                edge_weight_map, edge_score_out,
+                stream, tiles);
+        };
+        if (batches.empty()) {
+            render_backward({});
+        } else {
+            const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
+            const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
+            for (const auto& saved : batches) {
+                if (saved.count == 0)
+                    continue;
+                const auto batch = intersect_tile(means2d, radii, depths, nullptr, nullptr,
+                                                  C, N, tile_size, tile_width, tile_height, true,
+                                                  tiles_per_gauss, stream, const_cast<int32_t*>(tile_offsets), saved.tiles);
+                LFS_ASSERT(batch.n_isects == saved.count && batch.n_sort > 0);
+                flatten_ids = batch.flatten_ids;
+                n_isects = static_cast<uint32_t>(batch.n_sort);
+                render_backward(saved.tiles);
+            }
+        }
 
         // Backward through SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {

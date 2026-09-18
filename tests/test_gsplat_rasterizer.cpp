@@ -8,6 +8,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/vmm_device_buffer.hpp"
+#include "core/environment.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -24,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
@@ -756,35 +758,11 @@ TEST(GsplatRasterizerEdgeScores, GutAndFastGsHavePositiveScoreCorrelation) {
 }
 
 // These count checks do not allocate tensors or call CUDA.
-TEST(GsplatIntersectionCount, AcceptsRepresentableCounts) {
-    for (const int64_t count : {int64_t{0}, int64_t{1}, gsplat_lfs::kMaxIntersectionCount}) {
+TEST(GsplatIntersectionCount, AcceptsNonnegativeAggregateCounts) {
+    for (const int64_t count : {int64_t{0}, int64_t{1}, gsplat_lfs::kMaxIntersectionCount,
+                                gsplat_lfs::kMaxIntersectionCount + 1, int64_t{2241098778},
+                                std::numeric_limits<int64_t>::max()}) {
         EXPECT_TRUE(gsplat_lfs::validate_intersection_count(count)) << count;
-    }
-}
-
-TEST(GsplatIntersectionCount, RejectsOverflowWithActionableTypedError) {
-    for (const int64_t count : {gsplat_lfs::kMaxIntersectionCount + 1,
-                                int64_t{2241098778}, std::numeric_limits<int64_t>::max()}) {
-        const auto status = gsplat_lfs::validate_intersection_count(count);
-        ASSERT_FALSE(status);
-        EXPECT_EQ(status.error().code(), lfs::ErrorCode::BoundsViolation);
-        EXPECT_EQ(status.error().domain(), lfs::ErrorDomain::Rendering);
-        EXPECT_EQ(status.error().retryability(), lfs::Retryability::NotRetryable);
-        const std::string message(status.error().user_message());
-        EXPECT_NE(message.find(std::to_string(count)), std::string::npos);
-        EXPECT_NE(message.find("2147483647"), std::string::npos);
-        EXPECT_NE(message.find("lower working resolution"), std::string::npos);
-        EXPECT_NE(message.find("lower max_cap"), std::string::npos);
-        EXPECT_NE(message.find("reduce initial points"), std::string::npos);
-        EXPECT_NE(message.find("renderer capacity limit"), std::string::npos);
-        EXPECT_NE(message.find("many ordinary splats"), std::string::npos);
-        EXPECT_NE(message.find("If diagnostics show that splat footprints have grown"), std::string::npos);
-        EXPECT_LT(message.find("lower max_cap"), message.find("scale_reg="));
-        EXPECT_EQ(message.find('\n'), std::string::npos);
-        EXPECT_NE(message.find("resize_factor"), std::string::npos);
-        EXPECT_NE(message.find("scale_reg=0.005-0.01"), std::string::npos);
-        EXPECT_NE(message.find("scaling_lr/scaling_lr_end=0.0005-0.001"), std::string::npos);
-        EXPECT_NE(message.find("init_scaling does not affect MRNF"), std::string::npos);
     }
 }
 
@@ -798,16 +776,17 @@ TEST(GsplatIntersectionCount, RejectsNegativeCount) {
 
 TEST(GsplatIntersectionCount, RoundedCapacityCannotOverflowSignedSortCount) {
     const size_t limit = static_cast<size_t>(gsplat_lfs::kMaxIntersectionCount);
-    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(0), 0u);
-    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(1024), 1024u);
-    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit), limit);
-    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 1), limit);
-    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536), limit);
-    // Rounding padding is disposable; an actual count above the limit is not.
-    EXPECT_FALSE(gsplat_lfs::validate_intersection_count(static_cast<int64_t>(limit + 1)));
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(0, limit), 0u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(1024, limit), 1024u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit, limit), limit);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 1, limit), limit);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536, limit), limit);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536, 1024), 1024u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(512, 1024), 512u);
+    EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536, limit + 65536), limit);
 }
 
-TEST(GsplatRasterizerErrors, IntersectionOverflowStopsBeforeGrowthOnColdAndWarmCache) {
+TEST(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCache) {
     int device_count = 0;
     if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
         GTEST_SKIP() << "CUDA device unavailable";
@@ -816,67 +795,90 @@ TEST(GsplatRasterizerErrors, IntersectionOverflowStopsBeforeGrowthOnColdAndWarmC
         ~CacheCleanup() { (void)gsplat_lfs::release_intersect_thread_local_cache(); }
     } cleanup;
 
-    // Each splat covers exactly 256*256 tiles. The count pass needs only O(N)
-    // storage, but emitting all 32769*65536 pairs would exceed INT32_MAX.
+    // Preserve #2185's 32769-splat / 256x256-tile fixture and exact pair count.
+    // Project coincident splats across the full grid, then exercise the production
+    // partitioner and renderer. 64 copies already saturate every pixel, providing
+    // an independent unbatched reference for the large frame.
     constexpr uint32_t n = 32769;
     constexpr uint32_t tiles = 256;
     constexpr int64_t count = int64_t{n} * tiles * tiles;
-    static_assert(count > gsplat_lfs::kMaxIntersectionCount);
-    auto means2d = Tensor::full({n, 2}, 2048.0f, Device::CUDA);
-    auto radii = Tensor::full({n, 2}, 2048, Device::CUDA, DataType::Int32);
-    auto depths = Tensor::full({n}, 1.0f, Device::CUDA);
-    auto per_gauss = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
-    const auto stream = getCurrentCUDAStream();
+    static_assert(count == 2147549184LL);
+    auto make_model = [](size_t size) {
+        auto rotations = Tensor::zeros({size, 4}, Device::CPU);
+        for (size_t i = 0; i < size; ++i)
+            rotations.ptr<float>()[4 * i] = 1.f;
+        return SplatData(0, Tensor::zeros({size, 3}, Device::CUDA),
+                         Tensor::full({size, 1, 3}, 0.5f, Device::CUDA),
+                         Tensor::zeros({size, 0, 3}, Device::CUDA),
+                         Tensor::zeros({size, 3}, Device::CUDA),
+                         rotations.to(Device::CUDA), Tensor::full({size}, 2.f, Device::CUDA), 1.f);
+    };
+    auto model = make_model(n);
+    auto reference_model = make_model(64);
+    auto R = Tensor::eye(3, Device::CUDA);
+    auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA);
+    Camera camera(R, T, 5000.f, 5000.f, 2048.f, 2048.f, Tensor(), Tensor(),
+                  lfs::core::CameraModelType::PINHOLE, "aggregate_2185", "",
+                  std::filesystem::path{}, 4096, 4096, 0);
+    auto background = Tensor::full({3}, 0.25f, Device::CUDA);
+    auto render = [&](SplatData& splats) {
+        return gsplat_rasterize_forward(camera, splats, background,
+                                        0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+    };
+    auto reference = render(reference_model);
+    ASSERT_TRUE(reference.has_value()) << reference.error();
+    ASSERT_TRUE(reference->second.batches.empty());
+    auto reference_image = reference->first.image.clone();
+    auto reference_alpha = reference->first.alpha.clone();
+    auto reference_image_cpu = reference_image.cpu();
+    auto reference_alpha_cpu = reference_alpha.cpu();
+    bool saturated_reference = true;
+    for (size_t i = 0; i < reference_alpha_cpu.numel(); ++i) {
+        const float alpha = reference_alpha_cpu.ptr<float>()[i];
+        saturated_reference = saturated_reference && std::isfinite(alpha) && alpha > 0.999f && alpha < 1.f;
+    }
+    ASSERT_TRUE(saturated_reference);
+    release_ctx_arena(reference->second);
+    reference = {};
 
     for (const bool warm : {false, true}) {
         SCOPED_TRACE(warm ? "warm cache" : "cold cache");
         ASSERT_TRUE(gsplat_lfs::release_intersect_thread_local_cache());
-        auto offsets = Tensor::full({tiles * tiles + 1}, -123, Device::CUDA, DataType::Int32);
-        const auto intersect = [&](const uint32_t splats, int32_t* output_offsets) {
-            return gsplat_lfs::intersect_tile(
-                means2d.ptr<float>(), radii.ptr<int32_t>(), depths.ptr<float>(),
-                nullptr, nullptr, 1, splats, 16, tiles, tiles, true,
-                per_gauss.ptr<int32_t>(), stream, output_offsets);
-        };
-        int32_t warm_sort_capacity = 0;
         if (warm) {
-            const auto result = intersect(1, nullptr);
-            ASSERT_EQ(result.n_isects, tiles * tiles);
-            warm_sort_capacity = result.n_sort;
+            auto seed = render(reference_model);
+            ASSERT_TRUE(seed.has_value()) << seed.error();
+            ASSERT_TRUE(seed->second.batches.empty());
+            release_ctx_arena(seed->second);
         }
-        try {
-            (void)intersect(n, offsets.ptr<int32_t>());
-            FAIL() << "Expected a typed intersection-count failure";
-        } catch (const lfs::Exception& error) {
-            EXPECT_EQ(error.error().code(), lfs::ErrorCode::BoundsViolation);
-            EXPECT_NE(error.error().user_message().find(std::to_string(count)), std::string_view::npos);
+        auto result = render(model);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        EXPECT_EQ(result->second.n_isects, count);
+        ASSERT_GT(result->second.batches.size(), 1u);
+        int64_t sum = 0;
+        uint32_t next_tile = 0;
+        for (const auto& batch : result->second.batches) {
+            EXPECT_EQ(batch.tiles.begin, next_tile);
+            EXPECT_GT(batch.tiles.end, batch.tiles.begin);
+            EXPECT_EQ(batch.count, int64_t{n} * (batch.tiles.end - batch.tiles.begin));
+            EXPECT_LE(batch.count, gsplat_lfs::kMaxIntersectionCount);
+            sum += batch.count;
+            next_tile = batch.tiles.end;
         }
-        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
-        const auto offsets_cpu = offsets.cpu();
-        for (size_t i = 0; i < offsets_cpu.numel(); ++i) {
-            const int32_t offset = offsets_cpu.ptr<int32_t>()[i];
-            if (warm) {
-                // Speculation may emit only the existing capacity before the
-                // count is rejected; those offsets must stay within that buffer.
-                ASSERT_GE(offset, 0) << i;
-                ASSERT_LE(offset, warm_sort_capacity) << i;
-                if (i > 0) {
-                    ASSERT_GE(offset, offsets_cpu.ptr<int32_t>()[i - 1]) << i;
-                }
-            } else {
-                ASSERT_EQ(offset, -123) << i;
-            }
-        }
-        if (warm) {
-            EXPECT_EQ(offsets_cpu.ptr<int32_t>()[tiles * tiles], warm_sort_capacity);
-        }
-        // The rejected frame must leave the cache usable for a subsequent call.
-        const auto result = intersect(1, offsets.ptr<int32_t>());
-        EXPECT_EQ(result.n_isects, tiles * tiles);
-        ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
-        const auto recovered_offsets = offsets.cpu();
-        EXPECT_EQ(recovered_offsets.ptr<int32_t>()[0], 0);
-        EXPECT_EQ(recovered_offsets.ptr<int32_t>()[tiles * tiles], tiles * tiles);
+        EXPECT_EQ(sum, count);
+        EXPECT_EQ(next_tile, tiles * tiles);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        auto image_cpu = result->first.image.cpu();
+        auto alpha_cpu = result->first.alpha.cpu();
+        EXPECT_EQ(std::memcmp(reference_image_cpu.ptr<float>(), image_cpu.ptr<float>(),
+                              image_cpu.numel() * sizeof(float)),
+                  0);
+        EXPECT_EQ(std::memcmp(reference_alpha_cpu.ptr<float>(), alpha_cpu.ptr<float>(),
+                              alpha_cpu.numel() * sizeof(float)),
+                  0);
+        std::cout << "#2185 " << (warm ? "warm" : "cold") << " pairs=" << sum
+                  << " batches=" << result->second.batches.size()
+                  << " RGB/alpha match unbatched reference" << std::endl;
+        release_ctx_arena(result->second);
     }
 }
 
@@ -995,8 +997,8 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
     AdamOptimizer opt(*splat, cfg);
     opt.allocate_gradients(static_cast<size_t>(kN));
 
-    Tensor image0, image1;
-    auto run_once = [&](Tensor& image_out) {
+    Tensor image0, image1, alpha0, alpha1;
+    auto run_once = [&](Tensor& image_out, Tensor& alpha_out) {
         auto r = gsplat_rasterize_forward(
             camera, *splat, bg, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB,
             /*use_gut=*/true);
@@ -1004,15 +1006,19 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
         auto output = std::move(r->first);
         auto ctx = std::move(r->second);
         ASSERT_GT(ctx.n_isects, 0);
+        std::cout << "pairs=" << ctx.n_isects << " batches=" << std::max(size_t{1}, ctx.batches.size()) << std::endl;
+        if (std::getenv("LFS_GSPLAT_PAIR_BUDGET"))
+            EXPECT_GT(ctx.batches.size(), 1u);
         auto grad_image = Tensor::ones_like(output.image);
         auto grad_alpha = Tensor::zeros_like(output.alpha);
         gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
         image_out = output.image.clone();
+        alpha_out = output.alpha.clone();
         ctx.isect_ids_ptr = nullptr;
         ctx.flatten_ids_ptr = nullptr;
     };
 
-    run_once(image0);
+    run_once(image0, alpha0);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     auto means_g = opt.get_grad(ParamType::Means).clone();
     auto scale_g = opt.get_grad(ParamType::Scaling).clone();
@@ -1021,10 +1027,11 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
     auto color_g = opt.get_grad(ParamType::Sh0).clone();
 
     opt.zero_grad(1);
-    run_once(image1);
+    run_once(image1, alpha1);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     EXPECT_EQ(max_abs_diff_tensors(image0, image1), 0.0f);
+    EXPECT_EQ(max_abs_diff_tensors(alpha0, alpha1), 0.0f);
     EXPECT_LT(max_rel_diff_tensors(means_g, opt.get_grad(ParamType::Means)), 1e-4f);
     EXPECT_LT(max_rel_diff_tensors(scale_g, opt.get_grad(ParamType::Scaling)), 1e-4f);
     EXPECT_LT(max_rel_diff_tensors(quat_g, opt.get_grad(ParamType::Rotation)), 1e-4f);
@@ -1039,6 +1046,7 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
         write_float_bin(std::filesystem::path(dump_dir) / "v_opacities.bin", opa_g);
         write_float_bin(std::filesystem::path(dump_dir) / "v_colors.bin", color_g);
         write_float_bin(std::filesystem::path(dump_dir) / "render.bin", image0);
+        write_float_bin(std::filesystem::path(dump_dir) / "alpha.bin", alpha0);
         std::cout << dump_env << " wrote tensors to " << dump_dir << std::endl;
     }
     if (const char* ref_dir = std::getenv(ref_env)) {
@@ -1047,6 +1055,10 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
         const auto rel_quats = max_rel_diff(quat_g, read_float_bin(std::filesystem::path(ref_dir) / "v_quats.bin"));
         const auto rel_opa = max_rel_diff(opa_g, read_float_bin(std::filesystem::path(ref_dir) / "v_opacities.bin"));
         const auto rel_color = max_rel_diff(color_g, read_float_bin(std::filesystem::path(ref_dir) / "v_colors.bin"));
+        auto alpha_ref = read_float_bin(std::filesystem::path(ref_dir) / "alpha.bin");
+        auto alpha_cpu = alpha0.cpu();
+        ASSERT_EQ(alpha_ref.size(), alpha_cpu.numel());
+        EXPECT_EQ(std::memcmp(alpha_ref.data(), alpha_cpu.ptr<float>(), alpha_ref.size() * sizeof(float)), 0);
         auto render_ref = read_float_bin(std::filesystem::path(ref_dir) / "render.bin");
         auto render_cpu = image0.cpu();
         float render_max_abs = 0.0f;
@@ -1069,7 +1081,8 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
         EXPECT_LT(rel_quats, 1e-4f);
         EXPECT_LT(rel_opa, 1e-4f);
         EXPECT_LT(rel_color, 1e-4f);
-        EXPECT_LE(render_max_abs, 1e-6f);
+        EXPECT_EQ(render_max_abs, 0.f);
+        EXPECT_EQ(std::memcmp(render_ref.data(), pi, nimg * sizeof(float)), 0);
         EXPECT_TRUE(render_bit_identical);
     }
 }
@@ -1086,4 +1099,195 @@ TEST_F(GsplatRasterizerTest, GutFromWorldFisheyeGradParity) {
     constexpr int kH = 64;
     auto camera = make_fisheye_camera(kW, kH);
     run_gut_from_world_parity(camera, "GUT_FISHEYE_GRAD_DUMP", "GUT_FISHEYE_GRAD_REF");
+}
+
+namespace {
+    Camera make_extra_parity_camera(lfs::core::CameraModelType model, int w = 96, int h = 64) {
+        auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
+        auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA);
+        Tensor radial, tangential;
+        if (model == lfs::core::CameraModelType::PINHOLE) {
+            radial = Tensor::from_vector({0.03f, -0.01f, 0.002f, 0.f, 0.f, 0.f}, {6}, Device::CPU);
+            tangential = Tensor::from_vector({0.001f, -0.002f}, {2}, Device::CPU);
+        } else if (model == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
+            radial = Tensor::from_vector({0.035f, 0.007f, 0.0006f, -0.0003f}, {4}, Device::CPU);
+            tangential = Tensor::from_vector({0.001f, -0.002f, 0.0003f, -0.0004f}, {4}, Device::CPU);
+        }
+        return Camera(R, T, 40.f, 40.f, w * 0.5f, h * 0.5f,
+                      radial, tangential, model, "parity", "", std::filesystem::path{}, w, h, 0);
+    }
+} // namespace
+
+TEST_F(GsplatRasterizerTest, GutFromWorldDistortedGradParity) {
+    auto camera = make_extra_parity_camera(lfs::core::CameraModelType::PINHOLE);
+    run_gut_from_world_parity(camera, "GUT_DISTORTED_GRAD_DUMP", "GUT_DISTORTED_GRAD_REF");
+}
+TEST_F(GsplatRasterizerTest, GutFromWorldEquirectangularGradParity) {
+    auto camera = make_extra_parity_camera(lfs::core::CameraModelType::EQUIRECTANGULAR);
+    run_gut_from_world_parity(camera, "GUT_EQUIRECTANGULAR_GRAD_DUMP", "GUT_EQUIRECTANGULAR_GRAD_REF");
+}
+TEST_F(GsplatRasterizerTest, GutFromWorldThinPrismGradParity) {
+    auto camera = make_extra_parity_camera(lfs::core::CameraModelType::THIN_PRISM_FISHEYE);
+    run_gut_from_world_parity(camera, "GUT_THIN_PRISM_GRAD_DUMP", "GUT_THIN_PRISM_GRAD_REF");
+}
+
+// Opt-in because this emits 2.4986 billion pairs, bounded by the tile batches.
+TEST_F(GsplatRasterizerTest, AggregateOverflowTrainingStep) {
+    if (!std::getenv("GUT_LARGE_FRAME"))
+        GTEST_SKIP();
+    constexpr size_t n = 2600000;
+    auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
+    auto T = Tensor::zeros({3}, Device::CUDA);
+    Camera camera(R, T, 1920.f, 1920.f, 1920.f, 1080.f, Tensor(), Tensor(),
+                  lfs::core::CameraModelType::PINHOLE, "aggregate", "", std::filesystem::path{}, 3840, 2160, 0);
+    auto means = Tensor::zeros({n, 3}, Device::CPU);
+    auto rotations = Tensor::zeros({n, 4}, Device::CPU);
+    for (size_t i = 0; i < n; ++i) {
+        means.ptr<float>()[3 * i + 2] = 5.f;
+        rotations.ptr<float>()[4 * i] = 1.f;
+    }
+    SplatData model(0, means.to(Device::CUDA), Tensor::full({n, 1, 3}, 0.5f, Device::CUDA),
+                    Tensor::zeros({n, 0, 3}, Device::CUDA), Tensor::full({n, 3}, std::log(0.2f), Device::CUDA),
+                    rotations.to(Device::CUDA), Tensor::zeros({n}, Device::CUDA), 1.f);
+    AdamConfig cfg;
+    cfg.initial_capacity = n;
+    AdamOptimizer opt(model, cfg);
+    opt.allocate_gradients(n);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto r = gsplat_rasterize_forward(camera, model, background,
+                                      0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+    ASSERT_TRUE(r.has_value()) << r.error();
+    EXPECT_EQ(static_cast<int64_t>(r->second.n_isects), 2498600000LL);
+    ASSERT_GT(r->second.batches.size(), 1u);
+    int64_t sum = 0, largest = 0;
+    for (const auto& batch : r->second.batches) {
+        sum += batch.count;
+        largest = std::max(largest, batch.count);
+    }
+    EXPECT_EQ(sum, 2498600000LL);
+    std::cout << "large batches=" << r->second.batches.size() << " max_pairs=" << largest << std::endl;
+    auto before = model.sh0().clone();
+    gsplat_rasterize_backward(r->second, Tensor::ones_like(r->first.image),
+                              Tensor::zeros_like(r->first.alpha), model, opt, Tensor{});
+    opt.step(1);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto after = model.sh0();
+    EXPECT_GT(max_abs_diff_tensors(before, after), 0.f);
+    std::cout << "Aggregate frame: forward/backward/Adam step complete, pairs=2498600000" << std::endl;
+}
+
+TEST_F(GsplatRasterizerTest, TileRangesPreserveCountsAndStableDepthOrder) {
+    constexpr uint32_t n = 64, tw = 7, th = 5;
+    std::vector<float> means(n * 2);
+    std::vector<int32_t> radii(n * 2);
+    for (uint32_t i = 0; i < n; ++i) {
+        means[2 * i] = float((i * 17) % 140);
+        means[2 * i + 1] = float((i * 23) % 100);
+        radii[2 * i] = i % 9 == 0 ? 0 : 8 + (i * 11) % 80;
+        radii[2 * i + 1] = 4 + (i * 7) % 70;
+    }
+    auto m = Tensor::from_blob(means.data(), {n, 2}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto r = Tensor::from_blob(radii.data(), {n, 2}, Device::CPU, DataType::Int32).to(Device::CUDA);
+    auto d = Tensor::ones({n}, Device::CUDA); // Equal depth: stable tie order matters.
+    auto counts = Tensor::empty({n}, Device::CUDA, DataType::Int32);
+    auto offsets = Tensor::empty({tw * th + 1}, Device::CUDA, DataType::Int32);
+    auto intersect = [&](gsplat_lfs::TileRange range) {
+        return gsplat_lfs::intersect_tile(m.ptr<float>(), r.ptr<int32_t>(), d.ptr<float>(),
+                                          nullptr, nullptr, 1, n, 16, tw, th, true, counts.ptr<int32_t>(), nullptr,
+                                          offsets.ptr<int32_t>(), range);
+    };
+    const auto full = intersect({});
+    ASSERT_GT(full.n_sort, 0);
+    std::vector<int64_t> keys(full.n_isects);
+    std::vector<int32_t> ids(full.n_isects), totals(n, 0), expected_counts(n);
+    ASSERT_EQ(cudaMemcpy(keys.data(), full.isect_ids, keys.size() * sizeof(int64_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(ids.data(), full.flatten_ids, ids.size() * sizeof(int32_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(expected_counts.data(), counts.ptr<int32_t>(), n * sizeof(int32_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    int64_t sum = 0;
+    // Includes partial rows, empty tiles, one-tile ranges and the last tile.
+    for (uint32_t begin = 0; begin < tw * th;) {
+        const uint32_t end = std::min(tw * th, begin + 1 + begin % 6);
+        const auto batch = intersect({begin, end});
+        std::vector<int64_t> batch_keys(batch.n_isects);
+        std::vector<int32_t> batch_ids(batch.n_isects), batch_counts(n);
+        ASSERT_EQ(cudaMemcpy(batch_keys.data(), batch.isect_ids, batch_keys.size() * sizeof(int64_t), cudaMemcpyDeviceToHost), cudaSuccess);
+        ASSERT_EQ(cudaMemcpy(batch_ids.data(), batch.flatten_ids, batch_ids.size() * sizeof(int32_t), cudaMemcpyDeviceToHost), cudaSuccess);
+        ASSERT_EQ(cudaMemcpy(batch_counts.data(), counts.ptr<int32_t>(), n * sizeof(int32_t), cudaMemcpyDeviceToHost), cudaSuccess);
+        std::vector<int64_t> wanted_keys;
+        std::vector<int32_t> wanted_ids;
+        for (size_t j = 0; j < keys.size(); ++j) {
+            const auto tile = uint32_t(uint64_t(keys[j]) >> 32);
+            if (tile >= begin && tile < end) {
+                wanted_keys.push_back(keys[j]);
+                wanted_ids.push_back(ids[j]);
+            }
+        }
+        EXPECT_EQ(batch_keys, wanted_keys);
+        EXPECT_EQ(batch_ids, wanted_ids);
+        for (size_t j = 0; j < n; ++j)
+            totals[j] += batch_counts[j];
+        sum += batch.n_isects;
+        begin = end;
+    }
+    EXPECT_EQ(totals, expected_counts);
+    EXPECT_EQ(sum, full.n_isects);
+}
+
+TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradients) {
+    constexpr size_t n = 50000;
+    auto seed = make_parity_splat(n, 0xC0FFEE01u);
+    SplatData model(3, seed->means_raw(), seed->sh0_raw(),
+                    Tensor::full({n, 15, 3}, 0.025f, Device::CUDA),
+                    seed->scaling_raw(), seed->rotation_raw(), seed->opacity_raw(), 1.f);
+    model.set_active_sh_degree(3);
+    auto camera = make_extra_parity_camera(lfs::core::CameraModelType::THIN_PRISM_FISHEYE, 99, 67);
+    auto bg = Tensor::full({3}, 0.25f, Device::CUDA);
+    AdamConfig config;
+    config.initial_capacity = n;
+    AdamOptimizer opt(model, config);
+    opt.allocate_gradients(n);
+    auto error_map = Tensor::full({67, 99}, 0.2f, Device::CUDA);
+    auto edge_map = Tensor::full({67, 99}, 0.3f, Device::CUDA);
+    auto scores = Tensor::zeros({n}, Device::CUDA);
+    const auto prior = lfs::core::environment::value("LFS_GSPLAT_PAIR_BUDGET");
+    struct RestoreBudget {
+        std::optional<std::string> prior;
+        ~RestoreBudget() {
+            (void)lfs::core::environment::set_value("LFS_GSPLAT_PAIR_BUDGET", prior.value_or(""));
+        }
+    } restore{prior};
+    Tensor reference_image, reference_alpha, reference_scores, reference_densification;
+    std::vector<Tensor> gradients;
+    for (int arm = 0; arm < 2; ++arm) {
+        ASSERT_TRUE(gsplat_lfs::release_intersect_thread_local_cache());
+        ASSERT_TRUE(lfs::core::environment::set_value("LFS_GSPLAT_PAIR_BUDGET", arm ? "1" : ""));
+        opt.zero_grad(1);
+        scores.fill_(0.f);
+        model._densification_info = Tensor::zeros({2, n}, Device::CUDA);
+        auto result = gsplat_rasterize_forward(camera, model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        EXPECT_EQ(result->second.batches.empty(), arm == 0);
+        // Nonzero opacity-output derivatives exercise the alpha/background terms.
+        gsplat_rasterize_backward(result->second, Tensor::full(result->first.image.shape(), 0.7f, Device::CUDA),
+                                  Tensor::full(result->first.alpha.shape(), 0.4f, Device::CUDA), model, opt,
+                                  error_map, edge_map, scores);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        if (arm == 0) {
+            reference_image = result->first.image.clone();
+            reference_alpha = result->first.alpha.clone();
+            reference_scores = scores.clone();
+            reference_densification = model._densification_info.clone();
+            for (auto param : AdamOptimizer::all_param_types())
+                gradients.push_back(opt.get_grad(param).clone());
+        } else {
+            EXPECT_EQ(max_abs_diff_tensors(reference_image, result->first.image), 0.f);
+            EXPECT_EQ(max_abs_diff_tensors(reference_alpha, result->first.alpha), 0.f);
+            EXPECT_LT(max_rel_diff_tensors(reference_scores, scores), 1e-4f);
+            EXPECT_LT(max_rel_diff_tensors(reference_densification, model._densification_info), 1e-4f);
+            size_t i = 0;
+            for (auto param : AdamOptimizer::all_param_types()) {
+                EXPECT_LT(max_rel_diff_tensors(gradients[i++], opt.get_grad(param)), 1e-4f);
+            }
+        }
+    }
 }

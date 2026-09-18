@@ -8,12 +8,14 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "gsplat/Common.h"
+#include "gsplat/TileBatch.h"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <expected>
 #include <string>
+#include <vector>
 
 namespace lfs::training {
 
@@ -45,7 +47,9 @@ namespace lfs::training {
         // cache release hook or at thread shutdown.
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
-        int32_t n_isects = 0;
+        int64_t n_isects = 0;
+        std::vector<gsplat_lfs::TileBatch> batches;
+        int32_t* tiles_per_gauss_ptr = nullptr;
         int32_t n_sort = 0;
 
         // Saved input tensors (references, not copies)

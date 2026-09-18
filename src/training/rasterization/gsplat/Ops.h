@@ -5,9 +5,11 @@
 #pragma once
 
 #include "Common.h"
+#include "TileBatch.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <tuple>
+#include <vector>
 
 namespace gsplat_lfs {
 
@@ -47,10 +49,12 @@ namespace gsplat_lfs {
         int32_t* tiles_per_gauss; // [C, N] - output buffer provided by caller
         int64_t* isect_ids;       // [n_sort] sorted keys (sentinel-padded)
         int32_t* flatten_ids;     // [n_sort] sorted ids (sentinel-padded)
-        int32_t n_isects;         // Exact intersection count for this frame
+        int64_t n_isects;         // Exact count, including an over-budget count-only result
         int32_t n_sort;           // Sorted key count (high-water capacity)
     };
 
+    // An over-budget result has n_isects > 0 and n_sort == 0: subdivide whole
+    // tiles before rendering. No partial list may be accepted.
     // isect_ids / flatten_ids point into a thread-local grow-only cache.
     // Do NOT cudaFree them; release via release_intersect_thread_local_cache()
     // only at thread/training shutdown.
@@ -68,7 +72,7 @@ namespace gsplat_lfs {
         bool sort,
         int32_t* tiles_per_gauss_out, // [C, N] pre-allocated output
         cudaStream_t stream = nullptr,
-        int32_t* isect_offsets = nullptr); // [C * tile_h * tile_w + 1]
+        int32_t* isect_offsets = nullptr, TileRange tiles = {}); // [C * tile_h * tile_w + 1]
 
     bool release_intersect_thread_local_cache() noexcept;
 
@@ -202,7 +206,7 @@ namespace gsplat_lfs {
         float* renders,    // [C, image_height, image_width, channels]
         float* alphas,     // [C, image_height, image_width, 1]
         int32_t* last_ids, // [C, image_height, image_width]
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, TileRange tiles = {});
 
     //=========================================================================
     // Rasterization - Backward
@@ -255,7 +259,7 @@ namespace gsplat_lfs {
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr, TileRange tiles = {});
 
     //=========================================================================
     // High-level API: Fully fused rasterization with SH evaluation
@@ -278,8 +282,9 @@ namespace gsplat_lfs {
         // Borrowed from TLS high-water isect cache — do NOT cudaFree.
         int64_t* isect_ids;   // [n_isects]
         int32_t* flatten_ids; // [n_sort]
-        int32_t n_isects;
+        int64_t n_isects;
         int32_t n_sort = 0;
+        std::vector<TileBatch> batches; // Empty on the ordinary single-batch path
     };
 
     void rasterize_from_world_with_sh_fwd(
@@ -385,6 +390,7 @@ namespace gsplat_lfs {
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr);
 
 } // namespace gsplat_lfs
