@@ -20,19 +20,22 @@ The built-in registry exposes:
 | `spatial` | Spatial | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | None |
 | `temporal` | Temporal | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | Depth, motion, jitter and per-view color/depth history |
 | `nvidia-dlss` | NVIDIA DLSS (optional) | `quality` (2/3), `balanced` (0.58), `performance` (0.50) | Depth, motion and jitter; history is owned by the NGX feature |
+| `amd-fsr3` | AMD FSR 3.1 (optional) | `quality` (2/3), `balanced` (1/1.7), `performance` (0.50) | Depth, motion and jitter; history is owned by the FidelityFX feature |
 
 The renderer's existing `render_scale` remains the base scene scale. A selected
 backend's input multiplier is applied independently, so reconstruction does not
 rewrite the base control. Native presentation ignores the multiplier.
-For NVIDIA DLSS, the table records the catalog's bootstrap values only. Once
-NGX is initialized, its optimal-settings query selects the exact render extent
-for the current output size and preset; that result is cached until one of
-those inputs changes.
+For NVIDIA DLSS and AMD FSR 3.1, the table records the catalog's bootstrap
+values only. Once the vendor runtime is initialized, its optimal-settings query
+selects the exact render extent for the current output size and preset; that
+result is cached until one of those inputs changes.
 
 The requested backend, effective backend, fallback state, and runtime readiness
 are distinct. The built-in spatial Vulkan pipeline is created lazily on first
 use. If creation fails, the frame is presented through the native path and the
 transition is logged; the saved request is not silently rewritten.
+Mode-ineligible temporal requests report `unsupported_mode`, while runtime
+failures continue to report `runtime_unavailable`.
 
 ## Spatial path
 
@@ -151,6 +154,80 @@ discovery: it checks out a pinned `NVIDIA/DLSS` revision with Git LFS before
 configuration, then stages the external LichtFeld plugin and matching vendor
 runtime in the package. Missing portable SDK artifacts are fatal rather than
 silently producing a package without the advertised backend.
+
+## Optional AMD FSR 3.1 plugin
+
+AMD FSR 3.1 uses the same versioned `scene_upscaler_plugin_api.h` C ABI and
+reviewed temporal frame contract as DLSS. Neither the main executable nor
+`lfs_visualizer` links FidelityFX. An enabled build produces
+`lfs_scene_upscaler_amd_fsr3.dll` on Windows or
+`liblfs_scene_upscaler_amd_fsr3.so` on Linux under
+`scene_upscalers/amd`. The host opens only that isolated application-owned
+module during Vulkan bootstrap; FidelityFX backend initialization, contexts,
+shared resources and full-resolution outputs remain lazy until AMD FSR 3.1 is
+selected.
+Safe mode never opens the module, and exact application-relative paths prevent
+system search-path discovery.
+
+The backend consumes LichtFeld's LDR `RGBA8` viewport color directly, supplies
+neutral pre-exposure, and writes the same full-resolution `RGBA8` presentation
+contract without an additional host-side transfer or sharpening pass. Its other
+inputs are normalized non-inverted `R32_SFLOAT` raster depth converted from
+LichtFeld's positive linear view depth and low-resolution `RG16F`
+current-to-previous pixel motion. Because that depth was rasterized with the
+jittered camera projection, motion is reconstructed from the same current and
+previous jittered projection pair; the plugin declares the embedded jitter so
+FidelityFX can cancel it using the exact current camera-projection sample. The
+reported jitter is independent of texture storage or presentation orientation.
+The optional RCAS post-pass is disabled: the Quality,
+Balanced and Performance presets select reconstruction ratios without adding a
+second sharpening operation to high-frequency splat edges. Static-scene
+convergence and the repeating Halton jitter sequence follow the SDK phase count
+derived from the actual render/output ratio (18, 23, or 32 samples for the
+standard Quality, Balanced, and Performance ratios). Each FSR dispatch consumes
+a newly published color/depth generation rendered with that sample; GUI-only
+presentation frames reuse the last resolved output instead of feeding the same
+source and frozen jitter into FidelityFX again. Main, left and right views own
+independent FidelityFX contexts; split presentation remains transactional. A
+malformed request or runtime failure falls back atomically to Native and is
+latched until an explicit Native to AMD FSR 3.1 retry. Expected startup warm-up,
+temporary resize suspension, VRAM-pressure suspension and output extents below
+32 by 32 remain quiet and recover automatically.
+
+Reactive and transparency-and-composition masks remain absent until the renderer
+can publish semantically correct material signals; aggregate Gaussian coverage
+is not a valid substitute. LichtFeld has no canonical metres-per-scene-unit
+contract, so the SDK receives its neutral `1.0` view-space scale; depth
+projection still uses the frame's exact near plane, far plane and vertical field
+of view.
+
+FSR 3.1 currently supports perspective regular and training viewports,
+Independent Dual split view and PLY comparison. Equirectangular projection,
+appearance-corrected readback and orthographic projection remain native because
+their projection or camera contracts do not match FidelityFX FSR 3.1's required
+perspective parameters.
+
+Ordinary developer builds leave the plugin disabled. Use the official
+[AMD FidelityFX SDK v1.1.4 release](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4)
+and enable it explicitly:
+
+```sh
+git clone --branch v1.1.4 --recurse-submodules https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK external/fidelityfx-sdk
+cmake -S . -B build -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=/path/to/FidelityFX-SDK
+```
+
+`LFS_AMD_FSR3_BUILD_SDK=ON` builds the required static FSR upscaler and Vulkan
+backend libraries from an isolated copy of the user-provided SDK if prebuilt
+libraries are absent. On Linux, CMake uses glslang from vcpkg and applies the
+two small compatibility patches required by SDK v1.1.4: a Linux shader-tool
+PCH and Vulkan scratch-buffer alignment. The Linux SDK build uses vcpkg's
+glslang with its SPIR-V optimiser. The SDK and plugin use two-byte
+`wchar_t`; a typical Linux build takes about four minutes on an eight-core
+machine. Portable configurations default the plugin on and require the SDK
+unless explicitly disabled. The Windows nightly workflow checks out the exact
+v1.1.4 revision before configuration. The FidelityFX SDK MIT
+license is staged at the plugin binary boundary and installed with package
+licenses.
 
 ## Persistence and safe mode
 

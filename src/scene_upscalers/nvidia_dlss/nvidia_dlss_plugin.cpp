@@ -326,10 +326,13 @@ namespace {
         LfsSceneUpscalerPluginResult evaluate(
             const LfsSceneUpscalerEvaluateV1& evaluation) {
             std::scoped_lock lock(mutex_);
+            constexpr std::size_t REQUIRED_EVALUATION_PREFIX =
+                offsetof(LfsSceneUpscalerEvaluateV1, reset_flags) +
+                sizeof(std::uint32_t);
             if (!runtime_initialized_ || parameters_ == nullptr)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             "NGX runtime is not initialized");
-            if (evaluation.struct_size < sizeof(LfsSceneUpscalerEvaluateV1) ||
+            if (evaluation.struct_size < REQUIRED_EVALUATION_PREFIX ||
                 !validView(evaluation.view) || evaluation.command_buffer == VK_NULL_HANDLE ||
                 !validImage(evaluation.color, false) ||
                 !validImage(evaluation.depth, false) ||
