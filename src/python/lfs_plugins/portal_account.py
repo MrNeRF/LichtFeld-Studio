@@ -1183,6 +1183,8 @@ class PortalAccountService:
                 "error": snapshot.error,
                 "membership_required": snapshot.membership_required,
                 "label": snapshot.label,
+                "email": snapshot.email,
+                "connected_since": snapshot.connected_since,
                 "tier": snapshot.tier,
                 "tooltip": snapshot.tooltip,
             }

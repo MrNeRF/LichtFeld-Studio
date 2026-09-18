@@ -24,6 +24,8 @@ DEFAULT_ACCOUNT_STATE: dict[str, object] = {
     "error": "",
     "membership_required": False,
     "label": "",
+    "email": "",
+    "connected_since": "",
     "tier": "",
     "tooltip": "",
 }

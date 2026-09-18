@@ -1105,6 +1105,34 @@ def test_width_only_viewport_changes_do_not_rebuild_list_rows(panel_module):
     assert panel._sync_asset_window_viewport() is True
 
 
+def test_gallery_width_change_updates_card_geometry_without_rebuilding_rows(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._layout_class = "wide"
+    panel._view_mode = "gallery"
+    scroll = _Element()
+    scroll.scroll_top = 300
+    scroll.client_height = 400
+    scroll.client_width = 570
+    panel._doc = _Document({"asset-gallery-scroll": scroll})
+    assets = [_project(id=str(index), project_uuid=str(index)) for index in range(100)]
+    panel._window_assets(assets)
+    assert panel._sync_asset_window_viewport() is True
+    panel._window_assets(assets)
+    old_slot = panel._asset_card_slot_width
+    old_bottom = panel._asset_gallery_bottom_spacer_height
+    panel._handle.dirty_fields.clear()
+
+    scroll.client_width = 580
+    assert panel._sync_asset_window_viewport() is False
+
+    assert panel._asset_card_slot_width != old_slot
+    assert panel._asset_gallery_bottom_spacer_height != old_bottom
+    assert "asset_card_slot_width" in panel._handle.dirty_fields
+    assert "asset_gallery_bottom_spacer_height" in panel._handle.dirty_fields
+    assert "assets" not in panel._handle.dirty_fields
+
+
 def test_thumbnail_size_is_shared_across_responsive_breakpoints(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._layout_class = "compact"
@@ -1128,7 +1156,6 @@ def test_move_to_trash_uses_platform_helper_before_catalog_removal(panel_module,
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(assets={asset["id"]: asset})
     actions = []
-    source = inspect.getsource(panel_module._move_to_trash)
     monkeypatch.setattr(panel_module, "_move_to_trash", lambda path: actions.append(("trash", path)))
     monkeypatch.setattr(panel, "_library_command", lambda name, *args, **_kwargs: actions.append((name, *args)) or True)
     monkeypatch.setattr(panel, "refresh_catalog", lambda **_kwargs: actions.append(("refresh",)))
@@ -1145,8 +1172,23 @@ def test_move_to_trash_uses_platform_helper_before_catalog_removal(panel_module,
         ("trash", "C:/projects/example.licht"),
         ("delete_asset", asset["id"]),
     ]
-    assert "SHFileOperationW" in source
-    assert 'platform != "nt"' in source
+
+
+def test_windows_trash_warns_before_shell_falls_back_to_permanent_delete(panel_module, tmp_path):
+    calls = []
+
+    class Shell32:
+        def SHFileOperationW(self, operation):
+            calls.append(operation._obj)
+            return 0
+
+    panel_module._move_to_trash(str(tmp_path / "project.licht"), platform="nt", shell32=Shell32())
+
+    assert len(calls) == 1
+    flags = calls[0].fFlags
+    assert flags & 0x0040  # FOF_ALLOWUNDO
+    assert flags & 0x4000  # FOF_WANTNUKEWARNING
+    assert not flags & 0x0010  # FOF_NOCONFIRMATION
 
 @pytest.mark.parametrize("status,action", [("MISSING", "locate"), ("UNREADABLE", ""), ("UNSUPPORTED", ""), ("REPAIR_ONLY", ""), ("UNSUPPORTED_NEWER", "")])
 def test_file_problems_hide_gallery_verbs(panel_module, status, action):
@@ -2483,6 +2525,13 @@ def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_mod
 
     assert panel._select_asset_id("second") is True
     assert panel._inspector_expanded is False
+    panel._inspector_expanded = True
+    assert panel._navigate_selection(panel_module.KI_UP) is True
+    assert panel._inspector_expanded is False
+    panel._inspector_expanded = True
+    assert panel._select_folder_id(panel_module.SCOPE_ALL) is True
+    assert panel._inspector_expanded is False
+    assert panel._select_asset_id("first") is True
     panel.open_project_operation(args=["contents"])
     assert panel._inspector_expanded is True
 
@@ -2491,6 +2540,8 @@ def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_mod
     rcss = (resources / "asset_manager.rcss").read_text()
     theme_rcss = (resources / "asset_manager.theme.rcss").read_text()
     assert 'data-style-padding-bottom="inspector_reserved_height"' not in rml
+    assert "inspector-strip" not in rml
+    assert "inspector-strip" not in rcss
     assert ".asset-shell.inspector-expanded .asset-inspector { display: flex; }" in rcss
     assert ".asset-inspector { position: absolute; display: none;" in rcss
     assert "border-left-width: 1dp; z-index: 10;" in rcss

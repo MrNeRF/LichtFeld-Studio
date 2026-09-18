@@ -168,6 +168,8 @@ namespace lfs::python {
             state["error"] = value.error;
             state["membership_required"] = value.membership_required;
             state["label"] = value.label;
+            state["email"] = value.email;
+            state["connected_since"] = value.connected_since;
             state["tier"] = value.tier;
             state["tooltip"] = value.tooltip;
             return state;
@@ -187,6 +189,8 @@ namespace lfs::python {
             state.error = dict_value(dict, "error", std::string{});
             state.membership_required = dict_value(dict, "membership_required", false);
             state.label = dict_value(dict, "label", std::string{});
+            state.email = dict_value(dict, "email", std::string{});
+            state.connected_since = dict_value(dict, "connected_since", std::string{});
             state.tier = dict_value(dict, "tier", std::string{});
             state.tooltip = dict_value(dict, "tooltip", std::string{});
             return state;

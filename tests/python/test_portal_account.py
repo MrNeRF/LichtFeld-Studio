@@ -12,11 +12,13 @@ import time
 import urllib.error
 import urllib.parse
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from lfs_plugins import portal_account
+from lfs_plugins.ui.store import RuntimeState
 
 
 class FakeResponse:
@@ -203,6 +205,24 @@ def make_service(tmp_path, *, waiter=None, base_url=None):
         platform="TestOS",
         waiter=waiter,
     )
+
+
+def test_account_runtime_state_publishes_session_identity_as_it_arrives(tmp_path, monkeypatch):
+    monkeypatch.setattr("lfs_plugins.ui.store._native_store", lambda: None)
+    service = make_service(tmp_path)
+    service._snapshot = replace(
+        service.snapshot(), signed_in=True, email="", connected_since=""
+    )
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("", "")
+
+    service._snapshot = replace(service.snapshot(), email="ada@example.com")
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("ada@example.com", "")
+
+    service._snapshot = replace(service.snapshot(), connected_since="session-1")
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("ada@example.com", "session-1")
 
 
 def test_device_flow_state_machine_polls_and_caches_profile(tmp_path, monkeypatch):

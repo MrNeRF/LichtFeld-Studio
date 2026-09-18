@@ -1102,10 +1102,6 @@
 
 .asset-inspector { position: absolute; display: none; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; border-left-width: 1dp; z-index: 10; }
 .asset-shell.inspector-expanded .asset-inspector { display: flex; }
-.inspector-strip { box-sizing: border-box; position: relative; display: none; align-items: center; gap: 8dp; height: 32dp; min-height: 32dp; padding: 0 12dp; overflow: hidden; }
-.inspector-strip-name { flex: 1 1 0dp; width: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.inspector-strip-meta { flex: 0 1 56dp; width: 56dp; min-width: 0; max-width: 56dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10dp; }
-.inspector-strip-open { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 48dp; padding: 0 8dp; white-space: nowrap; }
 .asset-inspector-content { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; }
 .asset-inspector-content > [data-if] { flex: 0 0 auto; min-width: 0; width: 100%; }
 .asset-info-asset-layout { box-sizing: border-box; display: flex; width: 100%; min-width: 0; gap: 16dp; align-items: stretch; }
@@ -1165,7 +1161,6 @@
 
 .asset-shell.is-medium .inspector-resize-handle { display: none; }
 .asset-shell.is-medium .asset-inspector > .asset-resize-handle { position: absolute; left: 0; right: 0; top: -8dp; height: 12dp; margin: 0; }
-.asset-shell.is-medium .inspector-strip { display: none; }
 .asset-shell.is-narrow #asset-main-row, .asset-shell.is-compact #asset-main-row { flex-direction: column; }
 .asset-shell.is-narrow .asset-results-stack, .asset-shell.is-compact .asset-results-stack { flex-direction: column; }
 .asset-shell.is-narrow .asset-navigator, .asset-shell.is-compact .asset-navigator { display: flex; flex: 0 0 32dp; width: auto; padding: 4dp 8dp; }
@@ -1174,7 +1169,6 @@
 .asset-shell.is-narrow .asset-resize-handle--vertical, .asset-shell.is-compact .asset-resize-handle--vertical { display: none; }
 .asset-shell.is-narrow .asset-inspector, .asset-shell.is-compact .asset-inspector { left: 0; right: 0; bottom: 0; width: auto; overflow: hidden; }
 .asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }
-.asset-shell.is-narrow .inspector-strip, .asset-shell.is-compact .inspector-strip { display: none; }
 .asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { display: flex; }
 .asset-shell.is-compact .asset-toolbar-filter, .asset-shell.is-compact .asset-sort-button { display: none; }
 .asset-shell.is-compact .asset-toolbar-view { display: block; }
@@ -1248,7 +1242,6 @@
 .asset-health-badge { position: absolute; left: 6dp; top: 6dp; width: 16dp; height: 16dp; display: flex; justify-content: center; align-items: center; border-radius: 8dp; line-height: 16dp; font-size: 12dp; font-weight: bold; }
 .asset-list-thumb .asset-health-badge { left: 0; top: 0; }
 .asset-list-thumb .gallery-activity { right: 0; top: 0; }
-.inspector-strip > .asset-health-badge, .inspector-strip > .gallery-activity { position: relative; left: auto; right: auto; top: auto; flex: 0 0 16dp; }
 
 .asset-card-menu { top: auto; bottom: 44dp; right: 6dp; }
 

@@ -138,6 +138,22 @@ def test_per_frame_account_check_does_not_copy_transfer_history(gallery):
     assert panel._check_identity() is True
     assert actions == ["paused"]
 
+
+def test_force_refresh_requested_while_busy_is_preserved(gallery, monkeypatch):
+    panel, _state, actions = gallery
+    panel.service.refresh = lambda **kwargs: actions.append(kwargs)
+    panel.service.busy = True
+    panel._refresh_pending = True
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+
+    panel.refresh(force=True)
+
+    assert panel._refresh_requested is True
+    assert panel._refresh_force_requested is True
+    panel.service.busy = False
+    panel._poll_body()
+    assert actions == [{"force": True}]
+
 @pytest.mark.parametrize("native_active,expected", [(True, 50), (False, 40)])
 def test_progress_painting_uses_the_existing_model_without_copying_history(gallery, monkeypatch, native_active, expected):
     panel, state, _ = gallery

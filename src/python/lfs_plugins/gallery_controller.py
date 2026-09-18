@@ -817,15 +817,17 @@ class GalleryController:
 
     def refresh(self, *, force=False):
         self._check_identity()
-        if self._refresh_pending and self.service.busy:
-            return
         if not self.service.snapshot().get("signed_in"):
             self._refresh_requested = False
+            self._refresh_force_requested = False
             self._message = ""
             self._refresh_model()
             return
         self._refresh_requested = True
         self._refresh_force_requested = self._refresh_force_requested or force
+        if self._refresh_pending and self.service.busy:
+            self._schedule_poll()
+            return
         if not self.service.busy:
             self._refresh_requested = False
             self._message = ""

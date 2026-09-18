@@ -110,6 +110,8 @@ namespace lfs::vis {
             bool membership_required = false;
             std::string error;
             std::string label;
+            std::string email;
+            std::string connected_since;
             std::string tier;
             std::string tooltip;
 
