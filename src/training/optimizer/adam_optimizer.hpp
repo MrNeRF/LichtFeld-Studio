@@ -148,6 +148,10 @@ namespace lfs::training {
         void set_mean_step_far_mask(lfs::core::Tensor mask);
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
+        // Collection is independent of the hinge: refinement can still consume
+        // projected sizes while the strategy defers scale shrinkage.
+        void set_collect_projected_screen_share(bool enabled) noexcept { collect_projected_screen_share_ = enabled; }
+        [[nodiscard]] bool collect_projected_screen_share() const noexcept { return collect_projected_screen_share_; }
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
@@ -236,6 +240,7 @@ namespace lfs::training {
         int screen_share_n_ = 0;
         float screen_share_limit_ = 0.0f;
         float screen_share_penalty_ = 0.0f;
+        bool collect_projected_screen_share_ = false;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

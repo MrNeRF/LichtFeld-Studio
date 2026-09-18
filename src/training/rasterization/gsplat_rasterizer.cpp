@@ -13,6 +13,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
 #include <array>
@@ -909,6 +910,18 @@ namespace lfs::training {
                     v_means_ptr,
                     N,
                     stream);
+            }
+
+            // Projection is shared by all tile batches. Publish only after the
+            // complete backward succeeds, while its full-frame radii are alive.
+            // Inference and strategies that do not request this metric do no work.
+            auto& shares = gaussian_model._max_screen_share;
+            if (optimizer.collect_projected_screen_share() &&
+                shares.is_valid() && shares.numel() == N && N > 0) {
+                shares.sync_to_stream(stream);
+                kernels::launch_accumulate_projected_screen_share(
+                    ctx.radii_ptr, ctx.means2d_ptr, shares.ptr<float>(), N, W, H, stream);
+                shares.set_stream(stream);
             }
 
             // Isect/flatten ids stay in the TLS VMM cache for the next forward.

@@ -23,6 +23,19 @@ To enable 3DGUT, use the `--gut` flag.
 - RADIAL_FISHEYE
 - SIMPLE_RADIAL_FISHEYE
 
+## Screen-size controls with MRNF
+
+With GUT and MRNF, `max_screen_share` measures the fraction of the image covered by a Gaussian's opacity-tightened projected bounding rectangle, clipped to the image. It includes the camera projection and distortion. The rectangle is a size bound, not an exact count of contributing pixels. A value of `0.1` means ten percent of the image area; `0` or `1` disables the controls.
+
+MRNF preserves coarse coverage while adding detail:
+
+- During growth, `oversize_split_fraction` prioritizes over-limit Gaussians within the existing growth budget. Zero disables that priority.
+- Once growth has ended and refinement has begun, refinement clips oversized scales and `screen_share_penalty` applies a soft scale penalty on Adam steps. Zero penalty disables the soft penalty independently of clipping and splitting.
+
+The handoff follows the configured growth schedule, including fill pacing when enabled. Measurements keep their maximum across training views until the next refinement and stop with the refinement window. These controls encourage smaller splats; they do not impose an immediate hard image-area bound or a total intersection-memory limit.
+
+FastGS retains its angular size statistic, so equal numeric limits need not select the same Gaussians across renderers. Switching renderers clears the measurement window to avoid mixing those units.
+
 ## References
 - [3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting](https://research.nvidia.com/labs/toronto-ai/3DGUT/) - Original paper and project page
 - [3dgrut Repository](https://github.com/nv-tlabs/3dgrut) - Reference implementation

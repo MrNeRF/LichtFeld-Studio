@@ -142,6 +142,13 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr,
         lfs::training::PositiveMedianScratch* scratch = nullptr);
 
+    /// Accumulate the image-clipped projected bounding rectangle area / image area.
+    /// radii and means2d are [N, 2]; zero radii exclude culled splats. Call once
+    /// per completed training frame, independently of tile batching.
+    void launch_accumulate_projected_screen_share(
+        const int32_t* radii, const float* means2d,
+        float* shares, size_t n, uint32_t width, uint32_t height, cudaStream_t stream);
+
     /// Subtract min(log(share/limit), log(1.5)) from the longest log-scale axis
     /// when share > limit. The other two axes are left unchanged.
     void launch_clip_log_scale_by_screen_share(

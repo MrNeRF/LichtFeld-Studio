@@ -663,6 +663,34 @@ namespace lfs::training::kernels {
     }
 
     namespace {
+        __global__ void accumulate_projected_screen_share_kernel(
+            const int32_t* __restrict__ radii, const float* __restrict__ means2d,
+            float* shares, size_t n, uint32_t width, uint32_t height) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i >= n || radii[2 * i] <= 0 || radii[2 * i + 1] <= 0)
+                return;
+            const float x = means2d[2 * i], y = means2d[2 * i + 1];
+            const float rx = radii[2 * i], ry = radii[2 * i + 1];
+            const float dx = fmaxf(0.f, fminf(float(width), x + rx) - fmaxf(0.f, x - rx));
+            const float dy = fmaxf(0.f, fminf(float(height), y + ry) - fmaxf(0.f, y - ry));
+            const float share = (dx / float(width)) * (dy / float(height));
+            // One writer per splat, once per frame on the training stream.
+            // Retain the maximum across views until the strategy resets it.
+            shares[i] = fmaxf(shares[i], share);
+        }
+    } // namespace
+
+    void launch_accumulate_projected_screen_share(
+        const int32_t* radii, const float* means2d,
+        float* shares, size_t n, uint32_t width, uint32_t height, cudaStream_t stream) {
+        if (n == 0 || width == 0 || height == 0)
+            return;
+        accumulate_projected_screen_share_kernel<<<(n + 255) / 256, 256, 0, stream>>>(
+            radii, means2d, shares, n, width, height);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.accumulate_projected_screen_share");
+    }
+
+    namespace {
         __global__ void clip_log_scale_by_screen_share_kernel(
             float* __restrict__ log_scales,
             const float* __restrict__ max_share,

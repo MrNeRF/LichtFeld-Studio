@@ -15,11 +15,13 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/components/ppisp.hpp"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/IntersectionCount.h"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/strategies/mrnf.hpp"
 
 #include <algorithm>
 #include <array>
@@ -988,6 +990,7 @@ TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {
 void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char* ref_env) {
     constexpr int kN = 50000;
     auto splat = make_parity_splat(kN, 0xC0FFEE01u);
+    splat->_max_screen_share = Tensor::zeros({static_cast<size_t>(kN)}, Device::CUDA);
     auto bg = Tensor::zeros({3}, Device::CUDA);
     bg.fill_(0.25f);
 
@@ -1012,6 +1015,7 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
         auto grad_image = Tensor::ones_like(output.image);
         auto grad_alpha = Tensor::zeros_like(output.alpha);
         gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
+        EXPECT_EQ(splat->_max_screen_share.max().item<float>(), 0.f);
         image_out = output.image.clone();
         alpha_out = output.alpha.clone();
         ctx.isect_ids_ptr = nullptr;
@@ -1289,5 +1293,355 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
                 EXPECT_LT(max_rel_diff_tensors(gradients[i++], opt.get_grad(param)), 1e-4f);
             }
         }
+    }
+}
+
+// Regression for issue #2189. Run with and without the existing pair-budget
+// test override to cover both the single-list and tile replay dispatch paths.
+class GutScreenShare : public ::testing::TestWithParam<int> {};
+
+TEST_P(GutScreenShare, PublishedOncePerFrameAndConstrainsOnlyWhenEnabled) {
+    using Model = lfs::core::CameraModelType;
+    const int variant = GetParam();
+    auto camera = variant == 0 ? make_camera(96, 64)
+                               : make_extra_parity_camera(variant == 1   ? Model::PINHOLE
+                                                          : variant == 2 ? Model::FISHEYE
+                                                          : variant == 3 ? Model::EQUIRECTANGULAR
+                                                                         : Model::THIN_PRISM_FISHEYE);
+    constexpr size_t n = 50000;
+    auto model = make_parity_splat(n, 0xC0FFEE01u);
+    model->_max_screen_share = Tensor::zeros({n}, Device::CUDA);
+    auto bg = Tensor::full({3}, .25f, Device::CUDA);
+    AdamConfig config;
+    config.initial_capacity = n;
+    AdamOptimizer opt(*model, config);
+    opt.allocate_gradients(n);
+    opt.set_collect_projected_screen_share(true);
+    // Statistics must not depend on hinge strength: clipping and splitting
+    // still need them when the hinge is disabled.
+    opt.set_screen_share_cap(model->_max_screen_share.ptr<float>(), n, .0001f, 0.f);
+    auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+    ASSERT_TRUE(r.has_value()) << r.error();
+    if (lfs::core::environment::value("LFS_GSPLAT_PAIR_BUDGET") == "1")
+        EXPECT_GT(r->second.batches.size(), 1u);
+    EXPECT_EQ(model->_max_screen_share.max().item<float>(), 0.f);
+    auto reference = r->first.image.clone();
+    gsplat_rasterize_backward(r->second, Tensor::ones_like(r->first.image), Tensor{}, *model, opt);
+    auto shares = model->_max_screen_share.clone();
+    ASSERT_GT(shares.max().item<float>(), 0.f) << "GUT must publish screen-share measurements";
+    EXPECT_LE(shares.max().item<float>(), 1.f);
+    auto again = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(max_abs_diff_tensors(reference, again->first.image), 0.f);
+    gsplat_rasterize_backward(again->second, Tensor::ones_like(again->first.image), Tensor{}, *model, opt);
+    EXPECT_EQ(max_abs_diff_tensors(shares, model->_max_screen_share), 0.f)
+        << "Revisiting the same splat in tiles/frames must not sum its area";
+
+    // With no reconstruction gradient, an unset limit is a strict Adam no-op.
+    auto before = model->scaling_raw().clone();
+    opt.zero_grad(1);
+    opt.set_screen_share_cap(nullptr, 0, 0.f, 0.f);
+    opt.step(1);
+    EXPECT_EQ(max_abs_diff_tensors(before, model->scaling_raw()), 0.f);
+    // The configured limit must actually alter oversized splats via production Adam.
+    opt.set_screen_share_cap(model->_max_screen_share.ptr<float>(), n, .0001f, 1.f);
+    opt.step(2);
+    EXPECT_GT(max_abs_diff_tensors(before, model->scaling_raw()), 0.f);
+    auto a = before.cpu(), b = model->scaling_raw().cpu(), h = shares.cpu();
+    size_t oversized = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (h.ptr<float>()[i] > .0001f) {
+            ++oversized;
+            EXPECT_LT(b.ptr<float>()[3 * i], a.ptr<float>()[3 * i]);
+        } else {
+            EXPECT_FLOAT_EQ(b.ptr<float>()[3 * i], a.ptr<float>()[3 * i]);
+        }
+    }
+    EXPECT_GT(oversized, 0u);
+}
+
+INSTANTIATE_TEST_SUITE_P(CameraModels, GutScreenShare, ::testing::Values(0, 1, 2, 3, 4));
+
+TEST_P(GutScreenShare, MatchesClippedProjectionAndKeepsRefinementWindowMaximum) {
+    using Model = lfs::core::CameraModelType;
+    const int variant = GetParam();
+    auto camera = variant == 0 ? make_camera(96, 64)
+                               : make_extra_parity_camera(variant == 1   ? Model::PINHOLE
+                                                          : variant == 2 ? Model::FISHEYE
+                                                          : variant == 3 ? Model::EQUIRECTANGULAR
+                                                                         : Model::THIN_PRISM_FISHEYE);
+    constexpr size_t n = 50000;
+    auto model = make_parity_splat(n, 0xC0FFEE01u);
+    model->_max_screen_share = Tensor::zeros({n}, Device::CUDA);
+    auto bg = Tensor::full({3}, .25f, Device::CUDA);
+    AdamConfig config;
+    config.initial_capacity = n;
+    AdamOptimizer opt(*model, config);
+    opt.allocate_gradients(n);
+    opt.set_collect_projected_screen_share(true);
+    opt.set_screen_share_cap(model->_max_screen_share.ptr<float>(), n, .1f, 0.f);
+    Tensor first;
+    for (int frame = 0; frame < 3; ++frame) {
+        if (frame == 1)
+            model->scaling_raw().add_(-1.f);
+        if (frame == 2)
+            model->_max_screen_share.zero_();
+        auto prior = model->_max_screen_share.cpu();
+        auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+        ASSERT_TRUE(r.has_value()) << r.error();
+        std::vector<int32_t> radii(2 * n);
+        std::vector<float> means2d(2 * n);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        ASSERT_EQ(cudaMemcpy(radii.data(), r->second.radii_ptr, 2 * n * sizeof(int32_t), cudaMemcpyDeviceToHost), cudaSuccess);
+        ASSERT_EQ(cudaMemcpy(means2d.data(), r->second.means2d_ptr, 2 * n * sizeof(float), cudaMemcpyDeviceToHost), cudaSuccess);
+        gsplat_rasterize_backward(r->second, Tensor::ones_like(r->first.image), Tensor{}, *model, opt);
+        auto actual = model->_max_screen_share.cpu();
+        for (size_t i = 0; i < n; ++i) {
+            float expected = prior.ptr<float>()[i];
+            if (radii[2 * i] > 0 && radii[2 * i + 1] > 0) {
+                const float x = means2d[2 * i], y = means2d[2 * i + 1];
+                const float dx = std::max(0.f, std::min(96.f, x + radii[2 * i]) - std::max(0.f, x - radii[2 * i]));
+                const float dy = std::max(0.f, std::min(64.f, y + radii[2 * i + 1]) - std::max(0.f, y - radii[2 * i + 1]));
+                expected = std::max(expected, (dx / 96.f) * (dy / 64.f));
+            }
+            EXPECT_NEAR(actual.ptr<float>()[i], expected, 1e-7f) << "splat=" << i << " frame=" << frame;
+        }
+        if (frame == 0)
+            first = model->_max_screen_share.clone();
+        // Shrinking 3D scales can also move the unscented projected center;
+        // the per-splat CPU comparison above verifies the running maximum.
+        if (frame == 2)
+            EXPECT_LT(model->_max_screen_share.max().item<float>(), first.max().item<float>());
+    }
+}
+
+TEST_P(GutScreenShare, MrnfPreservesGrowthCoverageAndConstrainsMatureSplats) {
+    using Model = lfs::core::CameraModelType;
+    const int variant = GetParam();
+    auto camera = variant == 0 ? make_camera(96, 64)
+                               : make_extra_parity_camera(variant == 1   ? Model::PINHOLE
+                                                          : variant == 2 ? Model::FISHEYE
+                                                          : variant == 3 ? Model::EQUIRECTANGULAR
+                                                                         : Model::THIN_PRISM_FISHEYE);
+    constexpr size_t n = 50000;
+    for (bool enabled : {false, true}) {
+        for (bool mature : {false, true}) {
+            auto model = make_parity_splat(n, 0xC0FFEE01u);
+            MRNF strategy(*model);
+            auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+            params.gut = true;
+            params.sh_degree = 0;
+            params.max_cap = n;
+            params.background_improvements = false;
+            params.use_edge_map = false;
+            params.start_refine = 2000;
+            params.refine_every = 250;
+            params.grow_until_iter = 15000;
+            params.stop_refine = 28500;
+            params.iterations = 30000;
+            params.max_screen_share = enabled ? .0001f : 0.f;
+            params.screen_share_penalty = 1.f;
+            params.means_noise_weight = 0.f;
+            params.scale_decay = 0.f;
+            params.opacity_decay = 0.f;
+            strategy.initialize(params);
+            auto& opt = strategy.get_optimizer();
+            opt.allocate_gradients(n);
+            const int iteration = mature ? 15001 : 100;
+            auto bg = Tensor::full({3}, .25f, Device::CUDA);
+            auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+            ASSERT_TRUE(r.has_value()) << r.error();
+            auto before = model->scaling_raw().clone();
+            gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor{}, *model, opt);
+            if (enabled)
+                EXPECT_GT(model->_max_screen_share.max().item<float>(), params.max_screen_share);
+            opt.zero_grad(iteration);
+            // Exercise the actual strategy publication/schedule, not a test
+            // manually binding the cap directly to Adam.
+            strategy.step(iteration);
+            const float diff = max_abs_diff_tensors(before, model->scaling_raw());
+            if (enabled && mature)
+                EXPECT_GT(diff, 0.f);
+            else
+                EXPECT_EQ(diff, 0.f);
+        }
+    }
+}
+
+TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
+    using Model = lfs::core::CameraModelType;
+    const int variant = GetParam();
+    auto camera = variant == 0 ? make_camera(96, 64)
+                               : make_extra_parity_camera(variant == 1   ? Model::PINHOLE
+                                                          : variant == 2 ? Model::FISHEYE
+                                                          : variant == 3 ? Model::EQUIRECTANGULAR
+                                                                         : Model::THIN_PRISM_FISHEYE);
+    constexpr size_t n = 50000;
+    Tensor unset_scales[2];
+    for (bool enabled : {false, true}) {
+        for (bool mature : {false, true}) {
+            auto model = make_parity_splat(n, 0xC0FFEE01u);
+            MRNF strategy(*model);
+            auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+            params.gut = true;
+            params.sh_degree = 0;
+            params.max_cap = n; // isolate clipping: no spare growth budget
+            params.background_improvements = false;
+            params.use_edge_map = false;
+            params.start_refine = 2000;
+            params.refine_every = 250;
+            params.grow_until_iter = 15000;
+            params.stop_refine = 28500;
+            params.iterations = 30000;
+            params.max_screen_share = enabled ? .0001f : 0.f;
+            params.screen_share_penalty = 0.f;
+            params.means_noise_weight = 0.f;
+            params.scale_decay = 0.f;
+            params.opacity_decay = 0.f;
+            strategy.initialize(params);
+            auto& opt = strategy.get_optimizer();
+            opt.allocate_gradients(n);
+            const int iteration = mature ? 15000 : 2250;
+            auto bg = Tensor::full({3}, .25f, Device::CUDA);
+            auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+            ASSERT_TRUE(r.has_value()) << r.error();
+            auto before = model->scaling_raw().clone();
+            gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor{}, *model, opt);
+            if (enabled)
+                EXPECT_GT(model->_max_screen_share.max().item<float>(), params.max_screen_share);
+            strategy.post_backward(iteration, r->first);
+            ASSERT_EQ(model->size(), n);
+            const float diff = max_abs_diff_tensors(before, model->scaling_raw());
+            if (!enabled) {
+                // Existing decay performs an exp/log round trip even at zero
+                // strength. Record that baseline to compare growth exactly.
+                EXPECT_LT(diff, 1e-6f);
+                unset_scales[mature] = model->scaling_raw().clone();
+            } else if (mature) {
+                EXPECT_GT(max_abs_diff_tensors(unset_scales[mature], model->scaling_raw()), 1e-3f);
+            } else {
+                EXPECT_EQ(max_abs_diff_tensors(unset_scales[mature], model->scaling_raw()), 0.f);
+            }
+        }
+    }
+}
+
+TEST(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
+    auto radii = Tensor::from_vector(std::vector<int32_t>{10, 10, 10, 10, 0, 10, 100, 100}, {4, 2}, Device::CUDA);
+    auto centers = Tensor::from_vector({5.f, 5.f, 95.f, 45.f, 50.f, 25.f, 50.f, 25.f}, {4, 2}, Device::CUDA);
+    auto shares = Tensor::from_vector({.1f, 0.f, .3f, 0.f}, {4}, Device::CUDA);
+    struct Stream {
+        cudaStream_t value = nullptr;
+        ~Stream() {
+            if (value)
+                cudaStreamDestroy(value);
+        }
+    } stream;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream.value, cudaStreamNonBlocking), cudaSuccess);
+    auto record = [&] {
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        kernels::launch_accumulate_projected_screen_share(radii.ptr<int32_t>(), centers.ptr<float>(), shares.ptr<float>(), 4, 100, 50, stream.value);
+        ASSERT_EQ(cudaStreamSynchronize(stream.value), cudaSuccess);
+    };
+    record();
+    auto h = shares.cpu();
+    EXPECT_FLOAT_EQ(h.ptr<float>()[0], .1f);
+    EXPECT_NEAR(h.ptr<float>()[1], 225.f / 5000.f, 1e-7f);
+    EXPECT_FLOAT_EQ(h.ptr<float>()[2], .3f); // invisible retains earlier views
+    EXPECT_FLOAT_EQ(h.ptr<float>()[3], 1.f);
+    auto previous = shares.clone();
+    radii = Tensor::from_vector(std::vector<int32_t>{1, 1, 1, 1, 0, 1, 1, 1}, {4, 2}, Device::CUDA);
+    record();
+    EXPECT_EQ(max_abs_diff_tensors(previous, shares), 0.f);
+    shares.zero_();
+    record();
+    h = shares.cpu();
+    for (size_t i : {0u, 1u, 3u})
+        EXPECT_NEAR(h.ptr<float>()[i], 4.f / 5000.f, 1e-8f);
+    EXPECT_EQ(h.ptr<float>()[2], 0.f);
+}
+
+TEST(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
+    auto model = make_parity_splat(100, 42);
+    MRNF strategy(*model);
+    auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+    params.gut = true;
+    params.max_cap = 100;
+    params.sh_degree = 0;
+    params.background_improvements = false;
+    strategy.initialize(params);
+    ASSERT_TRUE(strategy.get_optimizer().collect_projected_screen_share());
+    model->_max_screen_share.fill_(.5f);
+    params.gut = false;
+    strategy.set_optimization_params(params);
+    EXPECT_FALSE(strategy.get_optimizer().collect_projected_screen_share());
+    EXPECT_EQ(model->_max_screen_share.max().item<float>(), 0.f);
+    model->_max_screen_share.fill_(.5f);
+    params.gut = true;
+    strategy.set_optimization_params(params);
+    EXPECT_TRUE(strategy.get_optimizer().collect_projected_screen_share());
+    EXPECT_EQ(model->_max_screen_share.max().item<float>(), 0.f);
+    params.max_screen_share = 0.f;
+    strategy.set_optimization_params(params);
+    EXPECT_FALSE(strategy.get_optimizer().collect_projected_screen_share());
+}
+
+TEST(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLimit) {
+    auto camera = make_camera(96, 64);
+    for (bool enabled : {false, true}) {
+        auto model = make_visible_splat(1);
+        model->means().zero_();
+        // Front-facing surface: isolate clipping of the projected axes.
+        model->scaling_raw() = Tensor::from_vector({-2.f, -2.f, -6.f}, {1, 3}, Device::CUDA);
+        MRNF strategy(*model);
+        auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        params.sh_degree = 0;
+        params.max_cap = 1;
+        params.background_improvements = false;
+        params.use_edge_map = false;
+        params.start_refine = 2000;
+        params.refine_every = 250;
+        params.grow_until_iter = 15000;
+        params.stop_refine = 28500;
+        params.iterations = 30000;
+        params.max_screen_share = enabled ? .1f : 0.f;
+        params.screen_share_penalty = 0.f;
+        params.means_noise_weight = 0.f;
+        params.scale_decay = 0.f;
+        params.opacity_decay = 0.f;
+        strategy.initialize(params);
+        auto& opt = strategy.get_optimizer();
+        opt.allocate_gradients(1);
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        float initial_area = 0.f;
+        float final_area = 0.f;
+        for (int window = 0; window <= 52; ++window) {
+            auto r = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+            ASSERT_TRUE(r.has_value()) << r.error();
+            int32_t radii[2]{};
+            float center[2]{};
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            ASSERT_EQ(cudaMemcpy(radii, r->second.radii_ptr, sizeof(radii), cudaMemcpyDeviceToHost), cudaSuccess);
+            ASSERT_EQ(cudaMemcpy(center, r->second.means2d_ptr, sizeof(center), cudaMemcpyDeviceToHost), cudaSuccess);
+            const float dx = std::max(0.f, std::min(96.f, center[0] + radii[0]) - std::max(0.f, center[0] - radii[0]));
+            const float dy = std::max(0.f, std::min(64.f, center[1] + radii[1]) - std::max(0.f, center[1] - radii[1]));
+            final_area = radii[0] > 0 && radii[1] > 0 ? dx * dy / (96.f * 64.f) : 0.f;
+            if (window == 0)
+                initial_area = final_area;
+            gsplat_rasterize_backward(r->second, Tensor::zeros_like(r->first.image), Tensor{}, *model, opt);
+            if (window < 52)
+                strategy.post_backward(15000 + 250 * window, r->first);
+        }
+        std::cout << "GUT projected-area constraint: enabled=" << enabled
+                  << " initial=" << initial_area << " final=" << final_area << '\n';
+        EXPECT_GT(initial_area, .1f);
+        if (enabled) {
+            EXPECT_GT(final_area, 0.f); // Constrain it without deleting it.
+            EXPECT_LE(final_area, .1f);
+        } else {
+            EXPECT_EQ(final_area, initial_area);
+        }
+        ASSERT_EQ(model->size(), 1);
     }
 }

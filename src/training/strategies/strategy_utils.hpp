@@ -202,7 +202,8 @@ namespace lfs::training {
     inline void publish_screen_share_cap(
         AdamOptimizer* optimizer,
         lfs::core::SplatData& splat,
-        const lfs::core::param::OptimizationParameters& params) {
+        const lfs::core::param::OptimizationParameters& params,
+        const float penalty_scale = 1.0f) {
         if (!optimizer) {
             return;
         }
@@ -215,7 +216,7 @@ namespace lfs::training {
             splat._max_screen_share.ptr<float>(),
             static_cast<int>(splat._max_screen_share.numel()),
             params.max_screen_share,
-            params.screen_share_penalty);
+            params.screen_share_penalty * penalty_scale);
     }
 
     /// Collect leftover per-primitive Adam scale pointers from the removed

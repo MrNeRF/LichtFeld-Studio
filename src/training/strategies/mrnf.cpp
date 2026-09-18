@@ -823,6 +823,10 @@ namespace lfs::training {
             const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
             ensure_max_screen_share_shape(*_splat_data, n, cap);
             publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            if (_optimizer) {
+                _optimizer->set_collect_projected_screen_share(
+                    _params->gut && screen_share_cap_active(_params->max_screen_share));
+            }
         }
     }
 
@@ -1290,7 +1294,8 @@ namespace lfs::training {
                                "wait fused adam before screen-share mutate");
         }
 
-        if (_params && screen_share_cap_active(_params->max_screen_share) &&
+        if (_params && screen_share_shrink_active(iter) &&
+            screen_share_cap_active(_params->max_screen_share) &&
             _splat_data->_max_screen_share.is_valid() &&
             _splat_data->_max_screen_share.numel() == n) {
             auto& log_scales_clip = _splat_data->scaling_raw();
@@ -3433,9 +3438,26 @@ namespace lfs::training {
         }
     }
 
+    bool MRNF::screen_share_shrink_active(const int iter) const {
+        if (!_params->gut) {
+            return true;
+        }
+        // During growth, oversized splats are split to preserve coverage.
+        // Shrink only once growth has ended and refinement has begun. Compare
+        // cadence buckets rather than multiplying a potentially large step.
+        return iter > 0 && _params->refine_every > 0 &&
+               static_cast<size_t>(iter) / _params->refine_every >
+                   _params->start_refine / _params->refine_every &&
+               iter >= effective_grow_until_iter();
+    }
+
     void MRNF::step(int iter) {
         LOG_TIMER("MRNF::step");
         if (iter < _params->iterations) {
+            if (_params->gut) {
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params,
+                                         screen_share_shrink_active(iter) ? 1.f : 0.f);
+            }
             _optimizer->step(iter);
             _optimizer->zero_grad(iter);
 
@@ -3669,6 +3691,10 @@ namespace lfs::training {
         if (_scheduler)
             _scheduler->adopt_checkpoint_state(*source._scheduler);
         _params.swap(source._params);
+        if (_optimizer && _params) {
+            _optimizer->set_collect_projected_screen_share(
+                _params->gut && screen_share_cap_active(_params->max_screen_share));
+        }
         std::swap(_refine_weight_max, source._refine_weight_max);
         std::swap(_refine_ratio_max, source._refine_ratio_max);
         std::swap(_vis_count, source._vis_count);
@@ -3726,6 +3752,7 @@ namespace lfs::training {
 
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool background_changed = background_improvements_enabled() != params.background_improvements;
+        const bool renderer_changed = _params && _params->gut != params.gut;
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
 
         if (_mean_lr_unscaled <= 0.0) {
@@ -3738,6 +3765,11 @@ namespace lfs::training {
         refresh_decay_schedule_from_current_state();
         if (_splat_data) {
             ensure_densification_info_shape();
+            if (renderer_changed && _splat_data->_max_screen_share.is_valid()) {
+                // FastGS angular measurements and GUT projected areas have
+                // different units; begin a fresh window when switching renderers.
+                _splat_data->_max_screen_share.zero_();
+            }
         }
 
         if (background_changed) {

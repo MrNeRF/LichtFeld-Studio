@@ -163,6 +163,7 @@ namespace lfs::training {
         void refine(int iter, RenderOutput& render_output);
         void grow_and_split(int iter, int pruned_count);
         [[nodiscard]] int effective_grow_until_iter() const;
+        [[nodiscard]] bool screen_share_shrink_active(int iter) const;
         [[nodiscard]] lfs::core::Tensor compute_refine_candidates() const;
         void apply_decay(int iter);
         void inject_noise(int iter);
