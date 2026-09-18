@@ -12,6 +12,16 @@
     border-color: @{border};
 }
 
+/* ── Quick Look ──────────────────────────────────────────── */
+
+.asset-quick-look {
+    background-color: @{modal.backdrop};
+}
+
+.asset-quick-look-card {
+    background-color: @{surface};
+}
+
 .asset-size-menu {
     background-color: @{surface};
     color: @{text};
@@ -73,7 +83,10 @@
 
 .asset-refresh-button img,
 .asset-folder-menu img,
-.asset-card-menu img,
+.asset-card-menu img {
+    image-color: @{alpha(text,0.90)};
+}
+
 .inspector-more img,
 .inspector-disclosure,
 .asset-list-header-gallery-icon {
@@ -177,6 +190,12 @@
 
 .asset-folder-menu:hover {
     background-color: @{alpha(surface_bright,0.94)};
+}
+
+.asset-resize-handle:hover,
+.asset-resize-handle:active,
+.asset-resize-handle:focus {
+    background-color: @{alpha(primary,0.45)};
 }
 
 /* ── Gallery ─────────────────────────────────────────────── */
@@ -288,11 +307,16 @@
     color: @{text};
 }
 
+.asset-list-column-handle:hover {
+    border-right-color: @{primary};
+    background-color: @{alpha(primary,0.18)};
+}
+
 .asset-list-primary {
     color: @{text};
 }
 
-/* ── Info Panel ──────────────────────────────────────────── */
+/* ── Inspector ───────────────────────────────────────────── */
 
 .asset-inspector {
     background-color: @{surface};
@@ -334,6 +358,7 @@
 
 .contents-tag { color: @{text_dim}; background-color: @{surface_bright}; }
 .contents-row--pending { color: @{text_dim}; }
+.contents-remove img { image-color: @{text}; }
 
 .gallery-activity > img { image-color: @{text_dim}; opacity: 0.35; }
 .gallery-activity > progress, .gallery-activity > progress fill { image-color: @{primary}; }

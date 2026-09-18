@@ -41,11 +41,6 @@ namespace lfs::vis::gui {
             return status_bar.fit_level_;
         }
 
-        static void applyFitLevel(RmlStatusBar& status_bar, const int level) {
-            status_bar.fit_level_ = level;
-            status_bar.applyFitLevel(level);
-        }
-
         static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
             status_bar.model_.mcp_details_expanded = expanded;
         }
@@ -93,6 +88,7 @@ namespace {
         void SetScissorRegion(Rml::Rectanglei) override {}
     };
 
+    // Keep this test model in sync with RmlStatusBar::ModelState in rml_status_bar.hpp.
     struct StatusBarModel {
         bool safe_mode = false;
         std::string safe_mode_text = "Safe Mode";
@@ -101,8 +97,17 @@ namespace {
         bool show_training = true;
         bool progress_miner = false;
         bool miner_raised = false;
+        bool miner_step_a = false;
         bool miner_strike = false;
+        bool miner_step_b = false;
+        bool miner_smoke_1 = false;
+        bool miner_smoke_2 = false;
+        bool miner_smoke_3 = false;
+        bool miner_smoke_4 = false;
+        bool miner_smoke_5 = false;
+        bool miner_smoke_6 = false;
         std::string progress_width = "50%";
+        std::string progress_text_left = "0dp";
         std::string progress_text = "50%";
         std::string step_label = "Step:";
         std::string step_value = "15000/30000";
@@ -130,20 +135,6 @@ namespace {
         std::string zoom_text = "Zoom: 100";
         std::string zoom_color = "#ffffff";
         std::string zoom_sep_color = "#ffffff";
-        std::string account_label = "LichtFeld Account";
-        std::string account_tier = "Professional";
-        std::string account_tooltip;
-        std::string account_color = "#ffffff";
-        bool account_show_tier = true;
-        bool account_membership_required = false;
-        bool gallery_visible = true;
-        bool gallery_show_label = true;
-        bool gallery_busy = true;
-        bool gallery_attention = false;
-        bool gallery_error = false;
-        std::string gallery_label = "Gallery · 2 uploading 43 %";
-        std::string gallery_tooltip = "Gallery transfers in progress";
-        std::string gallery_color = "#ffffff";
         std::string lfs_mem_text = "LFS 12.34 GiB";
         std::string lfs_mem_color = "#ffffff";
         bool show_gpu_model = true;
@@ -238,8 +229,17 @@ namespace {
             bound &= constructor.Bind("show_training", &model_.show_training);
             bound &= constructor.Bind("progress_miner", &model_.progress_miner);
             bound &= constructor.Bind("miner_raised", &model_.miner_raised);
+            bound &= constructor.Bind("miner_step_a", &model_.miner_step_a);
             bound &= constructor.Bind("miner_strike", &model_.miner_strike);
+            bound &= constructor.Bind("miner_step_b", &model_.miner_step_b);
+            bound &= constructor.Bind("miner_smoke_1", &model_.miner_smoke_1);
+            bound &= constructor.Bind("miner_smoke_2", &model_.miner_smoke_2);
+            bound &= constructor.Bind("miner_smoke_3", &model_.miner_smoke_3);
+            bound &= constructor.Bind("miner_smoke_4", &model_.miner_smoke_4);
+            bound &= constructor.Bind("miner_smoke_5", &model_.miner_smoke_5);
+            bound &= constructor.Bind("miner_smoke_6", &model_.miner_smoke_6);
             bound &= constructor.Bind("progress_width", &model_.progress_width);
+            bound &= constructor.Bind("progress_text_left", &model_.progress_text_left);
             bound &= constructor.Bind("progress_text", &model_.progress_text);
             bound &= constructor.Bind("step_label", &model_.step_label);
             bound &= constructor.Bind("step_value", &model_.step_value);
@@ -267,20 +267,6 @@ namespace {
             bound &= constructor.Bind("zoom_text", &model_.zoom_text);
             bound &= constructor.Bind("zoom_color", &model_.zoom_color);
             bound &= constructor.Bind("zoom_sep_color", &model_.zoom_sep_color);
-            bound &= constructor.Bind("account_label", &model_.account_label);
-            bound &= constructor.Bind("account_tier", &model_.account_tier);
-            bound &= constructor.Bind("account_tooltip", &model_.account_tooltip);
-            bound &= constructor.Bind("account_color", &model_.account_color);
-            bound &= constructor.Bind("account_show_tier", &model_.account_show_tier);
-            bound &= constructor.Bind("account_membership_required", &model_.account_membership_required);
-            bound &= constructor.Bind("gallery_visible", &model_.gallery_visible);
-            bound &= constructor.Bind("gallery_show_label", &model_.gallery_show_label);
-            bound &= constructor.Bind("gallery_busy", &model_.gallery_busy);
-            bound &= constructor.Bind("gallery_attention", &model_.gallery_attention);
-            bound &= constructor.Bind("gallery_error", &model_.gallery_error);
-            bound &= constructor.Bind("gallery_label", &model_.gallery_label);
-            bound &= constructor.Bind("gallery_tooltip", &model_.gallery_tooltip);
-            bound &= constructor.Bind("gallery_color", &model_.gallery_color);
             bound &= constructor.Bind("lfs_mem_text", &model_.lfs_mem_text);
             bound &= constructor.Bind("lfs_mem_color", &model_.lfs_mem_color);
             bound &= constructor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -404,59 +390,6 @@ namespace {
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
-    }
-
-    bool elementTakesWidth(Rml::Element* element) {
-        return element != nullptr && element->IsVisible(true) &&
-               element->GetDisplay() != Rml::Style::Display::None &&
-               element->GetOffsetWidth() > 0.0f;
-    }
-
-    TEST_F(StatusBarFitTest, GalleryChipHidesBeforeAccountChip) {
-        auto* const gallery = document_->GetElementById("gallery-chip");
-        auto* const gallery_label = document_->GetElementById("gallery-chip-label");
-        auto* const account = document_->GetElementById("account-chip");
-        ASSERT_NE(gallery, nullptr);
-        ASSERT_NE(gallery_label, nullptr);
-        ASSERT_NE(account, nullptr);
-
-        context_->SetDimensions({2400, 22});
-        lfs::vis::gui::RmlStatusBarTestAccess::applyFitLevel(status_bar_, 0);
-        context_->Update();
-        EXPECT_TRUE(elementTakesWidth(gallery));
-        EXPECT_TRUE(elementTakesWidth(gallery_label));
-        EXPECT_TRUE(elementTakesWidth(account));
-
-        lfs::vis::gui::RmlStatusBarTestAccess::applyFitLevel(status_bar_, 2);
-        context_->Update();
-        EXPECT_TRUE(elementTakesWidth(gallery));
-        EXPECT_FALSE(elementTakesWidth(gallery_label));
-        EXPECT_TRUE(elementTakesWidth(account));
-
-        lfs::vis::gui::RmlStatusBarTestAccess::applyFitLevel(status_bar_, 5);
-        context_->Update();
-        EXPECT_TRUE(elementTakesWidth(gallery));
-        EXPECT_TRUE(elementTakesWidth(account));
-
-        lfs::vis::gui::RmlStatusBarTestAccess::applyFitLevel(status_bar_, 6);
-        context_->Update();
-        EXPECT_FALSE(elementTakesWidth(gallery));
-        EXPECT_TRUE(elementTakesWidth(account));
-    }
-
-    TEST_F(StatusBarFitTest, GalleryChipHiddenWhenSignedOut) {
-        model_.gallery_visible = false;
-        model_handle_.DirtyVariable("gallery_visible");
-        context_->SetDimensions({2400, 22});
-        lfs::vis::gui::RmlStatusBarTestAccess::applyFitLevel(status_bar_, 0);
-        context_->Update();
-
-        auto* const gallery = document_->GetElementById("gallery-chip");
-        auto* const account = document_->GetElementById("account-chip");
-        ASSERT_NE(gallery, nullptr);
-        ASSERT_NE(account, nullptr);
-        EXPECT_FALSE(elementTakesWidth(gallery));
-        EXPECT_TRUE(elementTakesWidth(account));
     }
 
     TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {

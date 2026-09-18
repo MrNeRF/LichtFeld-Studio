@@ -152,7 +152,6 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: rgba(0, 0, 0, 0.52);
     z-index: 30;
 }
 
@@ -170,7 +169,6 @@
     width: 360dp;
     max-width: 80%;
     padding: 12dp;
-    background-color: #20242b;
     border-width: 1dp;
     border-radius: 6dp;
 }
@@ -1026,10 +1024,6 @@
 .asset-resize-handle { flex: 0 0 auto; z-index: 2; background-color: transparent; }
 .asset-resize-handle--vertical { width: 12dp; min-width: 12dp; margin: 0 -2dp; cursor: ew-resize; }
 .asset-resize-handle--horizontal { height: 12dp; min-height: 12dp; margin: -2dp 0; cursor: ns-resize; }
-.asset-resize-handle:hover, .asset-resize-handle:active, .asset-resize-handle:focus {
-    background-color: rgba(128, 160, 220, 0.45);
-}
-
 #asset-gallery { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; }
 .asset-gallery-header { flex: 0 0 auto; min-width: 0; }
 .asset-gallery-header-row { min-height: 32dp; display: flex; align-items: center; gap: 8dp; padding: 4dp 12dp; }
@@ -1094,7 +1088,6 @@
     border-right-color: transparent;
     cursor: ew-resize;
 }
-.asset-list-column-handle:hover { border-right-color: #8fb4ff; background-color: rgba(143, 180, 255, 0.18); }
 .asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex: 0 0 auto; min-width: 0; }
 .asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
 .asset-scroll-shell-list.is-wide .asset-col-modified { display: block; }
@@ -1273,7 +1266,7 @@
 .contents-action { box-sizing: border-box; display: flex; align-items: center; flex: 0 0 auto; height: 24dp; min-height: 24dp; padding: 0 6dp; margin: 0; white-space: nowrap; }
 .contents-action span { display: block; line-height: 16dp; white-space: nowrap; }
 .contents-remove { box-sizing: border-box; flex: 0 0 24dp; width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 4dp; margin: 0; }
-.contents-remove img { display: block; width: 16dp; height: 16dp; image-color: #d8dee9; }
+.contents-remove img { display: block; width: 16dp; height: 16dp; }
 .contents-row--pending { opacity: 0.65; }
 .contents-row--disabled { opacity: 0.5; }
 .contents-pending { display: block; line-height: 24dp; min-height: 24dp; white-space: normal; }
