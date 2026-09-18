@@ -1056,6 +1056,15 @@ set_tests_properties(lichtfeld.cmake.vcpkg_profiles PROPERTIES
     TIMEOUT 60
 )
 
+add_test(NAME lichtfeld.cmake.native_file_dialog_port
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_native_file_dialog_port.cmake"
+)
+set_tests_properties(lichtfeld.cmake.native_file_dialog_port PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS "fast"
+    TIMEOUT 10
+)
+
 add_test(NAME lichtfeld.python.fast
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m "not gpu and not slow and not integration"
