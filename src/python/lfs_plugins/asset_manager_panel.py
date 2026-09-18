@@ -1138,15 +1138,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _start_inspection_refresh(self) -> None:
         if not self._asset_index or not self._panel_mounted or not self._handle:
             return
-        entries = [
-            asset
-            for asset in self._window_assets(self._filtered_assets())
-            if not asset.get("recent_only")
-        ]
+        entries = self._window_assets(self._filtered_assets())
         selected = self.get_selected_asset_id()
-        self._ensure_inspection_pipeline().refresh(
-            entries, "" if selected.startswith("recent:") else selected
-        )
+        self._ensure_inspection_pipeline().refresh(entries, selected)
 
     def _on_inspection_result(self, asset_id: str, kind: str, result: Any, error: Optional[Exception]) -> None:
         if not self._panel_mounted:
@@ -1611,6 +1605,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         ids = getattr(self._asset_index, "iter_project_ids", None)
         live_ids = set(ids() if callable(ids) else self._asset_index_assets())
         live_ids.update(self._gallery_remote_assets())
+        live_ids.update(self._recent_only_assets())
         stale_ids = set(self._thumbnail_sources_by_asset).difference(live_ids)
         release_texture = getattr(lf.ui, "release_rml_texture", None)
         for asset_id in stale_ids:
@@ -2771,7 +2766,30 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
         if asset.get("recent_only"):
-            return [{"label": tr("projects.action.open"), "action": "load"}]
+            items = [{"label": tr("projects.action.open"), "action": "load"}]
+            if self._project_available(asset):
+                items.append({
+                    "label": tr("projects.action.show_in_folder"),
+                    "action": "show_in_folder",
+                    "separator_before": True,
+                })
+            details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
+            if details is not None:
+                labels = {
+                    "contents": "projects.contents.title",
+                    "export_as": "projects.action.export_as",
+                    "update_thumbnail": "projects.action.update_thumbnail",
+                    "rename": "projects.action.rename",
+                }
+                for operation in operation_actions(asset):
+                    action = str(operation.get("action") or "")
+                    if action in labels:
+                        items.append({
+                            "label": tr(labels[action]),
+                            "action": "project:" + action,
+                            "separator_before": action == "contents",
+                        })
+            return items
         items: List[Dict[str, Any]] = []
         if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})

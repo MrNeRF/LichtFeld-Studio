@@ -825,6 +825,44 @@ def test_recent_only_project_has_no_gallery_inspector_action(
     assert controller_calls == []
 
 
+def test_recent_only_project_uses_native_inspection_without_joining_library(
+    panel_module, monkeypatch, tmp_path
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    recent = panel._filtered_assets()[0]
+    panel._inspection_by_asset[recent["id"]] = {
+        "card": SimpleNamespace(
+            has_preview=True,
+            physical_file_size=2048,
+            saved_at_unix_ns=1_700_000_000_000_000_000,
+            commit_uuid="inspected-commit",
+        ),
+        "details": object(),
+    }
+
+    formatted = panel._format_asset_for_ui(recent)
+    assert formatted["size_label"].startswith("2.0 ")
+    assert formatted["saved_label"]
+    assert formatted["has_preview"] is True
+    assert formatted["commit_uuid"] == "inspected-commit"
+    assert panel._asset_index.assets == {}
+    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == [
+        "load",
+        "show_in_folder",
+        "project:contents",
+        "project:export_as",
+        "project:update_thumbnail",
+        "project:rename",
+    ]
+
+
 def test_recent_scope_resolves_path_aliases(panel_module, tmp_path):
     watched = tmp_path / "watched"
     watched.mkdir()
@@ -913,11 +951,10 @@ def test_unindexed_recent_open_actions_preserve_mru_and_library_safety(
     recent = panel._filtered_assets()[0]
     import_module("lfs_plugins.file_menu")
 
-    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == [
-        "load"
-    ]
+    expected_actions = ["load"] + (["show_in_folder"] if exists else [])
+    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == expected_actions
     assert panel._select_asset_id(recent["id"]) is True
-    assert inspections == [([], "")]
+    assert inspections == [([recent], recent["id"])]
     assert panel.get_contents_rows() == []
 
     shell = _Element()
