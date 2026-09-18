@@ -305,6 +305,7 @@ namespace lfs::vis::gui {
             manager_->releaseCachedVulkanContext(direct_cache_);
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
+        last_forwarded_mods_ = 0;
         last_hovered_ = false;
         manual_dropdown_hover_ = nullptr;
         manual_dropdown_mouse_captured_ = false;
@@ -589,6 +590,13 @@ namespace lfs::vis::gui {
             updateContextLayout(pw, ph);
             restoreScrollTop(saved_scroll);
         }
+
+        // A data-model update can move a resize handle without any physical
+        // mouse motion. Re-hit-test the settled layout so RmlUi republishes the
+        // cursor belonging to the element now under the pointer.
+        if (last_hovered_ && last_forwarded_mx_ >= 0 && last_forwarded_my_ >= 0)
+            rml_context_->ProcessMouseMove(last_forwarded_mx_, last_forwarded_my_,
+                                           last_forwarded_mods_);
 
         if (needs_post_layout_update)
             rml_context_->Update();
@@ -1145,6 +1153,7 @@ namespace lfs::vis::gui {
             if (!effective_hovered) {
                 last_forwarded_mx_ = -1;
                 last_forwarded_my_ = -1;
+                last_forwarded_mods_ = 0;
                 setManualDropdownHover(nullptr);
                 manual_dropdown_mouse_captured_ = false;
                 rml_context_->ProcessMouseLeave();
@@ -1168,6 +1177,7 @@ namespace lfs::vis::gui {
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
+        last_forwarded_mods_ = mods;
 
         const bool manual_dropdown_route = dropdown_hovered || manual_dropdown_mouse_captured_;
         Rml::Element* manual_dropdown_target =

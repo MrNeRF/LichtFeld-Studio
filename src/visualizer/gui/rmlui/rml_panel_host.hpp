@@ -159,6 +159,7 @@ namespace lfs::vis::gui {
         int last_layout_padding_ = -1;
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
+        int last_forwarded_mods_ = 0;
         bool last_hovered_ = false;
         Rml::Element* manual_dropdown_hover_ = nullptr;
         bool manual_dropdown_mouse_captured_ = false;

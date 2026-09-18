@@ -1643,13 +1643,10 @@ namespace lfs::vis {
             return;
         }
 
-        SDL_Rect target_bounds = usable_bounds;
-#if defined(_WIN32)
-        // Windows-only: keep work-area dimensions so the taskbar stays visible.
-        // Ask for the display top; the WM may still clamp managed windows to work-area y.
-        target_bounds.y = display_bounds.y;
-        target_bounds.h = std::min(usable_bounds.h, display_bounds.h);
-#endif
+        // Borderless windows are not constrained by the native non-client area.
+        // Respect the complete work area, including its origin: a top taskbar or
+        // desktop dock moves usable_bounds.y below display_bounds.y.
+        const SDL_Rect target_bounds = usable_bounds;
 
         const bool size_set = SDL_SetWindowSize(window_, target_bounds.w, target_bounds.h);
         const bool position_set = SDL_SetWindowPosition(window_, target_bounds.x, target_bounds.y);
