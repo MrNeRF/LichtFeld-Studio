@@ -187,6 +187,10 @@ class _Element:
         self.scroll_height = 900.0
         self.client_height = 300.0
         self.client_width = 800.0
+        self.absolute_left = 0.0
+        self.absolute_top = 0.0
+        self.absolute_width = self.client_width
+        self.absolute_height = 24.0
         self.focused = False
         self.selection_range = None
         if parent is not None:
@@ -2757,3 +2761,79 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     panel.confirm_project_dialog()
     assert panel._dialog_kind == "update_thumbnail"
     assert closed == []
+
+
+def test_asset_menu_button_anchors_menu_without_mouse_position(
+    panel_module, monkeypatch
+):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    shell = _Element()
+    button = _Element(
+        {"data-asset-id": asset["id"], "data-asset-action": "menu"}, shell
+    )
+    button.absolute_left = 310.0
+    button.absolute_top = 42.0
+    button.absolute_height = 24.0
+    monkeypatch.setattr(panel_module.lf.ui, "get_mouse_screen_pos", None)
+    event = _Event(shell, button)
+
+    panel._on_asset_manager_click(event)
+
+    assert panel_module.lf._test_state.context_menus[-1]["position"] == (310.0, 66.0)
+    assert event.stopped is True
+
+
+@pytest.mark.parametrize("key_name", ["KI_RETURN", "KI_SPACE"])
+def test_asset_menu_button_is_left_to_native_keyboard_activation(panel_module, key_name):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    loaded = []
+    quick_look = []
+    panel._load_asset = loaded.append
+    panel.open_quick_look = lambda: quick_look.append(asset["id"])
+    shell = _Element()
+    button = _Element(
+        {"data-asset-id": asset["id"], "data-asset-action": "menu"}, shell
+    )
+    event = _Event(
+        shell,
+        button,
+        params={"key_identifier": str(getattr(panel_module, key_name))},
+    )
+
+    panel._on_asset_results_keydown(event)
+    panel._on_asset_manager_keydown(event)
+
+    assert loaded == []
+    assert quick_look == []
+    assert panel_module.lf._test_state.context_menus == []
+    assert event.stopped is False
+
+
+@pytest.mark.parametrize("action", ["gallery:publish", "project:contents"])
+def test_removed_asset_context_action_does_not_reuse_previous_selection(
+    panel_module, action
+):
+    panel = panel_module.AssetManagerPanel()
+    first = _project(id="first", project_uuid="first", name="First")
+    second = _project(id="second", project_uuid="second", name="Second")
+    panel._asset_index = _index(assets={first["id"]: first, second["id"]: second})
+    panel._selected_asset_ids = {second["id"]}
+    panel._selection_cursor_id = second["id"]
+    gallery_actions = []
+    project_actions = []
+    panel._gallery_command = gallery_actions.append
+    panel.open_project_operation = lambda _handle, _event, args: project_actions.extend(args)
+    assert panel._show_asset_context_menu(first["id"]) is True
+    del panel._asset_index.assets[first["id"]]
+
+    panel_module.lf._test_state.context_menus[-1]["on_action"](action)
+
+    assert panel.get_selected_asset_id() == second["id"]
+    assert gallery_actions == []
+    assert project_actions == []

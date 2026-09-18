@@ -2756,13 +2756,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self,
         items: List[Dict[str, Any]],
         on_action: Callable[[str], None],
+        anchor=None,
     ) -> bool:
         show = getattr(lf.ui, "show_context_menu", None)
         mouse_position = getattr(lf.ui, "get_mouse_screen_pos", None)
-        if not callable(show) or not callable(mouse_position):
+        if not callable(show) or (anchor is None and not callable(mouse_position)):
             return False
         try:
-            x, y = mouse_position()
+            if anchor is not None:
+                x = float(anchor.absolute_left)
+                y = float(anchor.absolute_top) + float(anchor.absolute_height)
+            else:
+                x, y = mouse_position()
             show(items, float(x), float(y), on_action)
             return True
         except Exception as exc:
@@ -2824,7 +2829,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _handle_asset_context_action(self, action: str, asset_id: str) -> None:
         if action.startswith("gallery:"):
-            self._select_asset_id(asset_id)
+            if not self._select_asset_id(asset_id):
+                return
             self._gallery_command(action.split(":", 1)[1])
         elif action == "load":
             self._load_asset(asset_id)
@@ -2839,14 +2845,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "trash":
             self.on_move_asset_to_trash(None, None, [asset_id])
         elif action.startswith("project:"):
-            self._select_asset_id(asset_id)
+            if not self._select_asset_id(asset_id):
+                return
             self.open_project_operation(None, None, [action.partition(":")[2]])
 
-    def _show_asset_context_menu(self, asset_id: str) -> bool:
+    def _show_asset_context_menu(self, asset_id: str, anchor=None) -> bool:
         asset = self._asset_dict(asset_id)
         return bool(asset) and self._show_shared_context_menu(
             self._asset_context_menu_items(asset),
             lambda action: self._handle_asset_context_action(action, asset_id),
+            anchor,
         )
 
     def on_rename_asset(self, _handle, _ev, args):
@@ -3600,7 +3608,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             elif action == "load":
                 self._load_asset(asset_id)
             elif action == "menu":
-                self._show_asset_context_menu(asset_id)
+                self._show_asset_context_menu(asset_id, action_element)
             elif action == "select":
                 self._select_asset_id(
                     asset_id,
@@ -3938,6 +3946,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return True
         target = event.target()
         container = event.current_target()
+        asset_action = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-action", container
+        )
+        if (
+            asset_action is not None
+            and asset_action.get_attribute("data-asset-action", "") != "select"
+        ):
+            return False
         tag = getattr(target, "tag_name", "")
         if callable(tag):
             tag = tag()
@@ -3959,6 +3975,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _on_asset_results_keydown(self, event) -> None:
         if self._input_capture_active():
+            return
+        container = event.current_target()
+        action_element = rml_widgets.find_ancestor_with_attribute(
+            event.target(), "data-asset-action", container
+        )
+        if (
+            action_element is not None
+            and action_element.get_attribute("data-asset-action", "") != "select"
+        ):
             return
         if self._on_gallery_shortcut(event):
             return
