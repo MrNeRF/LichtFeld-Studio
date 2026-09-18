@@ -73,6 +73,8 @@ namespace {
             std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
         const auto retained_thumbnail = std::vector<std::byte>{
             std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
+        const auto newer_preview = std::vector<std::byte>{
+            std::byte{'n'}, std::byte{'e'}, std::byte{'w'}};
         {
             auto reader = require_result(ProjectReader::open(source));
             auto writer = require_result(ProjectWriter::append(source));
@@ -92,6 +94,7 @@ namespace {
             require_status(writer.set_preview(selected_preview));
             require_status(writer.commit());
         }
+        static_cast<void>(require_result(set_project_preview(source, newer_preview)));
 
         const auto restored_path = temporary.path / "restored-thumbnail-history.licht";
         static_cast<void>(require_result(restore_save(source, 2, restored_path)));

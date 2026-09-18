@@ -1236,6 +1236,55 @@ namespace lfs::io::project {
         if (!selected_reader) {
             return std::move(selected_reader).error();
         }
+        const ChunkInfo* selected_preview_row = nullptr;
+        std::optional<ChunkKey> append_preview_key;
+        if (reader->preview().has_value()) {
+            const auto& locator = *reader->preview();
+            const auto current_preview = std::ranges::find_if(
+                reader->chunks(), [&locator](const ChunkInfo& row) {
+                    return row.key.fourcc == FOURCC_THMB &&
+                           row.payload_offset == locator.offset &&
+                           row.stored_bytes == locator.bytes;
+                });
+            if (current_preview != reader->chunks().end()) {
+                append_preview_key = current_preview->key;
+                if (generation == reader->commit().generation) {
+                    const auto selected = selected_rows.find(current_preview->key);
+                    if (selected != selected_rows.end() &&
+                        selected->second.payload_offset == locator.offset &&
+                        selected->second.stored_bytes == locator.bytes)
+                        selected_preview_row = &selected->second;
+                }
+            }
+        }
+        if (selected_preview_row == nullptr && append_preview_key.has_value()) {
+            const auto matching_key = selected_rows.find(*append_preview_key);
+            if (matching_key != selected_rows.end())
+                selected_preview_row = &matching_key->second;
+        }
+        if (selected_preview_row == nullptr) {
+            const auto canonical = selected_rows.find(
+                ChunkKey{FOURCC_THMB, reader->superblock().project_uuid});
+            if (canonical != selected_rows.end())
+                selected_preview_row = &canonical->second;
+        }
+        if (selected_preview_row == nullptr) {
+            for (const auto& [key, row] : selected_rows) {
+                if (key.fourcc != FOURCC_THMB)
+                    continue;
+                if (selected_preview_row != nullptr) {
+                    selected_preview_row = nullptr;
+                    break;
+                }
+                selected_preview_row = &row;
+            }
+        }
+        const auto is_selected_preview = [selected_preview_row](const ChunkInfo& row) {
+            return selected_preview_row != nullptr &&
+                   row.key == selected_preview_row->key &&
+                   row.payload_offset == selected_preview_row->payload_offset &&
+                   row.stored_bytes == selected_preview_row->stored_bytes;
+        };
         auto project_bytes = selected_reader->read_chunk(project_row->second);
         if (!project_bytes) {
             return std::move(project_bytes).error();
@@ -1298,12 +1347,20 @@ namespace lfs::io::project {
                 if (key == project_row->first) {
                     if (auto written = writer.write_chunk(key, restored_project); !written)
                         return std::move(written).error();
+                } else if (is_selected_preview(row)) {
+                    auto preview = selected_reader->read_chunk(row);
+                    if (!preview)
+                        return std::move(preview).error();
+                    if (auto written = writer.set_preview(*preview); !written)
+                        return std::move(written).error();
                 } else if (auto copied = writer.copy_chunk_verbatim(*selected_reader, row); !copied) {
                     return std::move(copied).error();
                 }
             }
             for (const auto& row : reader->chunks()) {
-                if (row.is_live() && !selected_rows.contains(row.key)) {
+                if (row.is_live() && !selected_rows.contains(row.key) &&
+                    !(selected_preview_row != nullptr && append_preview_key.has_value() &&
+                      row.key == *append_preview_key)) {
                     if (auto erased = writer.erase(row.key); !erased)
                         return std::move(erased).error();
                 }
@@ -1403,10 +1460,7 @@ namespace lfs::io::project {
                     !written) {
                     return std::move(written).error();
                 }
-            } else if (old_key.fourcc == FOURCC_THMB &&
-                       selected_reader->preview().has_value() &&
-                       row.payload_offset == selected_reader->preview()->offset &&
-                       row.stored_bytes == selected_reader->preview()->bytes) {
+            } else if (is_selected_preview(row)) {
                 auto preview = selected_reader->read_chunk(row);
                 if (!preview) {
                     return std::move(preview).error();
