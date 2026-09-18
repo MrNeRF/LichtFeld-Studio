@@ -165,12 +165,12 @@ namespace gsplat_lfs {
                 cum_tiles_per_gauss,
                 tile_size, tile_width, tile_height, tile_n_bits,
                 tiles_per_gauss, isect_ids, flatten_ids, max_isects, tiles);
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
         };
         if (tiles.end == UINT32_MAX)
             launch.template operator()<false>();
         else
             launch.template operator()<true>();
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
     }
 
     __global__ void fill_isect_sentinels_kernel(
