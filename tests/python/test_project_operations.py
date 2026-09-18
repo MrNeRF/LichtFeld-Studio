@@ -19,26 +19,24 @@ def _symlink_or_skip(link: Path, target: Path) -> None:
         raise
 
 
-def _windows_denied_identity_swap(error: BaseException) -> bool:
-    current: BaseException | None = error
-    while current is not None:
-        if (
-            os.name == "nt"
-            and isinstance(current, PermissionError)
-            and current.winerror == 5
-        ):
-            return True
-        current = current.__cause__
-    return False
+def _overwrite_file(path: Path, replacement: Path) -> None:
+    """Change an open project's identity without relying on rename semantics."""
+    contents = replacement.read_bytes()
+    with path.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(contents)
+        stream.truncate()
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
-def _assert_changed_or_platform_refused(error: BaseException) -> None:
-    assert "changed" in str(error) or _windows_denied_identity_swap(error)
-
-
-def _skip_locked_identity_swap_on_windows(swap: str) -> None:
-    if os.name == "nt" and swap == "identity":
-        pytest.skip("Windows denies replacement while the operation pins the project identity")
+def _overwrite_superblock(path: Path, replacement: Path) -> None:
+    contents = replacement.read_bytes()[:256]
+    with path.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(contents)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 @pytest.fixture
@@ -57,7 +55,6 @@ def identity_project(native_io, tmp_path, monkeypatch):
 def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_path, monkeypatch, operation, swap):
     from lfs_plugins.project_operations import ProjectOperations, ProjectOperationFailure
 
-    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     replacement = tmp_path / "replacement.licht"
     native_io.restore_save(path, 1, replacement)
@@ -74,7 +71,7 @@ def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_pat
         put(row)
         if row["status"] == "running":
             if swap == "identity":
-                os.replace(replacement, selected)
+                _overwrite_file(selected, replacement)
             else:
                 selected.unlink()
                 _symlink_or_skip(selected, replacement)
@@ -92,13 +89,11 @@ def test_contents_refuses_swap_after_backup(native_io, identity_project, tmp_pat
         "rename": lambda: native_io.set_project_title(selected, "Changed"),
         "dataset_reference": lambda: native_io.set_dataset_reference(selected, tmp_path),
     }
-    with pytest.raises(ProjectOperationFailure) as failure:
+    with pytest.raises(ProjectOperationFailure, match="(identity|path).*changed") as failure:
         store.run("guarded", {"path": str(selected), "id": str(card.project_uuid),
                   "commit_uuid": str(card.commit_uuid)}, operation, operations[operation])
-    platform_refused = _windows_denied_identity_swap(failure.value)
-    _assert_changed_or_platform_refused(failure.value)
     assert failure.value.record["status"] == "failed"
-    assert "changed" in store.recover()["guarded"]["reason"] or platform_refused
+    assert "changed" in store.recover()["guarded"]["reason"]
     assert selected.read_bytes() == before
 
 
@@ -115,7 +110,6 @@ def test_contents_refuses_callback_for_another_existing_path(native_io, identity
 
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_compact_rechecks_destination_after_progress(native_io, identity_project, tmp_path, swap):
-    _skip_locked_identity_swap_on_windows(swap)
     path, _ = identity_project
     other = tmp_path / "other.licht"
     native_io.restore_save(path, 1, other)
@@ -124,6 +118,8 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
         selected = tmp_path / "alias.licht"
         _symlink_or_skip(selected, path)
     before = other.read_bytes()
+    if swap == "identity":
+        before = before[:256] + selected.read_bytes()[256:]
     swapped = False
 
     def progress(*_args):
@@ -131,21 +127,19 @@ def test_compact_rechecks_destination_after_progress(native_io, identity_project
         if not swapped:
             swapped = True
             if swap == "identity":
-                os.replace(other, path)
+                _overwrite_superblock(path, other)
             else:
                 selected.unlink()
                 _symlink_or_skip(selected, other)
 
-    with pytest.raises(Exception) as failure:
+    with pytest.raises(Exception, match="(identity|path).*changed"):
         native_io.compact_project_file(selected, progress=progress)
-    _assert_changed_or_platform_refused(failure.value)
     assert swapped and selected.read_bytes() == before
 
 
 @pytest.mark.parametrize("swap", ["identity", "path"])
 @pytest.mark.parametrize("guarded", [False, True])
 def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_project, tmp_path, swap, guarded):
-    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     other = tmp_path / "other.licht"
     native_io.restore_save(path, 1, other)
@@ -163,18 +157,17 @@ def test_reduce_rechecks_planned_identity_after_progress(native_io, identity_pro
             return
         swapped = True
         if swap == "identity":
-            os.replace(other, path)
+            _overwrite_file(path, other)
         else:
             selected.unlink()
             _symlink_or_skip(selected, other)
 
-    with pytest.raises(Exception) as failure:
+    with pytest.raises(Exception, match="(identity|path).*changed"):
         operation = lambda: native_io.reduce_size(selected, {"compact": False, "drop_thumbnail": True}, progress=progress)
         if guarded:
             native_io.run_project_operation(selected, str(card.project_uuid), str(card.commit_uuid), operation)
         else:
             operation()
-    _assert_changed_or_platform_refused(failure.value)
     assert swapped and selected.read_bytes() == before
 
 
@@ -211,7 +204,6 @@ def test_contents_edits_and_restore_accept_unicode_alias(native_io, identity_pro
 @pytest.mark.parametrize("operation", ["backup", "restore_backup"])
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_contents_recovery_write_refuses_changed_project(native_io, identity_project, tmp_path, operation, swap):
-    _skip_locked_identity_swap_on_windows(swap)
     path, card = identity_project
     backup = native_io.backup_project_file(path)
     other = tmp_path / "other.licht"
@@ -224,7 +216,7 @@ def test_contents_recovery_write_refuses_changed_project(native_io, identity_pro
 
     def write_recovery():
         if swap == "identity":
-            os.replace(other, path)
+            _overwrite_file(path, other)
         else:
             alias.unlink()
             _symlink_or_skip(alias, other)
@@ -233,9 +225,8 @@ def test_contents_recovery_write_refuses_changed_project(native_io, identity_pro
         else:
             native_io.restore_project_backup(alias, backup, str(card.project_uuid), str(card.commit_uuid))
 
-    with pytest.raises(Exception) as failure:
+    with pytest.raises(Exception, match="(identity|path).*changed"):
         native_io.run_project_operation(alias, str(card.project_uuid), str(card.commit_uuid), write_recovery)
-    _assert_changed_or_platform_refused(failure.value)
     assert alias.read_bytes() == before
 
 
@@ -521,14 +512,7 @@ def test_closed_file_mutation_accepts_unicode_path(native_io, tmp_path):
 
 @pytest.mark.parametrize('kill_point', [
     'running',
-    pytest.param(
-        'completed',
-        marks=pytest.mark.xfail(
-            os.name == "nt",
-            reason="Windows denies atomic recovery replacement while identity is pinned",
-            strict=True,
-        ),
-    ),
+    'completed',
 ])
 def test_contents_kill_rolls_back_on_restart(native_io, tmp_path, kill_point):
     import subprocess

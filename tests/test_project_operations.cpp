@@ -59,6 +59,19 @@ namespace {
         ASSERT_TRUE(stream);
     }
 
+    void write_u64(const fs::path& path, const std::uint64_t offset,
+                   const std::uint64_t value) {
+        std::array<std::byte, 8> bytes{};
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            bytes[index] = static_cast<std::byte>((value >> (index * 8)) & 0xff);
+        }
+        std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(stream);
+        stream.seekp(static_cast<std::streamoff>(offset));
+        stream.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        ASSERT_TRUE(stream);
+    }
+
     TEST(ProjectOperations, RestoreOlderSaveRekeysAndRefusesCollision) {
         TemporaryDirectory temporary;
         const auto source = make_document(temporary.path / "source.licht");
@@ -144,12 +157,31 @@ namespace {
         flip_byte(damaged, HEAD_SLOT_OFFSETS[0] + 200);
         flip_byte(damaged, HEAD_SLOT_OFFSETS[1] + 200);
         const auto repaired_path = temporary.path / "repaired-thumbnail-history.licht";
-        const auto repaired = repair_project(damaged, repaired_path);
-        ASSERT_FALSE(repaired);
-        EXPECT_EQ(repaired.error().code(), lfs::ErrorCode::FailedPrecondition);
-        EXPECT_EQ(repaired.error().user_message(),
+        static_cast<void>(require_result(repair_project(damaged, repaired_path)));
+        auto repaired = require_result(ProjectReader::open(repaired_path));
+        EXPECT_EQ(require_result(repaired.read_preview()), newer_preview);
+        EXPECT_EQ(std::ranges::count_if(
+                      repaired.chunks(), [](const ChunkInfo& row) {
+                          return row.is_live() && row.key.fourcc == FOURCC_THMB;
+                      }),
+                  2);
+
+        const auto ambiguous_repair_source =
+            temporary.path / "ambiguous-repair-thumbnail-history.licht";
+        fs::copy_file(source, ambiguous_repair_source);
+        for (const auto offset : HEAD_SLOT_OFFSETS) {
+            write_u64(ambiguous_repair_source, offset + 112, 1);
+            flip_byte(ambiguous_repair_source, offset + 200);
+        }
+        const auto ambiguous_repair_destination =
+            temporary.path / "ambiguous-repair-result.licht";
+        const auto ambiguous_repair =
+            repair_project(ambiguous_repair_source, ambiguous_repair_destination);
+        ASSERT_FALSE(ambiguous_repair);
+        EXPECT_EQ(ambiguous_repair.error().code(), lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(ambiguous_repair.error().user_message(),
                   "The recovered project preview is ambiguous.");
-        EXPECT_FALSE(fs::exists(repaired_path));
+        EXPECT_FALSE(fs::exists(ambiguous_repair_destination));
     }
 
     TEST(ProjectOperations, RebindCheckpointKeepsRecoveryCopy) {

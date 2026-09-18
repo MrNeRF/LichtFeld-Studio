@@ -828,38 +828,56 @@ namespace lfs::io::project {
             return value;
         }
 
-        lfs::Result<std::pair<std::filesystem::path, std::uint64_t>>
+        struct RepairCandidate {
+            std::filesystem::path path;
+            std::uint64_t generation = 0;
+            bool preview_selection_recovered = false;
+        };
+
+        lfs::Result<RepairCandidate>
         find_repair_candidate(const std::filesystem::path& path) {
             constexpr std::uint64_t kScanLimit = 256ull * 1024 * 1024;
             std::error_code size_error;
             const auto size = std::filesystem::file_size(path, size_error);
             if (size_error) {
-                return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                return fail<RepairCandidate>(
                     lfs::ErrorCode::NotFound, path,
                     "The repair source could not be inspected.", size_error.message(),
                     "repair.scan");
             }
             if (size < APPEND_REGION_OFFSET + COMMIT_RECORD_BYTES) {
-                return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                return fail<RepairCandidate>(
                     lfs::ErrorCode::DataLoss, path,
                     "No valid project save was found for repair.",
                     "the file is shorter than one complete commit", "repair.candidate");
             }
             std::ifstream input(path, std::ios::binary);
             if (!input) {
-                return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                return fail<RepairCandidate>(
                     lfs::ErrorCode::PermissionDenied, path,
                     "The repair source could not be opened.", "open failed", "repair.scan");
             }
             std::array<std::byte, SUPERBLOCK_BYTES> superblock{};
             input.read(reinterpret_cast<char*>(superblock.data()), superblock.size());
             if (input.gcount() != static_cast<std::streamsize>(superblock.size())) {
-                return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                return fail<RepairCandidate>(
                     lfs::ErrorCode::DataLoss, path,
                     "No valid project save was found for repair.",
                     "the superblock is incomplete", "repair.candidate");
             }
             const auto project_uuid = read_uuid_bytes(superblock, 24);
+            const auto file_uuid = read_uuid_bytes(superblock, 40);
+            std::array<std::array<std::byte, HEAD_SLOT_BYTES>, 2> original_heads{};
+            for (std::uint32_t slot = 0; slot < original_heads.size(); ++slot) {
+                input.clear();
+                input.seekg(static_cast<std::streamoff>(HEAD_SLOT_OFFSETS[slot]));
+                input.read(reinterpret_cast<char*>(original_heads[slot].data()),
+                           original_heads[slot].size());
+                if (input.gcount() !=
+                    static_cast<std::streamsize>(original_heads[slot].size())) {
+                    original_heads[slot].fill(std::byte{0});
+                }
+            }
             const auto start = size > kScanLimit ? size - kScanLimit : APPEND_REGION_OFFSET;
             const auto scan_start = std::max(start, APPEND_REGION_OFFSET);
             input.seekg(static_cast<std::streamoff>(scan_start));
@@ -893,7 +911,7 @@ namespace lfs::io::project {
                 candidates.emplace_back(offset, generation);
             }
             if (candidates.empty()) {
-                return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                return fail<RepairCandidate>(
                     lfs::ErrorCode::DataLoss, path,
                     "No valid project save was found for repair.",
                     "the bounded commit scan found no complete commit record",
@@ -909,7 +927,7 @@ namespace lfs::io::project {
                 if (!std::filesystem::copy_file(path, temporary,
                                                 std::filesystem::copy_options::none,
                                                 copy_error)) {
-                    return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                    return fail<RepairCandidate>(
                         lfs::ErrorCode::PermissionDenied, temporary,
                         "The repair staging file could not be created.", copy_error.message(),
                         "repair.staging");
@@ -923,6 +941,54 @@ namespace lfs::io::project {
                     continue;
                 }
                 std::array<std::byte, HEAD_SLOT_BYTES> head{};
+                std::optional<std::optional<PreviewLocator>> recovered_preview;
+                for (const auto& original_head : original_heads) {
+                    const auto original = std::span<const std::byte>(original_head);
+                    auto sanitized_head = original_head;
+                    std::fill(sanitized_head.begin() + 128,
+                              sanitized_head.begin() + 4092, std::byte{0});
+                    constexpr std::array<std::byte, 8> head_magic{
+                        std::byte{'L'}, std::byte{'F'}, std::byte{'S'}, std::byte{'H'},
+                        std::byte{'E'}, std::byte{'A'}, std::byte{'D'}, std::byte{0}};
+                    if (std::memcmp(original.data(), head_magic.data(), head_magic.size()) != 0 ||
+                        read_u32_bytes(original, 12) != HEAD_SLOT_BYTES ||
+                        read_u64_bytes(original, 24) != generation ||
+                        read_uuid_bytes(original, 32) != project_uuid ||
+                        read_uuid_bytes(original, 48) != file_uuid ||
+                        read_uuid_bytes(original, 64) != read_uuid_bytes(commit, 48) ||
+                        read_u64_bytes(original, 80) != candidate_offset ||
+                        read_u64_bytes(original, 88) != COMMIT_RECORD_BYTES ||
+                        read_u64_bytes(original, 96) != read_u64_bytes(commit, 176) ||
+                        read_u32_bytes(original, 104) != read_u32_bytes(commit, 252) ||
+                        crc32c(0, sanitized_head.data(), 4092) !=
+                            read_u32_bytes(original, 4092)) {
+                        continue;
+                    }
+                    const auto preview_offset = read_u64_bytes(original, 112);
+                    const auto preview_bytes = read_u32_bytes(original, 120);
+                    const auto preview_format = read_u32_bytes(original, 124);
+                    std::optional<PreviewLocator> selection;
+                    if (preview_offset == 0 && preview_bytes == 0 && preview_format == 0) {
+                        selection.reset();
+                    } else if (preview_offset % CHUNK_ALIGNMENT == 0 && preview_bytes >= 1 &&
+                               preview_bytes <= MAX_PREVIEW_BYTES &&
+                               preview_format == static_cast<std::uint32_t>(PreviewFormat::Png) &&
+                               preview_bytes <= read_u64_bytes(commit, 176) &&
+                               preview_offset <= read_u64_bytes(commit, 176) - preview_bytes) {
+                        selection = PreviewLocator{
+                            .offset = preview_offset,
+                            .bytes = preview_bytes,
+                            .format = PreviewFormat::Png,
+                        };
+                    } else {
+                        continue;
+                    }
+                    if (recovered_preview.has_value() && *recovered_preview != selection) {
+                        recovered_preview.reset();
+                        break;
+                    }
+                    recovered_preview.emplace(selection);
+                }
                 const auto fill_head = [&](const std::uint32_t slot,
                                            const std::uint64_t sequence) {
                     head.fill(std::byte{0});
@@ -941,6 +1007,13 @@ namespace lfs::io::project {
                     write_u64_bytes(head, 88, COMMIT_RECORD_BYTES);
                     write_u64_bytes(head, 96, read_u64_bytes(commit, 176));
                     write_u32_bytes(head, 104, read_u32_bytes(commit, 252));
+                    if (recovered_preview.has_value() && recovered_preview->has_value()) {
+                        write_u64_bytes(head, 112, (*recovered_preview)->offset);
+                        write_u32_bytes(head, 120, (*recovered_preview)->bytes);
+                        write_u32_bytes(
+                            head, 124,
+                            static_cast<std::uint32_t>((*recovered_preview)->format));
+                    }
                     write_u32_bytes(head, 4092, crc32c(0, head.data(), 4092));
                 };
                 {
@@ -948,7 +1021,7 @@ namespace lfs::io::project {
                                         std::ios::binary | std::ios::in | std::ios::out);
                     if (!output) {
                         std::filesystem::remove(temporary);
-                        return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                        return fail<RepairCandidate>(
                             lfs::ErrorCode::PermissionDenied, temporary,
                             "The repair staging file could not be opened.", "open failed",
                             "repair.staging");
@@ -961,7 +1034,7 @@ namespace lfs::io::project {
                     output.flush();
                     if (!output) {
                         std::filesystem::remove(temporary);
-                        return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+                        return fail<RepairCandidate>(
                             lfs::ErrorCode::PermissionDenied, temporary,
                             "The repair staging head could not be written.", "write failed",
                             "repair.staging");
@@ -969,11 +1042,15 @@ namespace lfs::io::project {
                 }
                 auto reader = ProjectReader::open(temporary);
                 if (reader && reader->verify_all()) {
-                    return std::pair{temporary, generation};
+                    return RepairCandidate{
+                        .path = temporary,
+                        .generation = generation,
+                        .preview_selection_recovered = recovered_preview.has_value(),
+                    };
                 }
                 std::filesystem::remove(temporary);
             }
-            return fail<std::pair<std::filesystem::path, std::uint64_t>>(
+            return fail<RepairCandidate>(
                 lfs::ErrorCode::DataLoss, path,
                 "No valid project save was found for repair.",
                 "the bounded scan found commits but none passed index and live-header validation",
@@ -991,14 +1068,16 @@ namespace lfs::io::project {
         auto identity = detail::ProjectPathIdentity::capture(path);
         if (!identity)
             return lfs::Result<void>::failure(std::move(identity).error());
-        auto reader = ProjectReader::open(path);
-        if (!reader)
-            return lfs::Result<void>::failure(std::move(reader).error());
-        if (expected_project.is_nil() || reader->superblock().project_uuid != expected_project ||
-            (!expected_commit.is_nil() && reader->commit().commit_uuid != expected_commit))
-            return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
-                              "The project changed before the operation started. Refresh Projects and try again.",
-                              "selected project or commit identity does not match the locked file", "operation.identity");
+        {
+            auto reader = ProjectReader::open(path);
+            if (!reader)
+                return lfs::Result<void>::failure(std::move(reader).error());
+            if (expected_project.is_nil() || reader->superblock().project_uuid != expected_project ||
+                (!expected_commit.is_nil() && reader->commit().commit_uuid != expected_commit))
+                return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
+                                  "The project changed before the operation started. Refresh Projects and try again.",
+                                  "selected project or commit identity does not match the locked file", "operation.identity");
+        }
         if (auto checked = identity->validate(); !checked)
             return checked;
         struct RestoreLease {
@@ -1092,20 +1171,22 @@ namespace lfs::io::project {
         auto backup_identity = detail::ProjectPathIdentity::capture(backup);
         if (!backup_identity)
             return lfs::Result<void>::failure(std::move(backup_identity).error());
-        auto current = ProjectReader::open(path);
-        auto recovery = ProjectReader::open(backup);
-        if (!current)
-            return lfs::Result<void>::failure(std::move(current).error());
-        if (!recovery)
-            return lfs::Result<void>::failure(std::move(recovery).error());
-        if (current->superblock().project_uuid != expected_project ||
-            current->commit().commit_uuid != expected_commit ||
-            recovery->superblock().project_uuid != expected_project)
-            return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
-                              "The project identity changed. The recovery copy was kept.",
-                              "recovery refused to overwrite a different project or commit", "recovery.identity");
-        if (auto verified = recovery->verify_all(); !verified)
-            return lfs::Result<void>::failure(std::move(verified).error());
+        {
+            auto current = ProjectReader::open(path);
+            auto recovery = ProjectReader::open(backup);
+            if (!current)
+                return lfs::Result<void>::failure(std::move(current).error());
+            if (!recovery)
+                return lfs::Result<void>::failure(std::move(recovery).error());
+            if (current->superblock().project_uuid != expected_project ||
+                current->commit().commit_uuid != expected_commit ||
+                recovery->superblock().project_uuid != expected_project)
+                return fail<void>(lfs::ErrorCode::FailedPrecondition, path,
+                                  "The project identity changed. The recovery copy was kept.",
+                                  "recovery refused to overwrite a different project or commit", "recovery.identity");
+            if (auto verified = recovery->verify_all(); !verified)
+                return lfs::Result<void>::failure(std::move(verified).error());
+        }
         const auto temporary = lfs::io::make_atomic_temp_output_path(identity->canonical_path);
         std::error_code error;
         if (!std::filesystem::copy_file(backup, temporary, std::filesystem::copy_options::none, error)) {
@@ -2397,7 +2478,7 @@ namespace lfs::io::project {
         if (!candidate) {
             return std::move(candidate).error();
         }
-        const auto temporary = candidate->first;
+        const auto temporary = candidate->path;
         struct TemporaryCleanup {
             std::filesystem::path path;
             ~TemporaryCleanup() {
@@ -2416,27 +2497,18 @@ namespace lfs::io::project {
                                              "The project identity changed before repair started.",
                                              "recovered source does not match the selected project", "repair.identity");
         const auto& source_commit = reader->commit();
-        const ChunkInfo* repair_preview_row = nullptr;
-        for (const auto& row : reader->chunks()) {
-            if (!row.is_live() || row.key.fourcc != FOURCC_THMB) {
-                continue;
-            }
-            if (reader->preview().has_value()) {
-                const auto& locator = *reader->preview();
-                if (row.payload_offset == locator.offset &&
-                    row.stored_bytes == locator.bytes) {
-                    repair_preview_row = &row;
-                }
-                continue;
-            }
-            if (repair_preview_row != nullptr) {
+        if (!candidate->preview_selection_recovered) {
+            const auto retained_thumbnail = std::ranges::find_if(
+                reader->chunks(), [](const ChunkInfo& row) {
+                    return row.is_live() && row.key.fourcc == FOURCC_THMB;
+                });
+            if (retained_thumbnail != reader->chunks().end()) {
                 return fail<ProjectRepairResult>(
                     lfs::ErrorCode::FailedPrecondition, path,
                     "The recovered project preview is ambiguous.",
-                    "the repaired head has no preview locator and multiple THMB rows remain",
+                    "the damaged heads do not provide a trustworthy preview selection",
                     "repair.preview");
             }
-            repair_preview_row = &row;
         }
         std::uint64_t planned_bytes = 0;
         for (const auto& row : reader->chunks()) {
@@ -2481,16 +2553,6 @@ namespace lfs::io::project {
             if (!row.is_live()) {
                 continue;
             }
-            if (repair_preview_row == &row && !reader->preview().has_value()) {
-                auto preview = reader->read_chunk(row);
-                if (!preview) {
-                    return std::move(preview).error();
-                }
-                if (auto written = writer->set_preview(*preview); !written) {
-                    return std::move(written).error();
-                }
-                continue;
-            }
             if (auto copied = writer->copy_chunk_verbatim(*reader, row); !copied) {
                 return std::move(copied).error();
             }
@@ -2511,7 +2573,7 @@ namespace lfs::io::project {
         }
         return ProjectRepairResult{
             .card = *card,
-            .saves_recovered = candidate->second,
+            .saves_recovered = candidate->generation,
         };
     }
 
