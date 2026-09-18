@@ -33,6 +33,16 @@
 #include <vector>
 
 namespace {
+    constexpr const char* IMMEDIATE_INPUT_PENDING_ATTRIBUTE =
+        "data-immediate-input-pending";
+
+    void request_immediate_input_frame(Rml::Element* element) {
+        if (!element)
+            return;
+        if (auto* doc = element->GetOwnerDocument())
+            doc->SetAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE, "");
+    }
+
     std::string strip_legacy_id(const std::string& label) {
         auto pos = label.find("##");
         if (pos == std::string::npos)
@@ -281,6 +291,7 @@ namespace lfs::python {
         const auto type = event.GetId();
         if (type == Rml::EventId::Click) {
             auto* el = event.GetCurrentElement();
+            request_immediate_input_frame(el);
             if (el && el->GetTagName() == "input") {
                 const auto input_type = el->GetAttribute<Rml::String>("type", "");
                 if (input_type == "checkbox") {
@@ -291,8 +302,9 @@ namespace lfs::python {
             }
             state->clicked = true;
         } else if (type == Rml::EventId::Change) {
-            state->changed = true;
             auto* el = event.GetCurrentElement();
+            request_immediate_input_frame(el);
+            state->changed = true;
             if (!el)
                 return;
             const auto tag = el->GetTagName();

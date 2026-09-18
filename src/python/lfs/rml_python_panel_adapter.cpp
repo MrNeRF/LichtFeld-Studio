@@ -19,6 +19,9 @@
 
 namespace lfs::vis::gui {
     namespace {
+        constexpr const char* IMMEDIATE_INPUT_PENDING_ATTRIBUTE =
+            "data-immediate-input-pending";
+
         lfs::python::MouseState makeMouseState(const std::optional<PanelInputState>& input,
                                                float prev_mouse_x, float prev_mouse_y,
                                                bool have_prev_mouse,
@@ -474,6 +477,9 @@ namespace lfs::vis::gui {
 
         pending_dirty |= lfs::python::consume_document_dirty(doc);
 
+        const bool immediate_input_pending =
+            has_draw_ && doc->HasAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE);
+
         if (pending_dirty && ops.mark_content_dirty)
             ops.mark_content_dirty(host_);
 
@@ -482,9 +488,13 @@ namespace lfs::vis::gui {
         // already authoritative, so avoid reacquiring the GIL and calling draw().
         const bool draw_required = was_content_dirty || pending_dirty ||
                                    update_requested || should_run_update ||
+                                   immediate_input_pending ||
                                    last_prepare_frame_ == 0;
-        if (draw_required)
+        if (draw_required) {
+            if (immediate_input_pending)
+                doc->RemoveAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE);
             drawImmediateLayout(doc, ctx);
+        }
 
         if (frame_serial != 0)
             last_prepare_frame_ = frame_serial;
@@ -723,6 +733,13 @@ namespace lfs::vis::gui {
         if (!host_)
             return false;
 
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (has_draw_ && ops.get_document) {
+            auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+            if (doc && doc->HasAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE))
+                return true;
+        }
+
         const auto language_generation =
             lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
         if (language_generation != last_language_generation_)
@@ -736,7 +753,6 @@ namespace lfs::vis::gui {
             }
         }
 
-        const auto& ops = lfs::python::get_rml_panel_host_ops();
         if (ops.get_document) {
             auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
             if (isVisibleForAnimation() &&
@@ -776,6 +792,9 @@ namespace lfs::vis::gui {
 
             if (ops.get_document) {
                 auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+                if (has_draw_ && doc &&
+                    doc->HasAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE))
+                    append_reason("immediate_input");
                 if (lfs::python::is_document_dirty(doc))
                     append_reason("doc_dirty");
                 if (lfs::python::is_document_update_requested(doc))

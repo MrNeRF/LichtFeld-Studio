@@ -426,6 +426,19 @@ def test_cached_python_panels_request_a_frame_on_language_change():
     assert "return true;" in needs_frame.split("if (!dirty_driven_updates_)", 1)[0]
 
 
+def test_immediate_python_controls_request_one_followup_frame_without_polling():
+    layout_source = (ROOT / "src" / "python" / "lfs" / "rml_im_mode_layout.cpp").read_text(encoding="utf-8")
+    adapter_source = (ROOT / "src" / "python" / "lfs" / "rml_python_panel_adapter.cpp").read_text(encoding="utf-8")
+
+    marker = "data-immediate-input-pending"
+    assert marker in layout_source
+    assert marker in adapter_source
+    assert "request_immediate_input_frame(el);" in layout_source
+    assert "doc->HasAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE)" in adapter_source
+    assert "doc->RemoveAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE)" in adapter_source
+    assert 'append_reason("immediate_input")' in adapter_source
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
