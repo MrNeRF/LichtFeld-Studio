@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
 import re
+import shutil
 import sys
 import threading
 import time
@@ -861,6 +862,165 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
         "project:update_thumbnail",
         "project:rename",
     ]
+
+
+def test_recent_only_project_cache_identity_tracks_external_file_changes(
+    panel_module, monkeypatch, tmp_path
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"version-a")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+
+    first = panel._recent_scope_assets()[0]
+    project_path.write_bytes(b"version-b-is-larger")
+    second = panel._recent_scope_assets()[0]
+
+    assert first is not second
+    assert first["stat_identity"] != second["stat_identity"]
+    assert second["file_size_bytes"] == len(b"version-b-is-larger")
+
+
+def test_recent_only_inspection_drives_preview_and_exposes_failure(
+    panel_module, monkeypatch, tmp_path
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    recent = panel._recent_scope_assets()[0]
+    panel._selected_asset_ids = {recent["id"]}
+    panel._inspection_by_asset[recent["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid="native-project",
+            commit_uuid="native-commit",
+            has_preview=True,
+            physical_file_size=7,
+            saved_at_unix_ns=1,
+        )
+    }
+
+    decorator = panel.get_selected_asset_thumbnail_decorator()
+    assert "kind=licht" in decorator and "native-commit" in decorator
+
+    panel._panel_mounted = True
+    panel._on_inspection_result(
+        recent["id"], "card", None, ValueError("corrupt project")
+    )
+    assert panel.get_selected_health_state() == "UNREADABLE"
+    assert panel.selected_has_problem() is True
+    assert panel.get_catalog_notice() == "corrupt project"
+
+
+@pytest.mark.parametrize("backup", [False, True])
+def test_recent_only_operation_uses_inspected_native_identity(
+    panel_module, monkeypatch, tmp_path, backup
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    recent_id = "recent:temporary-row"
+    native_id = str(uuid.uuid4())
+    card = SimpleNamespace(project_uuid=native_id, commit_uuid=str(uuid.uuid4()))
+    details = SimpleNamespace(card=card)
+    backup_path = tmp_path / "backup.licht"
+    backup_path.write_bytes(b"backup")
+    calls = []
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: card,
+        inspect_project_details=lambda _path: details,
+        plan_reduce_size=lambda _path: object(),
+        backup_project_file=lambda _path: backup_path,
+        run_project_operation=lambda _path, project_id, commit_id, action: (
+            calls.append((project_id, commit_id)), action()
+        )[1],
+    )
+    real_store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: real_store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    recent = {
+        "id": recent_id,
+        "path": str(project_path),
+        "name": "external",
+        "recent_only": True,
+    }
+    monkeypatch.setattr(panel, "_asset_dict", lambda asset_id: recent if asset_id == recent_id else None)
+    panel._inspection_by_asset[recent_id] = {"card": card, "details": details}
+
+    panel._start_project_operation(
+        recent_id,
+        "Export project",
+        lambda _progress, _cancel: calls.append("executed"),
+        backup=backup,
+    )
+
+    assert calls[-1] == "executed"
+    if backup:
+        assert calls[0] == (native_id, str(card.commit_uuid))
+    assert next(iter(panel._project_operations.values()))["status"] == "completed"
+    assert panel._asset_index is None
+
+
+def test_recent_only_operation_executes_against_native_project_fixture(
+    lf, panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "external.licht"
+    shutil.copy2(Path(__file__).parents[1] / "data" / "portable-sog.licht", project_path)
+    card = lf.io.inspect_project_card(project_path)
+    details = lf.io.inspect_project_details(project_path)
+    recent_id = "recent:native-fixture"
+    store = project_operations.ProjectOperations(lf.io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", lf.io, raising=False)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    recent = {
+        "id": recent_id,
+        "path": str(project_path),
+        "name": "external",
+        "recent_only": True,
+    }
+    monkeypatch.setattr(panel, "_asset_dict", lambda asset_id: recent if asset_id == recent_id else None)
+    panel._inspection_by_asset[recent_id] = {"card": card, "details": details}
+
+    panel._start_project_operation(
+        recent_id,
+        "Rename project",
+        lambda _progress, _cancel: lf.io.set_project_title(project_path, "Recent renamed"),
+        backup=False,
+    )
+
+    assert lf.io.inspect_project_card(project_path).title == "Recent renamed"
+    assert next(iter(panel._project_operations.values()))["status"] == "completed"
+    assert not (tmp_path / "records").exists()
 
 
 def test_recent_scope_resolves_path_aliases(panel_module, tmp_path):

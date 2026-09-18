@@ -1002,7 +1002,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _recent_scope_assets(self) -> List[Dict[str, Any]]:
         """Project the MRU list into catalog assets or temporary, open-only rows."""
         paths = self._recent_paths()
-        signature = (self._catalog_epoch(), tuple(paths))
+        observations = []
+        for path in paths:
+            try:
+                candidate = Path(path)
+                stat = candidate.stat()
+                exists = candidate.is_file()
+                observations.append((
+                    path,
+                    exists,
+                    int(stat.st_size),
+                    int(stat.st_mtime_ns),
+                    int(stat.st_dev),
+                    int(stat.st_ino),
+                ))
+            except OSError:
+                observations.append((path, False, 0, 0, 0, 0))
+        signature = (self._catalog_epoch(), tuple(observations))
         if signature == self._recent_scope_cache_signature:
             return self._recent_scope_cache_rows
 
@@ -1014,7 +1030,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         rows = []
         seen_paths = set()
-        for path in paths:
+        for path, exists, size, mtime_ns, st_dev, st_ino in observations:
             path_key = self._project_path_key(path)
             if not path_key or path_key in seen_paths:
                 continue
@@ -1022,7 +1038,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             asset = assets_by_path.get(path_key)
             if asset is None:
                 asset_id = "recent:" + hashlib.sha256(path_key.encode("utf-8")).hexdigest()
-                exists = Path(path).is_file()
                 asset = {
                     "id": asset_id,
                     "name": Path(path).stem,
@@ -1034,6 +1049,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "available": exists,
                     "status": "",
                     "has_preview": False,
+                    "file_size_bytes": size,
+                    "saved_at_unix_ns": mtime_ns,
+                    "stat_identity": {
+                        "size": size,
+                        "mtime_ns": mtime_ns,
+                        "st_dev": st_dev,
+                        "st_ino": st_ino,
+                    },
                     "recent_only": True,
                 }
             rows.append(asset)
@@ -1149,9 +1172,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if error is not None:
             self._inspection_errors[asset_id] = str(error)
-            if kind == "card":
-                self._dirty_fields("assets", "selected_has_problem", "selected_health_label")
+            self._dirty_fields(
+                "assets", "selected_has_problem", "selected_health_label",
+                "catalog_notice", "has_catalog_notice",
+            )
             return
+        cleared_error = self._inspection_errors.pop(asset_id, None)
+        if cleared_error is not None:
+            self._dirty_fields(
+                "selected_has_problem", "selected_health_label",
+                "catalog_notice", "has_catalog_notice",
+            )
         if kind == "details" and isinstance(result, dict) and "details" in result:
             self._inspection_by_asset.setdefault(asset_id, {})["plan"] = result["plan"]
             result = result["details"]
@@ -1555,20 +1586,29 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return (changed or created or geometry_changed or placeholder_title_changed or
                 placeholder_display_changed or visibility_changed)
 
-    def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
+    def _asset_with_inspection(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
         inspected = self._inspection_by_asset.get(asset_id, {})
-        card = inspected.get("card")
+        details = inspected.get("details")
+        card = getattr(details, "card", None) or inspected.get("card")
+        result = dict(asset)
         if card is not None:
-            # Native card values are provisional but are fresher than the
-            # catalog snapshot and keep cards useful while details load.
-            asset = {
-                **asset,
-                "has_preview": bool(getattr(card, "has_preview", asset.get("has_preview"))),
-                "file_size_bytes": int(getattr(card, "physical_file_size", asset.get("file_size_bytes", 0)) or 0),
-                "saved_at_unix_ns": int(getattr(card, "saved_at_unix_ns", asset.get("saved_at_unix_ns", 0)) or 0),
-                "commit_uuid": str(getattr(card, "commit_uuid", asset.get("commit_uuid", "")) or asset.get("commit_uuid", "")),
-            }
+            # Native values are fresher than catalog or temporary Recent rows.
+            result.update({
+                "has_preview": bool(getattr(card, "has_preview", result.get("has_preview"))),
+                "file_size_bytes": int(getattr(card, "physical_file_size", result.get("file_size_bytes", 0)) or 0),
+                "saved_at_unix_ns": int(getattr(card, "saved_at_unix_ns", result.get("saved_at_unix_ns", 0)) or 0),
+                "commit_uuid": str(getattr(card, "commit_uuid", result.get("commit_uuid", "")) or result.get("commit_uuid", "")),
+                "native_project_uuid": str(getattr(card, "project_uuid", "") or ""),
+            })
+        if result.get("recent_only") and asset_id in self._inspection_errors:
+            result["status"] = "UNREADABLE"
+            result["inspection_error"] = self._inspection_errors[asset_id]
+        return result
+
+    def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
+        asset = self._asset_with_inspection(asset)
+        asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
         folder_name = self._folder_name(asset.get("folder_id"))
         thumbnail_decorator = self._thumbnail_decorator(self._asset_with_poster(asset))
         thumbnail_source = self._thumbnail_source_from_decorator(thumbnail_decorator)
@@ -1758,6 +1798,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_catalog_notice(self) -> str:
         if self._asset_index and getattr(self._asset_index, "last_error", ""):
             return self._asset_index.last_error
+        selected_id = self.get_selected_asset_id()
+        if selected_id.startswith("recent:") and selected_id in self._inspection_errors:
+            return self._inspection_errors[selected_id]
         if self._catalog_notice:
             return self._catalog_notice
         if self._catalog_load_failed:
@@ -1811,7 +1854,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
         asset_id = self.get_selected_asset_id()
-        return self._asset_dict(asset_id)
+        asset = self._asset_dict(asset_id)
+        return self._asset_with_inspection(asset) if asset else None
 
     def get_selected_asset_name(self) -> str:
         asset = self._get_selected_asset()
@@ -2513,7 +2557,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "rename":
             name = str(data.get("name") or "").strip()
             if name:
-                self._start_project_operation(asset["id"], "Rename project", lambda _progress, _cancel: self._native_io_call("set_project_title", path, name), after=lambda: self._rename_catalog_entry(asset["id"], name))
+                after = None if asset.get("recent_only") else lambda: self._rename_catalog_entry(asset["id"], name)
+                self._start_project_operation(asset["id"], "Rename project", lambda _progress, _cancel: self._native_io_call("set_project_title", path, name), after=after)
         elif action == "repair":
             destination = str(data.get("destination") or "")
             if not destination:
@@ -2605,14 +2650,24 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not asset.get("path"):
             self._set_catalog_notice(tr("projects.status.locate_id_mismatch"))
             return
+        project_name = self._get_asset_display_name(asset)
         asset["operation_path"] = str(Path(asset["path"]).resolve())
         inspected = self._inspection_by_asset.get(asset_id, {})
         card = getattr(inspected.get("details"), "card", None) or inspected.get("card")
-        if card is not None and str(getattr(card, "project_uuid", "")) == asset_id:
+        native_project_id = str(getattr(card, "project_uuid", "") or "") if card is not None else ""
+        if asset.get("recent_only"):
+            if not native_project_id:
+                self._set_catalog_notice(
+                    self._inspection_errors.get(asset_id) or tr("projects.status.unreadable")
+                )
+                return
+            asset["id"] = native_project_id
+            asset["commit_uuid"] = str(card.commit_uuid)
+        elif card is not None and native_project_id == asset_id:
             asset["commit_uuid"] = str(card.commit_uuid)
         operation_id = "project-" + str(uuid.uuid4())
         cancel = threading.Event()
-        metadata = dict(project_name=self._get_asset_display_name(asset), operation_kind=operation_kind,
+        metadata = dict(project_name=project_name, operation_kind=operation_kind,
                         part={key: (content_row or {}).get(key, "") for key in ("kind", "label", "number", "total", "images")})
         self._project_operations[operation_id] = {
             "asset_id": asset_id,
@@ -2648,6 +2703,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 _log.exception("Complete project operation failed operation=%s path=%s", title, asset["path"])
                 row["status"] = "failed"
                 self._contents_feedback[asset_id] = dict(row_id=(content_row or {}).get("id", ""), status="failed", reason=str(exc))
+                if content_row is None:
+                    self._set_catalog_notice(str(exc))
             finally:
                 self._request_model_update()
                 self._dirty_selection()
@@ -2665,7 +2722,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             except Exception as exc:
                 _log.exception("Project worker failed operation=%s path=%s", title, asset["path"])
                 error = exc
-            if error is None and (content_row or operation_kind):
+            if error is None and (content_row or operation_kind or asset.get("recent_only")):
                 try:
                     facts = self._inspect_contents(str(asset["path"]))
                 except Exception as exc:
@@ -2766,6 +2823,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _asset_context_menu_items(self, asset: Dict[str, Any]) -> List[Dict[str, Any]]:
         if asset.get("recent_only"):
+            asset = self._asset_with_inspection(asset)
             items = [{"label": tr("projects.action.open"), "action": "load"}]
             if self._project_available(asset):
                 items.append({
