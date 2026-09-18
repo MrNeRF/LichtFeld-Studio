@@ -20,6 +20,14 @@ body {
     background-color: transparent;
 }
 
+#project-title {
+    color: @{text_dim};
+}
+
+#project-title .project-dirty {
+    color: @{text};
+}
+
 #menu-toolbar {
     background-color: transparent;
 }

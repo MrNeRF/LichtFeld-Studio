@@ -6038,6 +6038,21 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.menu_bar", 0.25);
             menu_bar_->render();
 
+            const auto project_display = viewer_->projectGetDisplayInfo();
+            std::string project_title = project_display.title.value_or(std::string{});
+            if (project_title.empty() && project_display.path) {
+                project_title = lfs::core::path_to_utf8(project_display.path->stem());
+            }
+            if (project_title.empty()) {
+                project_title = "Untitled";
+            }
+            rml_menu_bar_.updateProjectDisplay(
+                std::move(project_title),
+                project_display.path
+                    ? lfs::core::path_to_utf8(project_display.path->lexically_normal())
+                    : std::string{},
+                project_display.dirty);
+
             const auto menu_entries_version = menu_bar_->menuEntriesVersion();
             const auto menu_language_generation = app_store().language_generation.get();
             if (!menu_labels_synced_ ||

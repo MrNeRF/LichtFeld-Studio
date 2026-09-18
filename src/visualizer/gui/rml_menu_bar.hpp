@@ -126,6 +126,7 @@ namespace lfs::vis::gui {
         void draw(int screen_w, int screen_h);
         void updateLabels(const std::vector<std::string>& labels,
                           const std::vector<std::string>& idnames);
+        void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
         void processInput(const PanelInputState& input);
         void closeDropdown();
@@ -157,6 +158,8 @@ namespace lfs::vis::gui {
         void rebuildPortalStatus();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
+        bool projectTitleAtPoint(float x, float y) const;
+        void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();
 
@@ -191,12 +194,17 @@ namespace lfs::vis::gui {
         std::string gallery_progress_width_{"0%"};
         bool gallery_has_progress_ = false;
         bool gallery_progress_indeterminate_ = false;
+        std::string project_title_;
+        std::string project_tooltip_;
+        bool project_dirty_ = false;
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;
         Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
         Rml::Element* brand_logo_ = nullptr;
+        Rml::Element* project_title_container_ = nullptr;
+        Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;
         Rml::Element* menu_window_controls_ = nullptr;
         Rml::Element* menu_window_split_view_ = nullptr;
@@ -206,6 +214,9 @@ namespace lfs::vis::gui {
         RmlTooltipController tooltip_;
         float viewport_right_edge_ = 0.0f;
         float applied_toolbar_right_ = -1.0f;
+        float applied_project_title_left_ = -1.0f;
+        float applied_project_title_width_ = -1.0f;
+        bool project_title_has_room_ = false;
         bool toolbar_fits_ = true;
         bool ui_hidden_ = false;
         bool last_window_split_view_ = false;

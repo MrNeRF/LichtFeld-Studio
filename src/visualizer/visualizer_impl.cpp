@@ -4205,6 +4205,11 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    ProjectDisplayInfo VisualizerImpl::projectGetDisplayInfo() {
+        return project_lifecycle_ ? project_lifecycle_->displayInfo()
+                                  : ProjectDisplayInfo{};
+    }
+
     lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
     VisualizerImpl::projectGetLicense() {
         if (!project_lifecycle_) {

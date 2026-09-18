@@ -238,6 +238,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isBlankProject() const;
         [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
+        [[nodiscard]] ProjectDisplayInfo displayInfo();
         [[nodiscard]] lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         license();
         [[nodiscard]] lfs::Result<void>
@@ -572,6 +573,7 @@ namespace lfs::vis::project {
         isTrainingCheckpointStale() const;
         [[nodiscard]] bool
         canFlushFinishedTrainerSnapshot() const;
+        [[nodiscard]] bool hasDirtyProjectForDisplay() const;
         void queueProjectWriteSettlement(
             JobHandle handle);
         void settleProjectWrite();
@@ -779,6 +781,10 @@ namespace lfs::vis::project {
             document_access_mutex_;
         std::optional<ProjectInfo>
             cached_project_info_;
+        std::optional<ProjectDisplayInfo>
+            cached_project_display_info_;
+        const lfs::io::project::ProjectDocument*
+            cached_project_display_document_ = nullptr;
         std::uint64_t
             adopted_training_snapshot_count_ = 0;
         std::string

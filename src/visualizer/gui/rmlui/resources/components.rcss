@@ -1210,6 +1210,8 @@ crf-curve {
     padding: 4dp 8dp;
     font-size: 12dp;
     max-width: 320dp;
+    white-space: normal;
+    word-break: break-all;
     pointer-events: none;
 }
 

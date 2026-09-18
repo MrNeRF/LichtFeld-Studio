@@ -8445,6 +8445,31 @@ namespace lfs::vis::project {
         return hasHardDirtyChapters(*document_);
     }
 
+    bool ProjectLifecycle::hasDirtyProjectForDisplay() const {
+        if (close_save_state_.load(std::memory_order_acquire) == CloseSaveState::Saving ||
+            viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return true;
+        }
+        if (!document_ || isBlankUntitledSession()) {
+            return false;
+        }
+        if (viewer_.getTrainer() && viewer_.getTrainerManager() &&
+            viewer_.getTrainerManager()->isTrainingActive() &&
+            !viewer_.getTrainerManager()->isPausedAtCheckpointBaseline()) {
+            return true;
+        }
+        if (isScratchBoundSession() || canFlushFinishedTrainerSnapshot() ||
+            scene_dirty_.load(std::memory_order_acquire) ||
+            payload_dirty_.load(std::memory_order_acquire)) {
+            return true;
+        }
+        if (const auto* parameter_manager = viewer_.getParameterManager();
+            parameter_manager && parameter_manager->isDirty()) {
+            return true;
+        }
+        return hasHardDirtyChapters(*document_);
+    }
+
     bool ProjectLifecycle::containsEmbeddedSecrets()
         const {
         if (!document_) {
@@ -9022,6 +9047,44 @@ namespace lfs::vis::project {
             });
         }
         cached_project_info_ = result;
+        return result;
+    }
+
+    ProjectDisplayInfo ProjectLifecycle::displayInfo() {
+        ProjectDisplayInfo result;
+        if (!document_) {
+            cached_project_display_info_.reset();
+            cached_project_display_document_ = nullptr;
+            return result;
+        }
+
+        // This read surface must never adopt a completed training snapshot or
+        // otherwise mutate lifecycle state merely because the chrome redraws.
+        result.dirty = hasDirtyProjectForDisplay();
+        std::unique_lock document_lock(document_access_mutex_, std::try_to_lock);
+        if (!document_lock.owns_lock()) {
+            if (cached_project_display_info_ &&
+                cached_project_display_document_ == document_.get()) {
+                auto cached = *cached_project_display_info_;
+                cached.dirty = result.dirty;
+                return cached;
+            }
+            return result;
+        }
+        if (!isScratchBoundSession()) {
+            result.path = recovered_master_path_
+                              ? recovered_master_path_
+                              : document_->source_path();
+        }
+        const auto title = document_->project().dom().get_json("title");
+        if (title && title->is_string()) {
+            auto value = title->get<std::string>();
+            if (!value.empty()) {
+                result.title = std::move(value);
+            }
+        }
+        cached_project_display_info_ = result;
+        cached_project_display_document_ = document_.get();
         return result;
     }
 

@@ -10,6 +10,7 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -146,7 +147,7 @@ namespace lfs::vis::gui {
             return false;
 
         if (text_changed)
-            tooltip_el->SetInnerRML(Rml::String(pending_text_));
+            tooltip_el->SetInnerRML(Rml::StringUtilities::EncodeRml(pending_text_));
 
         // A freshly-shown or text-changed tooltip has no laid-out size yet;
         // park it offscreen and force a layout pass so we can measure it before

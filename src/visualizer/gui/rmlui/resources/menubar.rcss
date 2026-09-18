@@ -43,6 +43,45 @@ body {
     margin-right: 0;
 }
 
+#project-title {
+    position: absolute;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    overflow: hidden;
+}
+
+#project-title-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 8dp;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title-content span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title.hidden,
+#project-title.no-room {
+    display: none;
+}
+
+.project-dirty {
+    flex: none;
+}
+
 #brand-logo {
     flex: none;
     width: 20dp;

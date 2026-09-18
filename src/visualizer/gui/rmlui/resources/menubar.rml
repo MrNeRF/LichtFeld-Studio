@@ -115,6 +115,11 @@
             </div>
         </div>
     </div>
+    <div id="project-title" data-class-hidden="project_title == ''">
+        <div id="project-title-content" data-attr-title="project_tooltip">
+            <span>{{ project_title }}</span><span data-if="project_dirty" class="project-dirty"> *</span>
+        </div>
+    </div>
     <div id="bottom-border"></div>
     <div id="dropdown-overlay"></div>
     <div id="dropdown-container">

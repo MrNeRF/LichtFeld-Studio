@@ -113,6 +113,17 @@ namespace lfs::vis {
         std::optional<lfs::ErrorCode> error_code;
     };
 
+    // Lightweight snapshot for persistent application chrome. Unlike
+    // ProjectInfo, this deliberately avoids payload and storage inspection so
+    // it is safe to refresh while the window is interactive.
+    struct LFS_VIS_API ProjectDisplayInfo {
+        std::optional<std::filesystem::path> path;
+        std::optional<std::string> title;
+        bool dirty = false;
+
+        friend bool operator==(const ProjectDisplayInfo&, const ProjectDisplayInfo&) = default;
+    };
+
     struct LFS_VIS_API ProjectInfo {
         std::optional<std::filesystem::path> path;
         std::string project_uuid;
@@ -236,6 +247,7 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual ProjectDisplayInfo projectGetDisplayInfo() { return {}; }
         virtual lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         projectGetLicense() = 0;
         virtual lfs::Result<void>
