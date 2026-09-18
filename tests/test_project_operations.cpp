@@ -136,6 +136,20 @@ namespace {
                   }),
                   2);
 
+        const auto damaged = temporary.path / "damaged-thumbnail-history.licht";
+        fs::copy_file(source, damaged);
+        flip_byte(damaged, HEAD_SLOT_OFFSETS[0] + 200);
+        flip_byte(damaged, HEAD_SLOT_OFFSETS[1] + 200);
+        const auto repaired_path = temporary.path / "repaired-thumbnail-history.licht";
+        static_cast<void>(require_result(repair_project(damaged, repaired_path)));
+        auto repaired = require_result(ProjectReader::open(repaired_path));
+        EXPECT_EQ(require_result(repaired.read_preview()), newer_preview);
+        EXPECT_EQ(std::ranges::count_if(
+                      repaired.chunks(), [](const ChunkInfo& row) {
+                          return row.is_live() && row.key.fourcc == FOURCC_THMB;
+                      }),
+                  2);
+
         static_cast<void>(require_result(restore_save(source, 2, source)));
         auto source_reader = require_result(ProjectReader::open(source));
         EXPECT_EQ(require_result(source_reader.read_preview()), selected_preview);
@@ -151,20 +165,6 @@ namespace {
         EXPECT_EQ(ambiguous.error().user_message(),
                   "The selected save's preview is ambiguous.");
         EXPECT_FALSE(fs::exists(ambiguous_destination));
-
-        const auto damaged = temporary.path / "damaged-thumbnail-history.licht";
-        fs::copy_file(source, damaged);
-        flip_byte(damaged, HEAD_SLOT_OFFSETS[0] + 200);
-        flip_byte(damaged, HEAD_SLOT_OFFSETS[1] + 200);
-        const auto repaired_path = temporary.path / "repaired-thumbnail-history.licht";
-        static_cast<void>(require_result(repair_project(damaged, repaired_path)));
-        auto repaired = require_result(ProjectReader::open(repaired_path));
-        EXPECT_EQ(require_result(repaired.read_preview()), newer_preview);
-        EXPECT_EQ(std::ranges::count_if(
-                      repaired.chunks(), [](const ChunkInfo& row) {
-                          return row.is_live() && row.key.fourcc == FOURCC_THMB;
-                      }),
-                  2);
 
         const auto ambiguous_repair_source =
             temporary.path / "ambiguous-repair-thumbnail-history.licht";
