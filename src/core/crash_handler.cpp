@@ -8,6 +8,7 @@
 #include "core/environment.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 #include "core/user_paths.hpp"
@@ -383,7 +384,7 @@ namespace lfs::core {
 #endif
 
             std::set_terminate(terminate_handler);
-            const std::string path = g_crash_log_path.string();
+            const std::string path = path_to_utf8(g_crash_log_path);
             std::fprintf(stderr, "Crash diagnostics: %s\n", path.c_str());
         });
     }
