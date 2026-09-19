@@ -48,7 +48,8 @@ namespace lfs::app {
         };
 
         OverwriteChoice askOverwrite(const std::filesystem::path& path) {
-            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ", path.filename().string());
+            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ",
+                       path_to_utf8(path.filename()));
             std::string input;
             if (!std::getline(std::cin, input) || input.empty()) {
                 return OverwriteChoice::NO;
