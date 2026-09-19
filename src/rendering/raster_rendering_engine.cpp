@@ -87,11 +87,11 @@ namespace lfs::rendering {
         if (resolved_path.empty()) {
             return std::unexpected("Environment map path is empty");
         }
+        const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         if (!std::filesystem::exists(resolved_path)) {
-            return std::unexpected(std::format("Environment map not found: {}", resolved_path.string()));
+            return std::unexpected(std::format("Environment map not found: {}", path_utf8));
         }
 
-        const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         auto [source, width, height, channels] = lfs::core::load_image_float(resolved_path);
         if (!source)
             return std::unexpected(std::format("Failed to read environment map {}", path_utf8));
@@ -132,7 +132,7 @@ namespace lfs::rendering {
         lfs::core::free_image_float(source);
 
         cache.image = image;
-        LOG_INFO("Loaded tensor environment map {}", resolved_path.string());
+        LOG_INFO("Loaded tensor environment map {}", path_utf8);
         return image;
     }
 

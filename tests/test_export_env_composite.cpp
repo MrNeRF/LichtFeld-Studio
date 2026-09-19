@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "environment_image.hpp"
 #include "environment_math.hpp"
@@ -40,6 +41,40 @@ namespace {
         ASSERT_EQ(loaded->pixels, (std::vector<float>{10.0f / 255.0f, 20.0f / 255.0f,
                                                       30.0f / 255.0f, 40.0f / 255.0f,
                                                       50.0f / 255.0f, 60.0f / 255.0f}));
+    }
+
+    TEST(EnvironmentImageLoadTest, PreservesUnicodePath) {
+        const auto directory = std::filesystem::temp_directory_path() /
+                               lfs::core::utf8_to_path("lfs_environment_環境");
+        const auto path = directory / lfs::core::utf8_to_path("背景_é.png");
+        std::error_code ec;
+        std::filesystem::remove_all(directory, ec);
+        ASSERT_TRUE(std::filesystem::create_directories(directory, ec)) << ec.message();
+
+        const std::vector<uint8_t> rgb = {10, 20, 30};
+        ASSERT_TRUE(lfs::core::save_png(path, rgb.data(), 1, 1, 3, 8, 0));
+
+        const auto loaded = lfs::rendering::loadEnvironmentImage(path);
+        lfs::rendering::releaseEnvironmentImageCache();
+        std::filesystem::remove_all(directory, ec);
+
+        ASSERT_TRUE(loaded.has_value()) << (loaded ? "" : loaded.error());
+        EXPECT_EQ(loaded->path, path);
+        EXPECT_EQ(loaded->pixels, (std::vector<float>{10.0f / 255.0f,
+                                                       20.0f / 255.0f,
+                                                       30.0f / 255.0f}));
+    }
+
+    TEST(EnvironmentImageLoadTest, ReportsMissingUnicodePathAsUtf8) {
+        const auto path = std::filesystem::temp_directory_path() /
+                          lfs::core::utf8_to_path("missing_environment_環境.hdr");
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+
+        const auto loaded = lfs::rendering::loadEnvironmentImage(path);
+
+        ASSERT_FALSE(loaded.has_value());
+        EXPECT_NE(loaded.error().find(lfs::core::path_to_utf8(path)), std::string::npos);
     }
 
     constexpr const char* kEnvironmentAsset = "resources/assets/environments/alps_field_1k.hdr";
