@@ -8379,7 +8379,7 @@ namespace lfs::vis::project {
                !isScratchBoundSession();
     }
 
-    bool ProjectLifecycle::hasDirtyProject() {
+    std::optional<bool> ProjectLifecycle::dirtyProjectPreflight() const {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -8391,6 +8391,13 @@ namespace lfs::vis::project {
         }
         if (!document_) {
             return false;
+        }
+        return std::nullopt;
+    }
+
+    bool ProjectLifecycle::hasDirtyProject() {
+        if (const auto dirty = dirtyProjectPreflight()) {
+            return *dirty;
         }
         // Never let a silent training snapshot adoption
         // satisfy the exit gate as NotDirty.
@@ -8414,6 +8421,14 @@ namespace lfs::vis::project {
             last_unadoptable_training_snapshot_warning_
                 .clear();
         }
+        return hasDirtyProjectAfterPreflight();
+    }
+
+    bool ProjectLifecycle::hasDirtyProjectAfterPreflight() const {
+        // Training requires camera nodes; scene teardown clears the trainer before
+        // removing nodes. A blank untitled session has no nodes, so the active
+        // training and blank-session returns are mutually exclusive. Keep the
+        // save/exit ordering here for both callers.
         if (viewer_.getTrainer() &&
             viewer_.getTrainerManager() &&
             viewer_.getTrainerManager()
@@ -8446,28 +8461,10 @@ namespace lfs::vis::project {
     }
 
     bool ProjectLifecycle::hasDirtyProjectForDisplay() const {
-        if (close_save_state_.load(std::memory_order_acquire) == CloseSaveState::Saving ||
-            viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
-            return true;
+        if (const auto dirty = dirtyProjectPreflight()) {
+            return *dirty;
         }
-        if (!document_ || isBlankUntitledSession()) {
-            return false;
-        }
-        if (viewer_.getTrainer() && viewer_.getTrainerManager() &&
-            viewer_.getTrainerManager()->isTrainingActive() &&
-            !viewer_.getTrainerManager()->isPausedAtCheckpointBaseline()) {
-            return true;
-        }
-        if (isScratchBoundSession() || canFlushFinishedTrainerSnapshot() ||
-            scene_dirty_.load(std::memory_order_acquire) ||
-            payload_dirty_.load(std::memory_order_acquire)) {
-            return true;
-        }
-        if (const auto* parameter_manager = viewer_.getParameterManager();
-            parameter_manager && parameter_manager->isDirty()) {
-            return true;
-        }
-        return hasHardDirtyChapters(*document_);
+        return hasDirtyProjectAfterPreflight();
     }
 
     bool ProjectLifecycle::containsEmbeddedSecrets()

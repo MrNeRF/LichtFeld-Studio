@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -23,6 +24,7 @@
 #include "rendering/rendering_types.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
 
 #include <RmlUi/Core.h>
@@ -345,16 +347,7 @@ namespace lfs::vis::gui {
         return bar_height_ * dp;
     }
 
-    void RmlMenuBar::init(RmlUIManager* mgr) {
-        assert(mgr);
-        rml_manager_ = mgr;
-
-        rml_context_ = rml_manager_->createContext("menu_bar", 800, 30);
-        if (!rml_context_) {
-            LOG_ERROR("RmlMenuBar: failed to create RML context");
-            return;
-        }
-
+    void RmlMenuBar::bindModel() {
         auto ctor = rml_context_->CreateDataModel("menu_bar");
         assert(ctor);
 
@@ -444,6 +437,19 @@ namespace lfs::vis::gui {
         ctor.Bind("project_tooltip", &project_tooltip_);
         ctor.Bind("project_dirty", &project_dirty_);
         menu_model_ = ctor.GetModelHandle();
+    }
+
+    void RmlMenuBar::init(RmlUIManager* mgr) {
+        assert(mgr);
+        rml_manager_ = mgr;
+
+        rml_context_ = rml_manager_->createContext("menu_bar", 800, 30);
+        if (!rml_context_) {
+            LOG_ERROR("RmlMenuBar: failed to create RML context");
+            return;
+        }
+
+        bindModel();
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
@@ -626,6 +632,22 @@ namespace lfs::vis::gui {
         }
 
         rebuildLabels();
+    }
+
+    void RmlMenuBar::updateProjectDisplay(const ProjectDisplayInfo& project_display) {
+        std::string project_title = project_display.title.value_or(std::string{});
+        if (project_title.empty() && project_display.path) {
+            project_title = lfs::core::path_to_utf8(project_display.path->stem());
+        }
+        if (project_title.empty()) {
+            project_title = "Untitled";
+        }
+        updateProjectDisplay(
+            std::move(project_title),
+            project_display.path
+                ? lfs::core::path_to_utf8(project_display.path->lexically_normal())
+                : std::string{},
+            project_display.dirty);
     }
 
     void RmlMenuBar::updateProjectDisplay(std::string title, std::string tooltip, const bool dirty) {

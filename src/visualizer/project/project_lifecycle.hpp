@@ -573,6 +573,10 @@ namespace lfs::vis::project {
         isTrainingCheckpointStale() const;
         [[nodiscard]] bool
         canFlushFinishedTrainerSnapshot() const;
+        // Keep these guards before snapshot adoption, without duplicating them
+        // in the display reader. nullopt means the document needs further checks.
+        [[nodiscard]] std::optional<bool> dirtyProjectPreflight() const;
+        [[nodiscard]] bool hasDirtyProjectAfterPreflight() const;
         [[nodiscard]] bool hasDirtyProjectForDisplay() const;
         void queueProjectWriteSettlement(
             JobHandle handle);

@@ -4,7 +4,6 @@
 
 import json
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -279,74 +278,18 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "std::vector<MenuToolbarButtonView> camera_buttons_" in menu_bar_header
 
 
-def test_active_project_title_is_centered_responsive_and_preserves_window_drag():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    rml = (resources / "menubar.rml").read_text(encoding="utf-8")
-    rcss = (resources / "menubar.rcss").read_text(encoding="utf-8")
-    components_rcss = (resources / "components.rcss").read_text(encoding="utf-8")
-    menu_bar_cpp = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rml_menu_bar.cpp"
-    ).read_text(encoding="utf-8")
-    gui_manager_cpp = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp"
-    ).read_text(encoding="utf-8")
-    project_lifecycle_cpp = (
-        PROJECT_ROOT / "src" / "visualizer" / "project" / "project_lifecycle.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert 'id="project-title"' in rml
-    assert 'id="project-title-content"' in rml
-    assert 'data-attr-title="project_tooltip"' in rml
-    assert 'data-if="project_dirty"' in rml
-    body = ET.fromstring(rml).find("body")
-    assert body is not None
-    menu_row = body.find("./div[@id='menu-row']")
-    assert menu_row is not None
-    assert menu_row.find("./div[@id='project-title']") is None
-    assert body.find("./div[@id='project-title']") is not None
-    title_rule = _rule_body(rcss, "#project-title")
-    assert "position: absolute;" in title_rule
-    title_content_rule = _rule_body(rcss, "#project-title-content")
-    assert "max-width: 100%;" in title_content_rule
-    assert "text-overflow: ellipsis;" in title_content_rule
-    assert "RmlMenuBar::updateProjectTitleLayout" in menu_bar_cpp
-    assert "applied_toolbar_right_" in menu_bar_cpp
-    assert 'project_title_container_->SetProperty("left"' in menu_bar_cpp
-    assert 'project_title_container_->SetProperty("width"' in menu_bar_cpp
-    assert "menu_toolbar_->GetOffsetWidth()" in menu_bar_cpp
-    assert "menu_toolbar_->GetScrollWidth()" in menu_bar_cpp
-    assert "width >= 96.0f * dp_ratio" in menu_bar_cpp
-    assert 'SetClass("no-room", !has_room)' in menu_bar_cpp
-    assert "projectTitleAtPoint(mx, my)" in menu_bar_cpp
-    project_title_hit_test = menu_bar_cpp.split(
-        "bool RmlMenuBar::projectTitleAtPoint", 1
-    )[1].split("void RmlMenuBar::updateProjectTitleLayout", 1)[0]
-    assert "project_title_el_->GetAbsoluteOffset" in project_title_hit_test
-    assert "project_title_el_->GetBox().GetSize" in project_title_hit_test
-    assert "tooltip_.setHover(project_tooltip_, project_title_el_)" in menu_bar_cpp
-    reload_resources = menu_bar_cpp.split("void RmlMenuBar::reloadResources()", 1)[1].split(
-        "void RmlMenuBar::updateLabels", 1
+def test_project_title_native_wiring_contract():
+    # CPU Rml tests in test_menu_bar_title.cpp cover geometry, hit testing, text,
+    # dirty bindings and tooltip escaping. These two wiring checks only ensure
+    # the GUI feeds that surface and SDL's drag exclusion list omits the title;
+    # they cannot prove OS window movement or rendered pixels.
+    gui = (PROJECT_ROOT / "src/visualizer/gui/gui_manager.cpp").read_text(encoding="utf-8")
+    menu = (PROJECT_ROOT / "src/visualizer/gui/rml_menu_bar.cpp").read_text(encoding="utf-8")
+    assert "rml_menu_bar_.updateProjectDisplay(project_display)" in gui
+    drag = menu.split("void RmlMenuBar::updateTitlebarDragRegion", 1)[1].split(
+        "void RmlMenuBar::", 1
     )[0]
-    assert 'GetElementById("project-title")' in reload_resources
-    assert 'GetElementById("project-title-content")' in reload_resources
-    tooltip_rule = _rule_body(components_rcss, ".frame-tooltip")
-    assert "white-space: normal;" in tooltip_rule
-    assert "word-break: break-all;" in tooltip_rule
-    tooltip_cpp = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rml_tooltip.cpp"
-    ).read_text(encoding="utf-8")
-    assert "Rml::StringUtilities::EncodeRml(pending_text_)" in tooltip_cpp
-    assert "append_element(excluded_rects, project_title_el_)" not in menu_bar_cpp
-    assert 'project_title = "Untitled"' in gui_manager_cpp
-    assert "path_to_utf8(project_display.path->lexically_normal())" in gui_manager_cpp
-    display_info = project_lifecycle_cpp.split(
-        "ProjectDisplayInfo ProjectLifecycle::displayInfo()", 1
-    )[1].split("void ProjectLifecycle::openStartupProject", 1)[0]
-    assert "hasDirtyProjectForDisplay()" in display_info
-    assert "hasDirtyProject();" not in display_info
-    assert "std::try_to_lock" in display_info
+    assert "append_element(excluded_rects, project_title_el_)" not in drag
 
 
 def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():

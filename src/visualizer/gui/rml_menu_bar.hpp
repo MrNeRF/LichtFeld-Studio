@@ -23,7 +23,8 @@ namespace Rml {
 
 namespace lfs::vis {
     struct Theme;
-}
+    struct ProjectDisplayInfo;
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -126,6 +127,7 @@ namespace lfs::vis::gui {
         void draw(int screen_w, int screen_h);
         void updateLabels(const std::vector<std::string>& labels,
                           const std::vector<std::string>& idnames);
+        void updateProjectDisplay(const ProjectDisplayInfo& project_display);
         void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
         void processInput(const PanelInputState& input);
@@ -144,6 +146,8 @@ namespace lfs::vis::gui {
         }
 
     private:
+        friend class RmlMenuBarTestAccess;
+        void bindModel();
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
