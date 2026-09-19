@@ -4,6 +4,7 @@
 #include "core/nn/weight_file.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/path_utils.hpp"
 
 #include <cstring>
 #include <format>
@@ -68,7 +69,7 @@ namespace lfs::core::nn {
         WeightFile file;
         if (!file.mapped_.open(path, MappedFile::Advice::Random)) {
             return io_error(lfs::ErrorCode::NotFound,
-                            std::format("could not map {}", path.string()));
+                            std::format("could not map {}", lfs::core::path_to_utf8(path)));
         }
         if (file.mapped_.size() < 8) {
             return io_error(lfs::ErrorCode::DataLoss, "file is shorter than the LFW1 header");
