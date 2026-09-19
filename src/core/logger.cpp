@@ -623,7 +623,7 @@ namespace lfs::core {
     }
 
     std::string Logger::default_log_file_path(const std::string& user_dir_override) {
-        return resolve_default_log_path(user_dir_override).string();
+        return path_to_utf8(resolve_default_log_path(user_dir_override));
     }
 
     bool Logger::is_ready() const noexcept {
