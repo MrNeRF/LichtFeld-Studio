@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_keyboard.h>
@@ -171,11 +172,13 @@ namespace lfs::vis::gui {
         if (!window_)
             return;
 
+        // RmlUi uses framebuffer pixels; SDL expects window coordinates for IME placement.
+        const auto scale = input::windowPixelScale(window_);
         SDL_Rect rect{};
-        rect.x = current_context_window_x_ + static_cast<int>(std::lround(caret_position.x));
-        rect.y = current_context_window_y_ + static_cast<int>(std::lround(caret_position.y));
+        rect.x = static_cast<int>(std::lround((current_context_window_x_ + caret_position.x) / scale.x));
+        rect.y = static_cast<int>(std::lround((current_context_window_y_ + caret_position.y) / scale.y));
         rect.w = 1;
-        rect.h = std::max(1, static_cast<int>(std::lround(line_height)));
+        rect.h = std::max(1, static_cast<int>(std::lround(line_height / scale.y)));
         SDL_SetTextInputArea(window_, &rect, 0);
     }
 

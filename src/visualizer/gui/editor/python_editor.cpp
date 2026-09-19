@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python_editor.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 
 #include "python_lsp_client.hpp"
 
@@ -3121,7 +3122,7 @@ namespace lfs::vis::editor {
             if (button == 1) {
                 float screen_x = event.GetParameter("mouse_x", 0.0f);
                 float screen_y = event.GetParameter("mouse_y", 0.0f);
-                SDL_GetMouseState(&screen_x, &screen_y);
+                input::mouseStateInPixels(SDL_GetMouseFocus(), &screen_x, &screen_y);
                 if (impl_->handleContextMenuMouseDown(mouse, screen_x, screen_y)) {
                     event.StopPropagation();
                     return;

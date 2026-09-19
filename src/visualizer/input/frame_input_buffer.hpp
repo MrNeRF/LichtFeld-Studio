@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "sdl_coordinate_utils.hpp"
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
@@ -181,13 +182,18 @@ namespace lfs::vis {
         void finalize(SDL_Window* window) {
             assert(window);
             poll_time = std::chrono::steady_clock::now();
-            const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
+            const SDL_MouseButtonFlags buttons = input::mouseStateInPixels(window, &mouse_x, &mouse_y);
             mouse_down[0] = (buttons & SDL_BUTTON_LMASK) != 0;
             mouse_down[1] = (buttons & SDL_BUTTON_RMASK) != 0;
             mouse_down[2] = (buttons & SDL_BUTTON_MMASK) != 0;
             key_mods = SDL_GetModState();
             int w = 0, h = 0;
-            SDL_GetWindowSize(window, &w, &h);
+            SDL_GetWindowSizeInPixels(window, &w, &h);
+            const auto scale = input::windowPixelScale(window);
+            for (auto& event : mouse_button_events) {
+                event.x *= scale.x;
+                event.y *= scale.y;
+            }
             window_w = w;
             window_h = h;
         }

@@ -6,6 +6,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
@@ -397,7 +398,7 @@ namespace lfs::vis::tools {
 
         float mx = 0.0f;
         float my = 0.0f;
-        SDL_GetMouseState(&mx, &my);
+        input::mouseStateInPixels(tool_context_->getWindow(), &mx, &my);
         const glm::vec2 mouse_pos{mx, my};
         auto* const rendering_manager = tool_context_->getRenderingManager();
         const float fallback_focal_length_mm = rendering_manager
