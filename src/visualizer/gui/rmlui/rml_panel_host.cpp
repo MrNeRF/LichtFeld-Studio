@@ -283,6 +283,10 @@ namespace lfs::vis::gui {
             return false;
 
         const float scroll_top = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
+        // The live resize target belongs to the current document. Never retain
+        // it across UnloadDocument(), where it immediately becomes dangling.
+        live_inspector_resize_target_ = nullptr;
+        resize_cursor_override_.clear();
         if (document_) {
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
@@ -957,7 +961,9 @@ namespace lfs::vis::gui {
              element = element->GetParentNode()) {
             if (element->GetAttribute<Rml::String>("data-resize", "") != "inspector-height")
                 continue;
-            live_inspector_resize_target_ = element->GetParentNode();
+            live_inspector_resize_target_ = document_
+                                                ? document_->GetElementById("asset-inspector")
+                                                : nullptr;
             if (!live_inspector_resize_target_)
                 return;
             live_inspector_resize_start_y_ = mouse_y;

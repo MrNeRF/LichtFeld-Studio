@@ -2782,6 +2782,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 row["status"] = "completed"
                 if self._inspection_pipeline is not None:
                     self._inspection_pipeline.invalidate(asset_id)
+                if reverify_asset:
+                    self._inspection_by_asset.pop(asset_id, None)
                 if facts:
                     self._inspection_by_asset[asset_id] = facts
                 self._inspection_errors.pop(asset_id, None)
@@ -4397,9 +4399,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._resize_start_y = float(event.get_parameter("mouse_y", "0"))
         self._resize_start_navigator = self._navigator_width
         self._resize_start_inspector = self._inspector_width
-        self._resize_start_height = self._inspector_preferred_height
+        self._resize_start_height = (
+            self._inspector_band_height()
+            if region == "inspector-height"
+            else self._inspector_preferred_height
+        )
         self._resize_scale = self._ui_scale()
-        self._resize_last_height = self._inspector_preferred_height
+        self._resize_last_height = self._resize_start_height
         self._bottom_panel_dragging = region == "inspector-height"
         if self._bottom_panel_dragging:
             metrics = breakpoint_metrics(self._content_width or 600.0)

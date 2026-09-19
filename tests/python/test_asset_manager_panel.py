@@ -641,7 +641,7 @@ def test_list_view_exposes_the_same_more_menu_affordance(panel_module):
     children = list(row)
     assert children.index(button) == next(
         index for index, child in enumerate(children)
-        if "asset-col-folder" in child.get("class", "")
+        if "asset-col-gallery" in child.get("class", "")
     ) + 1
 
     rcss = (resources / "asset_manager.rcss").read_text()
@@ -1569,6 +1569,11 @@ def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypat
     assert gallery.find("span") is None
     assert gallery.get("data-attr-title") == "asset.gallery_tooltip"
     assert gallery.findall(".//button") == []
+    columns = [child.get("class") for child in row]
+    assert columns.index("asset-col asset-col-gallery") == columns.index("asset-button asset-button--small-icon asset-list-menu") - 1
+    header = root.find('.//div[@class="asset-list-header"]')
+    header_columns = [child.get("class") for child in header]
+    assert header_columns.index("asset-col asset-col-gallery") == header_columns.index("asset-list-menu-spacer") - 1
 
 def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2905,6 +2910,8 @@ def test_legacy_stacked_inspector_height_migrates_once_then_persists(panel_modul
 
 
 def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cleared(panel_module):
+    import xml.etree.ElementTree as ET
+
     first = _project(id="first", project_uuid="first", name="First")
     second = _project(id="second", project_uuid="second", name="Second")
     panel = panel_module.AssetManagerPanel()
@@ -2949,17 +2956,23 @@ def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cl
     )[1].split("}", 1)[0]
     assert "position: relative;" in side_inspector_rule
     assert "flex: 0 0 auto;" in side_inspector_rule
-    assert ".asset-shell.is-medium .asset-inspector > .asset-resize-handle--horizontal { display: none; }" in rcss
     stacked_handle_rule = rcss.split(
-        ".asset-shell.is-narrow .asset-inspector > .asset-resize-handle--horizontal,",
+        ".asset-shell.inspector-expanded.is-narrow .asset-resize-handle--horizontal,",
         1,
     )[1].split("}", 1)[0]
     assert "display: block;" in stacked_handle_rule
     assert "cursor: resize-vertical;" in stacked_handle_rule
     horizontal_handle_rule = rcss.split(".asset-resize-handle--horizontal {", 1)[1].split("}", 1)[0]
-    assert "position: absolute;" in horizontal_handle_rule
-    assert "top: -8dp;" in horizontal_handle_rule
-    assert "height: 16dp;" in horizontal_handle_rule
+    assert "position: relative;" in horizontal_handle_rule
+    assert "height: 12dp;" in horizontal_handle_rule
+    assert "flex: 0 0 12dp;" in horizontal_handle_rule
+    root = ET.fromstring(rml)
+    handle = root.find('.//div[@data-resize="inspector-height"]')
+    inspector = root.find('.//aside[@id="asset-inspector"]')
+    results_stack = root.find('.//div[@class="asset-results-stack"]')
+    assert handle is not None and inspector is not None
+    assert results_stack is not None
+    assert list(results_stack).index(handle) + 1 == list(results_stack).index(inspector)
     assert 'data-class-dragging="bottom_panel_resize_dragging"' in rml
     assert '<span class="asset-resize-handle-line" aria-hidden="true"></span>' in rml
     assert ".asset-resize-handle--horizontal .asset-resize-handle-line" in theme_rcss
@@ -3000,6 +3013,44 @@ def test_stacked_inspector_resize_is_lightweight_and_clears_drag_state(panel_mod
     assert panel._info_preferred_height == pytest.approx(350.0)
     assert "inspector_style_height" in panel._handle.dirty_fields
     assert release.stopped is True
+
+
+def test_stacked_inspector_resize_starts_from_displayed_clamped_height(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._layout_class = "narrow"
+    panel._content_width = 500.0
+    panel._host_geometry = (500.0, 700.0)
+    panel._inspector_preferred_height = 1000.0
+    panel._start_resize(
+        "inspector-height", _Event(params={"mouse_x": "20", "mouse_y": "400"})
+    )
+
+    panel._on_resize_mousemove(
+        _Event(params={"mouse_x": "20", "mouse_y": "450"})
+    )
+
+    assert panel._resize_start_height == pytest.approx(350.0)
+    assert panel._inspector_preferred_height == pytest.approx(300.0)
+
+
+def test_native_inspector_resize_target_is_document_scoped():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/visualizer/gui/rmlui/rml_panel_host.cpp"
+    ).read_text()
+    reload_body = source[
+        source.index("bool RmlPanelHost::reloadDocument()"):
+        source.index("bool RmlPanelHost::loadDocument()")
+    ]
+    assert reload_body.index("live_inspector_resize_target_ = nullptr;") < reload_body.index(
+        "UnloadDocument(document_)"
+    )
+    begin_body = source[
+        source.index("void RmlPanelHost::beginLiveInspectorResize"):
+        source.index("void RmlPanelHost::updateLiveInspectorResize")
+    ]
+    assert 'document_->GetElementById("asset-inspector")' in begin_body
 
 def test_P13_space_toggles_quick_look_and_arrows_update_its_project(panel_module):
     asset = _project(name="Bonsai")
@@ -3308,6 +3359,76 @@ def test_translated_message_has_no_english_append(panel_module):
     from lfs_plugins.gallery_messages import localize_message
     panel_module.lf.ui.tr = lambda key: "Téléversement terminé."
     assert localize_message("Upload complete.") == "Téléversement terminé."
+
+
+def test_completed_thumbnail_operation_discards_stale_inspection_before_refresh(
+    panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "thumbnail.licht"
+    project_path.write_bytes(b"project")
+    asset = _project(path=str(project_path), commit_uuid="old", generation=4)
+    calls = []
+
+    def verify_asset(asset_id):
+        calls.append(("verify", asset_id))
+        asset["commit_uuid"] = "new"
+        asset["generation"] = 5
+        return SimpleNamespace(id=asset_id)
+
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old"
+        ),
+        backup_project_file=lambda _path: None,
+        run_project_operation=lambda _path, _project, _commit, action: action(),
+    )
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, verify_asset=verify_asset
+    )
+    panel._inspection_by_asset[asset["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old",
+            has_preview=True, physical_file_size=asset["file_size_bytes"],
+            saved_at_unix_ns=asset["saved_at_unix_ns"],
+        )
+    }
+    monkeypatch.setattr(
+        panel,
+        "refresh_catalog",
+        lambda **kwargs: calls.append(("refresh", kwargs)),
+    )
+
+    old_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    panel._start_project_operation(
+        asset["id"], "Update thumbnail", lambda _progress, _cancel: None,
+        backup=False, reverify_asset=True,
+    )
+    new_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+
+    assert calls == [
+        ("verify", asset["id"]),
+        ("refresh", {"scan_folders": False}),
+    ]
+    assert "rev=old" in old_decorator
+    assert "rev=new" in new_decorator
+    assert old_decorator != new_decorator
+    assert asset["id"] not in panel._inspection_by_asset
 
 
 def test_project_operation_thread_start_failure_restores_controls(panel_module, monkeypatch, caplog):
