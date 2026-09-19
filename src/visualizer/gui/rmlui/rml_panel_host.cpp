@@ -927,6 +927,69 @@ namespace lfs::vis::gui {
             manual_dropdown_hover_->SetPseudoClass("hover", true);
     }
 
+    void RmlPanelHost::updateResizeCursorOverride(const bool pointer_over_panel) {
+        // RmlPanelHost can reuse a cached render while the pointer is still.
+        // Persist the resize request explicitly so the frame-level cursor reset
+        // cannot erase it after the single hover transition that selected it.
+        if (mouse_captured_[0] && !resize_cursor_override_.empty())
+            return;
+
+        resize_cursor_override_.clear();
+        if (!pointer_over_panel || !rml_context_)
+            return;
+
+        for (auto* element = rml_context_->GetHoverElement(); element;
+             element = element->GetParentNode()) {
+            const auto region = element->GetAttribute<Rml::String>("data-resize", "");
+            if (region.empty())
+                continue;
+            resize_cursor_override_ = region == "inspector-height"
+                                          ? "resize-vertical"
+                                          : "resize-horizontal";
+            return;
+        }
+    }
+
+    void RmlPanelHost::beginLiveInspectorResize(const float mouse_y) {
+        if (!rml_context_)
+            return;
+        for (auto* element = rml_context_->GetHoverElement(); element;
+             element = element->GetParentNode()) {
+            if (element->GetAttribute<Rml::String>("data-resize", "") != "inspector-height")
+                continue;
+            live_inspector_resize_target_ = element->GetParentNode();
+            if (!live_inspector_resize_target_)
+                return;
+            live_inspector_resize_start_y_ = mouse_y;
+            live_inspector_resize_start_height_ =
+                live_inspector_resize_target_->GetBox().GetSize(Rml::BoxArea::Border).y;
+            return;
+        }
+    }
+
+    void RmlPanelHost::updateLiveInspectorResize(const float mouse_y,
+                                                 const bool mouse_down,
+                                                 const bool mouse_released) {
+        if (!live_inspector_resize_target_ || !rml_context_)
+            return;
+        if (mouse_down || mouse_released) {
+            const float dp_ratio = std::max(
+                rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+            const float minimum = 180.0f * dp_ratio;
+            const float maximum = std::max(minimum, rml_context_->GetDimensions().y * 0.5f);
+            const float height = std::clamp(
+                live_inspector_resize_start_height_ -
+                    (mouse_y - live_inspector_resize_start_y_),
+                minimum, maximum);
+            live_inspector_resize_target_->SetProperty(
+                "height", std::format("{:.1f}px", height));
+            render_needed_ = true;
+            direct_cache_dirty_ = true;
+        }
+        if (mouse_released || !mouse_down)
+            live_inspector_resize_target_ = nullptr;
+    }
+
     void RmlPanelHost::trackFrame(const float panel_x, const float panel_y) {
         if (!manager_ || !rml_context_ || !input_)
             return;
@@ -935,8 +998,12 @@ namespace lfs::vis::gui {
                                     static_cast<int>(panel_x - input_->screen_x -
                                                      last_fbo_padding_),
                                     static_cast<int>(panel_y - input_->screen_y -
-                                                     last_fbo_padding_),
+                                                      last_fbo_padding_),
                                     openDropdownBounds());
+        if (!resize_cursor_override_.empty()) {
+            if (auto* const system_interface = Rml::GetSystemInterface())
+                system_interface->SetMouseCursor(resize_cursor_override_);
+        }
     }
 
     void RmlPanelHost::applyHoverTooltip(const int pw, const float panel_y,
@@ -1123,6 +1190,8 @@ namespace lfs::vis::gui {
         float local_x = mouse_x - panel_x + last_fbo_padding_;
         float local_y = mouse_y - panel_y + last_fbo_padding_;
 
+        updateLiveInspectorResize(mouse_y, input.mouse_down[0], input.mouse_released[0]);
+
         const float logical_w = static_cast<float>(last_fbo_w_);
         const float logical_h = static_cast<float>(last_fbo_h_);
 
@@ -1303,6 +1372,8 @@ namespace lfs::vis::gui {
             }
             if (input.mouse_clicked[0])
                 sync_text_focus();
+            if (input.mouse_clicked[0])
+                beginLiveInspectorResize(mouse_y);
         } else if (input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
         }
@@ -1331,6 +1402,8 @@ namespace lfs::vis::gui {
                 deliver_button_up(button);
             }
         }
+
+        updateResizeCursorOverride(hovered);
 
         if (hovered) {
             if (auto* const hover = rml_context_->GetHoverElement())

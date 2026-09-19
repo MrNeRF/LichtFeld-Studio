@@ -253,9 +253,8 @@
                         <span class="asset-list-secondary text-muted" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span>
                       </span>
                       <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
-                        <img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon"
+                        <img class="gallery-list-icon" data-attr-src="asset.gallery_icon"
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
-                        <span data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span><span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                       </span>
                       <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width" data-attr-title="asset.size_label">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width" data-attr-title="asset.saved_label">{{asset.saved_label}}</span>
@@ -279,8 +278,8 @@
         <div class="asset-resize-handle asset-resize-handle--vertical inspector-resize-handle" data-resize="inspector"
              tabindex="0" aria-label="{{resize_inspector_label}}"></div>
         <aside id="asset-inspector" class="asset-inspector" data-style-width="inspector_style_width" data-style-height="inspector_style_height">
-          <div class="asset-resize-handle asset-resize-handle--horizontal" data-resize="inspector-height"
-               tabindex="0" aria-label="{{resize_inspector_height_label}}"></div>
+          <div class="asset-resize-handle asset-resize-handle--horizontal" data-class-dragging="bottom_panel_resize_dragging" data-resize="inspector-height"
+               tabindex="0" aria-label="{{resize_inspector_height_label}}"><span class="asset-resize-handle-line" aria-hidden="true"></span></div>
           <div id="asset-inspector-content" class="asset-inspector-content">
             <div class="asset-info-empty" data-if="show_selection_none"><span class="asset-info-empty-text">{{select_item_hint}}</span></div>
             <div class="asset-info-empty inspector-multi" data-if="show_selection_multiple">

@@ -14,21 +14,35 @@ from lfs_plugins.asset_layout import (
 
 @pytest.mark.parametrize(
     ("width", "name"),
-    [(419, "compact"), (420, "narrow"), (639, "narrow"),
-     (640, "medium"), (899, "medium"), (900, "wide")],
+    [(359, "compact"), (360, "narrow"), (679, "narrow"),
+     (680, "medium"), (999, "medium"), (1000, "wide")],
 )
 def test_breakpoints_use_frozen_boundaries(width, name):
     assert breakpoint_for_width(width) == name
     assert breakpoint_metrics(width)["breakpoint"] == name
 
 
-@pytest.mark.parametrize("width", [420, 500, 639])
-def test_narrow_inspector_metrics_describe_the_overlay(width):
+@pytest.mark.parametrize("width", [260, 500, 679])
+def test_stacked_inspector_metrics_preserve_a_readable_bottom_panel(width):
     metrics = breakpoint_metrics(width)
-    assert metrics["inspector_placement"] == "overlay"
-    assert metrics["inspector_default"] == 200.0
-    assert metrics["inspector_min"] == 120.0
-    assert metrics["inspector_max"] == 450.0
+    assert metrics["inspector_placement"] == "bottom"
+    assert metrics["inspector_default"] == 1000.0
+    assert metrics["inspector_min"] == 180.0
+    assert metrics["inspector_max"] == 1000.0
+
+
+@pytest.mark.parametrize("width", [680, 900, 999])
+def test_medium_keeps_the_navigator_compact_beside_the_inspector(width):
+    metrics = breakpoint_metrics(width)
+    assert metrics["navigator_mode"] == "dropdown"
+    assert metrics["inspector_placement"] == "column"
+
+
+def test_wide_navigator_preserves_core_list_affordances_when_it_appears():
+    after = list_column_widths(1000 - 320 - 200)
+    assert after["name"] >= 80.0
+    assert after["gallery"] == 32.0
+    assert sum(after.values()) + 24 + 16 + 32 + 8 + LIST_ACTION_COLUMN_WIDTH <= 480.1
 
 
 @pytest.mark.parametrize("width", [260, 500, 760, 1100])
@@ -51,3 +65,8 @@ def test_list_columns_reserve_the_row_action_column(width):
     widths = list_column_widths(width)
     fixed_chrome = 24 + 16 + 32 + 8 + LIST_ACTION_COLUMN_WIDTH
     assert sum(widths.values()) + fixed_chrome <= width + 0.1
+
+
+@pytest.mark.parametrize("width", [260, 480, 800, 1280])
+def test_gallery_is_always_a_fixed_icon_column(width):
+    assert list_column_widths(width)["gallery"] == 32.0
