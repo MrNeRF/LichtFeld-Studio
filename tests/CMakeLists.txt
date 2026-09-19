@@ -31,6 +31,40 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# =============================================================================
+# CPU-only visualizer tests (no LibTorch)
+# =============================================================================
+if(BUILD_VISUALIZER_TESTS)
+    set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_menu_bar_title.cpp
+    )
+    add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
+        ${LICHTFELD_VISUALIZER_TEST_SOURCES}
+    )
+    target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_visualizer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/visualizer
+    )
+    target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_visualizer
+        GTest::gtest_main
+    )
+    add_test(
+        NAME lichtfeld_visualizer_tests
+        COMMAND lichtfeld_visualizer_tests
+    )
+    set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        TIMEOUT 30
+    )
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
+        return()
+    endif()
+endif()
+
 if(BUILD_PANEL_LAYOUT_TESTS)
     add_executable(panel_layout_tests EXCLUDE_FROM_ALL
         test_panel_layout_render_demand.cpp
@@ -45,7 +79,7 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         $<TARGET_PROPERTY:${PROJECT_NAME},LINK_LIBRARIES>
         GTest::gtest_main
     )
-    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY)
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS)
         return()
     endif()
 endif()
