@@ -14,10 +14,12 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <ranges>
 #include <set>
 #include <system_error>
+#include <tuple>
 #include <utility>
 
 namespace lfs::io::project {
@@ -33,6 +35,9 @@ namespace lfs::io::project {
         constexpr std::array<std::byte, 8> COMMIT_MAGIC = {
             std::byte{'L'}, std::byte{'F'}, std::byte{'S'}, std::byte{'C'},
             std::byte{'O'}, std::byte{'M'}, std::byte{'I'}, std::byte{'T'}};
+        constexpr std::array<std::byte, 8> PNG_MAGIC = {
+            std::byte{0x89}, std::byte{'P'}, std::byte{'N'}, std::byte{'G'},
+            std::byte{'\r'}, std::byte{'\n'}, std::byte{0x1a}, std::byte{'\n'}};
 
         template <typename T>
         T inspect_read_u(const std::span<const std::byte> bytes,
@@ -78,6 +83,48 @@ namespace lfs::io::project {
                         static_cast<std::streamsize>(bytes.size()));
             return stream.good() &&
                    stream.gcount() == static_cast<std::streamsize>(bytes.size());
+        }
+
+        std::pair<std::uint32_t, std::uint32_t>
+        inspect_preview_dimensions(std::ifstream& stream,
+                                   const std::optional<PreviewLocator>& preview) {
+            if (!preview || preview->bytes < 24) {
+                return {};
+            }
+            std::array<std::byte, 24> header{};
+            if (!inspect_read_fixed(stream, preview->offset, header) ||
+                !std::equal(PNG_MAGIC.begin(), PNG_MAGIC.end(), header.begin()) ||
+                header[12] != std::byte{'I'} || header[13] != std::byte{'H'} ||
+                header[14] != std::byte{'D'} || header[15] != std::byte{'R'}) {
+                return {};
+            }
+            const auto read_be_u32 = [&header](const std::size_t offset) {
+                std::uint32_t value = 0;
+                for (std::size_t index = 0; index < 4; ++index) {
+                    value = (value << 8) |
+                            std::to_integer<std::uint8_t>(header[offset + index]);
+                }
+                return value;
+            };
+            if (read_be_u32(8) != 13) {
+                return {};
+            }
+            const std::uint32_t width = read_be_u32(16);
+            const std::uint32_t height = read_be_u32(20);
+            constexpr auto max_dimension =
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+            return width > 0 && height > 0 && width <= max_dimension &&
+                           height <= max_dimension
+                       ? std::pair{width, height}
+                       : std::pair<std::uint32_t, std::uint32_t>{};
+        }
+
+        std::pair<std::uint32_t, std::uint32_t>
+        inspect_preview_dimensions(const std::filesystem::path& path,
+                                   const std::optional<PreviewLocator>& preview) {
+            std::ifstream stream(path, std::ios::binary);
+            return stream ? inspect_preview_dimensions(stream, preview)
+                          : std::pair<std::uint32_t, std::uint32_t>{};
         }
 
         struct HeaderCardCandidate {
@@ -289,6 +336,8 @@ namespace lfs::io::project {
             result.validation_scope = "head";
             result.has_preview = selected->preview.has_value();
             result.preview_bytes = selected->preview ? selected->preview->bytes : 0;
+            std::tie(result.preview_width, result.preview_height) =
+                inspect_preview_dimensions(stream, selected->preview);
             result.min_reader_version = selected->commit.min_reader_version;
             result.min_safe_writer_version = selected->commit.min_safe_writer_version;
             result.commit_kind = selected->commit.kind;
@@ -308,6 +357,8 @@ namespace lfs::io::project {
 
         ProjectInspectorCard card_from_reader(const ProjectReader& reader) {
             const auto preview = reader.preview();
+            const auto [preview_width, preview_height] =
+                project_preview_dimensions(reader);
             std::optional<std::string> title;
             if (const auto* row = reader.find(FOURCC_PROJ,
                                               reader.superblock().project_uuid);
@@ -335,6 +386,8 @@ namespace lfs::io::project {
                 .validation_scope = "head",
                 .has_preview = preview.has_value(),
                 .preview_bytes = preview ? preview->bytes : 0,
+                .preview_width = preview_width,
+                .preview_height = preview_height,
                 .title = std::move(title),
                 .min_reader_version = reader.commit().min_reader_version,
                 .min_safe_writer_version = reader.commit().min_safe_writer_version,
@@ -456,6 +509,11 @@ namespace lfs::io::project {
         }
 
     } // namespace
+
+    std::pair<std::uint32_t, std::uint32_t>
+    project_preview_dimensions(const ProjectReader& reader) {
+        return inspect_preview_dimensions(reader.path(), reader.preview());
+    }
 
     lfs::Result<ProjectInspectorCard>
     inspect_project_card(const std::filesystem::path& path) {

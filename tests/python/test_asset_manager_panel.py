@@ -193,6 +193,7 @@ class _Element:
         self.absolute_top = 0.0
         self.absolute_width = self.client_width
         self.absolute_height = 24.0
+        self.properties = {}
         self.focused = False
         self.selection_range = None
         if parent is not None:
@@ -231,6 +232,9 @@ class _Element:
             self.classes.add(name)
         else:
             self.classes.discard(name)
+
+    def set_property(self, name, value):
+        self.properties[name] = value
 
     def is_class_set(self, name):
         return name in self.classes
@@ -389,15 +393,20 @@ def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
         f"&rev={fallback_rev}&path={encoded_fallback} cover center)"
     )
 
-    embedded = _project(path="/tmp/a folder/project & one.licht")
+    embedded = _project(
+        path="/tmp/a folder/project & one.licht",
+        preview_width=512,
+        preview_height=384,
+    )
     embedded_decorator = panel._thumbnail_decorator(embedded)
     encoded_project = quote(embedded["path"], safe="/:._-~")
     assert " " not in encoded_project
     assert embedded_decorator == (
         "image(preview://kind=licht&thumb=256"
-        f"&rev={embedded['commit_uuid']}&path={encoded_project} cover center)"
+        f"&rev={embedded['commit_uuid']}&w=512&h=384&path={encoded_project} cover center)"
     )
     assert embedded["path"] not in embedded_decorator
+    assert "&w=512&h=384&" in embedded_decorator
     embedded_row = format_asset(embedded)
     assert embedded_row["shows_placeholder"] is False
     assert embedded_row["has_preview"] is True
@@ -405,16 +414,21 @@ def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
     fallback_asset = _project(
         has_preview=False,
         fallback_preview_path=str(fallback_image),
+        preview_width=320,
+        preview_height=180,
+    )
+    expected_fallback_with_dimensions = expected_fallback.replace(
+        "&path=", "&w=320&h=180&path="
     )
     fallback_decorator = panel._thumbnail_decorator(fallback_asset)
-    assert fallback_decorator == expected_fallback
+    assert fallback_decorator == expected_fallback_with_dimensions
     assert "kind=image" in fallback_decorator
     assert "kind=licht" not in fallback_decorator
     assert "frame 1.png" not in fallback_decorator
     fallback_row = format_asset(fallback_asset)
     assert fallback_row["shows_placeholder"] is False
     assert fallback_row["has_preview"] is False
-    assert fallback_row["thumbnail_decorator"] == expected_fallback
+    assert fallback_row["thumbnail_decorator"] == expected_fallback_with_dimensions
 
     none_asset = _project(has_preview=False)
     assert panel._thumbnail_decorator(none_asset) == "none"
@@ -430,6 +444,29 @@ def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
 
     both = _project(fallback_preview_path=str(fallback_image))
     assert "kind=licht" in panel._thumbnail_decorator(both)
+
+
+def test_thumbnail_decorator_uses_dimensions_from_current_native_inspection(
+    panel_module,
+):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(preview_width=0, preview_height=0)
+    panel._inspection_by_asset[asset["id"]] = {
+        "card": SimpleNamespace(
+            has_preview=True,
+            preview_width=1600,
+            preview_height=900,
+            physical_file_size=asset["file_size_bytes"],
+            saved_at_unix_ns=asset["saved_at_unix_ns"],
+            commit_uuid=asset["commit_uuid"],
+            project_uuid=asset["id"],
+        )
+    }
+
+    row = panel._format_asset_for_ui(asset)
+
+    assert "&w=1600&h=900&" in row["thumbnail_decorator"]
+
 
 def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_path):
     panel = panel_module.AssetManagerPanel()
@@ -609,9 +646,9 @@ def test_list_view_exposes_the_same_more_menu_affordance(panel_module):
 
     rcss = (resources / "asset_manager.rcss").read_text()
     assert ".asset-list-menu-spacer { flex: 0 0 32dp; width: 32dp; min-width: 32dp;" in rcss
-    assert ".asset-list-menu { flex: 0 0 24dp; width: 24dp; min-width: 24dp;" in rcss
-    assert ".asset-list-row:hover .asset-list-menu" in rcss
-    assert ".asset-list-row.is-selected .asset-list-menu" in rcss
+    menu_rule = rcss.split(".asset-list-menu {", 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 24dp;" in menu_rule
+    assert "visibility: visible;" in menu_rule
 
 def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -1506,7 +1543,7 @@ def test_pull_undo_survives_gallery_checks_and_restores_project(panel_module, mo
     panel._gallery_undo[1]()
     assert restored == [True]
 
-def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatch):
+def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypatch):
     import xml.etree.ElementTree as ET
     from lfs_plugins.asset_layout import list_columns, list_column_widths
     panel = panel_module.AssetManagerPanel()
@@ -1514,12 +1551,12 @@ def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatc
     panel.on_bind_model(_BindingContext(model))
     for width in (260, 359, 360, 479, 480, 559, 560, 699, 700, 1100):
         columns = list_columns(width)
-        assert columns["gallery"] == (32 if width < 480 else list_column_widths(width)["gallery"])
+        assert columns["gallery"] == 32
         assert columns["size"] == (width >= 360)
         assert columns["modified"] == (width >= 560)
         assert columns["folder"] == (width >= 700)
         panel._asset_window_client_width = width
-        assert model.func_bindings["asset_list_gallery_compact"]() == (width < 480)
+        assert model.func_bindings["asset_list_gallery_compact"]() is True
         expected = list_column_widths(width)
         for name, value in expected.items():
             assert model.func_bindings[f"asset_list_{name}_width"]() == f"{value:.1f}dp"
@@ -1529,6 +1566,8 @@ def test_list_gallery_column_flexes_and_compacts_action(panel_module, monkeypatc
     gallery = row.find('./span[@class="asset-col asset-col-gallery"]')
     assert gallery.get("data-style-width") == "asset_list_gallery_width"
     assert gallery.find("img") is not None
+    assert gallery.find("span") is None
+    assert gallery.get("data-attr-title") == "asset.gallery_tooltip"
     assert gallery.findall(".//button") == []
 
 def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
@@ -1575,7 +1614,7 @@ def test_scroll_refreshes_only_when_the_virtual_record_window_changes(panel_modu
     assert panel._asset_window_refresh_pending is False
     assert panel._handle.dirty_fields == []
 
-    scroll.scroll_top = 240.0
+    scroll.scroll_top = 288.0
     panel._on_asset_scroll(_Event(scroll))
     assert panel._asset_window_refresh_pending is True
     assert "__update__" in panel._handle.dirty_fields
@@ -1600,6 +1639,22 @@ def test_horizontal_host_resize_uses_native_name_flex(panel_module):
     rcss = (resources / "asset_manager.rcss").read_text()
     assert 'class="asset-col asset-col-name" data-style-width=' not in rml
     assert ".asset-list-header .asset-col-name, .asset-list-row .asset-col-name { flex: 1 1 0dp; width: auto; }" in rcss
+
+
+def test_open_inspector_keeps_list_column_density_continuous_when_it_docks(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._inspector_expanded = True
+    panel._content_width = 679.0
+    panel._asset_window_client_width = 679.0
+    panel._layout_class = "narrow"
+
+    stacked_width = panel._effective_list_layout_width()
+    assert stacked_width == pytest.approx(359.0)
+
+    panel._content_width = 680.0
+    panel._asset_window_client_width = 360.0
+    panel._layout_class = "medium"
+    assert panel._effective_list_layout_width() == pytest.approx(360.0)
 
 def test_mount_binds_stable_delegated_handlers(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2792,14 +2847,14 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     monkeypatch.setattr(panel_module.lf.ui, "get_ui_scale", lambda: scale, raising=False)
     info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.LEFT_DOCK)
     monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
-    shell = SimpleNamespace(client_width=1100 * scale)
-    popup = SimpleNamespace(client_width=1100 * scale, client_height=700 * scale)
+    shell = SimpleNamespace(client_width=1280 * scale)
+    popup = SimpleNamespace(client_width=1280 * scale, client_height=700 * scale)
     panel._doc = _Document({"asset-shell": shell, "asset-popup": popup})
 
     panel._sync_panel_space_state()
     panel._sync_panel_layout()
     assert panel._layout_class == "wide"
-    assert panel._content_width == pytest.approx(1100)
+    assert panel._content_width == pytest.approx(1280)
     assert panel._is_floating is False
 
     info.space = panel_module.lf.ui.PanelSpace.FLOATING
@@ -2814,15 +2869,15 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     assert panel._main_min_height == 0.0
 
 
-@pytest.mark.parametrize("height,expected", [(200.0, "120.0dp"), (700.0, "200.0dp")])
-def test_narrow_inspector_resize_reset_restores_overlay_height(panel_module, height, expected):
+@pytest.mark.parametrize("height,expected", [(200.0, "180.0dp"), (700.0, "350.0dp"), (1440.0, "720.0dp")])
+def test_narrow_inspector_resize_reset_restores_readable_height(panel_module, height, expected):
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
     panel._layout_class = "narrow"
     panel._content_width = 500.0
     panel._host_geometry = (500.0, height)
     panel._inspector_expanded = True
-    panel._inspector_preferred_height = 120.0
+    panel._inspector_preferred_height = 180.0
     shell = _Element()
     popup = _Element()
     popup.client_width = 500.0
@@ -2833,13 +2888,23 @@ def test_narrow_inspector_resize_reset_restores_overlay_height(panel_module, hei
 
     panel._on_asset_manager_double_click(event)
 
-    assert panel._inspector_preferred_height == 200.0
+    assert panel._inspector_preferred_height == 1000.0
     assert panel.get_inspector_style_height() == expected
     assert panel._inspector_expanded is True
     assert event.stopped is True
 
 
-def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_module):
+def test_legacy_stacked_inspector_height_migrates_once_then_persists(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel.apply_chrome({"inspector_height": 200.0})
+    assert panel._inspector_preferred_height == 1000.0
+
+    panel.apply_chrome({"inspector_height": 260.0, "inspector_height_version": 3})
+    assert panel._inspector_preferred_height == 260.0
+    assert panel.capture_chrome()["inspector_height_version"] == 3
+
+
+def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cleared(panel_module):
     first = _project(id="first", project_uuid="first", name="First")
     second = _project(id="second", project_uuid="second", name="Second")
     panel = panel_module.AssetManagerPanel()
@@ -2851,11 +2916,9 @@ def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_mod
     panel._inspector_expanded = True
 
     assert panel._select_asset_id("second") is True
-    assert panel._inspector_expanded is False
-    panel._inspector_expanded = True
+    assert panel._inspector_expanded is True
     assert panel._navigate_selection(panel_module.KI_UP) is True
-    assert panel._inspector_expanded is False
-    panel._inspector_expanded = True
+    assert panel._inspector_expanded is True
     assert panel._select_folder_id(panel_module.SCOPE_ALL) is True
     assert panel._inspector_expanded is False
     assert panel._select_asset_id("first") is True
@@ -2880,11 +2943,70 @@ def test_P13_inspector_is_an_on_demand_overlay_closed_by_new_selection(panel_mod
     assert "overflow: visible" not in label_rule
     assert ".asset-shell.is-medium .inspector-resize-handle { display: none; }" in rcss
     assert ".asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }" in rcss
+    side_inspector_rule = rcss.split(
+        ".asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector {",
+        1,
+    )[1].split("}", 1)[0]
+    assert "position: relative;" in side_inspector_rule
+    assert "flex: 0 0 auto;" in side_inspector_rule
+    assert ".asset-shell.is-medium .asset-inspector > .asset-resize-handle--horizontal { display: none; }" in rcss
+    stacked_handle_rule = rcss.split(
+        ".asset-shell.is-narrow .asset-inspector > .asset-resize-handle--horizontal,",
+        1,
+    )[1].split("}", 1)[0]
+    assert "display: block;" in stacked_handle_rule
+    assert "cursor: resize-vertical;" in stacked_handle_rule
+    horizontal_handle_rule = rcss.split(".asset-resize-handle--horizontal {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in horizontal_handle_rule
+    assert "top: -8dp;" in horizontal_handle_rule
+    assert "height: 16dp;" in horizontal_handle_rule
+    assert 'data-class-dragging="bottom_panel_resize_dragging"' in rml
+    assert '<span class="asset-resize-handle-line" aria-hidden="true"></span>' in rml
+    assert ".asset-resize-handle--horizontal .asset-resize-handle-line" in theme_rcss
+    assert ".asset-resize-handle--horizontal:hover .asset-resize-handle-line" in theme_rcss
+    assert ".asset-resize-handle--horizontal.dragging .asset-resize-handle-line" in theme_rcss
+    assert ".asset-resize-handle--horizontal:focus .asset-resize-handle-line" not in theme_rcss
 
-def test_P13_space_opens_quick_look_from_panel_key_handler(panel_module):
-    asset = _project(name="Bonsai")
+
+def test_stacked_inspector_resize_is_lightweight_and_clears_drag_state(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
-    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._handle = _Handle()
+    panel._layout_class = "narrow"
+    panel._content_width = 500.0
+    panel._host_geometry = (500.0, 800.0)
+    panel._inspector_preferred_height = 300.0
+    monkeypatch.setattr(panel, "_ui_scale", lambda: 2.0)
+    monkeypatch.setattr(
+        panel,
+        "_sync_panel_layout",
+        lambda: pytest.fail("continuous Inspector resize must not remeasure the panel"),
+    )
+
+    panel._start_resize("inspector-height", _Event(params={"mouse_x": "20", "mouse_y": "400"}))
+    move = _Event(params={"mouse_x": "20", "mouse_y": "300"})
+    panel._on_resize_mousemove(move)
+
+    assert panel._inspector_preferred_height == pytest.approx(350.0)
+    assert panel._bottom_panel_dragging is True
+    assert "inspector_style_height" not in panel._handle.dirty_fields
+    assert "bottom_panel_height" not in panel._handle.dirty_fields
+    assert move.stopped is True
+
+    release = _Event()
+    panel._on_resize_mouseup(release)
+
+    assert panel._resize_region == ""
+    assert panel._bottom_panel_dragging is False
+    assert panel._info_preferred_height == pytest.approx(350.0)
+    assert "inspector_style_height" in panel._handle.dirty_fields
+    assert release.stopped is True
+
+def test_P13_space_toggles_quick_look_and_arrows_update_its_project(panel_module):
+    asset = _project(name="Bonsai")
+    other = _project(id="other", project_uuid="other", name="Garden")
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(assets={asset["id"]: asset, other["id"]: other})
     panel._selected_asset_ids = {asset["id"]}
     panel._selection_cursor_id = asset["id"]
     panel._update_selection_type()
@@ -2893,6 +3015,36 @@ def test_P13_space_opens_quick_look_from_panel_key_handler(panel_module):
     panel._on_asset_manager_keydown(_Event(shell, shell, {"key_identifier": str(panel_module.KI_SPACE)}))
 
     assert panel._quick_look_visible is True
+    navigation = _Event(shell, shell, {"key_identifier": str(panel_module.KI_DOWN)})
+    panel._on_asset_results_keydown(navigation)
+    assert panel.get_selected_asset_id() == other["id"]
+    assert panel._quick_look_visible is True
+    assert "quick_look_thumbnail" in panel._handle.dirty_fields
+    assert navigation.stopped is True
+
+    panel._on_asset_manager_keydown(_Event(shell, shell, {"key_identifier": str(panel_module.KI_SPACE)}))
+    assert panel._quick_look_visible is False
+
+
+def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    captured = {}
+    panel._show_shared_context_menu = lambda items, choose: captured.update(
+        items=items, choose=choose
+    )
+
+    panel.open_view_menu()
+
+    actions = {item["action"] for item in captured["items"]}
+    assert {
+        "filter:all", "sort:name", "gallery", "list", "thumbnail",
+        "check_gallery", "rescan_folders",
+    }.issubset(actions)
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "asset_manager.rml").read_text()
+    assert 'class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"' in rml
+    assert 'class="asset-button asset-button--icon asset-panel-close"' in rml
 
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET
@@ -2939,7 +3091,7 @@ def test_A4_list_gallery_header_fits_before_modified(panel_module, width, modifi
     assert model.func_bindings['asset_list_wide']() == modified
     assert model.func_bindings['asset_list_show_size']() == (width >= 360)
     assert model.func_bindings['asset_list_show_folder']() == (width >= 700)
-    assert model.func_bindings['asset_list_gallery_compact']() == (width < 480)
+    assert model.func_bindings['asset_list_gallery_compact']() is True
     assert model.func_bindings['col_gallery_label']().endswith('gallery.sidebar.title')
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
     root = ET.fromstring((resources / 'asset_manager.rml').read_text())
@@ -3040,8 +3192,16 @@ def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibilit
     GalleryController.open_portal(controller, scene)
     assert urls == [f'https://portal.example/gallery/scenes/{scene["id"]}/open/']
 
-def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
+@pytest.mark.parametrize(
+    ("layout", "content_width", "expected_width"),
+    [("medium", 800.0, 308.0), ("narrow", 600.0, 240.0)],
+)
+def test_info_poster_is_inserted_updated_and_released(
+    panel_module, tmp_path, layout, content_width, expected_width
+):
     panel, local, remote = _gallery_fixture(panel_module)
+    panel._layout_class = layout
+    panel._content_width = content_width
     poster = _write_png(tmp_path / "poster.png")
     panel._gallery_state["posters"] = {"remote-only": str(poster)}
     panel._selected_folder_id = panel_module.SCOPE_PUBLISHED
@@ -3083,6 +3243,10 @@ def test_info_poster_is_inserted_updated_and_released(panel_module, tmp_path):
                           get_element_by_id=elements.get)
     assert panel._sync_info_thumbnail(doc)
     assert thumbnail.properties["display"] == "flex" and "kind=image" in thumbnail.properties["decorator"]
+    expected_height = expected_width * 10.0 / 16.0
+    assert thumbnail.properties["width"] == f"{expected_width:.2f}dp"
+    assert thumbnail.properties["height"] == f"{expected_height:.2f}dp"
+    assert thumbnail.properties["flex-basis"] == f"{expected_height:.2f}dp"
     placeholder = thumbnail.children[0]
     assert placeholder.properties["display"] == "none"
     assert thumbnail.children[0].children[0].attributes["src"] == "../icon/scene/splat.png"

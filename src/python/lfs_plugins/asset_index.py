@@ -65,6 +65,8 @@ _PROJECT_STORAGE_FIELDS = frozenset(
         "role",
         "open_state",
         "has_preview",
+        "preview_width",
+        "preview_height",
         "status",
         "iteration",
         "name_origin",
@@ -355,6 +357,8 @@ class Project:
     role: str = ""
     open_state: str = ""
     has_preview: bool = False
+    preview_width: int = 0
+    preview_height: int = 0
     iteration: Optional[int] = None
     exists: bool = False
     available: bool = False
@@ -409,6 +413,8 @@ class Project:
                     "role": self.role,
                     "open_state": self.open_state,
                     "has_preview": self.has_preview,
+                    "preview_width": self.preview_width,
+                    "preview_height": self.preview_height,
                     "status": self.status,
                     "iteration": self.iteration,
                 }
@@ -430,6 +436,8 @@ class Project:
             "role": self.role,
             "open_state": self.open_state,
             "has_preview": self.has_preview,
+            "preview_width": self.preview_width,
+            "preview_height": self.preview_height,
             "exists": self.exists,
             "available": self.available,
             "status": self.status,
@@ -667,6 +675,8 @@ class AssetIndex:
         project.role = _enum_name(inspection.role)
         project.open_state = _enum_name(inspection.open_state)
         project.has_preview = bool(inspection.has_preview)
+        project.preview_width = int(getattr(inspection, "preview_width", 0) or 0)
+        project.preview_height = int(getattr(inspection, "preview_height", 0) or 0)
         iteration = getattr(inspection, "iteration", None)
         if iteration is not None:
             try:
@@ -720,6 +730,8 @@ class AssetIndex:
         project.role = str(value["role"] or "")
         project.open_state = str(value["open_state"] or "")
         project.has_preview = bool(value["has_preview"])
+        project.preview_width = int(value.get("preview_width", 0) or 0)
+        project.preview_height = int(value.get("preview_height", 0) or 0)
         project.iteration = value.get("iteration")
         if project.iteration is not None:
             project.iteration = int(project.iteration)
@@ -754,6 +766,8 @@ class AssetIndex:
             project.role = ""
             project.open_state = ""
             project.has_preview = False
+            project.preview_width = 0
+            project.preview_height = 0
         project.fallback_preview_path = ""
         project.exists = status != "MISSING"
         project.available = False
