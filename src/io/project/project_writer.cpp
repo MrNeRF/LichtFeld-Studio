@@ -5,6 +5,7 @@
 #include "io/project_container.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
@@ -3045,7 +3046,7 @@ namespace lfs::io::project {
             }
             LOG_DEBUG(
                 "Project commit validation stage: path={} crc_only={:.3f} ms",
-                candidate.string(),
+                lfs::core::path_to_utf8(candidate),
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - validation_started)
                     .count());
@@ -3460,7 +3461,8 @@ namespace lfs::io::project {
             };
             LOG_DEBUG(
                 "Project compaction stages: source={} destination={} source_open_metadata={:.3f} ms copy_crc_write={:.3f} ms commit={:.3f} ms total={:.3f} ms",
-                source_path.string(), destination_path.string(),
+                lfs::core::path_to_utf8(source_path),
+                lfs::core::path_to_utf8(destination_path),
                 milliseconds(compact_started, source_ready),
                 milliseconds(source_ready, copy_finished),
                 milliseconds(commit_started, finished),
