@@ -48,7 +48,8 @@ namespace lfs::app {
         };
 
         OverwriteChoice askOverwrite(const std::filesystem::path& path) {
-            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ", path.filename().string());
+            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ",
+                       path_to_utf8(path.filename()));
             std::string input;
             if (!std::getline(std::cin, input) || input.empty()) {
                 return OverwriteChoice::NO;
@@ -126,13 +127,18 @@ namespace lfs::app {
             const bool replace_output_extension = false) {
 
             if (format == param::OutputFormat::SSOG) {
-                return std::filesystem::absolute(output_template.empty()
-                                                     ? input.parent_path() / (input.stem().string() + ".ssog")
-                                                     : output_template);
+                auto default_output = input;
+                default_output.replace_extension(".ssog");
+                return std::filesystem::absolute(
+                    output_template.empty()
+                        ? default_output
+                        : output_template);
             }
             const auto ext = getFormatExtension(format);
             const auto cwd = std::filesystem::current_path();
-            const auto converted_name = input.stem().string() + suffix + ext;
+            auto converted_name = input.stem();
+            converted_name += suffix;
+            converted_name += ext;
 
             if (output_template.empty()) {
                 return cwd / converted_name;
@@ -717,8 +723,11 @@ namespace lfs::app {
 
         for (const auto& input : files) {
             auto output_template = params.output_path;
-            if (params.format == param::OutputFormat::SSOG && files.size() > 1 && !output_template.empty())
-                output_template /= input.stem().string() + ".ssog";
+            if (params.format == param::OutputFormat::SSOG && files.size() > 1 && !output_template.empty()) {
+                auto output_name = input.stem();
+                output_name += ".ssog";
+                output_template /= output_name;
+            }
             const auto output = generateOutputPath(input, output_template, params.format, "_converted");
 
             if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
