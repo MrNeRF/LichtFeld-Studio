@@ -23,7 +23,7 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS)
         return()
     endif()
 endif()
@@ -43,7 +43,7 @@ if(BUILD_VISUALIZER_TESTS)
     )
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/visualizer
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
     )
     target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
