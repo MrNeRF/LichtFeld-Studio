@@ -2735,6 +2735,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 row["status"] = "completed"
                 if self._inspection_pipeline is not None:
                     self._inspection_pipeline.invalidate(asset_id)
+                if reverify_asset:
+                    self._inspection_by_asset.pop(asset_id, None)
                 if facts:
                     self._inspection_by_asset[asset_id] = facts
                 self._inspection_errors.pop(asset_id, None)

@@ -3331,6 +3331,13 @@ def test_completed_thumbnail_operation_reverifies_asset_before_refresh(
     panel._asset_index = _index(
         assets={asset["id"]: asset}, verify_asset=verify_asset
     )
+    panel._inspection_by_asset[asset["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old",
+            has_preview=True, physical_file_size=asset["file_size_bytes"],
+            saved_at_unix_ns=asset["saved_at_unix_ns"],
+        )
+    }
     monkeypatch.setattr(
         panel,
         "refresh_catalog",
@@ -3354,6 +3361,7 @@ def test_completed_thumbnail_operation_reverifies_asset_before_refresh(
     assert "rev=old" in old_decorator
     assert "rev=new" in new_decorator
     assert old_decorator != new_decorator
+    assert asset["id"] not in panel._inspection_by_asset
 
 
 def test_asset_menu_button_anchors_menu_without_mouse_position(
