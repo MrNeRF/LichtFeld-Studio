@@ -17,6 +17,7 @@
 #include "input/input_router.hpp"
 #include "input/input_types.hpp"
 #include "input/key_codes.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
 #include "io/splat_path.hpp"
@@ -487,7 +488,7 @@ namespace lfs::vis {
 
         // Get initial mouse position
         float fx, fy;
-        SDL_GetMouseState(&fx, &fy);
+        input::mouseStateInPixels(window_, &fx, &fy);
         last_mouse_pos_ = {fx, fy};
 
         // Initialize frame timer
@@ -1632,7 +1633,7 @@ namespace lfs::vis {
         }
 
         float fx, fy;
-        SDL_GetMouseState(&fx, &fy);
+        input::mouseStateInPixels(window_, &fx, &fy);
         double mouse_x = fx, mouse_y = fy;
         bool over_gui = false;
         bool over_gui_hover = false;
@@ -1789,7 +1790,7 @@ namespace lfs::vis {
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
-        SDL_GetMouseState(&mx_f, &my_f);
+        input::mouseStateInPixels(window_, &mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         if (op::operators().activeModalId() !=
@@ -2191,7 +2192,7 @@ namespace lfs::vis {
             case input::Action::PIE_MENU:
                 if (gui) {
                     float px, py;
-                    SDL_GetMouseState(&px, &py);
+                    input::mouseStateInPixels(window_, &px, &py);
                     gui->gizmo().openPieMenu({px, py});
                 }
                 return;

@@ -1651,7 +1651,7 @@ namespace lfs::vis::gui {
 
         const auto& t = theme();
         const auto* const wm = viewer_->getWindowManager();
-        const glm::ivec2 screen_size = wm ? wm->getWindowSize() : glm::ivec2{};
+        const glm::ivec2 screen_size = wm ? wm->getFramebufferSize() : glm::ivec2{};
         const glm::ivec2 framebuffer_size = wm ? wm->getFramebufferSize() : glm::ivec2{};
         const int screen_w = screen_size.x;
         const int screen_h = screen_size.y;

@@ -11,6 +11,7 @@
 #include "core/tensor_backend.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
@@ -385,7 +386,7 @@ namespace lfs::vis {
             }
 
             if (titlebar_point) {
-                if (self->isMaximized())
+                if (self->isMaximized() && !self->usesWayland())
                     return SDL_HITTEST_NORMAL;
                 if (self->usesEventDrivenTitlebarDrag())
                     return SDL_HITTEST_NORMAL;
@@ -646,7 +647,7 @@ namespace lfs::vis {
         const WindowRectangle target = centeredWindowRectangleOnPrimaryDisplay(1280, 720);
 
         const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-        const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+        const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
         if (!size_set || !position_set) {
             LOG_WARN("Failed to reset window geometry to {}x{} at {},{}: {}",
                      target.width, target.height, target.x, target.y, SDL_GetError());
@@ -710,6 +711,7 @@ namespace lfs::vis {
             LOG_DEBUG("Failed to set window minimum size: {}", SDL_GetError());
         }
 
+        is_wayland_ = std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0;
         native_titlebar_move_available_ = hasX11NativeMoveSupport(window_);
         if (native_titlebar_move_available_) {
             LOG_DEBUG("Using X11 native titlebar move for borderless window drag");
@@ -724,7 +726,7 @@ namespace lfs::vis {
         }
 
         // Position window on specified monitor (if provided)
-        if (monitor_size_.x > 0 && monitor_size_.y > 0) {
+        if (!is_wayland_ && monitor_size_.x > 0 && monitor_size_.y > 0) {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
             SDL_SetWindowPosition(window_, xpos, ypos);
@@ -733,7 +735,7 @@ namespace lfs::vis {
         if (initial_window_state_) {
             auto state = *initial_window_state_;
             sanitizeInitialWindowState(state);
-            const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, state.x, state.y);
             const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
             if (!position_set || !size_set) {
                 LOG_WARN("Failed to restore saved window geometry {}x{} at {},{}: {}",
@@ -746,7 +748,7 @@ namespace lfs::vis {
             const auto target = centeredWindowRectangleOnPrimaryDisplay(
                 window_size_.x, window_size_.y);
             const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-            const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
             if (!size_set || !position_set) {
                 LOG_WARN("Failed to apply initial window geometry {}x{} at {},{}: {}",
                          target.width, target.height, target.x, target.y, SDL_GetError());
@@ -1063,10 +1065,11 @@ namespace lfs::vis {
             // Record GUI ownership at the press and carry it in the frame buffer.
             // Frame-time bounds miss GUI edges overlapping the viewport (the dock resize
             // strip) and layout changes. Input routing reuses this hit, including keyboard intent.
+            const auto position = glm::vec2(event.button.x, event.button.y) * input::windowPixelScale(window_);
             gui::GuiHitTestResult press_hit;
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 if (auto* const gui = services().guiOrNull())
-                    press_hit = gui->hitTestMouseButton(event.button.x, event.button.y);
+                    press_hit = gui->hitTestMouseButton(position.x, position.y);
                 frame_input_.notePressOwner(
                     event.button.button,
                     press_hit.blocks_pointer || press_hit.blocks_mouse_button);
@@ -1105,8 +1108,8 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
-            input_router_.beginMouseButton(action, event.button.x, event.button.y, press_hit);
-            input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            input_router_.beginMouseButton(action, position.x, position.y, press_hit);
+            input_controller_->handleMouseButton(button, action, position.x, position.y);
             input_router_.endMouseButton(action);
             break;
         }
@@ -1123,7 +1126,8 @@ namespace lfs::vis {
                 break;
             }
             if (input_controller_) {
-                input_controller_->handleMouseMove(event.motion.x, event.motion.y);
+                const auto position = glm::vec2(event.motion.x, event.motion.y) * input::windowPixelScale(window_);
+                input_controller_->handleMouseMove(position.x, position.y);
             }
             updateResizeCursor(static_cast<int>(std::round(event.motion.x)),
                                static_cast<int>(std::round(event.motion.y)));
@@ -1219,7 +1223,8 @@ namespace lfs::vis {
                 LOG_WARN("Failed to leave fullscreen: {}", SDL_GetError());
                 return;
             }
-            SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
+            if (!is_wayland_)
+                SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
             SDL_SetWindowSize(window_, windowed_size_.x, windowed_size_.y);
             is_fullscreen_ = false;
             LOG_DEBUG("setFullscreen leave requested: restoring windowed pos={}x{}, size={}x{}",
@@ -1283,14 +1288,15 @@ namespace lfs::vis {
     }
 
     bool WindowManager::isTitlebarDragPoint(const int x, const int y) const {
-        if (titlebar_drag_height_px_ <= 0 || y < 0 || y >= titlebar_drag_height_px_)
+        const auto pixel = glm::vec2(x, y) * input::windowPixelScale(window_);
+        if (titlebar_drag_height_px_ <= 0 || pixel.y < 0 || pixel.y >= titlebar_drag_height_px_)
             return false;
 
         for (const auto& rect : titlebar_drag_excluded_rects_) {
             if (rect.w <= 0 || rect.h <= 0)
                 continue;
-            if (x >= rect.x && x < rect.x + rect.w &&
-                y >= rect.y && y < rect.y + rect.h)
+            if (pixel.x >= rect.x && pixel.x < rect.x + rect.w &&
+                pixel.y >= rect.y && pixel.y < rect.y + rect.h)
                 return false;
         }
 
@@ -1591,7 +1597,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::normalizeNativeMaximize(const char* const reason) {
-        if (!window_ || is_fullscreen_) {
+        if (!window_ || is_fullscreen_ || is_wayland_) {
             updateWindowSize(reason, ResizeIntent::Exact);
             return;
         }
@@ -1631,6 +1637,14 @@ namespace lfs::vis {
     void WindowManager::maximizeBorderless(const char* const reason, const bool save_restore_geometry) {
         if (!window_ || is_fullscreen_)
             return;
+
+        // Wayland owns top-level placement and maximize/restore geometry.
+        // Applying work-area bounds ourselves cannot replace a native maximize.
+        if (is_wayland_) {
+            if (!SDL_MaximizeWindow(window_))
+                LOG_WARN("Failed to maximize Wayland window: {}", SDL_GetError());
+            return;
+        }
 
         if (save_restore_geometry) {
             saveBorderlessRestoreGeometry();

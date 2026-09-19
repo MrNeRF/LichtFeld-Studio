@@ -109,7 +109,7 @@ namespace lfs::vis::gui {
             int window_w = 800;
             int window_h = 600;
             if (auto* const window = rml_manager_ ? rml_manager_->getWindow() : nullptr)
-                SDL_GetWindowSize(window, &window_w, &window_h);
+                SDL_GetWindowSizeInPixels(window, &window_w, &window_h);
 
             width_ = std::max(window_w, 1);
             height_ = std::max(window_h, 1);
