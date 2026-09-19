@@ -798,7 +798,7 @@ class GalleryAssetMixin:
 
     def _gallery_published_summary(self):
         asset = self._get_selected_asset() or {}
-        link = self._gallery_state.get("links", {}).get(asset.get("id"), {})
+        link = self._gallery_state.get("links", {}).get(self._gallery_project_id(asset), {})
         if not link:
             return ""
         scene = self._gallery_scene(asset) or link.get("metadata", {})

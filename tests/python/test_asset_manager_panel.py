@@ -923,9 +923,22 @@ def test_recent_only_project_uses_inspected_identity_for_gallery_state(
     }
     panel._gallery_state = {
         "signed_in": True, "connected": True, "checkedAt": 1,
-        "links": {"native-project": {"sceneId": "scene-id"}},
+        "links": {"native-project": {
+            "sceneId": "scene-id", "uploadFormat": "sog",
+            "exchangedAt": time.time(),
+        }},
         "scenes": [scene], "jobs": [],
     }
+    scene["contentLength"] = 2048
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "tr",
+        lambda key: {
+            "projects.gallery.info.published_relative": "Published as {format} · {size} · {time}",
+            "projects.gallery.time.just_now": "just now",
+            "projects.unit.kb": "KB",
+        }.get(key, key),
+    )
     assert panel._select_asset_id(recent["id"])
 
     formatted = panel._format_asset_for_ui(recent)
@@ -934,6 +947,7 @@ def test_recent_only_project_uses_inspected_identity_for_gallery_state(
     assert panel._gallery_project_id(formatted) == "native-project"
     assert panel._gallery_scene(formatted) is scene
     assert panel._has_gallery_link() is True
+    assert panel._gallery_published_summary() == "Published as SOG · 2.0 KB · just now"
     assert panel._selected_gallery_action() == ""
 
 
