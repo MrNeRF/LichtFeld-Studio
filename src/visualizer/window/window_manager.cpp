@@ -364,7 +364,9 @@ namespace lfs::vis {
             const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
             const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
 
-            if (!self->isMaximized()) {
+            // Wayland supplies per-edge constraints to SDL. Let the compositor
+            // decide whether a tiled or maximized window can be resized.
+            if (!self->isMaximized() || self->usesWayland()) {
                 unsigned edge_mask = 0;
                 if (left)
                     edge_mask |= kResizeLeft;
