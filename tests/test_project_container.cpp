@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
@@ -3811,6 +3812,25 @@ namespace {
                 EXPECT_EQ(derived->filename(), fs::path(row.derived));
             }
         }
+    }
+
+    TEST(ProjectPathTest, UnicodeNamesPreservePublishedAndRecoveryPaths) {
+        const fs::path parent{"/tmp/licht-path-unicode"};
+        const auto published_name = lfs::core::utf8_to_path("\u9879\u76ee_\u00e8.licht");
+        const auto temporary_name = lfs::core::utf8_to_path(
+            "\u9879\u76ee_\u00e8.project-write.1.2.3.tmp.licht");
+        const auto published = parent / published_name;
+        const auto temporary = parent / temporary_name;
+
+        EXPECT_TRUE(isPublishedLichtPath(published));
+        EXPECT_FALSE(isPublishedLichtPath(temporary));
+
+        const auto derived = derivedPublishedMasterPath(temporary);
+        ASSERT_TRUE(derived.has_value());
+        EXPECT_EQ(*derived, published);
+
+        const auto message = unpublishedLichtUserMessage(temporary);
+        EXPECT_NE(message.find(lfs::core::path_to_generic_utf8(published)), std::string::npos);
     }
 
 } // namespace
