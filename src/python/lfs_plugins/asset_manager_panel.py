@@ -2636,12 +2636,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
                 return False
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after, reverify_asset=True)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after, reverify_asset=True)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after, reverify_asset=True)
         return True
 
     @staticmethod
@@ -2688,6 +2688,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         backup: bool = True,
         content_row: Optional[Dict[str, Any]] = None,
         operation_kind: str = "",
+        reverify_asset: bool = False,
     ) -> None:
         if self._contents_busy(asset_id):
             return
@@ -2737,6 +2738,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 if facts:
                     self._inspection_by_asset[asset_id] = facts
                 self._inspection_errors.pop(asset_id, None)
+                if reverify_asset and not asset.get("recent_only"):
+                    verify_asset = getattr(self._asset_index, "verify_asset", None)
+                    if callable(verify_asset):
+                        self._library_command("verify_asset", asset_id)
                 if after is not None:
                     after()
                 self._contents_feedback.pop(asset_id, None)

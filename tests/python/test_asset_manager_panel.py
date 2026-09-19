@@ -3276,6 +3276,7 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     assert native_calls == [
         ("preview_from_image_file", "/tmp/target.licht", "/tmp/selected.jpg")
     ]
+    assert operations[0][3]["reverify_asset"] is True
 
     panel._dialog_kind = "update_thumbnail"
     panel._dialog_data = {"source": "image_file"}
@@ -3287,6 +3288,72 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     panel.confirm_project_dialog()
     assert panel._dialog_kind == "update_thumbnail"
     assert closed == []
+
+
+def test_completed_thumbnail_operation_reverifies_asset_before_refresh(
+    panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "thumbnail.licht"
+    project_path.write_bytes(b"project")
+    asset = _project(path=str(project_path), commit_uuid="old", generation=4)
+    project = SimpleNamespace(id=asset["id"])
+    calls = []
+
+    def verify_asset(asset_id):
+        calls.append(("verify", asset_id))
+        asset["commit_uuid"] = "new"
+        asset["generation"] = 5
+        return project
+
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old"
+        ),
+        backup_project_file=lambda _path: None,
+        run_project_operation=lambda _path, _project, _commit, action: action(),
+    )
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, verify_asset=verify_asset
+    )
+    monkeypatch.setattr(
+        panel,
+        "refresh_catalog",
+        lambda **kwargs: calls.append(("refresh", kwargs)),
+    )
+
+    old_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    panel._start_project_operation(
+        asset["id"],
+        "Update thumbnail",
+        lambda _progress, _cancel: None,
+        backup=False,
+        reverify_asset=True,
+    )
+    new_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+
+    assert calls == [
+        ("verify", asset["id"]),
+        ("refresh", {"scan_folders": False}),
+    ]
+    assert "rev=old" in old_decorator
+    assert "rev=new" in new_decorator
+    assert old_decorator != new_decorator
 
 
 def test_asset_menu_button_anchors_menu_without_mouse_position(
