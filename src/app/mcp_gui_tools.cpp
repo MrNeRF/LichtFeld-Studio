@@ -5127,10 +5127,10 @@ namespace lfs::app {
                         core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
                     },
                 .scrub_to_time =
-                    [viewer_impl](const float time) {
+                    [viewer_impl](const float time, const bool update_camera) {
                         auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
-                        if (gui_manager)
-                            gui_manager->sequencer().seek(time);
+                        return gui_manager &&
+                               gui_manager->sequencerUI().scrubToTime(time, update_camera);
                     },
                 .ply_sequence_status =
                     [viewer_impl]() -> std::string {

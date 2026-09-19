@@ -42,7 +42,7 @@ namespace lfs::app {
         std::function<bool(const std::string&)> load_path;
         std::function<void(float)> set_playback_speed;
         std::function<void(const std::string&, float)> load_ply_sequence;
-        std::function<void(float)> scrub_to_time;
+        std::function<bool(float, bool)> scrub_to_time;
         std::function<std::string()> ply_sequence_status;
     };
 

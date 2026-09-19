@@ -1149,13 +1149,29 @@ namespace lfs::vis::gui {
 
         const bool is_playing = controller_.isPlaying() && controller_.timeline().realKeyframeCount() > 0;
         rm->setOverlayAnimationActive(is_playing);
-        if (ui_state_.follow_playback && controller_.timeline().realKeyframeCount() > 0) {
-            const auto state = controller_.currentCameraState();
-            auto& vp = viewer_->getViewport();
-            vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
-            rm->setFocalLength(state.focal_length_mm);
-            rm->markCameraPoseChanged();
-        }
+        if (ui_state_.follow_playback)
+            (void)applyCurrentTimelineCamera();
+    }
+
+    bool SequencerUIManager::applyCurrentTimelineCamera() {
+        if (controller_.timeline().realKeyframeCount() == 0)
+            return false;
+
+        auto* const rm = viewer_->getRenderingManager();
+        if (!rm)
+            return false;
+
+        const auto state = controller_.currentCameraState();
+        auto& vp = viewer_->getViewport();
+        vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
+        rm->setFocalLength(state.focal_length_mm);
+        rm->markCameraPoseChanged();
+        return true;
+    }
+
+    bool SequencerUIManager::scrubToTime(const float time, const bool update_camera) {
+        controller_.seek(time);
+        return update_camera && applyCurrentTimelineCamera();
     }
 
     void SequencerUIManager::advancePlayback(const float delta_time) {
