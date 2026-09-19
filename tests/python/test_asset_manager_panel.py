@@ -899,6 +899,44 @@ def test_recent_only_project_has_no_gallery_inspector_action(
     assert controller_calls == []
 
 
+def test_recent_only_project_uses_inspected_identity_for_gallery_state(
+    panel_module, monkeypatch, tmp_path
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    recent = panel._filtered_assets()[0]
+    panel._inspection_by_asset[recent["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid="native-project", commit_uuid="local-commit",
+            has_preview=False, physical_file_size=7, saved_at_unix_ns=1,
+        )
+    }
+    scene = {
+        "id": "scene-id", "originProjectUuid": "native-project",
+        "status": "ready", "contentRevision": "remote-commit",
+    }
+    panel._gallery_state = {
+        "signed_in": True, "connected": True, "checkedAt": 1,
+        "links": {"native-project": {"sceneId": "scene-id"}},
+        "scenes": [scene], "jobs": [],
+    }
+    assert panel._select_asset_id(recent["id"])
+
+    formatted = panel._format_asset_for_ui(recent)
+
+    assert formatted["native_project_uuid"] == "native-project"
+    assert panel._gallery_project_id(formatted) == "native-project"
+    assert panel._gallery_scene(formatted) is scene
+    assert panel._has_gallery_link() is True
+    assert panel._selected_gallery_action() == ""
+
+
 def test_recent_only_project_uses_native_inspection_without_joining_library(
     panel_module, monkeypatch, tmp_path
 ):

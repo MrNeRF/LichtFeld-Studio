@@ -549,7 +549,7 @@ def _can_compact_project() -> bool:
     return _project_has_path()
 
 
-def _publish_current_project_to_gallery() -> None:
+def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
     """Open the shared Gallery review for the active saved project."""
     from .gallery_messages import tr as gallery_tr
 
@@ -643,8 +643,19 @@ def _publish_current_project_to_gallery() -> None:
             action = primary["id"]
             details = {key: fields[key] for key in ("title", "description", "visibility")}
             if action == "check":
+                if not refresh_once:
+                    return
+                expected_identity = controller.service.identity()
+
+                def continue_after_refresh():
+                    if controller.service.identity() != expected_identity:
+                        return
+                    current = str(lf.project_poll_write().get("path") or "")
+                    if current and Path(current).resolve() == project_path:
+                        _publish_current_project_to_gallery(refresh_once=False)
+
+                controller._after_service = continue_after_refresh
                 controller.refresh()
-                lf.ui.message_dialog(title, gallery_tr("error.refresh"), "info")
                 return
             if action in ("resolve", "apply"):
                 controller.resolve_asset(asset, details, apply_only=action == "apply")

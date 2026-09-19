@@ -147,10 +147,18 @@ class GalleryAssetMixin:
 
     def _has_gallery_link(self):
         asset = self._get_selected_asset() or {}
-        return asset.get("id") in self._gallery_state.get("links", {}) or bool(self._gallery_scene(asset))
+        return self._gallery_project_id(asset) in self._gallery_state.get("links", {}) or bool(self._gallery_scene(asset))
+
+    @staticmethod
+    def _gallery_project_id(asset):
+        """Use inspected identity for external Recent rows without cataloguing them."""
+        if asset.get("recent_only"):
+            return asset.get("native_project_uuid") or asset.get("id")
+        return asset.get("id")
 
     def _gallery_scene(self, asset):
-        scene_id = asset.get("scene_id") or self._gallery_state.get("links", {}).get(asset.get("id"), {}).get("sceneId")
+        project_id = self._gallery_project_id(asset)
+        scene_id = asset.get("scene_id") or self._gallery_state.get("links", {}).get(project_id, {}).get("sceneId")
         scene = next((s for s in self._gallery_state.get("scenes", []) if s.get("id") == scene_id), None)
         if scene is not None:
             return scene
@@ -160,22 +168,25 @@ class GalleryAssetMixin:
                          or acknowledged.get("sceneId") != previous.get("sceneId")):
             return next((s for s in self._gallery_state.get("scenes", []) if s.get("id") == previous["sceneId"]),
                         previous.get("metadata"))
-        origins = [s for s in self._gallery_state.get("scenes", []) if s.get("originProjectUuid") == asset.get("id")
+        origins = [s for s in self._gallery_state.get("scenes", []) if s.get("originProjectUuid") == project_id
                    and s.get("status") == "ready"]
         return origins[0] if len(origins) == 1 else None
 
     def _gallery_facts(self, asset):
         remote = asset.get("remote_only", False)
-        link = self._gallery_state.get("links", {}).get(asset.get("id"))
+        project_id = self._gallery_project_id(asset)
+        link = self._gallery_state.get("links", {}).get(project_id)
         phase = "idle"
         controller = self._gallery_controller
-        if controller and getattr(controller, "_operation_project", None) == asset.get("id"):
+        if controller and getattr(controller, "_operation_project", None) == project_id:
             phase = controller.phase()
         jobs = list(self._gallery_state.get("jobs", ()))
         failure = self._gallery_state.get("preparationFailure")
         if failure and (not failure.get("commitUuid") or failure["commitUuid"] == asset.get("commit_uuid")):
             jobs.append(failure)
-        facts = asset_sync_state(None if remote else asset, link, self._gallery_scene(asset),
+        gallery_asset = ({**asset, "project_uuid": project_id}
+                         if project_id != asset.get("id") else asset)
+        facts = asset_sync_state(None if remote else gallery_asset, link, self._gallery_scene(asset),
             jobs, checked=bool(self._gallery_state.get("checkedAt")),
             storage_issue=self._gallery_state.get("storage_issue", False), phase=phase,
             cached_projection=asset.get("gallery") if "identity" not in self._gallery_state else None,
@@ -246,7 +257,7 @@ class GalleryAssetMixin:
             # Relink is one account-level condition, not a fault on every row.
             label = ""
         known_label = last_known_gallery_label(asset, self._gallery_state)
-        if (not relink_pending and asset.get("id") in self._gallery_state.get("links", {}) and known_label is None
+        if (not relink_pending and self._gallery_project_id(asset) in self._gallery_state.get("links", {}) and known_label is None
                 and not facts["active"] and facts["activity"] not in ("paused", "interrupted", "error")):
             label = tr("state.not_checked")
         if facts.get("viewingCopy"):
