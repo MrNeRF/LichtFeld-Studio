@@ -285,6 +285,17 @@ namespace lfs::vis::gui {
             return true;
         window_ = window;
 
+        if (SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                   SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr)) {
+            // SDL delivers Wayland enter/motion/leave and drop completion events.
+            // File delivery remains on the normal SDL drop path in WindowManager.
+            if (!SDL_AddEventWatch(&NativeDragDrop::waylandEventWatch, this))
+                return false;
+            initialized_ = true;
+            LOG_DEBUG("Native drag-drop initialized (Wayland SDL events)");
+            return true;
+        }
+
         platform_data_ = new PlatformData();
         SDL_PropertiesID props = SDL_GetWindowProperties(window);
         platform_data_->display =
@@ -294,6 +305,8 @@ namespace lfs::vis::gui {
 
         if (!platform_data_->display || !platform_data_->xwindow) {
             LOG_ERROR("Failed to get X11 display/window");
+            delete platform_data_;
+            platform_data_ = nullptr;
             return false;
         }
 
@@ -325,8 +338,9 @@ namespace lfs::vis::gui {
         if (!initialized_)
             return;
 
-        SDL_SetX11EventHook(nullptr, nullptr);
+        SDL_RemoveEventWatch(&NativeDragDrop::waylandEventWatch, this);
         if (platform_data_) {
+            SDL_SetX11EventHook(nullptr, nullptr);
             delete platform_data_;
             platform_data_ = nullptr;
         }
@@ -337,6 +351,16 @@ namespace lfs::vis::gui {
 
     void NativeDragDrop::pollEvents() {
         // XDnD state is tracked from SDL's event hook, nothing to poll.
+    }
+
+    bool SDLCALL NativeDragDrop::waylandEventWatch(void* userdata, SDL_Event* event) {
+        auto* const self = static_cast<NativeDragDrop*>(userdata);
+        if ((event->type == SDL_EVENT_DROP_BEGIN || event->type == SDL_EVENT_DROP_POSITION ||
+             event->type == SDL_EVENT_DROP_COMPLETE) &&
+            event->drop.windowID == SDL_GetWindowID(self->window_)) {
+            self->setDragHovering(event->type != SDL_EVENT_DROP_COMPLETE);
+        }
+        return true;
     }
 
     bool NativeDragDrop::x11EventHook(void* userdata, XEvent* xevent) {
