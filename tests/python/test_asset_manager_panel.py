@@ -936,6 +936,58 @@ def test_recent_only_project_has_no_gallery_inspector_action(
     assert controller_calls == []
 
 
+def test_recent_only_project_uses_inspected_identity_for_gallery_state(
+    panel_module, monkeypatch, tmp_path
+):
+    project_path = tmp_path / "external.licht"
+    project_path.write_bytes(b"project")
+    monkeypatch.setattr(
+        panel_module.lf, "project_recent_files", lambda: [str(project_path)], raising=False
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._selected_folder_id = panel_module.SCOPE_RECENT
+    recent = panel._filtered_assets()[0]
+    panel._inspection_by_asset[recent["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid="native-project", commit_uuid="local-commit",
+            has_preview=False, physical_file_size=7, saved_at_unix_ns=1,
+        )
+    }
+    scene = {
+        "id": "scene-id", "originProjectUuid": "native-project",
+        "status": "ready", "contentRevision": "remote-commit",
+    }
+    panel._gallery_state = {
+        "signed_in": True, "connected": True, "checkedAt": 1,
+        "links": {"native-project": {
+            "sceneId": "scene-id", "uploadFormat": "sog",
+            "exchangedAt": time.time(),
+        }},
+        "scenes": [scene], "jobs": [],
+    }
+    scene["contentLength"] = 2048
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "tr",
+        lambda key: {
+            "projects.gallery.info.published_relative": "Published as {format} · {size} · {time}",
+            "projects.gallery.time.just_now": "just now",
+            "projects.unit.kb": "KB",
+        }.get(key, key),
+    )
+    assert panel._select_asset_id(recent["id"])
+
+    formatted = panel._format_asset_for_ui(recent)
+
+    assert formatted["native_project_uuid"] == "native-project"
+    assert panel._gallery_project_id(formatted) == "native-project"
+    assert panel._gallery_scene(formatted) is scene
+    assert panel._has_gallery_link() is True
+    assert panel._gallery_published_summary() == "Published as SOG · 2.0 KB · just now"
+    assert panel._selected_gallery_action() == ""
+
+
 def test_recent_only_project_uses_native_inspection_without_joining_library(
     panel_module, monkeypatch, tmp_path
 ):
@@ -3361,76 +3413,6 @@ def test_translated_message_has_no_english_append(panel_module):
     assert localize_message("Upload complete.") == "Téléversement terminé."
 
 
-def test_completed_thumbnail_operation_discards_stale_inspection_before_refresh(
-    panel_module, monkeypatch, tmp_path
-):
-    from lfs_plugins import project_operations
-
-    project_path = tmp_path / "thumbnail.licht"
-    project_path.write_bytes(b"project")
-    asset = _project(path=str(project_path), commit_uuid="old", generation=4)
-    calls = []
-
-    def verify_asset(asset_id):
-        calls.append(("verify", asset_id))
-        asset["commit_uuid"] = "new"
-        asset["generation"] = 5
-        return SimpleNamespace(id=asset_id)
-
-    io = SimpleNamespace(
-        inspect_project_card=lambda _path: SimpleNamespace(
-            project_uuid=asset["id"], commit_uuid="old"
-        ),
-        backup_project_file=lambda _path: None,
-        run_project_operation=lambda _path, _project, _commit, action: action(),
-    )
-    store = project_operations.ProjectOperations(io, tmp_path / "records")
-    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
-    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
-
-    class InlineThread:
-        def __init__(self, target, **_kwargs):
-            self.target = target
-
-        def start(self):
-            self.target()
-
-    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
-    panel = panel_module.AssetManagerPanel()
-    panel._handle = _Handle()
-    panel._asset_index = _index(
-        assets={asset["id"]: asset}, verify_asset=verify_asset
-    )
-    panel._inspection_by_asset[asset["id"]] = {
-        "card": SimpleNamespace(
-            project_uuid=asset["id"], commit_uuid="old",
-            has_preview=True, physical_file_size=asset["file_size_bytes"],
-            saved_at_unix_ns=asset["saved_at_unix_ns"],
-        )
-    }
-    monkeypatch.setattr(
-        panel,
-        "refresh_catalog",
-        lambda **kwargs: calls.append(("refresh", kwargs)),
-    )
-
-    old_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
-    panel._start_project_operation(
-        asset["id"], "Update thumbnail", lambda _progress, _cancel: None,
-        backup=False, reverify_asset=True,
-    )
-    new_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
-
-    assert calls == [
-        ("verify", asset["id"]),
-        ("refresh", {"scan_folders": False}),
-    ]
-    assert "rev=old" in old_decorator
-    assert "rev=new" in new_decorator
-    assert old_decorator != new_decorator
-    assert asset["id"] not in panel._inspection_by_asset
-
-
 def test_project_operation_thread_start_failure_restores_controls(panel_module, monkeypatch, caplog):
     panel = panel_module.AssetManagerPanel()
     monkeypatch.setattr(panel, '_asset_dict', lambda _id: {'id': 'project', 'path': '/项目.licht'})
@@ -3561,6 +3543,7 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     assert native_calls == [
         ("preview_from_image_file", "/tmp/target.licht", "/tmp/selected.jpg")
     ]
+    assert operations[0][3]["reverify_asset"] is True
 
     panel._dialog_kind = "update_thumbnail"
     panel._dialog_data = {"source": "image_file"}
@@ -3572,6 +3555,80 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     panel.confirm_project_dialog()
     assert panel._dialog_kind == "update_thumbnail"
     assert closed == []
+
+
+def test_completed_thumbnail_operation_reverifies_asset_before_refresh(
+    panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "thumbnail.licht"
+    project_path.write_bytes(b"project")
+    asset = _project(path=str(project_path), commit_uuid="old", generation=4)
+    project = SimpleNamespace(id=asset["id"])
+    calls = []
+
+    def verify_asset(asset_id):
+        calls.append(("verify", asset_id))
+        asset["commit_uuid"] = "new"
+        asset["generation"] = 5
+        return project
+
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old"
+        ),
+        backup_project_file=lambda _path: None,
+        run_project_operation=lambda _path, _project, _commit, action: action(),
+    )
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, verify_asset=verify_asset
+    )
+    panel._inspection_by_asset[asset["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid="old",
+            has_preview=True, physical_file_size=asset["file_size_bytes"],
+            saved_at_unix_ns=asset["saved_at_unix_ns"],
+        )
+    }
+    monkeypatch.setattr(
+        panel,
+        "refresh_catalog",
+        lambda **kwargs: calls.append(("refresh", kwargs)),
+    )
+
+    old_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    panel._start_project_operation(
+        asset["id"],
+        "Update thumbnail",
+        lambda _progress, _cancel: None,
+        backup=False,
+        reverify_asset=True,
+    )
+    new_decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+
+    assert calls == [
+        ("verify", asset["id"]),
+        ("refresh", {"scan_folders": False}),
+    ]
+    assert "rev=old" in old_decorator
+    assert "rev=new" in new_decorator
+    assert old_decorator != new_decorator
+    assert asset["id"] not in panel._inspection_by_asset
 
 
 def test_asset_menu_button_anchors_menu_without_mouse_position(
