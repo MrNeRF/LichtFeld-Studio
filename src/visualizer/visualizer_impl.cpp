@@ -1526,7 +1526,7 @@ namespace lfs::vis {
                     if (auto info = projectGetInfo();
                         info && info->path) {
                         default_name =
-                            info->path->filename().string();
+                            lfs::core::path_to_utf8(info->path->filename());
                         default_directory =
                             info->path->parent_path();
                     }

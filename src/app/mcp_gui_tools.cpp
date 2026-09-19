@@ -4698,7 +4698,7 @@ namespace lfs::app {
                     result["total_chars"] = static_cast<int64_t>(code.size());
                     result["modified"] = console.isModified();
                     if (!console.getScriptPath().empty())
-                        result["path"] = console.getScriptPath().string();
+                        result["path"] = core::path_to_utf8(console.getScriptPath());
                     return result;
                 });
             });
@@ -5410,7 +5410,7 @@ namespace lfs::app {
                         {"output_total_chars", static_cast<int64_t>(console.getOutputText().size())},
                     };
                     if (!console.getScriptPath().empty())
-                        payload["path"] = console.getScriptPath().string();
+                        payload["path"] = core::path_to_utf8(console.getScriptPath());
 
                     return single_json_resource(uri, std::move(payload));
                 });

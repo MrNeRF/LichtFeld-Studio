@@ -1439,7 +1439,7 @@ namespace {
 
     void save_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state) {
         const auto& current = state.getScriptPath();
-        const std::string default_name = current.empty() ? "script" : current.stem().string();
+        const std::string default_name = current.empty() ? "script" : lfs::core::path_to_utf8(current.stem());
         const auto path = lfs::vis::gui::SavePythonFileDialog(default_name);
         if (!path.empty()) {
             save_script(path, state);

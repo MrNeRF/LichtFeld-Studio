@@ -1290,7 +1290,7 @@ namespace lfs::vis::gui {
 
         const std::string exported_count = LOCF(
             entry_count == 1 ? "runtime.log_entry_count" : "runtime.log_entries_count", entry_count);
-        setLoggingFeedback(LOCF("runtime.logs_exported", exported_count, path.filename().string()),
+        setLoggingFeedback(LOCF("runtime.logs_exported", exported_count, lfs::core::path_to_utf8(path.filename())),
                            FeedbackTone::Success);
     }
 

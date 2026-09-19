@@ -223,7 +223,7 @@ namespace lfs::vis {
                     iterator.increment(error);
                     continue;
                 }
-                const auto name = iterator->path().filename().string();
+                const auto name = lfs::core::path_to_utf8(iterator->path().filename());
                 if (iterator->is_directory(error)) {
                     if (name.starts_with('.') || iterator.depth() >= max_depth)
                         iterator.disable_recursion_pending();
