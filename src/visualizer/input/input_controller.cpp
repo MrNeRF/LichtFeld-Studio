@@ -2371,7 +2371,7 @@ namespace lfs::vis {
 
         if (paths.size() == 1) {
             const std::filesystem::path dropped_path = lfs::core::utf8_to_path(paths.front());
-            auto extension = dropped_path.extension().string();
+            auto extension = lfs::core::path_to_utf8(dropped_path.extension());
             std::ranges::transform(
                 extension, extension.begin(),
                 [](const unsigned char character) {
@@ -2398,7 +2398,7 @@ namespace lfs::vis {
                         dropped_path.filename()));
                 return;
             }
-            if (lfs::io::video::is_supported_video_extension(dropped_path.extension().string())) {
+            if (lfs::io::video::is_supported_video_extension(extension)) {
                 cmd::ShowVideoExtractor{.video_path = dropped_path}.emit();
                 LOG_INFO("Opening video extractor via drag-and-drop: {}",
                          lfs::core::path_to_utf8(dropped_path.filename()));
@@ -2410,8 +2410,11 @@ namespace lfs::vis {
             std::filesystem::path filepath = lfs::core::utf8_to_path(path_str);
             LOG_DEBUG("Processing dropped file: {}", lfs::core::path_to_utf8(filepath));
 
-            auto ext = filepath.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            auto ext = lfs::core::path_to_utf8(filepath.extension());
+            std::ranges::transform(
+                ext, ext.begin(), [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
 
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
@@ -2440,8 +2443,11 @@ namespace lfs::vis {
                 splat_files.push_back(filepath);
             } else if (ext == ".bin" || ext == ".txt") {
                 // Check if this is a COLMAP file (cameras.bin, images.bin, etc.)
-                auto filename = filepath.filename().string();
-                std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+                auto filename = lfs::core::path_to_utf8(filepath.filename());
+                std::ranges::transform(
+                    filename, filename.begin(), [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
                 if (filename == "cameras.bin" || filename == "cameras.txt" ||
                     filename == "images.bin" || filename == "images.txt") {
                     auto parent = filepath.parent_path();

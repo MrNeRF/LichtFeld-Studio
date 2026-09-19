@@ -14,6 +14,8 @@
  * This test runs on Windows CI without requiring CUDA/GPU.
  */
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1886,12 +1888,14 @@ TEST_F(UnicodePathTest, DragDropPathHandling) {
         "ドラッグ_drag_드래그_拖拽.png",
         "ドロップ_drop_드롭_放下.jpg",
         "混合ファイル_Mixed_혼합파일_混合文件.ply",
-        "Special (file) [test].sog"};
+        "Special (file) [test].sog",
+        "カメラ_Cameras_相机.TXT",
+        "拡張子_扩展.测试"};
 
     std::vector<std::string> received_paths;
 
     for (const auto& filename : dropped_filenames) {
-        auto file_path = test_dir / filename;
+        auto file_path = test_dir / utf8_to_path(filename);
         create_file(file_path, "dropped content");
 
         // Simulate what the Windows drop handler does:
@@ -1905,6 +1909,28 @@ TEST_F(UnicodePathTest, DragDropPathHandling) {
         // Verify the path is usable
         fs::path recovered = utf8_to_path(utf8_path);
         EXPECT_TRUE(fs::exists(recovered)) << "Dropped path not accessible: " << utf8_path;
+
+        std::string extension;
+        std::string basename;
+        EXPECT_NO_THROW({
+            extension = path_to_utf8(recovered.extension());
+            basename = path_to_utf8(recovered.filename());
+        });
+        EXPECT_FALSE(extension.empty());
+        EXPECT_EQ(basename, filename);
+
+        std::ranges::transform(
+            extension, extension.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        std::ranges::transform(
+            basename, basename.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        if (filename.ends_with(".TXT")) {
+            EXPECT_EQ(extension, ".txt");
+            EXPECT_TRUE(basename.ends_with(".txt"));
+        }
 
         received_paths.push_back(utf8_path);
     }
