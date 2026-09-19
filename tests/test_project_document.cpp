@@ -5,6 +5,7 @@
 
 #include "app/headless_recovery_document.hpp"
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
@@ -4670,6 +4671,38 @@ namespace {
             document->save(destination, append_options);
         ASSERT_TRUE(appended)
             << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest, SaveAsPreservesUnicodeSourceAndDestinationPaths) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / lfs::core::utf8_to_path("源_项目.licht");
+        const fs::path destination =
+            temporary.path / lfs::core::utf8_to_path("保存_копия.licht");
+
+        auto document = make_empty_document(fixed_uuid(19'160), 100);
+        ASSERT_TRUE(document->save(source, save_options(19'161, 200)));
+        auto reopened = require_result_ptr(ProjectDocument::open(source));
+
+        auto saved = reopened->save_as(
+            destination, save_options(19'162, 300));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ASSERT_TRUE(reopened->source_path());
+        EXPECT_EQ(*reopened->source_path(),
+                  fs::absolute(destination).lexically_normal());
+        EXPECT_TRUE(fs::is_regular_file(destination));
+        auto published = require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        static_cast<void>(require_result_ptr(
+            ProjectDocument::open(destination)));
+
+        for (const auto& entry : fs::directory_iterator(temporary.path)) {
+            const auto name = lfs::core::path_to_utf8(
+                entry.path().filename());
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+        }
     }
 
     TEST(ProjectDocumentTest,
