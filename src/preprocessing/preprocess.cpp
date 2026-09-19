@@ -1141,12 +1141,13 @@ namespace {
             auto outputs = std::make_shared<const HeadMaps>(run_inference(loaded.inference, params.num_tokens));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
+            const std::string image_filename = path_to_string(job.image_path.filename());
             if (bar)
-                bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+                bar->report(i + 1, image_filename, inference_ms);
             else if (!progress)
                 std::cout << "  inference " << inference_ms << " ms\n";
             if (progress)
-                progress(i + 1, plan.jobs.size(), job.image_path.filename().string());
+                progress(i + 1, plan.jobs.size(), image_filename);
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();
