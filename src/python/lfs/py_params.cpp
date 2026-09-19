@@ -223,7 +223,14 @@ namespace lfs::python {
                 throw std::invalid_argument("Strategy must be 'mcmc', 'mrnf', or 'igs+'");
 
             if (auto* pm = get_parameter_manager()) {
-                pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(canonical_strategy); });
+                pm->modifyActiveParams([&](auto&) {
+                    pm->setActiveStrategy(canonical_strategy);
+                    // Presets retain independent editable values. A stale GUT
+                    // value in the destination IGS+ slot must not survive a
+                    // GUI/Python-driven strategy reset into an invalid state.
+                    if (canonical_strategy == core::param::kStrategyIGSPlus)
+                        pm->getActiveParams().gut = false;
+                });
             } else {
                 get_default_params() = core::param::OptimizationParameters::defaults_for_strategy(canonical_strategy);
             }
