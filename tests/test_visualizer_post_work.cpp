@@ -10118,6 +10118,9 @@ namespace lfs::vis {
                 << lfs::format_for_developer(
                        snapshot_ready.error());
             trainer->is_paused_.store(true);
+            trainer->current_iteration_.store(1);
+            ASSERT_FALSE(trainer_manager->isPausedAtCheckpointBaseline());
+            ASSERT_TRUE(lifecycle->hasDirtyProject());
             ASSERT_FALSE(trainer->is_running());
             ASSERT_TRUE(trainer->is_paused());
             ASSERT_TRUE(
@@ -10150,6 +10153,22 @@ namespace lfs::vis {
             EXPECT_EQ(
                 metrics.last_path.lexically_normal(),
                 project_path.lexically_normal());
+
+            // The completed write now contains the paused trainer's current
+            // iteration. It must clear both the title and project-switch dirt.
+            EXPECT_FALSE(lifecycle->isTrainingCheckpointStale());
+            EXPECT_FALSE(lifecycle->hasDirtyProject());
+            EXPECT_FALSE(viewer.projectGetDisplayInfo().dirty);
+            EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+
+            trainer->current_iteration_.store(2);
+            EXPECT_TRUE(lifecycle->hasDirtyProject());
+            EXPECT_TRUE(viewer.projectGetDisplayInfo().dirty);
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            trainer->current_iteration_.store(1);
+            EXPECT_FALSE(lifecycle->hasDirtyProject());
+            scene.addGroup("Edit after save");
+            EXPECT_TRUE(lifecycle->hasDirtyProject());
         }
     }
 
