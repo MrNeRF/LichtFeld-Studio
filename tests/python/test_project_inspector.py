@@ -425,3 +425,15 @@ def test_inspection_scheduler_failure_can_be_retried(caplog):
     assert pipeline.cached('project').card is None
     assert pipeline.cached('project').error == 'scheduler marker'
     assert 'Schedule project inspection failed project=project' in caplog.text
+
+
+def test_checkpoint_order_uses_numeric_iterations_before_uuid_ties():
+    checkpoints = [
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000001", iteration=100),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000004", iteration=10),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000003", iteration=10),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000002", iteration=9),
+    ]
+    rows = _contents(_contents_details(retained_checkpoints=checkpoints))
+    actual = [row["checkpoint_uuid"] for row in rows if row["kind"] == "checkpoint"]
+    assert actual == [checkpoints[i].instance_uuid for i in (3, 2, 1, 0)]
