@@ -58,12 +58,16 @@ if(BUILD_UNICODE_TEST_ONLY)
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
         test_weight_file_paths.cpp
+        test_crash_handler.cpp
         licht_format_test_runtime.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/crash_handler.cpp
         ${CMAKE_SOURCE_DIR}/src/core/error.cpp
         ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/failure_report.cpp
         ${CMAKE_SOURCE_DIR}/src/core/mapped_file.cpp
         ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
         ${CMAKE_SOURCE_DIR}/src/core/nn/weight_file_open.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/user_paths.cpp
         ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
@@ -82,6 +86,10 @@ if(BUILD_UNICODE_TEST_ONLY)
         GTest::gtest_main
         nlohmann_json::nlohmann_json
     )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+        target_link_libraries(unicode_path_test PRIVATE stdc++exp)
+    endif()
     target_compile_definitions(unicode_path_test PRIVATE
         LFS_STATIC_BUILD
         LFS_UNICODE_TEST_STANDALONE)
