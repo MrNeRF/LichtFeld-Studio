@@ -336,8 +336,13 @@ class PortalGalleryClient:
                 raise PortalProtocolError("Invalid gallery download options")
             choice = next((item for item in choices if isinstance(item, dict) and item.get("format") == "licht"), None)
             if choice:
-                if choice.get("status") != "ready":
+                status = choice.get("status")
+                if status == "failed":
+                    raise ValueError("The portal could not prepare this download. Please try again later.")
+                if status == "preparing":
                     raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
+                if status != "ready":
+                    raise PortalProtocolError("Invalid gallery download status")
                 return self._download_representation(scene_id, choice, destination, cancel,
                     checkpoint, on_checkpoint, on_progress, on_message, final_destination, destination_identity)
         payload = self._request("GET", f"/splats/{_identifier(scene_id)}/download")
