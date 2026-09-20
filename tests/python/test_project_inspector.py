@@ -247,6 +247,26 @@ def test_contents_checkpoints_only_list_retained_payloads_and_match_sizes_by_ide
     assert cps[0]['label'] == 'Checkpoint, iteration 20, mcmc'
 
 
+@pytest.mark.parametrize("order", [
+    [2200, 3000, 3300, 7000, 7183],
+    [3000, 2200, 7183, 7000, 3300],
+    [7183, 7000, 3300, 3000, 2200],
+])
+def test_checkpoint_display_order_is_independent_of_storage_order(order):
+    checkpoints = [SimpleNamespace(instance_uuid=str(step), iteration=step)
+                   for step in order]
+    checkpoints.extend([
+        SimpleNamespace(instance_uuid="removed", iteration=1, retained=False),
+        SimpleNamespace(instance_uuid="3000-again", iteration=3000),
+    ])
+    rows = _contents(_contents_details(retained_checkpoints=checkpoints))
+    actual = [(row["iteration"], row["checkpoint_uuid"])
+              for row in rows if row["kind"] == "checkpoint"]
+    assert actual == [(2200, "2200"), (3000, "3000"), (3000, "3000-again"),
+                      (3300, "3300"), (7000, "7000"), (7183, "7183")]
+    assert [cp.iteration for cp in checkpoints[:5]] == order
+
+
 def test_contents_embedded_dataset_counts_images_without_counting_normals_as_images():
     details = _contents_details(parameters=SimpleNamespace(embedded_dataset_present=True, embedded_images=194, embedded_normals=194, embedded_sparse=3))
     plan = SimpleNamespace(embedded_dataset=[SimpleNamespace(bytes=100), SimpleNamespace(bytes=50)], drop_embedded_dataset=SimpleNamespace(allowed=False))
