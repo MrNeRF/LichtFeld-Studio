@@ -5025,8 +5025,7 @@ namespace lfs::vis::project {
                                       compacted
                                           .error()),
                             compact_error_code,
-                            compact_typed_error,
-                            compacted.has_value());
+                            compact_typed_error);
                         queueProjectWriteSettlement(
                             handle);
                     });
