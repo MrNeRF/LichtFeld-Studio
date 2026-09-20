@@ -450,14 +450,12 @@ def scan_asset_folder(
             )
             was_cancelled = cancel_event is not None and cancel_event.is_set()
             added, already, failed, _ = _commit_registration_batch(
-                index, [(path, folder_id) for path in discovered], None
+                index, [(path, folder_id) for path in discovered], cancel_event,
+                folder_ids={folder_id}, save=True,
             )
             was_cancelled = was_cancelled or (
                 cancel_event is not None and cancel_event.is_set()
             )
-            if added and not index.save():
-                failed += added
-                added = 0
             return AssetFolderScanResult(
                 discovered=len(discovered), added=added, already_cataloged=already,
                 failed=failed, cancelled=was_cancelled,
@@ -533,13 +531,13 @@ def scan_all_asset_folders(
         if callable(getattr(index, "reconcile_observations", None)):
             discovered = list(_iter_all())
             was_cancelled = cancel_event is not None and cancel_event.is_set()
-            added, already, failed, _ = _commit_registration_batch(index, discovered, None)
+            added, already, failed, _ = _commit_registration_batch(
+                index, discovered, cancel_event,
+                folder_ids={folder_id for _root, folder_id in roots}, save=True,
+            )
             was_cancelled = was_cancelled or (
                 cancel_event is not None and cancel_event.is_set()
             )
-            if added and not index.save():
-                failed += added
-                added = 0
             return AssetFolderScanResult(
                 discovered=len(discovered), added=added, already_cataloged=already,
                 failed=failed, cancelled=was_cancelled,
@@ -732,9 +730,12 @@ def _commit_registration_batch(
     index: Any,
     batch: list[tuple[str, str]],
     cancel_event: threading.Event | None,
+    *,
+    folder_ids: set[str] | None = None,
+    save: bool = False,
 ) -> tuple[int, int, int, bool]:
     """Commit one discovered batch. Cancel drops this batch if it is not committed."""
-    if not batch:
+    if not batch and folder_ids is None:
         return 0, 0, 0, False
     if cancel_event is not None and cancel_event.is_set():
         return 0, 0, 0, True
@@ -815,8 +816,8 @@ def _commit_registration_batch(
         ]
         result = reconcile(
             observations,
-            folder_ids={folder_id for _path, folder_id in batch},
-            save=False,
+            folder_ids=folder_ids if folder_ids is not None else {folder_id for _path, folder_id in batch},
+            save=save,
         )
         return (
             int(result.get("added", 0)),

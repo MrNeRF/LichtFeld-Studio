@@ -266,9 +266,9 @@ def test_scan_reports_discovery_progress_before_reconciliation(monkeypatch, tmp_
     progress = AssetFolderScanProgress()
     original_commit = asset_watch._commit_registration_batch
 
-    def tracked_commit(index_arg, batch, cancel_event):
+    def tracked_commit(index_arg, batch, cancel_event, **kwargs):
         before_commit.append(progress.snapshot())
-        result = original_commit(index_arg, batch, cancel_event)
+        result = original_commit(index_arg, batch, cancel_event, **kwargs)
         snapshots.append(progress.snapshot())
         return result
 
@@ -347,3 +347,68 @@ def test_verify_catalog_projects_prioritizes_visible_window():
         Index(), visible_asset_ids=["3", "1"], batch_size=1, interval_s=0
     ) == 5
     assert order == ["3", "1", "0", "2", "4"]
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+@pytest.mark.parametrize("remaining", [0, 1])
+def test_rescan_persists_removed_files_without_new_projects(tmp_path, monkeypatch, scan_all, remaining):
+    root = tmp_path / "watched"
+    root.mkdir()
+    paths = [root / "first.licht", root / "second.licht"]
+    inspections = {path.name: _inspection(str(uuid.uuid4())) for path in paths}
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspections[Path(path).name]))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    for path in paths:
+        path.write_bytes(b"project")
+    assert scan_asset_folder(index, "default", str(root)).added == 2
+    for path in paths[remaining:]:
+        path.unlink()
+    result = scan_all_asset_folders(index) if scan_all else scan_asset_folder(index, "default", str(root))
+    assert result.failed == 0
+    for path in paths[remaining:]:
+        assert index.get_asset(inspections[path.name].project_uuid).status == "MISSING"
+    reloaded = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    assert reloaded.load()
+    for path in paths[remaining:]:
+        assert reloaded.get_asset(inspections[path.name].project_uuid).status == "MISSING"
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+def test_scan_save_failure_restores_catalog(tmp_path, monkeypatch, scan_all):
+    root = tmp_path / "watched"
+    root.mkdir()
+    path = root / "new.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspection))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    monkeypatch.setattr(index, "save", lambda: False)
+    result = scan_all_asset_folders(index) if scan_all else scan_asset_folder(index, "default", str(root))
+    assert result.failed > 0 and result.added == 0
+    assert index.get_asset(inspection.project_uuid) is None
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+def test_cancel_during_discovery_does_not_commit_partial_scan(tmp_path, monkeypatch, scan_all):
+    root = tmp_path / "watched"
+    root.mkdir()
+    path = root / "new.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspection))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    cancel = threading.Event()
+    def discover(*args, **kwargs):
+        yield str(path)
+        cancel.set()
+    monkeypatch.setattr(asset_watch, "iter_licht_projects", discover)
+    result = scan_all_asset_folders(index, cancel) if scan_all else scan_asset_folder(index, "default", str(root), cancel)
+    assert result.cancelled
+    assert result.added == 0
+    assert index.get_asset(inspection.project_uuid) is None
