@@ -1363,3 +1363,60 @@ def test_saved_legacy_visibility_does_not_mark_local_changes(gallery):
     link = dict(sceneId="scene", commitUuid="saved", contentRevision="c", metadataRevision="m",
         sharedFields=dict(fields, visibility="public"), localFields=fields)
     assert asset_sync_state({"id": "project", "commit_uuid": "saved"}, link, remote)["freshness"] == "equal"
+
+
+@pytest.mark.parametrize("has_review", [False, True])
+def test_project_layout_restore_preserves_gallery_review_visibility(gallery, monkeypatch, tmp_path, has_review):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+
+    controller, _, _ = gallery
+    module = import_module("lfs_plugins.gallery_file_panel")
+    enabled = {}
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda identifier, value: enabled.update({identifier: value}), raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _identifier: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    panel = GalleryFilePanel()
+    if has_review:
+        panel.show(controller=controller,
+                   asset={"id": "project", "path": str(tmp_path / "project.licht"), "name": "Project"},
+                   scene=None, action="conflict", fields={}, mode="conflict")
+    review = panel._review
+    # Native project loading restores saved panel visibility before chrome.
+    enabled[panel.id] = not has_review
+    from lfs_plugins.panels import apply_panel_chrome
+    apply_panel_chrome(panel, {})
+    assert enabled[panel.id] is has_review
+    assert panel._review is review
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_failed_gallery_apply_has_a_way_to_review_again(gallery, ready):
+    from lfs_plugins.gallery_controller import asset_sync_state
+
+    project = {"id": "project", "path": "/project.licht", "commit_uuid": "local"}
+    link = {"sceneId": "remote", "commitUuid": "base", "contentRevision": "c1", "metadataRevision": "m1"}
+    remote = {"id": "remote", "contentRevision": "c1", "metadataRevision": "m2", "status": "ready" if ready else "processing"}
+    job = {"id": "failed", "project": "project", "sceneId": "remote", "kind": "download", "status": "completed",
+           "localUpdate": {"state": "failed", "backupPath": "/backup.licht"}}
+    facts = asset_sync_state(project, link, remote, [job])
+    actions = [action["id"] for action in facts["actions"]]
+    assert "open_recovery" in actions
+    assert ("resolve" in actions) is ready
+
+
+@pytest.mark.parametrize("changed_account", [False, True])
+def test_failed_settings_apply_refreshes_before_another_review(gallery, monkeypatch, changed_account):
+    controller, state, actions = gallery
+    controller._settings_pending = dict(job="failed", identity=state["identity"])
+    if changed_account:
+        state["identity"] = ("https://portal.example", "other@example.com", "second", True)
+    def fail(job, reason):
+        actions.append((job, reason))
+        controller.service.busy = True
+    controller.service.fail_local_update = fail
+    monkeypatch.setattr(controller, "_schedule_poll", lambda: None)
+    controller._fail_settings_apply(ValueError("Gallery changed"))
+    assert controller._settings_pending is None
+    assert bool(actions) is not changed_account
+    assert controller._refresh_requested is not changed_account
+    assert controller._refresh_force_requested is not changed_account

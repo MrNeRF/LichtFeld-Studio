@@ -101,6 +101,8 @@ def gallery_actions(entry, facts):
         add("unlink_previous", enabled=not busy)
         return actions
     if job.get("localUpdate", {}).get("interrupted") or job.get("localUpdate", {}).get("state") == "failed":
+        if facts.get("linked") and facts.get("sceneReady") and entry.get("exists", True):
+            add("resolve", enabled=not busy)
         add("open_recovery", account=False)
         return actions
     if job.get("requiresPreparation"):

@@ -478,6 +478,9 @@ class GalleryController:
         pending, self._settings_pending = self._settings_pending, None
         if pending and self.service.identity() == pending["identity"] and not self.service.busy:
             self.service.fail_local_update(pending["job"], friendly_error(error))
+            # The remote item may have changed while the review was open.
+            # Queue a fresh check after recording the failed apply.
+            self.refresh(force=True)
 
     def _resolve_pending_uploads(self, project_id, scene_id, identity, continuation):
         """Retire only the failed replacement explicitly superseded by Resolve."""

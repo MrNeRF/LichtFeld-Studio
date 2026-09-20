@@ -1202,7 +1202,8 @@ class GallerySync:
                         bucket["links"][project_id]["viewingCopy"] = True
                     job["project"] = project_id
                     job["linkOperation"] = {"id": operation, "state": "ready"}
-                self._save(project_checks=((path_identity, project_id),))
+                with self._supersede_failed_local_updates(job):
+                    self._save(project_checks=((path_identity, project_id),))
             except Exception as exc:
                 log_failure("link_saved", exc, project_id=project_id, operation_id=operation)
                 with self._lock:
@@ -1783,6 +1784,29 @@ class GallerySync:
             self._save()
         self._launch_metadata(action)
 
+    @contextmanager
+    def _supersede_failed_local_updates(self, current):
+        """A successful retry clears old failures without deleting recovery files."""
+        previous = []
+        for job in self._bucket()["jobs"]:
+            update = job.get("localUpdate", {})
+            if (job is not current and not job.get("retired")
+                    and job.get("project") == current.get("project")
+                    and job.get("sceneId") == current.get("sceneId")
+                    and job.get("status") == "completed"
+                    and (update.get("state") == "failed" or update.get("interrupted"))):
+                previous.append((job, job.get("retired")))
+                job["retired"] = True
+        try:
+            yield
+        except Exception:
+            for job, retired in previous:
+                if retired is None:
+                    job.pop("retired", None)
+                else:
+                    job["retired"] = retired
+            raise
+
 
 
     def finish_settings_update(self, job_id, commit_uuid, stamp, fields, *, acknowledge=True):
@@ -1812,7 +1836,8 @@ class GallerySync:
             job.update(message="Gallery changes applied. Recovery copy kept.")
             self.message = job["message"]
             try:
-                self._save(project_checks=((path_identity, job["project"]),))
+                with self._supersede_failed_local_updates(job):
+                    self._save(project_checks=((path_identity, job["project"]),))
             except Exception:
                 link.clear()
                 link.update(before_link)

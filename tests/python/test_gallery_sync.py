@@ -1624,3 +1624,46 @@ def test_server_private_visibility_is_preserved_but_not_shared():
     journal = dict(version=3, accounts={"owner": dict(links={"project": link}, jobs=[])})
     gallery_sync._validate_journal(journal)
     assert (link["sharedFields"], link["metadata"]) == (dict(title="Scene", description="", viewerSettings={}), remote)
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_retrying_failed_settings_apply_keeps_backup_and_clears_old_failure(tmp_path, monkeypatch, save_fails):
+    service = connected(tmp_path, monkeypatch)
+    remote = dict(id="remote", title="Gallery title", contentRevision="c1", metadataRevision="m2")
+    monkeypatch.setattr(Client, "scene", lambda *args: dict(remote))
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"original project")
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(remote, "before")
+    service._save()
+    first, _ = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    recovery_path = Path(service._job(first)["localUpdate"]["backupPath"])
+    service.fail_local_update(first, "Gallery changed; review again")
+    finish(service)
+
+    import copy
+    import uuid
+    unrelated = copy.deepcopy(service._job(first))
+    unrelated.update(id=str(uuid.uuid4()), project="another-project", sceneId="another-scene")
+    service._bucket()["jobs"].append(unrelated)
+    retry, _ = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    if save_fails:
+        monkeypatch.setattr(service, "_save", lambda **kwargs: (_ for _ in ()).throw(OSError("journal write failed")))
+    service.finish_settings_update(retry, "after", gallery_sync.file_stamp(path), {})
+    finish(service)
+
+    assert not unrelated.get("retired")
+    assert recovery_path.read_bytes() == b"original project"
+    assert bool(service._job(first).get("retired")) is not save_fails
+    assert service._job(retry)["localUpdate"]["state"] == ("ready" if save_fails else "applied")
+    assert service.snapshot()["links"]["project"]["commitUuid"] == ("before" if save_fails else "after")
+    from lfs_plugins.gallery_controller import asset_sync_state
+    facts = asset_sync_state(dict(id="project", path=str(path), commit_uuid="after"),
+        service.snapshot()["links"]["project"], dict(remote, status="ready"), service.snapshot()["jobs"])
+    assert (facts["action"] == "resolve") is save_fails
+    if not save_fails:
+        restarted = gallery_sync.GallerySync(service.account, tmp_path)
+        records = [job for bucket in restarted._data["accounts"].values() for job in bucket["jobs"]]
+        assert next(job for job in records if job["id"] == first)["retired"]
+        assert recovery_path.read_bytes() == b"original project"
