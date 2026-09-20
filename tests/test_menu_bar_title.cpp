@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "visualizer/visualizer.hpp"
 
@@ -255,10 +256,12 @@ namespace {
     }
 
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {
-        const std::string path = "/projects/long folder/<b>scan</b> &amp; capture.licht";
+        const std::filesystem::path path =
+            std::filesystem::path{"/projects"} / "long folder" / "<b>scan &amp; capture.licht";
+        const std::string expected_path = lfs::core::path_to_utf8(path.lexically_normal());
         bar_.updateProjectDisplay(ProjectDisplayInfo{.path = path, .title = "Scan"});
         context_->Update();
-        EXPECT_EQ(el("project-title-content")->GetAttribute<Rml::String>("title", ""), path);
+        EXPECT_EQ(el("project-title-content")->GetAttribute<Rml::String>("title", ""), expected_path);
         resize(1600);
         const auto title = bounds(el("project-title-content"));
         bar_.processInput({.mouse_x = (title.left + title.right) / 2, .mouse_y = 15, .screen_w = 1600, .screen_h = 300});
@@ -272,6 +275,6 @@ namespace {
         ASSERT_NE(rendered, nullptr);
         EXPECT_TRUE(rendered->IsVisible());
         EXPECT_EQ(rendered->QuerySelector("b"), nullptr);
-        EXPECT_EQ(textContent(rendered), path);
+        EXPECT_EQ(textContent(rendered), expected_path);
     }
 } // namespace

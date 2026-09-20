@@ -35,6 +35,17 @@ find_package(GTest CONFIG REQUIRED)
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
 if(BUILD_VISUALIZER_TESTS)
+    # The focused menu-bar suite exercises no GPU code. Windows CI installs
+    # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
+    # until a driver API is actually called. Normal application builds retain
+    # their existing eager driver dependency.
+    if(MSVC)
+        target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lfs_core PRIVATE delayimp)
+        target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lfs_visualizer PRIVATE delayimp)
+    endif()
+
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
     )
@@ -52,15 +63,6 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_visualizer
         GTest::gtest_main
     )
-    if(WIN32)
-        add_custom_command(TARGET lichtfeld_visualizer_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_RUNTIME_DLLS:lichtfeld_visualizer_tests>
-                $<TARGET_FILE_DIR:lichtfeld_visualizer_tests>
-            COMMAND_EXPAND_LISTS
-            COMMENT "Copying runtime DLLs for lichtfeld_visualizer_tests"
-        )
-    endif()
     add_test(
         NAME lichtfeld_visualizer_tests
         COMMAND lichtfeld_visualizer_tests
