@@ -122,6 +122,60 @@ def _panel(module):
     return panel
 
 
+def test_choose_project_folder_creates_there_without_changing_default(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    destination = tmp_path / "自定义 projects"
+    destination.mkdir()
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    panel._set_name("Garden")
+    panel._on_do_create()
+    assert state.calls[0][1] == (str(destination / "Garden.licht"),)
+    assert state.lf.ui.get_project_location() == str(state.location)
+    panel.show("")
+    assert panel._target_path().parent == state.location
+
+
+def test_custom_folder_overwrite_and_cancel(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    destination = tmp_path / "custom"
+    destination.mkdir()
+    existing = destination / "Garden.licht"
+    existing.write_bytes(b"existing project")
+    panel._set_name("Garden")
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    state.lf.ui.open_folder_dialog = lambda *_: ""
+    panel._on_browse_destination()
+    assert panel._target_path() == existing
+    panel._on_do_create()
+    assert not state.calls
+    assert existing.read_bytes() == b"existing project"
+    state.prompts[-1][3]("new_project.overwrite")
+    assert state.calls[0][1] == (str(existing),)
+    assert state.calls[0][2]["overwrite"] is True
+
+
+def test_changing_destination_invalidates_pending_overwrite(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    panel._set_name("Garden")
+    (state.location / "Garden.licht").write_bytes(b"existing")
+    panel._on_do_create()
+    confirm = state.prompts[-1][3]
+    destination = tmp_path / "custom"
+    destination.mkdir()
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    confirm("new_project.overwrite")
+    assert not state.calls
+
+
 def _run_scheduled(state, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

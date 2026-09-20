@@ -4,6 +4,7 @@
 
 #include "app/converter.hpp"
 #include "app/converter_output_paths.hpp"
+#include "app/converter_overwrite.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
@@ -39,28 +40,10 @@ namespace lfs::app {
         constexpr const char* CONVERT_EXTENSIONS[] = {".ply", ".sog", ".ssog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume", ".rad", ".licht"};
         constexpr const char* MESH_EXTENSIONS[] = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".mesh", ".ply"};
 
-        enum class OverwriteChoice { YES,
-                                     NO,
-                                     ALL };
-
         struct OutputTarget {
             param::OutputFormat format;
             std::filesystem::path path;
         };
-
-        OverwriteChoice askOverwrite(const std::filesystem::path& path) {
-            std::print("File exists: {}\nOverwrite? [y]es / [n]o / [a]ll: ", path.filename().string());
-            std::string input;
-            if (!std::getline(std::cin, input) || input.empty()) {
-                return OverwriteChoice::NO;
-            }
-            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(input[0])));
-            if (c == 'y')
-                return OverwriteChoice::YES;
-            if (c == 'a')
-                return OverwriteChoice::ALL;
-            return OverwriteChoice::NO;
-        }
 
         void truncateSHDegree(SplatData& splat, const int degree) {
             if (degree < 0)
@@ -675,7 +658,7 @@ namespace lfs::app {
             const auto output = generate_converter_output_path(input, output_template, params.format, "_converted");
 
             if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
-                const auto choice = askOverwrite(output);
+                const auto choice = ask_overwrite(output, std::cin, std::cout);
                 if (choice == OverwriteChoice::NO) {
                     std::println("  Skipped");
                     ++skipped;
@@ -716,7 +699,7 @@ namespace lfs::app {
             bool skip = false;
             for (const auto& output : outputs) {
                 if (std::filesystem::exists(output.path) && !overwrite_all && !params.overwrite) {
-                    const auto choice = askOverwrite(output.path);
+                    const auto choice = ask_overwrite(output.path, std::cin, std::cout);
                     if (choice == OverwriteChoice::NO) {
                         skip = true;
                         break;
