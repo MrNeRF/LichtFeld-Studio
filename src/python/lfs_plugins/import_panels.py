@@ -88,6 +88,8 @@ class _ImportDialogPanel(Panel):
     def on_unmount(self, _doc):
         if hasattr(self, "_dialog_mounted"):
             self._dialog_mounted = False
+            if not lf.ui.is_panel_enabled(self.id):
+                self._dialog_requested = False
             self._source_generation += 1
             self._source_probe_update_generation += 1
             self._source_probe_cancel.set()
@@ -198,6 +200,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_probe_active = False
         self._source_probe_cancel = threading.Event()
         self._dialog_mounted = False
+        self._dialog_requested = False
         self._colmap_available = False
         self._target_exists_cached = False
         self._dedupe_name_cache: dict[str, str] = {}
@@ -263,6 +266,13 @@ class NewProjectPanel(_ImportDialogPanel):
             changed = True
         return changed
 
+    def poll(self, _context):
+        # Saved panel placement is not a request to start creating a project.
+        return self._dialog_requested
+
+    def apply_chrome(self, _payload):
+        lf.ui.set_panel_enabled(self.id, self._dialog_requested)
+
     def show(self, source_path: str = "") -> bool:
         self._name = ""
         self._source_path = ""
@@ -296,6 +306,7 @@ class NewProjectPanel(_ImportDialogPanel):
         if not self._name:
             self._set_name(self._dedupe_name("untitled"))
         self._dirty_model()
+        self._dialog_requested = True
         lf.ui.set_panel_enabled(self.id, True)
         return True
 
@@ -745,16 +756,26 @@ class NewProjectPanel(_ImportDialogPanel):
             if self._destination_exists() and not overwrite:
                 self._confirm_overwrite(lambda: _commit(stop_training, True))
                 return
-            created = lf.project_create(
-                str(target),
-                discard_changes=True,
-                stop_training=stop_training,
-                overwrite=overwrite,
-            )
+            # Creation captures panel state; the command dialog must be closed.
+            self._dialog_requested = False
+            lf.ui.set_panel_enabled(self.id, False)
+            try:
+                created = lf.project_create(
+                    str(target),
+                    discard_changes=True,
+                    stop_training=stop_training,
+                    overwrite=overwrite,
+                )
+            except Exception:
+                self._dialog_requested = True
+                lf.ui.set_panel_enabled(self.id, True)
+                raise
             pending = bool(
                 getattr(lf, "project_create_pending", lambda: False)()
             )
             if created is False and not pending:
+                self._dialog_requested = True
+                lf.ui.set_panel_enabled(self.id, True)
                 if self._destination_exists() and not overwrite:
                     self._confirm_overwrite(lambda: _commit(stop_training, True))
                     return
@@ -799,6 +820,7 @@ class NewProjectPanel(_ImportDialogPanel):
         _after_consent(False)
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
+        self._dialog_requested = False
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_do_load(self, _handle=None, _ev=None, _args=None):

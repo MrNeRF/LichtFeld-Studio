@@ -81,6 +81,8 @@ def new_project_module(monkeypatch, tmp_path):
         get_project_location=lambda: str(state.location),
         get_default_project_location=lambda: str(location),
         set_panel_enabled=lambda panel_id, enabled: state.enabled.append((panel_id, enabled)),
+        is_panel_enabled=lambda panel_id: next((enabled for identifier, enabled in reversed(state.enabled)
+                                               if identifier == panel_id), False),
         tr=lambda key: key,
         confirm_dialog=confirm,
         open_dataset_folder_dialog=lambda: str(dataset),
@@ -429,3 +431,72 @@ def test_source_probe_is_debounced_until_idle(new_project_module, monkeypatch):
     panel.on_update(None)
     _run_scheduled(state)
     assert calls == [str(state.dataset)]
+
+
+def test_creation_does_not_save_the_open_dialog(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    original_create = state.lf.project_create
+
+    def create(*args, **kwargs):
+        assert state.enabled[-1] == ("lfs.new_project", False)
+        return original_create(*args, **kwargs)
+
+    state.lf.project_create = create
+    panel._on_do_create()
+    assert state.calls[0][0] == "create"
+
+
+def test_failed_creation_restores_the_dialog(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+
+    def fail(*args, **kwargs):
+        assert state.enabled[-1] == ("lfs.new_project", False)
+        raise RuntimeError("write failed")
+
+    state.lf.project_create = fail
+    with pytest.raises(RuntimeError, match="write failed"):
+        panel._on_do_create()
+    assert state.enabled[-1] == ("lfs.new_project", True)
+
+
+def test_restored_panel_visibility_does_not_request_a_new_project(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    assert not panel.poll(None)
+    panel.show("")
+    assert panel.poll(None)
+    panel._on_do_cancel()
+    # Old projects may contain enabled=True for this command dialog.
+    state.lf.ui.set_panel_enabled(panel.id, True)
+    from lfs_plugins.panels import apply_panel_chrome
+    apply_panel_chrome(panel, {})
+    assert state.enabled[-1] == (panel.id, False)
+    assert not panel.poll(None)
+    panel.show("")
+    assert panel.poll(None)
+
+
+@pytest.mark.parametrize("deferred_unmount", [False, True])
+def test_failed_creation_keeps_requested_dialog_after_unmount(new_project_module, deferred_unmount):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+
+    def fail(*args, **kwargs):
+        if not deferred_unmount:
+            panel.on_unmount(None)
+        raise RuntimeError("write failed")
+
+    state.lf.project_create = fail
+    with pytest.raises(RuntimeError, match="write failed"):
+        panel._on_do_create()
+    if deferred_unmount:
+        panel.on_unmount(None)
+    panel.apply_chrome({})
+    assert panel.poll(None)
+    assert state.enabled[-1] == (panel.id, True)
+    assert panel._can_create()
