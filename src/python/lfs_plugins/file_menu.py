@@ -207,12 +207,13 @@ def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
 
 class NewProjectOperator(Operator):
     label = "menu.file.new_project"
-    description = "Create a new project"
+    description = "Start a blank, unsaved project"
 
     def execute(self, context) -> set:
-        from .import_panels import open_new_project_panel
-
-        open_new_project_panel("")
+        confirm_discard_work_then(
+            lf.ui.tr("menu.file.new_project"),
+            lambda stop_training: _new_project(True, stop_training),
+        )
         return {"FINISHED"}
 
 
