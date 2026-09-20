@@ -163,6 +163,22 @@ if(NOT BUILD_FORMAT_TESTS AND NOT BUILD_TESTS)
     return()
 endif()
 
+# Headless SDL boundary regression tests, also built in the CPU-only CI configuration.
+# Do not link SDL itself: this isolated executable provides the four SDL state
+# queries used by the production coordinate helpers and frame finalization.
+add_executable(lichtfeld_sdl_coordinate_tests test_sdl_pixel_coordinates.cpp)
+target_compile_features(lichtfeld_sdl_coordinate_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_sdl_coordinate_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+)
+target_link_libraries(lichtfeld_sdl_coordinate_tests PRIVATE
+    GTest::gtest_main
+    SDL3::Headers
+    glm::glm
+)
+add_test(NAME lichtfeld.sdl_coordinates COMMAND lichtfeld_sdl_coordinate_tests)
+set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input" TIMEOUT 30)
+
 # MSVC resolves every object reference before /OPT:REF, while GNU ld can discard
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
