@@ -46,8 +46,8 @@ namespace lfs::vis::gui {
         // `body` if it does not exist, then positions / shows / hides it.
         // mouse_x/y are document-local coordinates; doc_w/h size the clamp.
         // Returns true if the document changed and needs a fresh paint.
-        bool apply(Rml::Element* body, int mouse_x, int mouse_y,
-                   int doc_w, int doc_h);
+        LFS_VIS_API bool apply(Rml::Element* body, int mouse_x, int mouse_y,
+                               int doc_w, int doc_h);
         [[nodiscard]] bool hasActiveState() const {
             return visible_ || pending_target_ != nullptr || !pending_text_.empty();
         }

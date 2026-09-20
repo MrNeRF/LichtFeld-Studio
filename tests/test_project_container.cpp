@@ -3424,6 +3424,63 @@ namespace {
         EXPECT_FALSE(fs::exists(backup_temp));
     }
 
+    TEST(ProjectContainerWriter, ActiveAutosaveWriteTempSurvivesRecoverySweep) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "active-autosave.licht";
+        create_single_chunk_fixture(
+            master, 1033, 1034, 1035, fixed_key("PROJ", 1036),
+            R"({"master":"active-autosave"})");
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const auto snapshot_uuid = fixed_uuid(1037);
+        ProjectWriter writer = require_result(ProjectWriter::create(
+            sidecar,
+            CreateOptions{
+                .project_uuid = base.superblock().project_uuid,
+                .file_uuid = fixed_uuid(1038),
+                .role = ContainerRole::AutosaveSidecar,
+                .base_explicit_commit_uuid = base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .sidecar_snapshot_uuid = snapshot_uuid,
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 1,
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+                .writer_lock_anchor = master,
+            }));
+
+        fs::path active_temp;
+        for (const auto& entry : fs::directory_iterator(temporary.path)) {
+            const auto name = entry.path().filename().string();
+            if (name.find(".project-write.") != std::string::npos &&
+                name.ends_with(".tmp.autosave")) {
+                active_temp = entry.path();
+                break;
+            }
+        }
+        ASSERT_FALSE(active_temp.empty());
+        ASSERT_TRUE(fs::is_regular_file(active_temp));
+
+        RecoveryInspection sweep;
+        sweep_orphan_project_artifacts(sidecar, sweep);
+        EXPECT_TRUE(fs::is_regular_file(active_temp));
+        EXPECT_TRUE(sweep.deleted_paths.empty());
+
+        auto commit = fixture_commit_options(1039, 1037, 1);
+        commit.kind = CommitKind::Autosave;
+        commit.snapshot_uuid = snapshot_uuid;
+        require_status(writer.plan_commit(commit));
+        require_status(writer.preflight(0));
+        for (const ChunkInfo& row : base.chunks()) {
+            if (row.row_kind == RowKind::Live) {
+                require_status(writer.add_sidecar_base_reference(row));
+            }
+        }
+        require_status(writer.commit());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        EXPECT_FALSE(fs::exists(active_temp));
+    }
+
     TEST(ProjectContainerWriter, InspectPrunesCorruptAsidesToNewestThree) {
         // Would fail if .corrupt-* asides grew without a per-stem cap.
         TemporaryDirectory temporary;
