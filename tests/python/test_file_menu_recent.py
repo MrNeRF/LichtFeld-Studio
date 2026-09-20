@@ -330,7 +330,16 @@ def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_p
         assert calls == [("resolve", {"apply_only": False})] and opened == []
     elif expected == "check":
         assert calls == [("check",)] and opened == []
-        assert file_menu.lf.message_dialogs[-1][2] == "info"
+        assert file_menu.lf.message_dialogs == []
+        assert callable(controller._after_service)
+
+        controller_module.asset_sync_state = lambda *args, **kwargs: {
+            "relationship": "linked", "linked": True, "freshness": "local",
+            "state": "local", "activity": "idle", "active": False,
+            "job": {}, "sceneReady": True, "presentationChanged": False,
+        }
+        controller._after_service()
+        assert len(opened) == 1 and opened[0]["action"] == "update"
 
 
 def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):

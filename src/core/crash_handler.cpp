@@ -3,13 +3,18 @@
 
 #include "core/crash_handler.hpp"
 
+#ifndef LFS_UNICODE_TEST_STANDALONE
 #include "core/cuda/memory_arena.hpp"
 #include "core/device_fault.hpp"
+#endif
 #include "core/environment.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
+#ifndef LFS_UNICODE_TEST_STANDALONE
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
+#endif
 #include "core/user_paths.hpp"
 
 #include <algorithm>
@@ -38,6 +43,7 @@
 
 namespace lfs::core {
 
+#ifndef LFS_UNICODE_TEST_STANDALONE
     namespace {
         constexpr int kMaxGpuPreShutdownHooks = 32;
         std::array<GpuPreShutdownHook, kMaxGpuPreShutdownHooks> g_gpu_pre_shutdown_hooks{};
@@ -88,6 +94,7 @@ namespace lfs::core {
     bool gpu_process_teardown_started() noexcept {
         return g_gpu_process_teardown_started.load(std::memory_order_acquire);
     }
+#endif
 
     void flush_diagnostics_noexcept() noexcept {
         try {
@@ -96,6 +103,7 @@ namespace lfs::core {
         }
     }
 
+#ifndef LFS_UNICODE_TEST_STANDALONE
     void teardown_gpu_before_exit() noexcept {
         try {
             // release every registered long-lived CUDA holder
@@ -120,6 +128,7 @@ namespace lfs::core {
             // failures internally; none may escape this sanctioned pre-exit step.
         }
     }
+#endif
 
     [[noreturn]] void flush_and_exit(const int code) noexcept {
         flush_diagnostics_noexcept();
@@ -383,7 +392,7 @@ namespace lfs::core {
 #endif
 
             std::set_terminate(terminate_handler);
-            const std::string path = g_crash_log_path.string();
+            const std::string path = path_to_utf8(g_crash_log_path);
             std::fprintf(stderr, "Crash diagnostics: %s\n", path.c_str());
         });
     }

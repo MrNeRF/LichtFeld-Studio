@@ -223,6 +223,7 @@ if(MSVC)
             ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
             PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()

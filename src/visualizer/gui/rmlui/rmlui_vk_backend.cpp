@@ -84,6 +84,8 @@ namespace {
     struct PreviewTextureRequest {
         std::filesystem::path path;
         int max_size = 0;
+        int width = 0;
+        int height = 0;
         bool embedded_project_preview = false;
     };
 
@@ -214,6 +216,10 @@ namespace {
                     preview_size = ParseIntParam(value);
                 } else if (key == "mw") {
                     dataset_size = ParseIntParam(value);
+                } else if (key == "w") {
+                    request.width = ParseIntParam(value);
+                } else if (key == "h") {
+                    request.height = ParseIntParam(value);
                 }
             }
 
@@ -1146,8 +1152,15 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         return 0;
 
     static constexpr Rml::byte transparent_pixel[4] = {0, 0, 0, 0};
-    texture_dimensions = {1, 1};
-    const Rml::TextureHandle handle = CreateTexture({transparent_pixel, sizeof(transparent_pixel)}, texture_dimensions, source);
+    const Rml::Vector2i placeholder_dimensions{1, 1};
+    // RmlUi builds and caches cover/contain geometry from the dimensions returned
+    // here. Report the decoded aspect ratio up front, while keeping the temporary
+    // GPU allocation at one transparent pixel until the asynchronous upload lands.
+    texture_dimensions = request->width > 0 && request->height > 0
+                             ? Rml::Vector2i{request->width, request->height}
+                             : placeholder_dimensions;
+    const Rml::TextureHandle handle = CreateTexture(
+        {transparent_pixel, sizeof(transparent_pixel)}, placeholder_dimensions, source);
     auto* texture = reinterpret_cast<texture_data_t*>(handle);
     if (!texture)
         return 0;

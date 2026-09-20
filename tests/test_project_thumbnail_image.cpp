@@ -121,6 +121,9 @@ namespace {
         EXPECT_GT(width, 0);
         EXPECT_GT(height, 0);
         EXPECT_GE(channels, 1);
+        const auto card = require_result(inspect_project_card(project_path));
+        EXPECT_EQ(card.preview_width, static_cast<std::uint32_t>(width));
+        EXPECT_EQ(card.preview_height, static_cast<std::uint32_t>(height));
         lfs::core::free_image(pixels);
 
         const auto* updated_scene_row = reader.find(
