@@ -52,6 +52,15 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_visualizer
         GTest::gtest_main
     )
+    if(WIN32)
+        add_custom_command(TARGET lichtfeld_visualizer_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_RUNTIME_DLLS:lichtfeld_visualizer_tests>
+                $<TARGET_FILE_DIR:lichtfeld_visualizer_tests>
+            COMMAND_EXPAND_LISTS
+            COMMENT "Copying runtime DLLs for lichtfeld_visualizer_tests"
+        )
+    endif()
     add_test(
         NAME lichtfeld_visualizer_tests
         COMMAND lichtfeld_visualizer_tests
