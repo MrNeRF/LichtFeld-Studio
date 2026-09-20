@@ -33,7 +33,7 @@ PANEL_SPECS = {
     "new_project": _PanelSpec(
         "lfs_plugins.import_panels", "NewProjectPanel", "lfs.new_project",
         "New Project", "FLOATING", 11, "rmlui/new_project_panel.rml",
-        "CONTENT", (560, 0), update_policy="dirty",
+        "CONTENT", (560, 0), update_policy="dirty", has_poll=True,
     ),
     "resume_checkpoint": _PanelSpec(
         "lfs_plugins.import_panels", "ResumeCheckpointPanel", "lfs.resume_checkpoint",

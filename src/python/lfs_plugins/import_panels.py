@@ -88,6 +88,8 @@ class _ImportDialogPanel(Panel):
     def on_unmount(self, _doc):
         if hasattr(self, "_dialog_mounted"):
             self._dialog_mounted = False
+            if not lf.ui.is_panel_enabled(self.id):
+                self._dialog_requested = False
             self._source_generation += 1
             self._source_probe_update_generation += 1
             self._source_probe_cancel.set()
@@ -178,6 +180,7 @@ class NewProjectPanel(_ImportDialogPanel):
 
         self._handle = None
         self._name = ""
+        self._project_location = ""
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
@@ -198,6 +201,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_probe_active = False
         self._source_probe_cancel = threading.Event()
         self._dialog_mounted = False
+        self._dialog_requested = False
         self._colmap_available = False
         self._target_exists_cached = False
         self._dedupe_name_cache: dict[str, str] = {}
@@ -238,6 +242,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
         model.bind("embed_dataset", lambda: self._embed_dataset, self._set_embed_dataset)
 
+        model.bind_event("browse_destination", self._on_browse_destination)
         model.bind_event("browse_folder", self._on_browse_folder)
         model.bind_event("browse_file", self._on_browse_file)
         model.bind_event("browse_init", self._on_browse_init)
@@ -263,8 +268,16 @@ class NewProjectPanel(_ImportDialogPanel):
             changed = True
         return changed
 
+    def poll(self, _context):
+        # Saved panel placement is not a request to start creating a project.
+        return self._dialog_requested
+
+    def apply_chrome(self, _payload):
+        lf.ui.set_panel_enabled(self.id, self._dialog_requested)
+
     def show(self, source_path: str = "") -> bool:
         self._name = ""
+        self._project_location = ""
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
@@ -296,6 +309,7 @@ class NewProjectPanel(_ImportDialogPanel):
         if not self._name:
             self._set_name(self._dedupe_name("untitled"))
         self._dirty_model()
+        self._dialog_requested = True
         lf.ui.set_panel_enabled(self.id, True)
         return True
 
@@ -374,7 +388,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_probe_active = True
         path = self._source_path
         name = self._name
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         generation = self._source_generation
         cancel = self._source_probe_cancel
 
@@ -447,7 +461,7 @@ class NewProjectPanel(_ImportDialogPanel):
             worker()
 
     def _refresh_target_cache(self) -> None:
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         base = self._name.strip() or "untitled"
         candidate = Path(location) / f"{base}.licht"
         self._target_exists_cached = candidate.exists()
@@ -500,8 +514,25 @@ class NewProjectPanel(_ImportDialogPanel):
             return False
         return name.split(".", 1)[0].casefold() not in self._WINDOWS_RESERVED_NAMES
 
+    def _destination_folder(self) -> str:
+        return self._project_location or str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+
+    def _on_browse_destination(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_folder_dialog(lf.ui.tr("new_project.choose_folder"), self._destination_folder())
+        if not path or path == self._destination_folder():
+            return
+        self._project_location = str(path)
+        self._source_generation += 1
+        self._source_probe_cancel.set()
+        self._source_probe_cancel = threading.Event()
+        self._source_probe_active = False
+        self._target_exists_cached = False
+        self._dedupe_name_cache.clear()
+        self._start_source_probe()
+        self._dirty_model()
+
     def _target_path(self) -> Path:
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         return Path(location) / f"{self._name.strip()}.licht"
 
     def _target_exists(self) -> bool:
@@ -745,16 +776,26 @@ class NewProjectPanel(_ImportDialogPanel):
             if self._destination_exists() and not overwrite:
                 self._confirm_overwrite(lambda: _commit(stop_training, True))
                 return
-            created = lf.project_create(
-                str(target),
-                discard_changes=True,
-                stop_training=stop_training,
-                overwrite=overwrite,
-            )
+            # Creation captures panel state; the command dialog must be closed.
+            self._dialog_requested = False
+            lf.ui.set_panel_enabled(self.id, False)
+            try:
+                created = lf.project_create(
+                    str(target),
+                    discard_changes=True,
+                    stop_training=stop_training,
+                    overwrite=overwrite,
+                )
+            except Exception:
+                self._dialog_requested = True
+                lf.ui.set_panel_enabled(self.id, True)
+                raise
             pending = bool(
                 getattr(lf, "project_create_pending", lambda: False)()
             )
             if created is False and not pending:
+                self._dialog_requested = True
+                lf.ui.set_panel_enabled(self.id, True)
                 if self._destination_exists() and not overwrite:
                     self._confirm_overwrite(lambda: _commit(stop_training, True))
                     return
@@ -799,6 +840,7 @@ class NewProjectPanel(_ImportDialogPanel):
         _after_consent(False)
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
+        self._dialog_requested = False
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_do_load(self, _handle=None, _ev=None, _args=None):

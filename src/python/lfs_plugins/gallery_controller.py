@@ -363,7 +363,8 @@ class GalleryController:
         reviewed_stamp = file_stamp(asset["path"]) if Path(asset["path"]).is_file() else None
         reviewed_dirty = lf.project_is_dirty()
 
-        def apply(decisions):
+        def apply(decisions, *, local_only=False):
+            publish = not (apply_only or local_only)
             if self.service.identity() != identity or self._project_identity() != project:
                 raise ValueError(tr("error.project_changed"))
             if (reviewed_stamp is not None and file_stamp(asset["path"]) != reviewed_stamp
@@ -385,11 +386,19 @@ class GalleryController:
 
             def start():
                 if decisions.get("content") == "gallery":
-                    self.pull_asset(asset, scene)
-                    self._pull_overrides = (scene["id"], metadata, identity, not apply_only)
+                    local_environment_path = None
+                    if decisions.get("view") != "gallery":
+                        local_environment_path = str(lf.get_render_settings().environment_map_path) if view.get("environment") else ""
+                    self._pull_overrides = (scene["id"], metadata, identity, publish, local_environment_path)
+                    try:
+                        self.pull_asset(asset, scene)
+                    except Exception:
+                        self._pull_overrides = None
+                        raise
                 else:
                     self._begin_settings_apply(asset, scene, metadata,
-                        publish=not apply_only, replace_content="content" in decisions and not apply_only,
+                        publish=publish, replace_content="content" in decisions and publish,
+                        preserve_local_content="content" in decisions,
                         use_gallery_environment=decisions.get("view") == "gallery" and bool(view.get("environment")))
                 self._schedule_poll()
             self._resolve_pending_uploads(asset["id"], scene["id"], identity, start)
@@ -399,10 +408,15 @@ class GalleryController:
         def closed(_submitted):
             self._decision_pending = False
             self._schedule_poll()
-        open_gallery_file_panel(controller=self, asset=asset, scene=scene, action="conflict", fields={},
-            mode="conflict", groups=groups, on_submit=apply, on_done=closed, apply_only=apply_only)
+        try:
+            open_gallery_file_panel(controller=self, asset=asset, scene=scene, action="conflict", fields={},
+                mode="conflict", groups=groups, on_submit=apply, on_done=closed, apply_only=apply_only)
+            self._decision_pending = True
+        except Exception:
+            self._decision_pending = False
+            raise
 
-    def _begin_settings_apply(self, asset, scene, metadata, *, publish=False, replace_content=False, use_gallery_environment=False):
+    def _begin_settings_apply(self, asset, scene, metadata, *, publish=False, replace_content=False, use_gallery_environment=False, preserve_local_content=False):
         project = self._project_identity()
         identity = self.service.identity()
         if project[0] != asset["id"] or lf.is_training_active():
@@ -412,7 +426,8 @@ class GalleryController:
             job, backup = self.service.prepare_settings_update(scene, project[0], project[1], stamp)
             self._settings_pending = dict(project=project, identity=identity, stamp=stamp,
                 scene=copy.deepcopy(scene), metadata=copy.deepcopy(metadata), job=job, backup=backup,
-                phase="backup", publish=publish, replace_content=replace_content, use_gallery_environment=use_gallery_environment)
+                phase="backup", publish=publish, replace_content=replace_content, use_gallery_environment=use_gallery_environment,
+                preserve_local_content=preserve_local_content)
             self._operation_project, self._operation_title = project[0], metadata["title"]
             self._schedule_poll()
         if lf.project_is_dirty():
@@ -452,7 +467,8 @@ class GalleryController:
                 stamp = file_stamp(pending["project"][1])
                 self.service.finish_settings_update(pending["job"],
                     str(lf.io.inspect_project(pending["project"][1]).commit_uuid), stamp,
-                    pending["metadata"], acknowledge=not pending["publish"])
+                    pending["metadata"], acknowledge=not pending["publish"],
+                    preserve_local_content=pending.get("preserve_local_content", False))
                 pending.update(phase="linking", applied_stamp=stamp)
             self._save_current_project(saved, expected_project=pending["project"])
             return
@@ -478,6 +494,9 @@ class GalleryController:
         pending, self._settings_pending = self._settings_pending, None
         if pending and self.service.identity() == pending["identity"] and not self.service.busy:
             self.service.fail_local_update(pending["job"], friendly_error(error))
+            # The remote item may have changed while the review was open.
+            # Queue a fresh check after recording the failed apply.
+            self.refresh(force=True)
 
     def _resolve_pending_uploads(self, project_id, scene_id, identity, continuation):
         """Retire only the failed replacement explicitly superseded by Resolve."""
@@ -1575,13 +1594,14 @@ class GalleryController:
         if index.update_asset(project.id, viewing_copy=True) is None:
             raise ValueError(index.last_error or tr("error.storage"))
 
-    def _link_saved_download(self, job_id, path, expected_project_id):
+    def _link_saved_download(self, job_id, path, expected_project_id, *, local_fields=None):
         inspected = lf.io.inspect_project(path)
         if str(inspected.project_uuid) != expected_project_id:
             raise ValueError("The project identity changed before linking. Refresh Projects and try again.")
         commit = str(getattr(inspected, "commit_uuid", ""))
         args = (job_id, str(inspected.project_uuid))
-        return self.service.link_download(*args, commit, project_path=path)
+        options = {"local_fields": local_fields} if local_fields is not None else {}
+        return self.service.link_download(*args, commit, project_path=path, **options)
 
     def _action_update_local(self, job_id):
         job = next(j for j in self._state["jobs"] if j["id"] == job_id)
@@ -1607,7 +1627,9 @@ class GalleryController:
     def _begin_local_update(self, job, project):
         if self._pull_overrides and self._pull_overrides[0] == job.get("result", {}).get("id"):
             job = copy.deepcopy(job)
-            job["result"]["viewerSettings"] = copy.deepcopy(self._pull_overrides[1]["viewerSettings"])
+            job["_local_fields"] = copy.deepcopy(self._pull_overrides[1])
+            if self._pull_overrides[4] is not None:
+                job["_local_environment_path"] = self._pull_overrides[4]
         if self._project_identity() != project:
             raise ValueError("The current project changed. Review it before updating.")
         if lf.is_training_active() or lf.ui.get_import_state().get("active"):
@@ -1664,7 +1686,7 @@ class GalleryController:
                 self._undo_pull = {"path": project[1], "backup": current_job["localUpdate"]["backupPath"],
                     "stamp": file_stamp(project[1]), "identity": self._identity}
             if self._pull_overrides:
-                scene_id, metadata, identity, publish = self._pull_overrides
+                scene_id, metadata, identity, publish = self._pull_overrides[:4]
                 self._pull_overrides = None
                 if identity == self._identity and publish:
                     self.service.edit(scene_id, domain_tokens(current_job["result"]), metadata, project_id=project[0])
@@ -1751,7 +1773,8 @@ class GalleryController:
             return
         update["phase"] = "linking"
         try:
-            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1], update["project"][0])
+            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1], update["project"][0],
+                **({"local_fields": job["_local_fields"]} if "_local_fields" in job else {}))
         except Exception as exc:
             log_failure("link_saved_download", exc, job_id=job["id"])
             raise ValueError("The project was updated and its recovery copy was kept, but the gallery link could not be saved. Refresh your gallery before continuing.") from exc
@@ -1759,7 +1782,10 @@ class GalleryController:
 
     def _apply_local_update(self, scene, incoming, job, update):
         # A saved recovery copy exists, and no edits have occurred since it was made.
-        restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
+        environment_path = (job["_local_environment_path"] if "_local_environment_path" in job
+                            else self.service.environment_path(job))
+        metadata = job.get("_local_fields", job["result"])
+        restore_view(lf, metadata.get("viewerSettings", {}), environment_path=environment_path)
         # Native remove_node(keep_children=True) keeps child-local transforms.
         # Reparent retained children explicitly first to preserve their world pose.
         removed_ids = set(update["old_nodes"])
@@ -1776,7 +1802,7 @@ class GalleryController:
             if node is not None:
                 scene.remove_node(node.name, keep_children=True)
         lf.set_node_visibility(incoming.name, True)
-        title = job["result"]["title"]
+        title = metadata["title"]
         if scene.get_node(title) is not None:
             title += " (gallery " + incoming.uuid[:8] + ")"
         scene.rename_node(incoming.name, title)

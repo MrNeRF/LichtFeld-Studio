@@ -2608,8 +2608,13 @@ namespace lfs::io::project {
                 "tombstones and base references have no stored payload",
                 "chunk.row_kind"));
         }
-        if (impl_->rows.contains(chunk.key) ||
-            impl_->touched.contains(chunk.key)) {
+        // An append carries forward old tombstones. Restoring an older save
+        // may replace one with its historical payload, just like write_chunk.
+        // A resolution made by this writer must still never be overwritten.
+        const auto existing = impl_->rows.find(chunk.key);
+        if (impl_->touched.contains(chunk.key) ||
+            (existing != impl_->rows.end() &&
+             existing->second.row_kind != RowKind::Tombstone)) {
             return status_failure(writer_error(
                 lfs::ErrorCode::AlreadyExists,
                 impl_->destination_path,

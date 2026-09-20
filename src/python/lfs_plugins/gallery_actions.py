@@ -101,6 +101,8 @@ def gallery_actions(entry, facts):
         add("unlink_previous", enabled=not busy)
         return actions
     if job.get("localUpdate", {}).get("interrupted") or job.get("localUpdate", {}).get("state") == "failed":
+        if facts.get("linked") and facts.get("sceneReady") and entry.get("exists", True):
+            add("resolve", enabled=not busy)
         add("open_recovery", account=False)
         return actions
     if job.get("requiresPreparation"):
@@ -131,6 +133,11 @@ def gallery_actions(entry, facts):
             add("cancel")
         if job:
             add("cancel")
+        return actions
+    if facts.get("relationship") == "remote_deleted" and job.get("status") == "conflict":
+        # A failed replacement cannot be resolved against an item that is gone.
+        # Retire it explicitly before offering Publish again.
+        add("cancel", enabled=not busy)
         return actions
     if facts.get("freshness") == "diverged":
         add("resolve", enabled=not busy)

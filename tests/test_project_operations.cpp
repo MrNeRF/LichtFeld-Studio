@@ -93,6 +93,51 @@ namespace {
         EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
     }
 
+    TEST(ProjectOperations, RestoreSaveResurrectsDeletedCheckpoint) {
+        TemporaryDirectory temporary;
+        const auto source = make_document(temporary.path / "deleted-checkpoint.licht");
+        const auto checkpoint_id = fixed_uuid(3500);
+        const auto payload = checkpoint_payload(2200);
+        {
+            auto document = require_result(ProjectDocument::open(source));
+            require_status(document.set_checkpoint(checkpoint_id, require_result(LazyChunkValue::from_owned(payload, checkpoint_id))));
+            static_cast<void>(require_result(save_document(document, source)));
+        }
+        {
+            auto document = require_result(ProjectDocument::open(source));
+            ASSERT_TRUE(document.remove_checkpoint(checkpoint_id));
+            static_cast<void>(require_result(save_document(document, source)));
+        }
+        const auto before = require_result(inspect_project_card(source));
+        ASSERT_EQ(before.generation, 3u);
+        auto deleted = require_result(ProjectReader::open(source));
+        ASSERT_NE(deleted.find(FOURCC_CKPT, checkpoint_id), nullptr);
+        ASSERT_EQ(deleted.find(FOURCC_CKPT, checkpoint_id)->row_kind, RowKind::Tombstone);
+        const auto restored = require_result(restore_save(source, 2, source));
+        EXPECT_EQ(restored.project_uuid, before.project_uuid);
+        EXPECT_EQ(restored.generation, 4u);
+        auto reader = require_result(ProjectReader::open(source));
+        const auto* checkpoint = reader.find(FOURCC_CKPT, checkpoint_id);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_EQ(require_result(reader.read_chunk(*checkpoint)), payload);
+
+        // Historical tombstones may be replaced, but never a resolution made
+        // during the current append, whether it copied or deleted the key.
+        for (const bool erase_first : {false, true}) {
+            auto writer = require_result(ProjectWriter::append(source));
+            require_status(writer.plan_commit());
+            require_status(writer.preflight(payload.size()));
+            if (erase_first) {
+                require_status(writer.erase(checkpoint->key));
+            } else {
+                require_status(writer.copy_chunk_verbatim(reader, *checkpoint));
+            }
+            const auto duplicate = writer.copy_chunk_verbatim(reader, *checkpoint);
+            ASSERT_FALSE(duplicate);
+            EXPECT_EQ(duplicate.error().code(), lfs::ErrorCode::AlreadyExists);
+        }
+    }
+
     TEST(ProjectOperations, RestoreSaveWithRetainedThumbnailChunks) {
         TemporaryDirectory temporary;
         const auto source = make_document(temporary.path / "thumbnail-history.licht");

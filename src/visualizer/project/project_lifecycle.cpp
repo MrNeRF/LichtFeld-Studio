@@ -4387,9 +4387,12 @@ namespace lfs::vis::project {
         if (!trainer || !document_) {
             return false;
         }
+        // A paused training loop points at the next iteration, while its
+        // checkpoint contains the last completed iteration. Compare using
+        // the same iteration that the snapshot writer records.
         if (cached_bound_checkpoint_iteration_) {
             return *cached_bound_checkpoint_iteration_ !=
-                   trainer->get_current_iteration();
+                   trainer->project_snapshot_iteration();
         }
         const auto bound = document_->bound_checkpoint_uuid();
         if (!bound || !*bound) {
@@ -4408,7 +4411,7 @@ namespace lfs::vis::project {
         cached_bound_checkpoint_iteration_ =
             stored_iteration;
         return *stored_iteration !=
-               trainer->get_current_iteration();
+               trainer->project_snapshot_iteration();
     }
 
     bool ProjectLifecycle::canFlushFinishedTrainerSnapshot()
@@ -8434,7 +8437,9 @@ namespace lfs::vis::project {
             viewer_.getTrainerManager()
                 ->isTrainingActive() &&
             !viewer_.getTrainerManager()
-                 ->isPausedAtCheckpointBaseline()) {
+                 ->isPausedAtCheckpointBaseline() &&
+            (!viewer_.getTrainerManager()->isPaused() ||
+             isTrainingCheckpointStale())) {
             return true;
         }
         if (isBlankUntitledSession()) {
@@ -8874,7 +8879,9 @@ namespace lfs::vis::project {
         const bool training_forces_dirty =
             training_active &&
             !trainer_manager
-                 ->isPausedAtCheckpointBaseline();
+                 ->isPausedAtCheckpointBaseline() &&
+            (!trainer_manager->isPaused() ||
+             isTrainingCheckpointStale());
         const bool parameter_dirty = [&] {
             const auto* parameter_manager =
                 viewer_.getParameterManager();

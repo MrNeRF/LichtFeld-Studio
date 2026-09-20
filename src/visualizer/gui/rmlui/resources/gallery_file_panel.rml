@@ -48,6 +48,7 @@
     <span class="status-error" data-if="has_error">{{error}}</span>
     <div class="gallery-file-actions">
       <button class="btn btn--secondary" data-event-click="cancel" data-attr-title="cancel_label">{{cancel_label}}</button>
+      <button class="btn btn--secondary" data-if="show_local_apply" data-attrif-disabled="!can_submit" data-event-click="apply_local" title="@tr:projects.gallery.conflict.apply_local">@tr:projects.gallery.conflict.apply_local</button>
       <button class="btn btn--primary" data-if="!is_replacement" data-attrif-disabled="!can_submit" data-event-click="submit" data-attr-title="submit_label">{{submit_label}}</button>
     </div>
   </div>

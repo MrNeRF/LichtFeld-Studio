@@ -29,7 +29,10 @@
     </div>
 
     <span class="impdlg-status status-error" data-if="create_hint">{{create_hint}}</span>
-    <span class="impdlg-note text-muted">{{location_preview}}</span>
+    <div class="impdlg-control-row">
+      <span class="impdlg-note text-muted">{{location_preview}}</span>
+      <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_destination">@tr:new_project.choose_folder</button>
+    </div>
 
     <div class="impdlg-advanced-header text-accent" data-class-is-expanded="advanced_expanded" data-event-click="toggle_advanced">
       <span class="section-arrow text-accent" data-class-is-expanded="advanced_expanded">&#x25B6;</span>
