@@ -65,6 +65,7 @@
     {
       "name": "vulkan-loader",
       "features": [
+        "wayland",
         "xcb",
         "xlib"
       ],
