@@ -12,6 +12,7 @@
 #include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
+#include "project_path_utils.hpp"
 #include "span_streambuf.hpp"
 #include <fstream>
 
@@ -4372,13 +4373,9 @@ namespace lfs::io::project {
         const auto original_dirty = impl_->dirty;
         const auto original_normalized_source_keys =
             impl_->normalized_source_keys;
-        auto temporary_filename = lfs::core::utf8_to_path(".");
-        temporary_filename += normalized->filename();
-        temporary_filename += lfs::core::utf8_to_path(
-            std::format(".saveas-{}.tmp",
-                        lfs::core::generate_uuid_v4().to_string()));
-        const auto temporary =
-            normalized->parent_path() / temporary_filename;
+        const auto temporary = detail::save_as_staging_path(
+            *normalized,
+            lfs::core::generate_uuid_v4().to_string());
 
         const auto remove_temporary = [&temporary] {
             std::error_code error;

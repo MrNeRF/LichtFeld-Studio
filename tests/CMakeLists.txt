@@ -104,6 +104,7 @@ if(BUILD_UNICODE_TEST_ONLY)
         test_unicode_paths_windows.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
+        test_project_save_as_paths.cpp
         licht_format_test_runtime.cpp
         ${CMAKE_SOURCE_DIR}/src/core/crash_handler.cpp
         ${CMAKE_SOURCE_DIR}/src/core/error.cpp
