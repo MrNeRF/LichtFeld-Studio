@@ -247,6 +247,26 @@ def test_contents_checkpoints_only_list_retained_payloads_and_match_sizes_by_ide
     assert cps[0]['label'] == 'Checkpoint, iteration 20, mcmc'
 
 
+@pytest.mark.parametrize("order", [
+    [2200, 3000, 3300, 7000, 7183],
+    [3000, 2200, 7183, 7000, 3300],
+    [7183, 7000, 3300, 3000, 2200],
+])
+def test_checkpoint_display_order_is_independent_of_storage_order(order):
+    checkpoints = [SimpleNamespace(instance_uuid=str(step), iteration=step)
+                   for step in order]
+    checkpoints.extend([
+        SimpleNamespace(instance_uuid="removed", iteration=1, retained=False),
+        SimpleNamespace(instance_uuid="3000-again", iteration=3000),
+    ])
+    rows = _contents(_contents_details(retained_checkpoints=checkpoints))
+    actual = [(row["iteration"], row["checkpoint_uuid"])
+              for row in rows if row["kind"] == "checkpoint"]
+    assert actual == [(2200, "2200"), (3000, "3000"), (3000, "3000-again"),
+                      (3300, "3300"), (7000, "7000"), (7183, "7183")]
+    assert [cp.iteration for cp in checkpoints[:5]] == order
+
+
 def test_contents_embedded_dataset_counts_images_without_counting_normals_as_images():
     details = _contents_details(parameters=SimpleNamespace(embedded_dataset_present=True, embedded_images=194, embedded_normals=194, embedded_sparse=3))
     plan = SimpleNamespace(embedded_dataset=[SimpleNamespace(bytes=100), SimpleNamespace(bytes=50)], drop_embedded_dataset=SimpleNamespace(allowed=False))
@@ -405,3 +425,15 @@ def test_inspection_scheduler_failure_can_be_retried(caplog):
     assert pipeline.cached('project').card is None
     assert pipeline.cached('project').error == 'scheduler marker'
     assert 'Schedule project inspection failed project=project' in caplog.text
+
+
+def test_checkpoint_order_uses_numeric_iterations_before_uuid_ties():
+    checkpoints = [
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000001", iteration=100),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000004", iteration=10),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000003", iteration=10),
+        SimpleNamespace(instance_uuid="00000000-0000-0000-0000-000000000002", iteration=9),
+    ]
+    rows = _contents(_contents_details(retained_checkpoints=checkpoints))
+    actual = [row["checkpoint_uuid"] for row in rows if row["kind"] == "checkpoint"]
+    assert actual == [checkpoints[i].instance_uuid for i in (3, 2, 1, 0)]

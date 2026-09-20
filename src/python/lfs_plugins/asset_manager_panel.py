@@ -185,13 +185,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._bottom_panel_height = 220.0
         self._info_preferred_height = 220.0
         self._navigator_width = 200.0
-        self._navigator_widths = {"medium": 160.0, "wide": 200.0}
+        self._navigator_widths = {"wide": 200.0}
         self._text_column_metrics = None
         self._text_measure_key = None
         self._text_locales = None
         self._inspector_label_width = 168.0
         self._inspector_width = INSPECTOR_COLUMN_MIN
-        self._inspector_preferred_height = 200.0
+        self._inspector_preferred_height = 1000.0
         self._inspector_expanded = False
         self._quick_look_visible = False
         self._thumbnail_menu_visible = False
@@ -209,6 +209,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._resize_region = ""
         self._resize_start_x = 0.0
         self._resize_start_y = 0.0
+        self._resize_scale = 1.0
+        self._resize_inspector_height_max = 1000.0
+        self._resize_last_height = self._inspector_preferred_height
         self._bottom_panel_drag_start_y = 0.0
         self._bottom_panel_start_height = self._bottom_panel_height
 
@@ -299,6 +302,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "navigator_widths": dict(self._navigator_widths),
             "inspector_width": self._inspector_width,
             "inspector_height": self._inspector_preferred_height,
+            "inspector_height_version": 3,
             "thumbnail_size": self._thumbnail_size,
             "list_column_overrides": dict(self._list_column_overrides),
             "inspector_sections": dict(self._inspector_sections),
@@ -336,18 +340,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._folder_layout_initialized = "folders_collapsed" in payload
             value = payload.get("bottom_panel_height")
             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
-                self._info_preferred_height = min(500.0, float(value))
+                self._info_preferred_height = min(500.0, max(180.0, float(value)))
                 self._inspector_preferred_height = self._info_preferred_height
             for key, low, high, default in (
                 ("navigator_width", 120.0, 240.0, 200.0),
                 ("inspector_width", INSPECTOR_COLUMN_MIN, 420.0, INSPECTOR_COLUMN_MIN),
-                ("inspector_height", 120.0, 450.0, 200.0),
+                ("inspector_height", 180.0, 1000.0, 1000.0),
             ):
                 number = payload.get(key)
+                attribute = "_inspector_preferred_height" if key == "inspector_height" else "_" + key
                 if isinstance(number, (int, float)) and math.isfinite(number):
-                    setattr(self, "_" + key, min(high, max(low, float(number))))
-                elif not hasattr(self, "_" + key):
-                    setattr(self, "_" + key, default)
+                    setattr(self, attribute, min(high, max(low, float(number))))
+                elif not hasattr(self, attribute):
+                    setattr(self, attribute, default)
+            if payload.get("inspector_height_version") != 3:
+                # Version 3 makes the stacked Inspector fill up to half of the
+                # panel. Do not retain the former fixed-height preference.
+                self._inspector_preferred_height = 1000.0
             number = payload.get("thumbnail_size")
             if not isinstance(number, (int, float)):
                 # Migrate the former per-breakpoint preference deterministically.
@@ -788,7 +797,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return self._thumbnail_size
 
     def get_navigator_style_width(self) -> str:
-        if self._layout_class in ("compact", "narrow"):
+        if self._layout_class in ("compact", "narrow", "medium"):
             return "auto"
         return f"{self._navigator_width:.1f}dp"
 
@@ -804,7 +813,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _inspector_band_height(self) -> float:
         height = self._host_geometry[1] if self._host_geometry else 700.0
-        return min(self._inspector_preferred_height, max(120.0, height / 2.0))
+        metrics = breakpoint_metrics(self._content_width or 600.0)
+        maximum = min(metrics["inspector_max"], max(metrics["inspector_min"], height * 0.5))
+        return min(self._inspector_preferred_height, maximum)
 
     def _dirty_layout_fields(self) -> None:
         self._dirty_fields(
@@ -815,6 +826,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "asset_card_thumbnail_height", "bottom_panel_height",
             "sidebar_height", "main_min_height",
         )
+
+    def _dirty_list_layout_fields(self) -> None:
+        self._responsive_width_signature = None
+        self._dirty_fields(
+            "asset_list_wide", "asset_list_show_size", "asset_list_show_folder",
+            "asset_list_gallery_compact",
+            *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder")),
+        )
+
+    def _dirty_inspector_layout(self) -> None:
+        self._asset_window_refresh_pending = True
+        self._dirty_fields("inspector_expanded")
+        self._dirty_list_layout_fields()
+        self._request_model_update()
 
     def set_thumbnail_size(self, value: Any) -> None:
         try:
@@ -1469,7 +1494,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         cursor=_SELECTION_UNCHANGED,
         anchor=_SELECTION_UNCHANGED,
     ) -> bool:
-        """Apply every selection transition and close stale Inspector details."""
+        """Apply selection changes while keeping open previews attached to the cursor."""
         selected = set(asset_ids)
         changed = selected != self._selected_asset_ids
         self._selected_asset_ids = selected
@@ -1481,9 +1506,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._selection_anchor_id = anchor
         elif self._selection_anchor_id not in selected:
             self._selection_anchor_id = self._selection_cursor_id
-        if changed and self._inspector_expanded:
+        if changed and self._inspector_expanded and not selected:
             self._inspector_expanded = False
-            self._dirty_fields("inspector_expanded")
+            self._dirty_inspector_layout()
         self._update_selection_type()
         return changed
 
@@ -1562,8 +1587,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 for field in ("generation", "saved_at_unix_ns", "file_size_bytes")
             )
             revision = quote(str(revision_value), safe="-._~")
+            dimensions = ""
+            preview_width = int(asset.get("preview_width") or 0)
+            preview_height = int(asset.get("preview_height") or 0)
+            if preview_width > 0 and preview_height > 0:
+                dimensions = f"&w={preview_width}&h={preview_height}"
             return AssetManagerPanel._thumbnail_image_decorator(
-                f"preview://kind=licht&thumb=256&rev={revision}&path={path}"
+                f"preview://kind=licht&thumb=256&rev={revision}{dimensions}&path={path}"
             )
         fallback = str(asset.get("fallback_preview_path") or "")
         if not fallback:
@@ -1577,8 +1607,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return "none"
         revision = quote(f"{stat.st_size}-{stat.st_mtime_ns}", safe="-._~")
         encoded = quote(fallback, safe=_RML_PATH_SAFE_CHARS)
+        dimensions = ""
+        preview_width = int(asset.get("preview_width") or 0)
+        preview_height = int(asset.get("preview_height") or 0)
+        if preview_width > 0 and preview_height > 0:
+            dimensions = f"&w={preview_width}&h={preview_height}"
         return AssetManagerPanel._thumbnail_image_decorator(
-            f"preview://kind=image&thumb=256&rev={revision}&path={encoded}"
+            f"preview://kind=image&thumb=256&rev={revision}{dimensions}&path={encoded}"
         )
 
     def _sync_info_thumbnail(self, doc):
@@ -1611,10 +1646,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         placeholder_title_changed = placeholder.get_attribute("title", "") != placeholder_title
         if placeholder_title_changed:
             placeholder.set_attribute("title", placeholder_title)
-        # The Inspector owns a 12 dp scroll gutter. The band alone uses the
-        # small landscape preview; the column fills its own content width.
-        width = (max(0.0, self._inspector_width - 12.0) if self._layout_class == "wide"
-                 else max(0.0, self._content_width - 12.0)
+        # Side inspectors use their content width. The stacked inspector caps
+        # its poster so opening it never consumes the whole results viewport.
+        width = (max(0.0, self._inspector_width - 12.0) if self._layout_class in ("wide", "medium")
+                 else min(240.0, max(0.0, self._content_width - 24.0))
                  if self._layout_class in ("compact", "narrow") else 160.0)
         geometry = (width, width * 10.0 / 16.0)
         geometry_changed = geometry != self._info_thumbnail_geometry
@@ -1622,7 +1657,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._info_thumbnail_geometry = geometry
             element.set_property("width", f"{geometry[0]:.2f}dp")
             element.set_property("height", f"{geometry[1]:.2f}dp")
-            element.set_property("flex-basis", f"{geometry[1] if self._layout_class != 'medium' else geometry[0]:.2f}dp")
+            # Every responsive layout stacks the preview above the details, so
+            # the flex main axis is vertical. Keep the basis equal to the 16:10
+            # preview height; using its width in the medium breakpoint expands
+            # the element to a square while the Contents inspector is visible.
+            element.set_property("flex-basis", f"{geometry[1]:.2f}dp")
         changed = source != self._info_thumbnail_source
         if changed:
             release = getattr(lf.ui, "release_rml_texture", None)
@@ -1651,6 +1690,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             # Native values are fresher than catalog or temporary Recent rows.
             result.update({
                 "has_preview": bool(getattr(card, "has_preview", result.get("has_preview"))),
+                "preview_width": int(getattr(card, "preview_width", result.get("preview_width", 0)) or 0),
+                "preview_height": int(getattr(card, "preview_height", result.get("preview_height", 0)) or 0),
                 "file_size_bytes": int(getattr(card, "physical_file_size", result.get("file_size_bytes", 0)) or 0),
                 "saved_at_unix_ns": int(getattr(card, "saved_at_unix_ns", result.get("saved_at_unix_ns", 0)) or 0),
                 "commit_uuid": str(getattr(card, "commit_uuid", result.get("commit_uuid", "")) or result.get("commit_uuid", "")),
@@ -2042,7 +2083,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def toggle_inspector(self, _handle=None, _ev=None, _args=None):
         self._inspector_expanded = not self._inspector_expanded
-        self._dirty_fields("inspector_expanded")
+        self._dirty_inspector_layout()
 
     def get_selected_asset_thumbnail_decorator(self) -> str:
         asset = self._get_selected_asset()
@@ -2059,6 +2100,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._quick_look_visible:
             self._quick_look_visible = False
             self._dirty_fields("quick_look_visible")
+
+    def toggle_quick_look(self) -> None:
+        if self._quick_look_visible:
+            self.close_quick_look()
+        else:
+            self.open_quick_look()
 
     def cycle_sort_mode(self, _handle=None, _ev=None, _args=None):
         index = (self.SORT_MODES.index(self._sort_mode) + 1) % len(self.SORT_MODES)
@@ -2507,7 +2554,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._inspector_expanded = True
             self._operations_expanded = True
             self._dirty_selection()
-            self._dirty_fields("inspector_expanded")
+            self._dirty_inspector_layout()
             return
         if action == "update_thumbnail":
             dataset_available, embedded_available = self._thumbnail_source_availability(
@@ -2636,12 +2683,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
                 return False
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after, reverify_asset=True)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after, reverify_asset=True)
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after)
+            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after, reverify_asset=True)
         return True
 
     @staticmethod
@@ -2688,6 +2735,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         backup: bool = True,
         content_row: Optional[Dict[str, Any]] = None,
         operation_kind: str = "",
+        reverify_asset: bool = False,
     ) -> None:
         if self._contents_busy(asset_id):
             return
@@ -2734,9 +2782,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 row["status"] = "completed"
                 if self._inspection_pipeline is not None:
                     self._inspection_pipeline.invalidate(asset_id)
+                if reverify_asset:
+                    self._inspection_by_asset.pop(asset_id, None)
                 if facts:
                     self._inspection_by_asset[asset_id] = facts
                 self._inspection_errors.pop(asset_id, None)
+                if reverify_asset and not asset.get("recent_only"):
+                    verify_asset = getattr(self._asset_index, "verify_asset", None)
+                    if callable(verify_asset):
+                        self._library_command("verify_asset", asset_id)
                 if after is not None:
                     after()
                 self._contents_feedback.pop(asset_id, None)
@@ -2954,7 +3008,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "inspector":
             if self._select_asset_id(asset_id):
                 self._inspector_expanded = True
-                self._dirty_fields("inspector_expanded")
+                self._dirty_inspector_layout()
         elif action == "use_found_location":
             self.on_use_found_location(None, None, [asset_id])
         elif action == "rename":
@@ -3681,8 +3735,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             # each binding is applied to the header and every visible row. Keep
             # structural changes exact, but coalesce continuous geometry to an
             # 8 dp bucket while the host is being dragged.
+            effective_width = self._effective_list_layout_width(values[2])
             columns = list_column_widths(
-                values[2], self._list_column_overrides, self._text_column_metrics
+                effective_width, self._list_column_overrides, self._text_column_metrics
             )
             signature = (
                 self._view_mode,
@@ -3722,7 +3777,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
             return "gallery", columns, start, visible
         gallery_visible = list_columns(
-            client_width, self._text_column_metrics, self._list_column_overrides
+            self._effective_list_layout_width(client_width),
+            self._text_column_metrics, self._list_column_overrides
         )["gallery"] != 32
         row_height = list_row_height(gallery_column_visible=gallery_visible)
         first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
@@ -4125,7 +4181,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return True
         if key == KI_ESCAPE and self._inspector_expanded:
             self._inspector_expanded = False
-            self._dirty_fields("inspector_expanded")
+            self._dirty_inspector_layout()
             self._stop_event(event)
             return True
         target = event.target()
@@ -4142,10 +4198,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if callable(tag):
             tag = tag()
         if key == KI_SPACE and tag not in ("input", "textarea", "select"):
-            self.open_quick_look()
-            if self._quick_look_visible:
-                self._stop_event(event)
-                return True
+            self.toggle_quick_look()
+            self._stop_event(event)
+            return True
         element = rml_widgets.find_ancestor_with_attribute(target, "data-folder-id", container)
         action = rml_widgets.find_ancestor_with_attribute(target, "data-sidebar-action", container)
         if key in (KI_RETURN, 32) and (element is not None or action is not None):
@@ -4176,9 +4231,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except (TypeError, ValueError):
             return
         if key == KI_SPACE:
-            self.open_quick_look()
-            if self._quick_look_visible:
-                self._stop_event(event)
+            self.toggle_quick_look()
+            self._stop_event(event)
             return
         if self._navigate_selection(key):
             self._stop_event(event)
@@ -4268,7 +4322,22 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._start_resize("inspector-height", event)
 
     def _list_columns(self):
-        return list_columns(self._asset_window_client_width, self._text_column_metrics, self._list_column_overrides)
+        return list_columns(
+            self._effective_list_layout_width(),
+            self._text_column_metrics,
+            self._list_column_overrides,
+        )
+
+    def _effective_list_layout_width(self, client_width: Optional[float] = None) -> float:
+        """Keep list columns stable when the stacked Inspector docks beside them."""
+        width = max(0.0, float(
+            self._asset_window_client_width if client_width is None else client_width
+        ))
+        if not self._inspector_expanded or self._layout_class not in ("compact", "narrow"):
+            return width
+        host_width = max(width, float(self._content_width or 0.0))
+        future_side_width = max(260.0, host_width - INSPECTOR_COLUMN_MIN)
+        return min(width, future_side_width)
 
     def _measure_text_columns(self):
         if not self._doc:
@@ -4318,7 +4387,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._text_measure_key = key
 
     def _list_column_width(self, column: str) -> float:
-        return list_column_widths(self._asset_window_client_width, self._list_column_overrides, self._text_column_metrics)[column]
+        return list_column_widths(
+            self._effective_list_layout_width(),
+            self._list_column_overrides,
+            self._text_column_metrics,
+        )[column]
 
     def _start_resize(self, region: str, event) -> None:
         self._resize_region = region
@@ -4326,8 +4399,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._resize_start_y = float(event.get_parameter("mouse_y", "0"))
         self._resize_start_navigator = self._navigator_width
         self._resize_start_inspector = self._inspector_width
-        self._resize_start_height = self._inspector_preferred_height
+        self._resize_start_height = (
+            self._inspector_band_height()
+            if region == "inspector-height"
+            else self._inspector_preferred_height
+        )
+        self._resize_scale = self._ui_scale()
+        self._resize_last_height = self._resize_start_height
         self._bottom_panel_dragging = region == "inspector-height"
+        if self._bottom_panel_dragging:
+            metrics = breakpoint_metrics(self._content_width or 600.0)
+            panel_height = self._host_geometry[1] if self._host_geometry else 700.0
+            self._resize_inspector_height_max = min(
+                metrics["inspector_max"],
+                max(metrics["inspector_min"], panel_height * 0.5),
+            )
         if region.startswith("list-column:"):
             self._resize_start_column = region.partition(":")[2]
             self._resize_start_column_width = self._list_column_width(self._resize_start_column)
@@ -4348,7 +4434,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._inspector_preferred_height = defaults["inspector_default"]
             self._info_preferred_height = self._inspector_preferred_height
             self._sync_panel_layout()
-            self._dirty_fields("inspector_height", "bottom_panel_height")
+            self._dirty_fields("inspector_height", "inspector_style_height", "bottom_panel_height")
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
             self._list_column_overrides.pop(column, None)
@@ -4363,8 +4449,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         except (TypeError, ValueError):
             return
         region = getattr(self, "_resize_region", "")
-        delta_x = (float(event.get_parameter("mouse_x", "0")) - self._resize_start_x) / self._ui_scale()
-        delta_y = (mouse_y - self._resize_start_y) / self._ui_scale()
+        scale = max(0.001, getattr(self, "_resize_scale", self._ui_scale()))
+        delta_x = (float(event.get_parameter("mouse_x", "0")) - self._resize_start_x) / scale
+        delta_y = (mouse_y - self._resize_start_y) / scale
         if region == "navigator":
             metrics = breakpoint_metrics(self._content_width or 1100.0)
             target = min(metrics["navigator_max"], max(
@@ -4376,17 +4463,19 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._inspector_width = min(420.0, max(INSPECTOR_COLUMN_MIN, self._resize_start_inspector - delta_x))
             self._dirty_layout_fields()
         elif region == "inspector-height" or self._bottom_panel_dragging:
-            popup = self._doc.get_element_by_id("asset-popup") if self._doc else None
-            panel_height = native_to_dp(
-                getattr(popup, "client_height", 0), self._ui_scale()
-            ) if popup else 0.0
-            maximum = max(120.0, min(450.0, panel_height * 0.5))
-            self._inspector_preferred_height = min(
-                maximum, max(120.0, self._resize_start_height - delta_y)
+            metrics = breakpoint_metrics(self._content_width or 600.0)
+            target = min(
+                self._resize_inspector_height_max,
+                max(metrics["inspector_min"], self._resize_start_height - delta_y),
             )
-            self._info_preferred_height = self._inspector_preferred_height
-            self._sync_panel_layout()
-            self._dirty_fields("bottom_panel_height", "inspector_height")
+            # Avoid a full panel measurement/layout pass for every mouse pixel.
+            # The Inspector height binding is the only live geometry dependency.
+            if abs(target - self._resize_last_height) >= 0.5:
+                self._inspector_preferred_height = target
+                self._resize_last_height = target
+                # RmlPanelHost owns the live native-pixel resize. Keeping this
+                # callback state-only avoids a second layout invalidation from
+                # Python during the same pointer frame; bindings reconcile on Up.
             self._stop_event(event)
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
@@ -4408,11 +4497,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             )
             self._stop_event(event)
 
-    def _on_resize_mouseup(self, _event) -> None:
-        if getattr(self, "_resize_region", ""):
+    def _on_resize_mouseup(self, event) -> None:
+        region = getattr(self, "_resize_region", "")
+        if region:
+            if region == "inspector-height":
+                self._info_preferred_height = self._inspector_preferred_height
             self._bottom_panel_dragging = False
             self._resize_region = ""
-            self._dirty_fields("bottom_panel_resize_dragging")
+            if region == "inspector-height":
+                self._dirty_fields(
+                    "bottom_panel_resize_dragging", "inspector_height", "inspector_style_height"
+                )
+            else:
+                self._dirty_fields("bottom_panel_resize_dragging")
+            self._stop_event(event)
 
     def _resolve_event_value(self, args, event, attribute: str) -> str:
         if args and args[0] not in (None, ""):

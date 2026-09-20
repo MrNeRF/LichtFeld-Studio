@@ -998,6 +998,7 @@ namespace lfs::io::project {
         std::filesystem::path active_path;
         std::optional<detail::ProjectPathIdentity> destination_identity;
         std::optional<detail::WriterLock> lock;
+        std::optional<detail::WriterLock> active_path_lock;
         std::optional<WriterLockLease> lock_lease;
         std::shared_ptr<detail::NativeFile> file;
         std::optional<ProjectReader> prior_reader;
@@ -1706,6 +1707,13 @@ namespace lfs::io::project {
         impl->destination_identity = std::move(*identity);
         impl->active_path =
             detail::make_sibling_temp_path(impl->destination_path, "project-write");
+        auto active_path_lock =
+            detail::WriterLock::acquire(impl->active_path);
+        if (!active_path_lock) {
+            return std::move(active_path_lock).error();
+        }
+        impl->active_path_lock.emplace(
+            std::move(*active_path_lock));
         impl->lock = std::move(held_lock);
         impl->lock_lease =
             std::move(held_lease);
@@ -2599,8 +2607,13 @@ namespace lfs::io::project {
                 "tombstones and base references have no stored payload",
                 "chunk.row_kind"));
         }
-        if (impl_->rows.contains(chunk.key) ||
-            impl_->touched.contains(chunk.key)) {
+        // An append carries forward old tombstones. Restoring an older save
+        // may replace one with its historical payload, just like write_chunk.
+        // A resolution made by this writer must still never be overwritten.
+        const auto existing = impl_->rows.find(chunk.key);
+        if (impl_->touched.contains(chunk.key) ||
+            (existing != impl_->rows.end() &&
+             existing->second.row_kind != RowKind::Tombstone)) {
             return status_failure(writer_error(
                 lfs::ErrorCode::AlreadyExists,
                 impl_->destination_path,

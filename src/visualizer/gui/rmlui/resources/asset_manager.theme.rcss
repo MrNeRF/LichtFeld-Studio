@@ -198,6 +198,18 @@
     background-color: @{alpha(primary,0.45)};
 }
 
+.asset-resize-handle--horizontal,
+.asset-resize-handle--horizontal:hover,
+.asset-resize-handle--horizontal:active,
+.asset-resize-handle--horizontal:focus {
+    background-color: transparent;
+}
+
+.asset-resize-handle--horizontal .asset-resize-handle-line { background-color: @{border}; }
+.asset-resize-handle--horizontal:hover .asset-resize-handle-line,
+.asset-resize-handle--horizontal:active .asset-resize-handle-line,
+.asset-resize-handle--horizontal.dragging .asset-resize-handle-line { background-color: @{primary}; }
+
 /* ── Gallery ─────────────────────────────────────────────── */
 
 #asset-gallery {

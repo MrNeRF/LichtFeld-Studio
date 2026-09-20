@@ -59,6 +59,12 @@ class GalleryFilePanel(Panel):
     def poll(self, _context):
         return self._review is not None
 
+    def apply_chrome(self, _payload):
+        # Opening a project restores saved panel visibility. The review belongs
+        # to the ongoing Gallery operation, so a saved layout must not hide it
+        # while it still blocks input to the Project Manager.
+        lf.ui.set_panel_enabled(self.id, self._review is not None)
+
     def show(self, *, controller, asset, scene, action, fields, includes="", quota="",
              warning="", publish_new=False, open_after=False, on_done=None,
              mode="publish", groups=(), on_submit=None, apply_only=False,

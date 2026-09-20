@@ -538,7 +538,10 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
             pending_saves.add(str(removed.get("id", "")))
             r.update(pending=True, undo=True, removal_id=removed["id"],
                      detail=tr("projects.contents.removed"))
-    checkpoints = list(value(details, "retained_checkpoints", []) or [])
+    # Compaction rewrites physical chunk order; display order follows iteration.
+    checkpoints = sorted(value(details, "retained_checkpoints", []) or [],
+                         key=lambda cp: (int(value(cp, "iteration", 0)),
+                                         str(value(cp, "instance_uuid", ""))))
     sizes = {str(value(cp, "instance_uuid", "")): int(value(cp, "bytes", 0)) for cp in value(plan, "retained_checkpoints", []) or []}
     strategy = str(value(params, "active_strategy", "") or "")
     for cp in checkpoints:

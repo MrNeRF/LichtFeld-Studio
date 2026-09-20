@@ -217,6 +217,8 @@ def _inspection(
     commit_uuid: str | None = None,
     generation: int = 1,
     has_preview: bool = True,
+    preview_width: int = 640,
+    preview_height: int = 360,
     open_state: str = "OPEN",
 ):
     return SimpleNamespace(
@@ -230,6 +232,8 @@ def _inspection(
         role=SimpleNamespace(name="MASTER"),
         open_state=SimpleNamespace(name=open_state),
         has_preview=has_preview,
+        preview_width=preview_width,
+        preview_height=preview_height,
     )
 
 
@@ -263,6 +267,8 @@ def _cached_record(path: Path, project_uuid: str, inspection=None):
         "role": "MASTER",
         "open_state": inspection.open_state.name,
         "has_preview": inspection.has_preview,
+        "preview_width": inspection.preview_width,
+        "preview_height": inspection.preview_height,
         "status": "AVAILABLE",
     }
 
@@ -310,6 +316,8 @@ def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, t
         "role",
         "open_state",
         "has_preview",
+        "preview_width",
+        "preview_height",
         "status",
     }.issubset(catalog["projects"][first.id])
 
@@ -876,6 +884,8 @@ def test_v4_restored_inspection_is_verified_before_becoming_available(
     assert project.status == "AVAILABLE"
     assert project.available is True
     assert project.has_preview is True
+    assert project.preview_width == 640
+    assert project.preview_height == 360
     assert project.commit_uuid == "cached-commit"
     assert project.inspection_verified is True
     assert inspect_calls == [True, True]  # Inspection and the guarded library write.

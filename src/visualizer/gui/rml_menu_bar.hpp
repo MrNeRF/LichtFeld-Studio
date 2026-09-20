@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -120,7 +121,7 @@ namespace lfs::vis::gui {
         std::vector<MenuDropdownChildView> children;
     };
 
-    class RmlMenuBar {
+    class LFS_VIS_API RmlMenuBar {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();

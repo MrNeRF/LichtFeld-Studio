@@ -566,3 +566,32 @@ def test_gallery_notice_never_contains_a_python_traceback(monkeypatch):
     monkeypatch.setitem(sys.modules, 'lichtfeld', SimpleNamespace(ui=SimpleNamespace(tr=lambda key: key)))
     text = 'Traceback (most recent call last):\n  File "/private/path.py", line 7\nRuntimeError: request marker'
     assert localize_message(text) == 'request marker'
+
+
+@pytest.mark.parametrize("status", ["failed", "preparing", "ready", "unknown"])
+def test_project_representation_failure_is_not_indefinite_processing(tmp_path, monkeypatch, status):
+    identifier = str(uuid.uuid4())
+    choice = dict(format="licht", status=status, representationId="pinned", size=4)
+    requests = []
+    def request(method, path, body=None):
+        requests.append(path)
+        assert path.endswith("/download-options")
+        return {"representations": [choice]}
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
+    client.max_file_bytes = 100
+    used = []
+    monkeypatch.setattr(client, "_download_representation", lambda *args: used.append(args[1]) or {"id": identifier})
+    if status == "ready":
+        assert client.download(identifier, tmp_path / "project.licht") == {"id": identifier}
+        assert used == [choice]
+    else:
+        with pytest.raises(PortalProtocolError if status == "unknown" else ValueError) as failure:
+            client.download(identifier, tmp_path / "project.licht")
+        assert isinstance(failure.value, portal_gallery.GalleryProcessingTimeout) is (status == "preparing")
+        if status == "failed":
+            assert "could not prepare" in str(failure.value)
+        elif status == "unknown":
+            assert isinstance(failure.value, PortalProtocolError)
+        assert not used
+    assert len(requests) == 1
+    assert not (tmp_path / "project.licht").exists()

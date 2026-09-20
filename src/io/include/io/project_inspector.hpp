@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lfs::io::project {
@@ -32,12 +33,17 @@ namespace lfs::io::project {
         std::string validation_scope = "head";
         bool has_preview = false;
         std::uint64_t preview_bytes = 0;
+        std::uint32_t preview_width = 0;
+        std::uint32_t preview_height = 0;
         std::optional<std::string> title;
         Version min_reader_version;
         Version min_safe_writer_version;
         CommitKind commit_kind = CommitKind::Explicit;
         std::string diagnostic;
     };
+
+    [[nodiscard]] LFS_IO_API std::pair<std::uint32_t, std::uint32_t>
+    project_preview_dimensions(const ProjectReader& reader);
 
     struct LFS_IO_API ProjectInspectorSave {
         std::uint64_t sequence = 0;

@@ -1588,6 +1588,23 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> encode_sog(const SplatData& splat_data, const SogEncodeOptions& options_in, SogSink& archive) {
+        if (splat_data.has_deleted_mask()) {
+            const auto visible_count = static_cast<size_t>(splat_data.visible_count());
+            if (visible_count == 0) {
+                return make_error(ErrorCode::EMPTY_DATASET, "No visible splats to write", options_in.output_path);
+            }
+            if (visible_count < splat_data.size()) {
+                auto compacted = splat_data.clone();
+                compacted.apply_deleted();
+                if (compacted.size() != visible_count) {
+                    return make_error(ErrorCode::INVALID_DATASET,
+                                      "Failed to prepare visible splats for SOG export",
+                                      options_in.output_path);
+                }
+                return encode_sog(compacted, options_in, archive);
+            }
+        }
+
         SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
