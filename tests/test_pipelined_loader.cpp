@@ -146,6 +146,58 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_LE(ready.mask->max().item<float>(), 1.0f);
 }
 
+TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencoding) {
+    for (const bool high_precision : {false, true}) {
+        SCOPED_TRACE(high_precision);
+        auto settings = config();
+        settings.use_16bit_color = high_precision;
+        PipelinedImageLoader loader(settings);
+        auto input = request(0, 0, false);
+        input.params.resize_factor = 1;
+        input.params.output_uint8 = !high_precision;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid());
+        EXPECT_EQ(ready.tensor.dtype(), high_precision ? DataType::Float32 : DataType::UInt8);
+        const auto stats = loader.get_stats();
+        EXPECT_EQ(stats.cold_path_misses, 0u);
+        EXPECT_EQ(stats.cpu_decode_calls, 0u);
+        EXPECT_EQ(stats.hot_path_hits, 1u);
+        input.sequence_id = 1;
+        loader.prefetch({input});
+        const auto repeated = loader.get();
+        EXPECT_EQ(ready.tensor.to(DataType::Float32).cpu().to_vector(),
+                  repeated.tensor.to(DataType::Float32).cpu().to_vector());
+    }
+}
+
+TEST_F(PipelinedImageLoaderTest, TrainingStartupOnlyPrefetchesBoundedBatch) {
+    const auto empty = Tensor::zeros({0}, Device::CPU);
+    const auto camera = std::make_shared<Camera>(
+        Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+        1.f, 1.f, .5f, .5f, empty, empty, CameraModelType::PINHOLE,
+        image_path_.filename().string(), image_path_, std::filesystem::path{}, 1, 1, 0);
+    for (const size_t count : {128u, 5114u}) {
+        SCOPED_TRACE(count);
+        std::vector<std::shared_ptr<Camera>> cameras(count, camera);
+        lfs::training::DatasetConfig dataset_config;
+        dataset_config.resize_factor = 1;
+        dataset_config.max_width = 32;
+        auto dataset = std::make_shared<lfs::training::CameraDataset>(std::move(cameras), dataset_config);
+        const auto started = std::chrono::steady_clock::now();
+        lfs::training::PipelinedDataLoader<lfs::training::InfiniteRandomSampler> loader(
+            dataset, lfs::training::InfiniteRandomSampler(count, 42), config());
+        const auto stats = loader.get_stats();
+        EXPECT_LE(stats.accepted_sequences, config().prefetch_count);
+        EXPECT_GT(stats.accepted_sequences, 0u);
+        auto first = loader.next();
+        ASSERT_TRUE(first);
+        EXPECT_TRUE(first->data.image.is_valid());
+        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::cout << "Startup for " << count << " cameras: " << elapsed << " s; accepted " << stats.accepted_sequences << " requests\n";
+    }
+}
+
 TEST_F(PipelinedImageLoaderTest, PngMaxWidthUsesOneDecode) {
     PipelinedImageLoader loader(config());
     const auto before = loader.get_stats().cpu_decode_calls;
