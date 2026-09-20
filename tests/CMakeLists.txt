@@ -51,13 +51,19 @@ if(BUILD_PANEL_LAYOUT_TESTS)
 endif()
 
 # =============================================================================
-# Unicode Path Test Only (no CUDA dependencies)
+# Unicode Path Test Only (no CUDA runtime linkage)
 # =============================================================================
 if(BUILD_UNICODE_TEST_ONLY)
-    # Standalone Unicode path test without CUDA
+    # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_weight_file_paths.cpp
+        licht_format_test_runtime.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/error.cpp
         ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/mapped_file.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/nn/weight_file_open.cpp
         ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
@@ -68,14 +74,16 @@ if(BUILD_UNICODE_TEST_ONLY)
         ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_SOURCE_DIR}/external
+        ${CUDAToolkit_INCLUDE_DIRS}
     )
 
     target_link_libraries(unicode_path_test PRIVATE
         GTest::gtest
         GTest::gtest_main
+        nlohmann_json::nlohmann_json
     )
     target_compile_definitions(unicode_path_test PRIVATE
-        LFS_CORE_EXPORTS
+        LFS_STATIC_BUILD
         LFS_UNICODE_TEST_STANDALONE)
 
     # C++23 standard
@@ -102,9 +110,9 @@ if(BUILD_UNICODE_TEST_ONLY)
         PROPERTIES TIMEOUT 30
     )
 
-    message(STATUS "Building standalone Unicode path test (no CUDA)")
-    if(NOT BUILD_TESTS)
-        return()  # Skip LibTorch-dependent tests when only Unicode coverage was requested.
+    message(STATUS "Building standalone Unicode path tests (no CUDA runtime linkage)")
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS)
+        return()  # Skip the remaining targets when only standalone coverage was requested.
     endif()
 endif()
 
@@ -500,6 +508,7 @@ set(TEST_FILES
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
+    test_weight_file_paths.cpp
     test_moge2.cpp
     test_lpips.cpp
     test_ppisp_controller.cpp
