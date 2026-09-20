@@ -8,12 +8,14 @@
 #include "core/export.hpp"
 #include "io/project_chapters.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -254,6 +256,16 @@ namespace lfs::vis {
         projectSetLicense(const lfs::io::project::ProjectLicense& license) = 0;
         virtual lfs::Result<void>
         projectClearLicense() = 0;
+        virtual lfs::Result<void>
+        projectSetPreview(
+            std::span<const std::byte> png_bytes,
+            const std::filesystem::path& expected_path = {},
+            std::string expected_project_uuid = {}) {
+            static_cast<void>(png_bytes);
+            static_cast<void>(expected_path);
+            static_cast<void>(expected_project_uuid);
+            return {};
+        }
         virtual lfs::Result<ProjectWritePoll>
         projectPollWrite() {
             return ProjectWritePoll{};

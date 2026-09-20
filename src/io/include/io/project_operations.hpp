@@ -197,6 +197,15 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectThumbnailSourceAvailability>
     inspect_project_thumbnail_sources(const std::filesystem::path& path);
 
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    encode_preview_from_image_file(const std::filesystem::path& image_path);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    encode_preview_from_first_dataset_image(const std::filesystem::path& path);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    encode_preview_from_first_embedded_image(const std::filesystem::path& path);
+
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     preview_from_first_dataset_image(const std::filesystem::path& path);
 

@@ -1813,6 +1813,13 @@ namespace lfs::io::project {
             return writer_error(lfs::ErrorCode::FailedPrecondition, path,
                                 "The project identity changed before writing. Refresh Projects and try again.",
                                 "the opened document no longer owns this destination", "project.identity");
+        if (!options.expected_commit_uuid.is_nil() &&
+            reader_result->commit().commit_uuid != options.expected_commit_uuid)
+            return writer_error(
+                lfs::ErrorCode::FailedPrecondition, path,
+                "The project changed before the thumbnail could be written.",
+                "the opened document's commit is no longer the destination head",
+                "project.commit");
         if (reader_result->open_state() != OpenState::Open) {
             return writer_error(
                 lfs::ErrorCode::Unsupported, path,

@@ -2452,6 +2452,130 @@ def test_viewport_thumbnail_capture_refuses_a_different_active_project(panel_mod
     assert exports == []
 
 
+def test_viewport_thumbnail_uses_active_project_write_not_closed_file(
+    panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins import project_operations
+
+    project_path = tmp_path / "active.licht"
+    project_path.write_bytes(b"project")
+    asset = _project(path=str(project_path))
+    closed = []
+    applied = []
+
+    def export_viewport_image(target, fmt, *args, **kwargs):
+        Path(target).write_bytes(_MIN_PNG)
+
+    def fail_closed(name):
+        def inner(*_args, **_kwargs):
+            closed.append(name)
+            raise AssertionError(f"closed-file {name}")
+
+        return inner
+
+    io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid=asset["commit_uuid"]
+        ),
+        backup_project_file=fail_closed("backup_project_file"),
+        run_project_operation=fail_closed("run_project_operation"),
+        set_project_preview=fail_closed("set_project_preview"),
+    )
+    store = project_operations.ProjectOperations(io, tmp_path / "records")
+    monkeypatch.setattr(project_operations, "ProjectOperations", lambda _io: store)
+    monkeypatch.setattr(panel_module.lf, "io", io, raising=False)
+    panel_module.lf.project_poll_write = lambda: {
+        "path": str(project_path),
+        "running": False,
+        "error": "",
+    }
+    panel_module.lf.get_render_scene = lambda: SimpleNamespace(total_gaussian_count=8)
+    panel_module.lf.export_viewport_image = export_viewport_image
+    panel_module.lf.project_set_preview = lambda data, wait=False, **kwargs: applied.append(
+        (bytes(data), wait, kwargs.get("path"), kwargs.get("project_uuid"))
+    )
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._inspection_by_asset[asset["id"]] = {
+        "card": SimpleNamespace(
+            project_uuid=asset["id"], commit_uuid=asset["commit_uuid"]
+        )
+    }
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **_kwargs: None)
+    monkeypatch.setattr(panel, "_request_model_update", lambda: None)
+    monkeypatch.setattr(panel, "_dirty_selection", lambda: None)
+
+    panel._dialog_data = {"source": "viewport"}
+    assert panel._start_thumbnail_operation(asset)
+    assert closed == []
+    assert applied == [(_MIN_PNG, False, str(project_path), asset["id"])]
+    assert next(iter(panel._project_operations.values()))["status"] == "completed"
+
+
+def test_viewport_thumbnail_capture_applies_preview_to_active_project(panel_module, tmp_path):
+    project_path = tmp_path / "active.licht"
+    project_path.write_bytes(b"project")
+    native_calls = []
+    applied = []
+    panel_module.lf.project_poll_write = lambda: {"path": str(project_path), "running": False}
+    panel_module.lf.get_render_scene = lambda: SimpleNamespace(total_gaussian_count=3)
+    panel_module.lf.export_viewport_image = lambda target, fmt, *args, **kwargs: Path(
+        target
+    ).write_bytes(_MIN_PNG)
+    panel_module.lf.project_set_preview = lambda data, wait=False, **kwargs: applied.append(
+        (bytes(data), wait, kwargs.get("path"), kwargs.get("project_uuid"))
+    )
+    panel_module.lf.io = SimpleNamespace(
+        set_project_preview=lambda *args: native_calls.append(("set_project_preview", args))
+    )
+
+    panel_module.AssetManagerPanel._capture_viewport_preview(str(project_path), "target")
+    assert applied == [(_MIN_PNG, False, str(project_path), "target")]
+    assert native_calls == []
+
+
+def test_viewport_thumbnail_capture_refuses_project_switch_after_capture(
+    panel_module, tmp_path
+):
+    project_path = tmp_path / "active.licht"
+    project_path.write_bytes(b"project")
+    applied = []
+    exported = []
+
+    def poll_write():
+        if exported:
+            return {"path": str(tmp_path / "other.licht"), "running": False}
+        return {"path": str(project_path), "running": False}
+
+    def export_viewport_image(target, fmt, *args, **kwargs):
+        Path(target).write_bytes(_MIN_PNG)
+        exported.append(True)
+
+    panel_module.lf.project_poll_write = poll_write
+    panel_module.lf.get_render_scene = lambda: SimpleNamespace(total_gaussian_count=3)
+    panel_module.lf.export_viewport_image = export_viewport_image
+    panel_module.lf.project_set_preview = lambda data, wait=False, **kwargs: applied.append(
+        data
+    )
+
+    with pytest.raises(RuntimeError, match="no longer belongs to this project"):
+        panel_module.AssetManagerPanel._capture_viewport_preview(
+            str(project_path), "target"
+        )
+    assert exported == [True]
+    assert applied == []
+
+
 def test_thumbnail_source_probe_rejects_unavailable_embedded_and_empty_viewport(panel_module):
     panel_module.lf.project_poll_write = lambda: {
         "path": "/tmp/target-project.licht"
@@ -3557,6 +3681,77 @@ def test_image_file_thumbnail_uses_native_decode_and_cancel_keeps_dialog(panel_m
     assert closed == []
 
 
+def test_active_image_file_thumbnail_uses_live_preview_write_not_closed_file(
+    panel_module, monkeypatch
+):
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+    panel._dialog_data = {"source": "image_file"}
+    operations = []
+    panel._start_project_operation = lambda asset_id, title, operation, **kwargs: operations.append(
+        (asset_id, title, operation, kwargs)
+    )
+    monkeypatch.setattr(
+        panel_module.lf.ui, "open_image_dialog", lambda *_args: "/tmp/selected.jpg", raising=False
+    )
+    panel_module.lf.project_poll_write = lambda: {"path": "/tmp/target.licht"}
+    applied = []
+    native_calls = []
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_native_io_call",
+        staticmethod(lambda name, *args: native_calls.append((name, *args)) or _MIN_PNG),
+    )
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_apply_active_project_preview",
+        staticmethod(lambda path, project_id, png: applied.append((path, project_id, png))),
+        raising=False,
+    )
+
+    assert panel._start_thumbnail_operation(
+        {"id": "target", "path": "/tmp/target.licht"}
+    )
+    assert operations[0][3].get("closed_file") is False
+    operations[0][2](lambda *_args: None, lambda: False)
+    assert native_calls == [("encode_preview_from_image_file", "/tmp/selected.jpg")]
+    assert applied == [("/tmp/target.licht", "target", _MIN_PNG)]
+
+
+def test_active_dataset_thumbnail_uses_live_preview_write_not_closed_file(
+    panel_module, monkeypatch
+):
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+    panel._dialog_data = {"source": "first_dataset"}
+    operations = []
+    panel._start_project_operation = lambda asset_id, title, operation, **kwargs: operations.append(
+        (asset_id, title, operation, kwargs)
+    )
+    panel_module.lf.project_poll_write = lambda: {"path": "/tmp/target.licht"}
+    applied = []
+    native_calls = []
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_native_io_call",
+        staticmethod(lambda name, *args: native_calls.append((name, *args)) or _MIN_PNG),
+    )
+    monkeypatch.setattr(
+        panel_module.AssetManagerPanel,
+        "_apply_active_project_preview",
+        staticmethod(lambda path, project_id, png: applied.append((path, project_id, png))),
+        raising=False,
+    )
+
+    assert panel._start_thumbnail_operation(
+        {"id": "target", "path": "/tmp/target.licht"}
+    )
+    assert operations[0][3].get("closed_file") is False
+    operations[0][2](lambda *_args: None, lambda: False)
+    assert native_calls == [
+        ("encode_preview_from_first_dataset_image", "/tmp/target.licht")
+    ]
+    assert applied == [("/tmp/target.licht", "target", _MIN_PNG)]
+
+
 def test_completed_thumbnail_operation_reverifies_asset_before_refresh(
     panel_module, monkeypatch, tmp_path
 ):
@@ -3705,3 +3900,28 @@ def test_removed_asset_context_action_does_not_reuse_previous_selection(
     assert panel.get_selected_asset_id() == second["id"]
     assert gallery_actions == []
     assert project_actions == []
+
+
+def test_recent_thumbnail_uses_native_project_identity(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel.__new__(panel_module.AssetManagerPanel)
+    panel._dialog_data = {"source": "viewport"}
+    operations = []
+    panel._start_project_operation = lambda asset_id, title, operation, **kwargs: operations.append(operation)
+    panel_module.lf.project_poll_write = lambda: {"path": "/tmp/recent.licht"}
+    native_id = "976ebf83-5764-435b-953c-dc8444e538aa"
+    monkeypatch.setattr(panel_module.AssetManagerPanel, "_native_io_call",
+                        staticmethod(lambda name, path: SimpleNamespace(project_uuid=native_id)))
+    captured = []
+    monkeypatch.setattr(panel_module.AssetManagerPanel, "_capture_viewport_preview",
+                        staticmethod(lambda path, project_id: captured.append((path, project_id))))
+    assert panel._start_thumbnail_operation({"id": "recent:temporary", "path": "/tmp/recent.licht"})
+    operations[0](lambda *_: None, lambda: False)
+    assert captured == [("/tmp/recent.licht", native_id)]
+
+
+def test_thumbnail_training_rejection_shows_short_user_message(panel_module):
+    def rejected(*args, **kwargs):
+        raise RuntimeError("lfs::Error[FailedPrecondition/IO]\n user_message: Stop training before updating the project thumbnail.\n detail: internal context")
+    panel_module.lf.project_set_preview = rejected
+    with pytest.raises(RuntimeError, match=r"^Stop training before updating the project thumbnail\.$"):
+        panel_module.AssetManagerPanel._apply_active_project_preview("/tmp/test.licht", "target", _MIN_PNG)

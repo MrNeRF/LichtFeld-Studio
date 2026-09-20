@@ -1745,6 +1745,141 @@ namespace lfs::io::project {
             generation = source_reader->commit().generation;
             return {};
         }
+
+        [[nodiscard]] lfs::Result<void>
+        refresh_clean_proofs_preserving_dirty(
+            const std::filesystem::path& path) {
+            ReaderOptions options;
+            if (source_reader) {
+                options = source_reader->reader_options();
+            }
+            auto reader = ProjectReader::open(path, options);
+            if (!reader) {
+                return lfs::Result<void>::failure(std::move(reader).error());
+            }
+            auto shared_reader = std::make_shared<ProjectReader>(
+                std::move(*reader));
+            std::map<ChunkKey, SourceRow, ChunkKeyLess> refreshed;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                staged_checkpoints;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                staged_ppisp;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                staged_dataset_sources;
+            std::set<ChunkKey, ChunkKeyLess> lazy_tombstones;
+            std::set<ChunkKey, ChunkKeyLess> disk_lazy_keys;
+            const auto stage_preserved_lazy =
+                [&](auto& existing, auto& destination,
+                    const Fourcc fourcc) -> lfs::Result<void> {
+                for (const auto& key : dirty) {
+                    if (key.fourcc != fourcc) {
+                        continue;
+                    }
+                    auto found = existing.find(key.instance_uuid);
+                    if (found == existing.end()) {
+                        lazy_tombstones.insert(key);
+                        continue;
+                    }
+                    auto shared = found->second.share();
+                    if (!shared) {
+                        return lfs::Result<void>::failure(
+                            std::move(shared).error());
+                    }
+                    destination.emplace(
+                        key.instance_uuid, std::move(*shared));
+                }
+                for (const auto& [uuid, payload] : existing) {
+                    if (destination.contains(uuid)) {
+                        continue;
+                    }
+                    if (payload.is_clean_reference()) {
+                        continue;
+                    }
+                    auto shared = payload.share();
+                    if (!shared) {
+                        return lfs::Result<void>::failure(
+                            std::move(shared).error());
+                    }
+                    destination.emplace(uuid, std::move(*shared));
+                }
+                return {};
+            };
+            if (auto staged = stage_preserved_lazy(
+                    checkpoints, staged_checkpoints, FOURCC_CKPT);
+                !staged) {
+                return staged;
+            }
+            if (auto staged = stage_preserved_lazy(
+                    ppisp_payloads, staged_ppisp, FOURCC_PPIS);
+                !staged) {
+                return staged;
+            }
+            if (auto staged = stage_preserved_lazy(
+                    dataset_sources, staged_dataset_sources, FOURCC_DSRC);
+                !staged) {
+                return staged;
+            }
+            for (const auto& row : shared_reader->chunks()) {
+                if (!row.is_live()) {
+                    continue;
+                }
+                auto proof = shared_reader->make_clean_proof(
+                    row, DOCUMENT_CLEAN_BASELINE);
+                if (!proof) {
+                    return lfs::Result<void>::failure(
+                        std::move(proof).error());
+                }
+                if (is_lazy_binary_fourcc(row.key.fourcc)) {
+                    disk_lazy_keys.insert(row.key);
+                    auto& destination =
+                        row.key.fourcc == FOURCC_CKPT
+                            ? staged_checkpoints
+                        : row.key.fourcc == FOURCC_PPIS
+                            ? staged_ppisp
+                            : staged_dataset_sources;
+                    if (lazy_tombstones.contains(row.key) ||
+                        destination.contains(row.key.instance_uuid)) {
+                        continue;
+                    }
+                    auto lazy = std::make_unique<LazyChunkValue::Impl>();
+                    lazy->reader = shared_reader;
+                    lazy->source = row;
+                    lazy->proof = std::move(*proof);
+                    lazy->snapshot_uuid = row.key.instance_uuid;
+                    destination.emplace(
+                        row.key.instance_uuid,
+                        LazyChunkValue(std::move(lazy)));
+                    continue;
+                }
+                const bool managed =
+                    is_project_managed_fourcc(row.key.fourcc);
+                const bool thumbnail = row.key.fourcc == FOURCC_THMB;
+                const bool unsupported_known_encoding =
+                    (managed || thumbnail) &&
+                    (row.chunk_version != P3_CHUNK_VERSION ||
+                     (thumbnail &&
+                      row.compression != Compression::Stored));
+                const bool opaque =
+                    unsupported_known_encoding ||
+                    (!managed && !thumbnail);
+                refreshed.emplace(
+                    row.key,
+                    SourceRow{
+                        .info = row,
+                        .proof = std::move(*proof),
+                        .opaque = opaque,
+                    });
+            }
+            source_rows = std::move(refreshed);
+            lazy_source_keys = std::move(disk_lazy_keys);
+            checkpoints = std::move(staged_checkpoints);
+            ppisp_payloads = std::move(staged_ppisp);
+            dataset_sources = std::move(staged_dataset_sources);
+            source_path = path;
+            source_reader = std::move(shared_reader);
+            generation = source_reader->commit().generation;
+            return {};
+        }
     };
 
     ProjectDocument::ProjectDocument(std::unique_ptr<Impl> impl)
@@ -3364,6 +3499,139 @@ namespace lfs::io::project {
     ProjectDocument::save(const std::filesystem::path& path,
                           const ProjectDocumentSaveOptions& options) {
         return save_impl(path, options, nullptr);
+    }
+
+    lfs::Result<ProjectDocumentSaveReport>
+    ProjectDocument::save_preview(
+        const std::span<const std::byte> png_bytes,
+        const ProjectDocumentSaveOptions& options) {
+        if (png_bytes.empty()) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::InvalidArgument,
+                "The project preview is empty.",
+                "A thumbnail-only write requires preview bytes",
+                "THMB");
+        }
+        if (!impl_->source_path || !impl_->source_reader) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::FailedPrecondition,
+                "This project has no path; use Save As.",
+                "A thumbnail-only write requires a bound source generation",
+                "project.path");
+        }
+        const auto compatibility =
+            impl_->source_reader->write_compatibility();
+        if (!compatibility.safe) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unsupported,
+                "This project is read-only in the current LichtFeld version.",
+                compatibility.reasons.empty()
+                    ? std::string{
+                          "unknown writer incompatibility"}
+                    : compatibility.reasons.front(),
+                "commit.write_compatibility");
+        }
+        auto normalized =
+            normalized_absolute_path(*impl_->source_path);
+        if (!normalized) {
+            return std::move(normalized).error();
+        }
+        std::optional<ProjectWriter> writer;
+        {
+            auto opened = ProjectWriter::append(
+                *normalized,
+                AppendOptions{
+                    .compatibility =
+                        impl_->source_reader->reader_options(),
+                    .index_compression = options.index_compression,
+                    .disk_reserve_bytes = options.disk_reserve_bytes,
+                    .boundary_observer = {},
+                    .writer_lock_lease = options.writer_lock_lease,
+                    .writer_lock_wait = options.writer_lock_wait,
+                    .expected_project_uuid = impl_->project_uuid,
+                    .expected_commit_uuid =
+                        impl_->source_reader->commit().commit_uuid,
+                });
+            if (!opened) {
+                return std::move(opened).error();
+            }
+            writer.emplace(std::move(*opened));
+        }
+        CommitOptions commit = options.commit;
+        commit.kind = CommitKind::Explicit;
+        if (commit.commit_uuid.is_nil()) {
+            commit.commit_uuid = lfs::core::generate_uuid_v4();
+        }
+        if (commit.wallclock_unix_ns == 0) {
+            commit.wallclock_unix_ns = unix_time_ns();
+        }
+        commit.min_reader_version =
+            impl_->source_reader->commit().min_reader_version;
+        commit.min_safe_writer_version =
+            impl_->source_reader->commit().min_safe_writer_version;
+        commit.extra_reader_capabilities =
+            impl_->source_reader->commit().required_reader_capabilities;
+        commit.extra_writer_capabilities =
+            impl_->source_reader->commit().required_writer_capabilities;
+        if (auto planned = writer->plan_commit(commit); !planned) {
+            return std::move(planned).error();
+        }
+        if (auto preflight = writer->preflight(png_bytes.size());
+            !preflight) {
+            return std::move(preflight).error();
+        }
+        std::optional<ChunkKey> rewritten_preview_key;
+        if (impl_->source_reader->preview().has_value()) {
+            const auto& locator = *impl_->source_reader->preview();
+            const auto row = std::ranges::find_if(
+                impl_->source_reader->chunks(),
+                [&locator](const ChunkInfo& candidate) {
+                    return candidate.is_live() &&
+                           candidate.key.fourcc == FOURCC_THMB &&
+                           candidate.payload_offset == locator.offset &&
+                           candidate.stored_bytes == locator.bytes;
+                });
+            if (row != impl_->source_reader->chunks().end()) {
+                rewritten_preview_key = row->key;
+            }
+        }
+        if (auto previewed = writer->set_preview(png_bytes); !previewed) {
+            return std::move(previewed).error();
+        }
+        ProjectDocumentSaveReport report;
+        ++report.rewritten_chunks;
+        for (const auto& row : impl_->source_reader->chunks()) {
+            if (!row.is_live()) {
+                continue;
+            }
+            if (rewritten_preview_key == row.key) {
+                continue;
+            }
+            auto proof = impl_->source_reader->make_clean_proof(
+                row, DOCUMENT_CLEAN_BASELINE);
+            if (!proof) {
+                return std::move(proof).error();
+            }
+            if (auto reused = writer->reuse_if_clean(
+                    *proof, DOCUMENT_CLEAN_BASELINE);
+                !reused) {
+                return std::move(reused).error();
+            }
+            ++report.reused_chunks;
+        }
+        if (auto committed = writer->commit(); !committed) {
+            return std::move(committed).error();
+        }
+        writer.reset();
+        if (auto refreshed =
+                impl_->refresh_clean_proofs_preserving_dirty(*normalized);
+            !refreshed) {
+            return std::move(refreshed).error();
+        }
+        report.generation = impl_->source_reader->commit().generation;
+        report.commit_uuid = impl_->source_reader->commit().commit_uuid;
+        report.snapshot_uuid = impl_->source_reader->commit().snapshot_uuid;
+        return report;
     }
 
     lfs::Result<ProjectDocumentSaveReport>

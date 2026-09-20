@@ -306,6 +306,9 @@ def project_set_license(identifier: str, notice: str = '') -> None:
 def project_clear_license() -> None:
     """Clear the license metadata for the active project"""
 
+def project_set_preview(png_bytes: bytes, wait: bool = False, path: str = '', project_uuid: str = '') -> bool:
+    """Write a thumbnail onto the active project without saving unsaved edits"""
+
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
 

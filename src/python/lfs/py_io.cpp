@@ -957,6 +957,33 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("png_bytes"));
 
+        m.def("encode_preview_from_image_file", [](const std::filesystem::path& image_path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_image_file(image_path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("image_path"));
+
+        m.def("encode_preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_first_dataset_image(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
+        m.def("encode_preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_first_embedded_image(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
         m.def("inspect_project_thumbnail_sources", [](const std::filesystem::path& path) {
             std::optional<lfs::Result<project::ProjectThumbnailSourceAvailability>> result;
             {
