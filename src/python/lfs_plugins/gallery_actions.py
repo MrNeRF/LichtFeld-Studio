@@ -134,6 +134,11 @@ def gallery_actions(entry, facts):
         if job:
             add("cancel")
         return actions
+    if facts.get("relationship") == "remote_deleted" and job.get("status") == "conflict":
+        # A failed replacement cannot be resolved against an item that is gone.
+        # Retire it explicitly before offering Publish again.
+        add("cancel", enabled=not busy)
+        return actions
     if facts.get("freshness") == "diverged":
         add("resolve", enabled=not busy)
     elif activity in ("error", "paused", "interrupted") and job:

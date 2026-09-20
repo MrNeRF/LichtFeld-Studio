@@ -1173,8 +1173,9 @@ class GallerySync:
                 action()
         self._launch(run)
 
-    def link_download(self, job_id, project_id, commit_uuid="", *, project_path=None):
+    def link_download(self, job_id, project_id, commit_uuid="", *, project_path=None, local_fields=None):
         self._client()
+        local_fields = copy.deepcopy(local_fields)
         job, bucket = self._job(job_id), self._bucket()
         if job.get("kind") != "download" or job["status"] != "completed" or job.get("retired") or job.get("cleanupPending"):
             raise ValueError("Finish downloading this scene first.")
@@ -1194,6 +1195,8 @@ class GallerySync:
                 with self._lock:
                     scene = job["result"]
                     bucket["links"][project_id] = exchange_link(scene, commit_uuid)
+                    if local_fields is not None:
+                        bucket["links"][project_id]["localFields"] = local_fields
                     if job.get("localUpdate", {}).get("backupPath"):
                         update = job["localUpdate"]
                         update.update(state="applied", appliedStamp=file_stamp(update["path"]), appliedCommit=commit_uuid,
@@ -1809,7 +1812,7 @@ class GallerySync:
 
 
 
-    def finish_settings_update(self, job_id, commit_uuid, stamp, fields, *, acknowledge=True):
+    def finish_settings_update(self, job_id, commit_uuid, stamp, fields, *, acknowledge=True, preserve_local_content=False):
         fields = copy.deepcopy(fields)
         def action():
             bucket = self._bucket()
@@ -1829,8 +1832,10 @@ class GallerySync:
             link["localFields"] = fields
             if acknowledge:
                 link.update(metadataRevision=job["result"]["metadataRevision"],
-                            sharedFields=shared_fields(job["result"]), commitUuid=commit_uuid,
+                            sharedFields=shared_fields(job["result"]),
                             metadata=copy.deepcopy(job["result"]), exchangedAt=time.time())
+                if not preserve_local_content:
+                    link["commitUuid"] = commit_uuid
             update.update(state="applied", appliedStamp=list(stamp), appliedCommit=commit_uuid,
                           appliedIdentity=list(self.identity()), appliedLink=copy.deepcopy(link))
             job.update(message="Gallery changes applied. Recovery copy kept.")

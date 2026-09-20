@@ -1667,3 +1667,43 @@ def test_retrying_failed_settings_apply_keeps_backup_and_clears_old_failure(tmp_
         records = [job for bucket in restarted._data["accounts"].values() for job in bucket["jobs"]]
         assert next(job for job in records if job["id"] == first)["retired"]
         assert recovery_path.read_bytes() == b"original project"
+
+
+def test_local_only_resolution_keeps_unpublished_content_after_restart(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    remote = dict(id="remote", title="Gallery title", contentRevision="c1", metadataRevision="m2",
+                  viewerSettings={}, description="", visibility="private")
+    monkeypatch.setattr(Client, "scene", lambda *args: remote)
+    path = tmp_path / "master.licht"
+    path.write_bytes(b"locally edited geometry with checkpoint")
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(dict(remote, metadataRevision="m1"), "published")
+    service._save()
+    job_id, _ = service.prepare_settings_update(remote, "project", str(path), gallery_sync.file_stamp(path))
+    finish(service)
+    service.finish_settings_update(job_id, "local-save", gallery_sync.file_stamp(path),
+                                   gallery_sync.shared_fields(remote), preserve_local_content=True)
+    finish(service)
+    assert service._job(job_id)["localUpdate"]["state"] == "applied"
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    link = restarted.snapshot()["links"]["project"]
+    assert link["commitUuid"] == "published"
+    assert link["metadataRevision"] == "m2"
+    assert link["localFields"] == gallery_sync.shared_fields(remote)
+    assert path.read_bytes() == b"locally edited geometry with checkpoint"
+
+
+def test_gallery_content_keeps_chosen_local_settings_pending(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    job = downloaded_job(service)
+    path = tmp_path / "saved.licht"
+    path.write_bytes(b"gallery geometry with local view")
+    chosen = dict(title="My title", description="My notes", viewerSettings={"exposure": 2})
+    service.link_download(job["id"], "project", "saved", project_path=path, local_fields=chosen)
+    finish(service)
+    assert job["linkOperation"]["state"] == "ready"
+    link = service.snapshot()["links"]["project"]
+    assert link["localFields"] == chosen
+    assert link["sharedFields"] == gallery_sync.shared_fields(job["result"])
+    assert link["localFields"] != link["sharedFields"]

@@ -2773,6 +2773,7 @@
   "projects.gallery.conflict.checkpoint_loss": "ギャラリーのコピーにはトレーニング履歴がありません。シーンの内容でギャラリーを選ぶと、ローカルのスプラットとチェックポイントが置き換わります。ローカルを選ぶと保持されます。",
   "projects.gallery.conflict.backup_first": "変更を適用する前に復元用コピーを保存します。",
   "projects.gallery.conflict.apply_update": "適用してギャラリーを更新",
+  "projects.gallery.conflict.apply_local": "ローカルに適用",
   "projects.gallery.conflict.apply_only": "ギャラリーの変更を適用",
   "projects.gallery.replacement.title": "このファイルは公開済みプロジェクトを置き換えました",
   "projects.gallery.replacement.warning": "別のプロジェクトに置き換わりました。{path} に新しいプロジェクトが保存されました。ギャラリーのコピー「{title}」は以前のファイルに属します。",
