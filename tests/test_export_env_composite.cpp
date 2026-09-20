@@ -61,8 +61,8 @@ namespace {
         ASSERT_TRUE(loaded.has_value()) << (loaded ? "" : loaded.error());
         EXPECT_EQ(loaded->path, path);
         EXPECT_EQ(loaded->pixels, (std::vector<float>{10.0f / 255.0f,
-                                                       20.0f / 255.0f,
-                                                       30.0f / 255.0f}));
+                                                      20.0f / 255.0f,
+                                                      30.0f / 255.0f}));
     }
 
     TEST(EnvironmentImageLoadTest, ReportsMissingUnicodePathAsUtf8) {

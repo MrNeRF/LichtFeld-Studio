@@ -5,6 +5,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "gui/gallery_scene_publication.hpp"
+#include "io/formats/sogs.hpp"
 #include "io/formats/spz.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
@@ -163,6 +164,7 @@ namespace {
         std::array<float, 16> local_transform{};
         std::vector<std::byte> dsrc;
         std::string sidecar;
+        std::uint64_t publication_count = 0;
     };
 
     PublishedNode read_published_node(const std::filesystem::path& directory) {
@@ -173,6 +175,10 @@ namespace {
         EXPECT_TRUE(record.payload.has_value());
         const auto* source = document->find_dataset_source(record.uuid);
         EXPECT_NE(source, nullptr);
+        const auto element = document->scene_graph().dom().array_find("nodes", record.uuid.to_string());
+        EXPECT_TRUE(element.has_value());
+        const auto publication = element ? element->get_json("publication") : std::nullopt;
+        EXPECT_TRUE(publication.has_value());
         std::ifstream manifest_file(directory / "manifest.json");
         const auto manifest = nlohmann::json::parse(manifest_file);
         PublishedNode published{
@@ -181,6 +187,7 @@ namespace {
             .local_transform = record.local_transform,
             .dsrc = read_lazy_bytes(*source),
             .sidecar = manifest.at("nodes").at(0).at("path").get<std::string>(),
+            .publication_count = publication ? publication->at("count").get<std::uint64_t>() : 0,
         };
         return published;
     }
@@ -522,6 +529,33 @@ TEST(GalleryScenePublicationTest, GallerySpzPublicationCountMatchesVisibleAfterS
 
     const auto loaded = lfs::io::load_spz(request.path / "0.spz");
     ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->size(), 5u);
+    EXPECT_EQ(loaded->visible_count(), 5u);
+}
+
+TEST(GalleryScenePublicationTest, GallerySogPublicationCountMatchesVisibleAfterSoftDelete) {
+    TemporaryDirectory temporary;
+    auto snapshot = cpu_snapshot();
+    ASSERT_EQ(snapshot.row_count, 8u);
+    lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
+    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    snapshot.data->soft_delete(del);
+    ASSERT_EQ(snapshot.data->visible_count(), 5u);
+
+    auto request = base_request(temporary.path / "deleted-sog.scene", ExportFormat::GALLERY_SOG);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = std::move(snapshot),
+        .name = "cropped",
+        .encoded = std::nullopt,
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "sog");
+    EXPECT_EQ(published.sidecar, "0.sog");
+    EXPECT_EQ(published.publication_count, 5u);
+
+    const auto loaded = lfs::io::load_sog(request.path / "0.sog");
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().message;
     EXPECT_EQ(loaded->size(), 5u);
     EXPECT_EQ(loaded->visible_count(), 5u);
 }

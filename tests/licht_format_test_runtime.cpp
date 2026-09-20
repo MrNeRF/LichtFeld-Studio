@@ -10,6 +10,7 @@
 
 namespace lfs::core::detail {
 
+#ifndef LFS_UNICODE_TEST_STANDALONE
     [[noreturn]] void assertion_failed(
         const std::string_view contract, const std::string_view expression,
         const std::string_view message, const SourceSite location) {
@@ -21,6 +22,7 @@ namespace lfs::core::detail {
         error += std::format(" ({}:{})", location.file_name(), location.line());
         throw std::runtime_error(error);
     }
+#endif
 
 } // namespace lfs::core::detail
 
@@ -39,5 +41,7 @@ namespace lfs::core {
     }
 
     void Logger::log(LogLevel, const SourceSite&, std::string_view) {}
+
+    void Logger::flush() {}
 
 } // namespace lfs::core

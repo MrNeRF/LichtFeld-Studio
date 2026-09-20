@@ -5,11 +5,15 @@
 
 #include "core/crash_handler.hpp"
 
+#include "core/environment.hpp"
 #include "core/failure_report.hpp"
+#include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #ifdef _WIN32
@@ -22,6 +26,32 @@
 namespace {
 
     constexpr int FIREWALL_EXIT_CODE = 70; // EX_SOFTWARE, frozen contract
+
+    class ScopedLfsHome {
+    public:
+        explicit ScopedLfsHome(const std::string& value)
+            : previous_(lfs::core::environment::value("LFS_HOME")) {
+            EXPECT_TRUE(lfs::core::environment::set_value("LFS_HOME", value));
+        }
+
+        ~ScopedLfsHome() {
+            if (previous_) {
+                (void)lfs::core::environment::set_value("LFS_HOME", *previous_);
+                return;
+            }
+#ifdef _WIN32
+            (void)_wputenv_s(L"LFS_HOME", L"");
+#else
+            (void)::unsetenv("LFS_HOME");
+#endif
+        }
+
+        ScopedLfsHome(const ScopedLfsHome&) = delete;
+        ScopedLfsHome& operator=(const ScopedLfsHome&) = delete;
+
+    private:
+        std::optional<std::string> previous_;
+    };
 
     auto current_process_id() {
 #ifdef _WIN32
@@ -60,6 +90,24 @@ TEST(CrashHandlerTest, ExceptionFirewallPropagatesNormalReturnValue) {
         return 7;
     });
     EXPECT_EQ(result, 7);
+}
+
+TEST(CrashHandlerTest, InstallationReportsUnicodeCrashLogPathAsUtf8) {
+    const auto root = std::filesystem::temp_directory_path() /
+                      lfs::core::utf8_to_path("lfs_crash_診断");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    const ScopedLfsHome home(lfs::core::path_to_utf8(root));
+
+    EXPECT_EXIT(([] {
+                    lfs::core::install_crash_handlers();
+                    lfs::core::flush_and_exit(0);
+                }()),
+                ::testing::ExitedWithCode(0), "lfs_crash_診断");
+
+    std::filesystem::remove_all(root, ec);
+    EXPECT_FALSE(ec) << ec.message();
 }
 
 TEST(CrashHandlerTest, HandledGpuFailureIsSavedOutsideRotatingLogs) {
