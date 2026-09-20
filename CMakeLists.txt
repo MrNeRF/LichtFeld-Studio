@@ -168,7 +168,7 @@ add_custom_target(lfs_git_version ALL
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
 option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
-option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
+option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path tests (no CUDA runtime linkage)" OFF)
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

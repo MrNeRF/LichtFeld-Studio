@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn.hpp"
-#include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 
 #include <cuda_runtime.h>
@@ -12,14 +11,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
 #include <numeric>
 #include <random>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -235,21 +232,6 @@ namespace {
     }
 
 } // namespace
-
-TEST(WeightFileTest, MissingUnicodePathIsReportedAsUtf8) {
-    const auto path = std::filesystem::temp_directory_path() /
-                      lfs::core::utf8_to_path("missing_weights_重み.lfw");
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    ASSERT_FALSE(ec) << ec.message();
-
-    const auto result = lfs::core::nn::WeightFile::open(path);
-
-    ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().code(), lfs::ErrorCode::NotFound);
-    EXPECT_NE(result.error().detail().find(lfs::core::path_to_utf8(path)),
-              std::string_view::npos);
-}
 
 class NnOpsTest : public ::testing::Test {
 protected:
