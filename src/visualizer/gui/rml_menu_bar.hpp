@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -125,12 +126,12 @@ namespace lfs::vis::gui {
         void init(RmlUIManager* mgr);
         void shutdown();
         void draw(int screen_w, int screen_h);
-        void updateLabels(const std::vector<std::string>& labels,
+        LFS_VIS_API void updateLabels(const std::vector<std::string>& labels,
                           const std::vector<std::string>& idnames);
-        void updateProjectDisplay(const ProjectDisplayInfo& project_display);
-        void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
+        LFS_VIS_API void updateProjectDisplay(const ProjectDisplayInfo& project_display);
+        LFS_VIS_API void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
-        void processInput(const PanelInputState& input);
+        LFS_VIS_API void processInput(const PanelInputState& input);
         void closeDropdown();
         void setViewportRightEdge(float x) { viewport_right_edge_ = x; }
         void setUiHidden(bool hidden);
@@ -147,7 +148,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
-        void bindModel();
+        LFS_VIS_API void bindModel();
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
@@ -162,8 +163,8 @@ namespace lfs::vis::gui {
         void rebuildPortalStatus();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
-        bool projectTitleAtPoint(float x, float y) const;
-        void updateProjectTitleLayout(int screen_w, float dp_ratio);
+        LFS_VIS_API bool projectTitleAtPoint(float x, float y) const;
+        LFS_VIS_API void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();
 
