@@ -86,6 +86,10 @@ if(BUILD_UNICODE_TEST_ONLY)
         GTest::gtest_main
         nlohmann_json::nlohmann_json
     )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+        target_link_libraries(unicode_path_test PRIVATE stdc++exp)
+    endif()
     target_compile_definitions(unicode_path_test PRIVATE
         LFS_STATIC_BUILD
         LFS_UNICODE_TEST_STANDALONE)
