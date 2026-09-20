@@ -4390,6 +4390,7 @@ namespace lfs::io::project {
                 ? lfs::core::generate_uuid_v4()
                 : options.file_uuid;
         const CompactionOptions compaction_options{
+            .writer_lock_lease = options.save_as_source_lock_lease,
             .compatibility =
                 impl_->source_reader
                     ? impl_->source_reader
@@ -4409,6 +4410,9 @@ namespace lfs::io::project {
             .disk_reserve_bytes = options.disk_reserve_bytes,
             .boundary_observer = {},
             .private_staging = true,
+            .progress = options.save_as_progress,
+            .cancel = options.save_as_cancel,
+            .excluded_checkpoints = options.save_as_excluded_checkpoints,
         };
         auto compacted = ProjectWriter::compact_to(
             original_path, temporary, compaction_options);

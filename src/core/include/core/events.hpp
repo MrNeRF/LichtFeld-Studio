@@ -78,7 +78,11 @@ namespace lfs::core {
             EVENT(ProjectSaveAs, std::filesystem::path path;);
             EVENT(ProjectCreate, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool allow_existing_destination_replacement = false;);
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool keep_asset_manager_open = false;);
-            EVENT(ProjectCompact, );
+            EVENT(ProjectCompact, bool clean = false;
+                  bool cancel_clean = false;
+                  std::filesystem::path destination;
+                  std::string expected_commit;
+                  std::function<void(const std::string&)> on_started;);
             EVENT(ProjectEmbedDataset, );
             EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false; std::filesystem::path create_path = {}; bool allow_existing_destination_replacement = false;);
             EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false;);

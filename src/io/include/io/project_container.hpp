@@ -596,6 +596,9 @@ namespace lfs::io::project {
         // Optional PROJ metadata prepared by a closed-file Contents operation.
         // It is published atomically with the compacted file.
         std::vector<std::byte> project_chapter_override;
+        // Closed-file cleanup excludes only checkpoints not bound to the scene.
+        std::vector<lfs::core::Uuid> excluded_checkpoints;
+        lfs::core::Uuid expected_source_commit_uuid = {};
     };
 
     class LFS_IO_API ProjectWriter {

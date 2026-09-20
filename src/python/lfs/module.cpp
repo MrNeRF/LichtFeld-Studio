@@ -334,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1428,6 +1428,25 @@ NB_MODULE(lichtfeld, m) {
                 });
         },
         "Compact the active .licht project in the background");
+    m.def("project_cancel_cleanup", [] {
+        nb::gil_scoped_release release;
+        emit_project_cmd_marshaled("python.project_cancel_cleanup", [] {
+            lfs::core::events::cmd::ProjectCompact{.cancel_clean = true}.emit();
+        });
+    });
+    m.def("project_clean", [](const std::string& destination, const std::string& expected_commit) {
+        if (!expected_commit.empty() && !lfs::core::Uuid::from_string(expected_commit))
+            throw std::invalid_argument("Invalid cleanup commit identity");
+        nb::gil_scoped_release release;
+        std::string error = "No project is open.";
+        emit_project_cmd_marshaled("python.project_clean", [&] {
+            lfs::core::events::cmd::ProjectCompact{
+                .clean = true, .destination = lfs::core::utf8_to_path(destination), .expected_commit = expected_commit,
+                .on_started = [&error](const std::string& message) { error = message; }}.emit();
+        });
+        if (!error.empty())
+            throw std::runtime_error(error);
+        return true; }, nb::arg("destination") = "", nb::arg("expected_commit") = "", "Clean the active saved project in the background, preserving its current resume point");
     m.def(
         "project_is_dirty", []() {
             auto* const viewer =

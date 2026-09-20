@@ -1691,6 +1691,138 @@ namespace lfs::io::project {
         return card;
     }
 
+    lfs::Result<ProjectInspectorCard>
+    clean_project_file(const std::filesystem::path& path,
+                       const std::filesystem::path& destination,
+                       const lfs::core::Uuid& expected_commit,
+                       ProjectOperationProgress progress,
+                       ProjectOperationCancel cancel) {
+        auto lease = acquire_operation_lock(path);
+        if (!lease)
+            return std::move(lease).error();
+        auto document = ProjectDocument::open(path, {.defer_geometry_payloads = true});
+        if (!document)
+            return std::move(document).error();
+        const auto commit = document->source_reader()->commit().commit_uuid;
+        if (!expected_commit.is_nil() && expected_commit != commit)
+            return fail<ProjectInspectorCard>(lfs::ErrorCode::FailedPrecondition, path,
+                                              "The project changed. Review the cleanup again.", "cleanup plan is stale", "clean.commit");
+        auto bound = document->bound_checkpoint_uuid();
+        if (!bound)
+            return std::move(bound).error();
+        std::vector<lfs::core::Uuid> removed;
+        for (const auto& uuid : document->checkpoint_uuids())
+            if (!*bound || uuid != **bound)
+                removed.push_back(uuid);
+        if (auto updated = document->edit_project().dom().set_json("contents_removals", {{"rows", JsonChapterDom::Json::array()}}); !updated)
+            return std::move(updated).error();
+        if (cancel && cancel())
+            return fail<ProjectInspectorCard>(lfs::ErrorCode::Cancelled, path,
+                                              "Project cleanup was canceled.", "canceled before writing", "clean.cancel");
+        CompactionOptions options;
+        options.writer_lock_lease = *lease;
+        options.expected_source_commit_uuid = commit;
+        options.excluded_checkpoints = removed;
+        options.project_chapter_override = document->project().to_bytes();
+        options.progress = progress;
+        options.cancel = cancel;
+        if (destination.empty()) {
+            auto cleaned = ProjectWriter::compact(path, options);
+            if (!cleaned)
+                return std::move(cleaned).error();
+            return inspect_after_save(path);
+        }
+        // A copy in another folder must still refer to the original external
+        // data, including missing data that the user may reconnect later.
+        const auto source_root = std::filesystem::absolute(path).parent_path();
+        const auto rebase = [&](ReferenceLocator& locator) {
+            if (locator.base == LocatorBase::Project && !locator.preferred.empty()) {
+                locator.preferred = lfs::core::path_to_utf8(
+                    (source_root / lfs::core::utf8_to_path(locator.preferred)).lexically_normal());
+                locator.base = LocatorBase::Absolute;
+            }
+        };
+        auto references = document->references().records();
+        if (!references)
+            return std::move(references).error();
+        for (auto& reference : *references) {
+            rebase(reference.locator);
+            if (auto changed = document->edit_references().upsert(reference); !changed)
+                return std::move(changed).error();
+        }
+        auto provenance = document->project().embedded_payload_provenance();
+        if (!provenance)
+            return std::move(provenance).error();
+        for (auto& payload : *provenance) {
+            rebase(payload.import_locator);
+            if (auto changed = document->edit_project().upsert_embedded_payload_provenance(payload); !changed)
+                return std::move(changed).error();
+        }
+        // Save As gives the copy its own catalog identity. Keep both intermediate
+        // generations private until verified.
+        auto output_identity = detail::ProjectPathIdentity::capture(destination);
+        if (!output_identity)
+            return std::move(output_identity).error();
+        auto output_lock = acquire_operation_lock(destination);
+        if (!output_lock)
+            return std::move(output_lock).error();
+        if (auto available = refuse_existing_destination(destination); !available)
+            return std::move(available).error();
+        auto temporary = destination;
+        temporary += ".clean-" + lfs::core::generate_uuid_v4().to_string() + ".tmp";
+        struct Cleanup {
+            std::filesystem::path path;
+            ~Cleanup() {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+                path += ".lock";
+                std::filesystem::remove(path, error);
+            }
+        } cleanup{temporary};
+        for (const auto& uuid : removed)
+            static_cast<void>(document->remove_checkpoint(uuid));
+        if (progress)
+            progress(0.0F, "Preparing cleaned copy");
+        ProjectDocumentSaveOptions save_options;
+        save_options.save_as_project_uuid = lfs::core::generate_uuid_v4();
+        save_options.regenerate_dataset_preview = false;
+        save_options.save_as_source_lock_lease = *lease;
+        save_options.save_as_excluded_checkpoints = removed;
+        save_options.save_as_progress = progress;
+        save_options.save_as_cancel = cancel;
+        auto saved = document->save_as(temporary, save_options);
+        if (!saved)
+            return std::move(saved).error();
+        options.writer_lock_lease.reset();
+        options.expected_source_commit_uuid = {};
+        options.project_chapter_override.clear();
+        // Save As has already removed the old checkpoints from the new head.
+        options.excluded_checkpoints.clear();
+        auto cleaned = ProjectWriter::compact(temporary, options);
+        if (!cleaned)
+            return std::move(cleaned).error();
+        {
+            auto reader = ProjectReader::open(temporary);
+            if (!reader)
+                return std::move(reader).error();
+            if (auto verified = reader->verify_all(); !verified)
+                return std::move(verified).error();
+        }
+        if (cancel && cancel())
+            return fail<ProjectInspectorCard>(lfs::ErrorCode::Cancelled, destination,
+                                              "Project cleanup was canceled.", "canceled before publication", "clean.cancel");
+        if (auto checked = output_identity->validate(); !checked)
+            return std::move(checked).error();
+        if (auto available = refuse_existing_destination(destination); !available)
+            return std::move(available).error();
+        auto published = lfs::io::replace_atomic_output_file(temporary, output_identity->canonical_path,
+                                                             lfs::io::AtomicOutputDurability::Durable);
+        if (!published)
+            return fail<ProjectInspectorCard>(lfs::ErrorCode::PermissionDenied, destination,
+                                              "The cleaned copy could not be saved.", published.error().message, "clean.publish");
+        return inspect_after_save(destination);
+    }
+
     lfs::Result<ProjectReducePlan>
     plan_reduce_size(const std::filesystem::path& path) {
         if (path.empty()) {

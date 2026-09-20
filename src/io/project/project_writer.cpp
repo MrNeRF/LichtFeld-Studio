@@ -3244,6 +3244,13 @@ namespace lfs::io::project {
                 "semantic open did not select a supported generation",
                 "commit.read_compatibility"));
         }
+        if (!options.expected_source_commit_uuid.is_nil() &&
+            source_result->commit().commit_uuid != options.expected_source_commit_uuid) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::FailedPrecondition, path,
+                "The project changed. Review the cleanup again.",
+                "the cleanup plan no longer matches the locked head", "clean.commit"));
+        }
         const WriteCompatibility compatibility =
             source_result->write_compatibility();
         if (!compatibility.safe) {
@@ -3382,8 +3389,13 @@ namespace lfs::io::project {
             return plan;
         }
         std::uint64_t planned_bytes = 0;
+        const auto keep_row = [&options](const ChunkInfo& row) {
+            return row.row_kind == RowKind::Live &&
+                   !(row.key.fourcc == FOURCC_CKPT &&
+                     std::ranges::find(options.excluded_checkpoints, row.key.instance_uuid) != options.excluded_checkpoints.end());
+        };
         for (const ChunkInfo& row : source_result->chunks()) {
-            if (row.row_kind != RowKind::Live) {
+            if (!keep_row(row)) {
                 continue;
             }
             auto next = detail::checked_add(
@@ -3400,13 +3412,13 @@ namespace lfs::io::project {
 
         const auto live_rows = std::ranges::count_if(
             source_result->chunks(),
-            [](const ChunkInfo& row) { return row.row_kind == RowKind::Live; });
+            keep_row);
         std::size_t copied_rows = 0;
         if (options.progress) {
             options.progress(0.0F, "Compacting project");
         }
         for (const ChunkInfo& source_row : source_result->chunks()) {
-            if (source_row.row_kind == RowKind::Live) {
+            if (keep_row(source_row)) {
                 if (options.cancel && options.cancel()) {
                     return status_failure(writer_error(
                         lfs::ErrorCode::Cancelled,

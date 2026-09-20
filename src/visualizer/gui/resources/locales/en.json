@@ -2896,5 +2896,21 @@
   "projects.contents.month.10": "Oct",
   "projects.contents.month.11": "Nov",
   "projects.contents.month.12": "Dec",
-  "projects.contents.refresh_failed": "The operation completed, but Contents could not refresh: {reason}"
+  "projects.contents.refresh_failed": "The operation completed, but Contents could not refresh: {reason}",
+  "project_cleanup": {
+    "title": "Clean project…",
+    "clean_here": "Clean this project",
+    "copy": "Save cleaned copy…",
+    "summary": "Older saves to remove: {saves}. Older checkpoints to remove: {checkpoints}. Estimated space saved: {size}.\n\nKeep the current models, edits, settings, embedded data, and current training resume point.\n\nCleaning this project permanently removes its older versions. A cleaned copy leaves the original untouched. Temporary disk space is needed.",
+    "wait": "Wait for the current project write to finish.",
+    "stop_training": "Stop training before cleaning the project.",
+    "save_first": "Save the current project before reviewing cleanup. Your current edits will be kept.",
+    "save_failed": "The project could not be saved. Cleanup has been stopped.",
+    "changed": "The project changed. Open Clean project again to review the current version.",
+    "new_destination": "Choose a new filename for the cleaned copy. Existing files are kept safe.",
+    "working": "Cleaning the project. Progress is shown in the task bar. You can cancel before cleanup finishes.",
+    "reading": "Reading the project…",
+    "done": "Cleanup complete. The file is {size} smaller.\n{path}",
+    "canceling": "Canceling cleanup… Please wait."
+  }
 }

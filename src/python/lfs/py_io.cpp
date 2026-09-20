@@ -828,6 +828,15 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
+        m.def("clean_project_file", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_commit, nb::object progress, nb::object cancel) {
+            const auto expected = expected_commit.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_commit);
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            nb::gil_scoped_release release;
+            return unwrap(project::clean_project_file(path, destination, expected,
+                progress_callback.callback && !progress_callback.callback.is_none() ? project::ProjectOperationProgress(progress_callback) : project::ProjectOperationProgress{},
+                cancel_callback.callback && !cancel_callback.callback.is_none() ? project::ProjectOperationCancel(cancel_callback) : project::ProjectOperationCancel{})); }, nb::arg("path"), nb::arg("destination") = "", nb::arg("expected_commit") = "", nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
         m.def("plan_reduce_size", [](const std::filesystem::path& path) {
             std::optional<lfs::Result<project::ProjectReducePlan>> result;
             {

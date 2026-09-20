@@ -1576,10 +1576,27 @@ namespace lfs::vis {
 
         cmd::ProjectCompact::when(
             [this, publish_project_error](
-                const auto&) {
-                if (auto compacted =
-                        projectCompact();
-                    !compacted) {
+                const auto& command) {
+                if (command.cancel_clean) {
+                    if (project_lifecycle_)
+                        project_lifecycle_->cancelCleanup();
+                    return;
+                }
+                auto expected_commit = lfs::core::Uuid{};
+                if (!command.expected_commit.empty()) {
+                    auto parsed = lfs::core::Uuid::from_string(command.expected_commit);
+                    if (!parsed)
+                        return;
+                    expected_commit = *parsed;
+                }
+                auto compacted = command.clean && project_lifecycle_
+                                     ? project_lifecycle_->clean(command.destination, expected_commit)
+                                     : projectCompact();
+                if (command.on_started) {
+                    command.on_started(compacted ? std::string{} : std::string(compacted.error().user_message()));
+                    return;
+                }
+                if (!compacted) {
                     publish_project_error(
                         "Compact Project",
                         compacted.error(),

@@ -315,6 +315,13 @@ def project_open(path: str = '', discard_changes: bool = False, stop_training: b
 def project_compact() -> None:
     """Compact the active .licht project in the background"""
 
+def project_cancel_cleanup() -> None: ...
+
+def project_clean(destination: str = '', expected_commit: str = '') -> bool:
+    """
+    Clean the active saved project in the background, preserving its current resume point
+    """
+
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
 

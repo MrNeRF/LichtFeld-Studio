@@ -246,6 +246,16 @@ class SaveProjectAsOperator(Operator):
         return {"FINISHED"}
 
 
+class CleanProjectOperator(Operator):
+    label = "project_cleanup.title"
+    description = "Remove older saves and checkpoints while keeping the current project"
+
+    def execute(self, context) -> set:
+        from .project_cleanup import open_project_cleanup
+        open_project_cleanup()
+        return {"FINISHED"}
+
+
 class CompactProjectOperator(Operator):
     label = "menu.file.compact_project"
     description = "Reclaim dead bytes in the active LichtFeld project"
@@ -742,6 +752,7 @@ class FileMenu:
                 enabled=_can_compact_project(),
             ),
             menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
+            menu_operator(CleanProjectOperator, enabled=_can_compact_project()),
             menu_operator(
                 CompactProjectOperator,
                 enabled=_can_compact_project(),
@@ -782,6 +793,7 @@ _operator_classes = [
     SaveProjectOperator,
     SaveProjectAsOperator,
     EmbedDatasetOperator,
+    CleanProjectOperator,
     CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,

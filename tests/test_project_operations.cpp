@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checkpoint_format.hpp"
+#include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "io/project_document.hpp"
 #include "io/project_operations.hpp"
@@ -330,6 +331,107 @@ namespace {
         ASSERT_EQ(details.retained_checkpoints.size(), 1u);
         EXPECT_TRUE(details.retained_checkpoints.front().binds_scene_graph);
         EXPECT_EQ(details.retained_checkpoints.front().instance_uuid, bound_uuid);
+    }
+
+    TEST(ProjectOperations, CleanProjectPreservesCurrentStateAndResumePoint) {
+        for (const bool copy : {false, true}) {
+            TemporaryDirectory temporary;
+            const auto source = temporary.path / "source.licht";
+            const auto destination = copy ? temporary.path / "copy.licht" : source;
+            auto document = require_result(ProjectDocument::create(fixed_uuid(7000)));
+            const auto bound = fixed_uuid(7001);
+            const auto old = fixed_uuid(7002);
+            const auto node = fixed_uuid(7003);
+            require_status(document.set_checkpoint(bound, require_result(LazyChunkValue::from_owned(checkpoint_payload(20), bound))));
+            require_status(document.set_checkpoint(old, require_result(LazyChunkValue::from_owned(checkpoint_payload(10), old))));
+            require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = node,
+                .type = "splat",
+                .name = "Current training model",
+                .payload = PayloadBinding{.fourcc = "CKPT", .instance_uuid = bound, .source_kind = "checkpoint"},
+            }));
+            require_status(document.edit_scene_graph().set_training_model_uuid(node));
+            static_cast<void>(require_result(save_document(document, source)));
+            require_status(document.edit_project().dom().set("title", "Keep this title"));
+            static_cast<void>(require_result(save_document(document, source)));
+            const auto original = read_file_bytes(source);
+            const auto before = require_result(inspect_project_card(source));
+            // Existing Compact removes save history but retains old checkpoints.
+            const auto control = temporary.path / "compact-only.licht";
+            fs::copy_file(source, control);
+            static_cast<void>(require_result(compact_project_file(control)));
+            EXPECT_EQ(require_result(inspect_project_details(control)).retained_checkpoints.size(), 2u);
+            const auto cleaned = require_result(clean_project_file(source, copy ? destination : fs::path{}, before.commit_uuid));
+            EXPECT_EQ(cleaned.project_uuid == before.project_uuid, !copy);
+            auto reader = require_result(ProjectReader::open(destination));
+            require_status(reader.verify_all());
+            ASSERT_NE(reader.find(FOURCC_CKPT, bound), nullptr);
+            EXPECT_EQ(require_result(reader.read_chunk(*reader.find(FOURCC_CKPT, bound))), checkpoint_payload(20));
+            EXPECT_EQ(reader.find(FOURCC_CKPT, old), nullptr);
+            const auto details = require_result(inspect_project_details(destination));
+            EXPECT_EQ(details.save_history.size(), 1u);
+            ASSERT_EQ(details.retained_checkpoints.size(), 1u);
+            EXPECT_TRUE(details.retained_checkpoints.front().binds_scene_graph);
+            EXPECT_EQ(details.card.title, "Keep this title");
+            EXPECT_LT(fs::file_size(destination), original.size());
+            if (copy)
+                EXPECT_EQ(read_file_bytes(source), original);
+            auto reopened = require_result(ProjectDocument::open(destination));
+            require_status(reopened.edit_project().dom().set("title", "Still editable"));
+            static_cast<void>(require_result(save_document(reopened, destination)));
+        }
+    }
+
+    TEST(ProjectOperations, CleanedCopyKeepsReferencesToOriginalFolder) {
+        TemporaryDirectory temporary;
+        fs::create_directories(temporary.path / "original");
+        fs::create_directories(temporary.path / "copies");
+        const auto source = temporary.path / "original" / "source.licht";
+        const auto destination = temporary.path / "copies" / "clean.licht";
+        auto document = require_result(ProjectDocument::create(fixed_uuid(7100)));
+        ReferenceRecord reference{
+            .uuid = fixed_uuid(7101),
+            .key = "dataset.root",
+            .kind = "dataset",
+            .locator = {.preferred = "missing-dataset", .base = LocatorBase::Project},
+            .unresolved = true,
+        };
+        require_status(document.edit_references().upsert(reference));
+        static_cast<void>(require_result(save_document(document, source)));
+        const auto original = read_file_bytes(source);
+        static_cast<void>(require_result(clean_project_file(source, destination)));
+        const auto cleaned = require_result(ProjectDocument::open(destination));
+        const auto copied = require_result(cleaned.references().find(reference.uuid));
+        ASSERT_TRUE(copied);
+        EXPECT_EQ(copied->locator.base, LocatorBase::Absolute);
+        EXPECT_EQ(copied->locator.preferred, lfs::core::path_to_utf8(source.parent_path() / "missing-dataset"));
+        EXPECT_EQ(copied->fingerprint, reference.fingerprint);
+        EXPECT_TRUE(copied->unresolved);
+        EXPECT_EQ(read_file_bytes(source), original);
+    }
+
+    TEST(ProjectOperations, CleanProjectCancellationAndStalePlanLeaveOriginalUnchanged) {
+        TemporaryDirectory temporary;
+        const auto source = make_document(temporary.path / "source.licht");
+        const auto original = read_file_bytes(source);
+        const auto stale = clean_project_file(source, {}, fixed_uuid(8888));
+        ASSERT_FALSE(stale);
+        EXPECT_EQ(stale.error().code(), lfs::ErrorCode::FailedPrecondition);
+        for (const bool copy : {false, true}) {
+            bool copying = false;
+            const auto destination = copy ? temporary.path / "copy.licht" : fs::path{};
+            const auto canceled = clean_project_file(source, destination, {}, [&](float, const std::string&) { copying = true; }, [&] { return copying; });
+            ASSERT_FALSE(canceled);
+            EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(read_file_bytes(source), original);
+            if (copy)
+                EXPECT_FALSE(fs::exists(destination));
+        }
+        const auto collision = temporary.path / "exists.licht";
+        fs::copy_file(source, collision);
+        EXPECT_FALSE(clean_project_file(source, collision));
+        EXPECT_EQ(read_file_bytes(collision), original);
+        EXPECT_EQ(read_file_bytes(source), original);
     }
 
     TEST(ProjectOperations, ExportVisibleWriterFixtureAndRejectTruncatedRepair) {
