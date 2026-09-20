@@ -1358,6 +1358,7 @@
     "source_hint": "데이터셋 폴더 또는 스플랫 파일을 선택하거나, 빈 프로젝트를 만들려면 소스를 비워 두세요.",
     "browse_folder": "폴더 찾아보기",
     "browse_file": "파일 찾아보기",
+    "choose_folder": "폴더 선택",
     "location_preview": "생성 위치: {path}",
     "already_exists": "이 이름의 프로젝트가 이미 있습니다.",
     "overwrite_title": "프로젝트가 이미 있습니다",

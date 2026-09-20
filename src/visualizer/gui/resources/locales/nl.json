@@ -1358,6 +1358,7 @@
     "source_hint": "Kies een datasetmap of splatbestand, of laat de bron leeg voor een leeg project.",
     "browse_folder": "Map kiezen",
     "browse_file": "Bestand kiezen",
+    "choose_folder": "Map kiezen",
     "location_preview": "Wordt gemaakt in: {path}",
     "already_exists": "Er bestaat al een project met deze naam.",
     "overwrite_title": "Project bestaat al",

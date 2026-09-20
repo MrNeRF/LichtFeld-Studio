@@ -180,6 +180,7 @@ class NewProjectPanel(_ImportDialogPanel):
 
         self._handle = None
         self._name = ""
+        self._project_location = ""
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
@@ -241,6 +242,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
         model.bind("embed_dataset", lambda: self._embed_dataset, self._set_embed_dataset)
 
+        model.bind_event("browse_destination", self._on_browse_destination)
         model.bind_event("browse_folder", self._on_browse_folder)
         model.bind_event("browse_file", self._on_browse_file)
         model.bind_event("browse_init", self._on_browse_init)
@@ -275,6 +277,7 @@ class NewProjectPanel(_ImportDialogPanel):
 
     def show(self, source_path: str = "") -> bool:
         self._name = ""
+        self._project_location = ""
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
@@ -385,7 +388,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_probe_active = True
         path = self._source_path
         name = self._name
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         generation = self._source_generation
         cancel = self._source_probe_cancel
 
@@ -458,7 +461,7 @@ class NewProjectPanel(_ImportDialogPanel):
             worker()
 
     def _refresh_target_cache(self) -> None:
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         base = self._name.strip() or "untitled"
         candidate = Path(location) / f"{base}.licht"
         self._target_exists_cached = candidate.exists()
@@ -511,8 +514,25 @@ class NewProjectPanel(_ImportDialogPanel):
             return False
         return name.split(".", 1)[0].casefold() not in self._WINDOWS_RESERVED_NAMES
 
+    def _destination_folder(self) -> str:
+        return self._project_location or str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+
+    def _on_browse_destination(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_folder_dialog(lf.ui.tr("new_project.choose_folder"), self._destination_folder())
+        if not path or path == self._destination_folder():
+            return
+        self._project_location = str(path)
+        self._source_generation += 1
+        self._source_probe_cancel.set()
+        self._source_probe_cancel = threading.Event()
+        self._source_probe_active = False
+        self._target_exists_cached = False
+        self._dedupe_name_cache.clear()
+        self._start_source_probe()
+        self._dirty_model()
+
     def _target_path(self) -> Path:
-        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        location = self._destination_folder()
         return Path(location) / f"{self._name.strip()}.licht"
 
     def _target_exists(self) -> bool:

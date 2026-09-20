@@ -1358,6 +1358,7 @@
     "source_hint": "Sélectionnez un dossier de dataset ou un fichier splat, ou laissez la source vide pour un projet vierge.",
     "browse_folder": "Parcourir le dossier",
     "browse_file": "Parcourir le fichier",
+    "choose_folder": "Choisir un dossier",
     "location_preview": "Sera créé dans : {path}",
     "already_exists": "Un projet portant ce nom existe déjà.",
     "overwrite_title": "Le projet existe déjà",

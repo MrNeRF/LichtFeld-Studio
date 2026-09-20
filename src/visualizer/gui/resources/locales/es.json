@@ -1358,6 +1358,7 @@
     "source_hint": "Selecciona una carpeta de dataset o un archivo splat, o deja el origen vacío para crear un proyecto en blanco.",
     "browse_folder": "Buscar carpeta",
     "browse_file": "Buscar archivo",
+    "choose_folder": "Elegir carpeta",
     "location_preview": "Se creará en: {path}",
     "already_exists": "Ya existe un proyecto con este nombre.",
     "overwrite_title": "El proyecto ya existe",

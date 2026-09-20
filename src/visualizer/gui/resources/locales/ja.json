@@ -1358,6 +1358,7 @@
     "source_hint": "データセットフォルダーまたはスプラットファイルを選択するか、空のプロジェクトにする場合はソースを空欄にします。",
     "browse_folder": "フォルダーを参照",
     "browse_file": "ファイルを参照",
+    "choose_folder": "フォルダーを選択",
     "location_preview": "作成先: {path}",
     "already_exists": "この名前のプロジェクトは既に存在します。",
     "overwrite_title": "プロジェクトは既に存在します",

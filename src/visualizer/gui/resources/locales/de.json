@@ -1358,6 +1358,7 @@
     "source_hint": "Wählen Sie einen Datensatzordner oder eine Splat-Datei, oder lassen Sie die Quelle für ein leeres Projekt leer.",
     "browse_folder": "Ordner durchsuchen",
     "browse_file": "Datei durchsuchen",
+    "choose_folder": "Ordner wählen",
     "location_preview": "Wird erstellt unter: {path}",
     "already_exists": "Ein Projekt mit diesem Namen existiert bereits.",
     "overwrite_title": "Projekt existiert bereits",

@@ -1356,6 +1356,7 @@
     "source_hint": "Choose a dataset folder or splat file, or leave the source empty for a blank project.",
     "browse_folder": "Browse folder",
     "browse_file": "Browse file",
+    "choose_folder": "Choose folder",
     "location_preview": "Will be created at: {path}",
     "already_exists": "A project with this name already exists.",
     "overwrite_title": "Project already exists",

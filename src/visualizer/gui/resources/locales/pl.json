@@ -1358,6 +1358,7 @@
     "source_hint": "Wybierz folder zbioru danych lub plik splat albo pozostaw źródło puste, aby utworzyć pusty projekt.",
     "browse_folder": "Przeglądaj folder",
     "browse_file": "Przeglądaj plik",
+    "choose_folder": "Wybierz folder",
     "location_preview": "Zostanie utworzony w: {path}",
     "already_exists": "Projekt o tej nazwie już istnieje.",
     "overwrite_title": "Projekt już istnieje",

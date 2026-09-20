@@ -1358,6 +1358,7 @@
     "source_hint": "选择数据集文件夹或 splat 文件；若要创建空项目，请将来源留空。",
     "browse_folder": "浏览文件夹",
     "browse_file": "浏览文件",
+    "choose_folder": "选择文件夹",
     "location_preview": "创建位置：{path}",
     "already_exists": "此名称的项目已存在。",
     "overwrite_title": "项目已存在",
