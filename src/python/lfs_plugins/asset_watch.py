@@ -527,6 +527,8 @@ def scan_all_asset_folders(
 
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
+    if not roots:
+        return AssetFolderScanResult()
     try:
         if callable(getattr(index, "reconcile_observations", None)):
             discovered = list(_iter_all())

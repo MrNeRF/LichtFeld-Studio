@@ -412,3 +412,12 @@ def test_cancel_during_discovery_does_not_commit_partial_scan(tmp_path, monkeypa
     assert result.cancelled
     assert result.added == 0
     assert index.get_asset(inspection.project_uuid) is None
+
+
+def test_scan_without_folder_roots_does_not_reconcile_unrelated_projects():
+    index = SimpleNamespace(
+        folders={"legacy": {"path": ""}},
+        _inspect_path=lambda path: None,
+        reconcile_observations=lambda *args, **kwargs: pytest.fail("No folder was scanned"),
+    )
+    assert scan_all_asset_folders(index) == asset_watch.AssetFolderScanResult()
