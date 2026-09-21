@@ -1335,18 +1335,11 @@ namespace lfs::io::project {
                     "restore.preview");
             }
             selected_preview_row = &selected->second;
-        } else {
-            for (const auto& [key, row] : selected_rows) {
-                if (key.fourcc != FOURCC_THMB)
-                    continue;
-                (void)row;
-                return fail<ProjectInspectorCard>(
-                    lfs::ErrorCode::FailedPrecondition, path,
-                    "The selected save's preview is ambiguous.",
-                    "its historical head locator is no longer published while THMB rows remain",
-                    "restore.preview");
-            }
         }
+        // Only the two published heads retain their preview locators. Older
+        // saves still contain their project data and thumbnail chunks. Restore
+        // those chunks without publishing a guessed preview when its locator
+        // is unavailable; an optional thumbnail must not prevent restoration.
         const auto is_selected_preview = [selected_preview_row](const ChunkInfo& row) {
             return selected_preview_row != nullptr &&
                    row.key == selected_preview_row->key &&

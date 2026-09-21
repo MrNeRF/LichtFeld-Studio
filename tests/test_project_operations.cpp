@@ -204,13 +204,17 @@ namespace {
                   }),
                   2);
 
-        const auto ambiguous_destination = temporary.path / "ambiguous-preview.licht";
-        const auto ambiguous = restore_save(source, 2, ambiguous_destination);
-        ASSERT_FALSE(ambiguous);
-        EXPECT_EQ(ambiguous.error().code(), lfs::ErrorCode::FailedPrecondition);
-        EXPECT_EQ(ambiguous.error().user_message(),
-                  "The selected save's preview is ambiguous.");
-        EXPECT_FALSE(fs::exists(ambiguous_destination));
+        const auto older_destination = temporary.path / "older-preview.licht";
+        static_cast<void>(require_result(restore_save(source, 2, older_destination)));
+        auto older = require_result(ProjectReader::open(older_destination));
+        EXPECT_FALSE(older.preview().has_value());
+        const auto* retained = older.find(FOURCC_THMB, fixed_uuid(1001));
+        ASSERT_NE(retained, nullptr);
+        EXPECT_EQ(require_result(older.read_chunk(*retained)), retained_thumbnail);
+        const auto* original = older.find(FOURCC_THMB, fixed_uuid(1000));
+        ASSERT_NE(original, nullptr);
+        EXPECT_EQ(require_result(older.read_chunk(*original)), selected_preview);
+        require_status(older.verify_all());
 
         const auto ambiguous_repair_source =
             temporary.path / "ambiguous-repair-thumbnail-history.licht";
@@ -228,6 +232,39 @@ namespace {
         EXPECT_EQ(ambiguous_repair.error().user_message(),
                   "The recovered project preview is ambiguous.");
         EXPECT_FALSE(fs::exists(ambiguous_repair_destination));
+    }
+
+    TEST(ProjectOperations, RestoreOlderSaveWithoutPublishedPreviewLocator) {
+        TemporaryDirectory temporary;
+        const std::vector<std::byte> preview{std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        for (const bool in_place : {false, true}) {
+            const auto source = make_document(temporary.path / (in_place ? "in-place.licht" : "source.licht"));
+            static_cast<void>(require_result(set_project_title(source, "Selected save")));
+            const auto selected = require_result(set_project_preview(source, preview));
+            static_cast<void>(require_result(set_project_title(source, "Newer save")));
+            const auto latest = require_result(set_project_title(source, "Latest save"));
+            ASSERT_FALSE(require_result(ProjectReader::open_generation(source, selected.generation)).preview());
+
+            const auto destination = in_place ? source : temporary.path / "restored.licht";
+            const auto restored = require_result(restore_save(source, selected.generation, destination));
+            EXPECT_EQ(restored.title, "Selected save");
+            EXPECT_EQ(restored.generation, in_place ? latest.generation + 1 : 1);
+            if (in_place)
+                EXPECT_EQ(restored.project_uuid, selected.project_uuid);
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_FALSE(reader.preview());
+            const auto* thumbnail = reader.find(FOURCC_THMB, fixed_uuid(1000));
+            ASSERT_NE(thumbnail, nullptr);
+            EXPECT_EQ(require_result(reader.read_chunk(*thumbnail)), preview);
+            require_status(reader.verify_all());
+
+            // A normal save may generate a new thumbnail after restoration.
+            const std::vector<std::byte> updated_preview{std::byte{'n'}, std::byte{'e'}, std::byte{'w'}};
+            static_cast<void>(require_result(set_project_preview(destination, updated_preview)));
+            auto updated = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(require_result(updated.read_preview()), updated_preview);
+            require_status(updated.verify_all());
+        }
     }
 
     TEST(ProjectOperations, RebindCheckpointKeepsRecoveryCopy) {

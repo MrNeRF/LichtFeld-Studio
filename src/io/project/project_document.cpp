@@ -4276,6 +4276,11 @@ namespace lfs::io::project {
 
         ProjectDocumentSaveReport report;
         std::optional<ChunkKey> rewritten_preview_key;
+        if (!preview_png.empty()) {
+            // A restored save can retain thumbnail chunks without a published
+            // preview. The writer uses the project key for the replacement.
+            rewritten_preview_key = ChunkKey{FOURCC_THMB, impl_->project_uuid};
+        }
         if (!preview_png.empty() && impl_->source_reader &&
             impl_->source_reader->preview().has_value()) {
             const auto& locator = *impl_->source_reader->preview();
