@@ -3,6 +3,7 @@
 #include "../src/io/cuda/morton_encoding.hpp"
 #include "app/include/app/converter.hpp"
 #include "core/argument_parser.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -711,4 +713,71 @@ TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
     auto loaded = Loader::create()->load(back.output_path);
     ASSERT_TRUE(loaded) << loaded.error().format();
     EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 128);
+}
+
+TEST(SsogFormat, ConverterPreservesUnicodeOutputNames) {
+    ScopedSsogDirectory dir;
+    const auto single_input =
+        dir.path / lfs::core::utf8_to_path("模型_日本語.ply");
+    ASSERT_TRUE(save_ply(
+        synthetic(128, 0), {.output_path = single_input}));
+
+    lfs::core::param::ConvertParameters single;
+    single.input_path = single_input;
+    single.format = lfs::core::param::OutputFormat::SSOG;
+    single.overwrite = true;
+    single.lod_levels = 2;
+    ASSERT_EQ(lfs::app::run_converter(single), 0);
+
+    auto single_output = single_input;
+    single_output.replace_extension(".ssog");
+    EXPECT_TRUE(fs::is_regular_file(single_output));
+    ASSERT_TRUE(load_ssog(single_output));
+
+    const auto converted_directory =
+        dir.path / lfs::core::utf8_to_path("変換先");
+    fs::create_directories(converted_directory);
+    lfs::core::param::ConvertParameters converted;
+    converted.input_path = single_input;
+    converted.output_path = converted_directory;
+    converted.format = lfs::core::param::OutputFormat::PLY;
+    converted.overwrite = true;
+    ASSERT_EQ(lfs::app::run_converter(converted), 0);
+    EXPECT_TRUE(fs::is_regular_file(
+        converted_directory /
+        lfs::core::utf8_to_path("模型_日本語_converted.ply")));
+
+    const auto input_directory =
+        dir.path / lfs::core::utf8_to_path("入力");
+    const auto output_directory =
+        dir.path / lfs::core::utf8_to_path("出力");
+    fs::create_directories(input_directory);
+    fs::create_directories(output_directory);
+    const std::array names{
+        "сцена_кириллица",
+        "场景_中文",
+    };
+    for (const auto* name : names) {
+        const auto input = input_directory /
+                           lfs::core::utf8_to_path(
+                               std::string(name) + ".ply");
+        ASSERT_TRUE(save_ply(
+            synthetic(128, 0), {.output_path = input}));
+    }
+
+    lfs::core::param::ConvertParameters batch;
+    batch.input_path = input_directory;
+    batch.output_path = output_directory;
+    batch.format = lfs::core::param::OutputFormat::SSOG;
+    batch.overwrite = true;
+    batch.lod_levels = 2;
+    ASSERT_EQ(lfs::app::run_converter(batch), 0);
+
+    for (const auto* name : names) {
+        const auto output = output_directory /
+                            lfs::core::utf8_to_path(
+                                std::string(name) + ".ssog");
+        EXPECT_TRUE(fs::is_regular_file(output));
+        ASSERT_TRUE(load_ssog(output));
+    }
 }

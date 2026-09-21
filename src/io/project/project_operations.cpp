@@ -2685,6 +2685,69 @@ namespace lfs::io::project {
         return availability;
     }
 
+    lfs::Result<std::vector<std::byte>>
+    encode_preview_from_image_file(const std::filesystem::path& image_path) {
+        return dataset_preview_png(image_path);
+    }
+
+    lfs::Result<std::vector<std::byte>>
+    encode_preview_from_first_dataset_image(const std::filesystem::path& path) {
+        auto document = ProjectDocument::open(path);
+        if (!document) {
+            return std::move(document).error();
+        }
+        const auto first = first_dataset_image(
+            document->project(), document->references(), document->parameters(),
+            path.parent_path());
+        if (!first) {
+            return fail<std::vector<std::byte>>(
+                lfs::ErrorCode::NotFound, path,
+                "The project has no reachable dataset image.",
+                "first_dataset_image returned no image", "preview.dataset");
+        }
+        return dataset_preview_png(*first);
+    }
+
+    lfs::Result<std::vector<std::byte>>
+    encode_preview_from_first_embedded_image(const std::filesystem::path& path) {
+        auto document = ProjectDocument::open(path);
+        if (!document) {
+            return std::move(document).error();
+        }
+        auto manifest = document->parameters().embedded_dataset();
+        if (!manifest) {
+            return std::move(manifest).error();
+        }
+        if (!*manifest) {
+            return fail<std::vector<std::byte>>(
+                lfs::ErrorCode::NotFound, path,
+                "The project has no embedded dataset image.",
+                "embedded dataset manifest is absent", "preview.dataset");
+        }
+        const auto entry = std::ranges::find_if(
+            (**manifest).entries,
+            [](const EmbeddedDatasetEntry& value) { return value.kind == "image"; });
+        if (entry == (**manifest).entries.end()) {
+            return fail<std::vector<std::byte>>(
+                lfs::ErrorCode::NotFound, path,
+                "The embedded dataset has no image payload.",
+                "embedded dataset manifest contains no image entry",
+                "preview.dataset");
+        }
+        const auto* payload = document->find_dataset_source(entry->chunk_uuid);
+        if (!payload) {
+            return fail<std::vector<std::byte>>(
+                lfs::ErrorCode::DataLoss, path,
+                "The embedded dataset image payload is missing.",
+                entry->chunk_uuid.to_string(), "preview.dataset");
+        }
+        auto image = read_lazy_payload(*payload);
+        if (!image) {
+            return std::move(image).error();
+        }
+        return encode_image_bytes(*image);
+    }
+
     lfs::Result<ProjectInspectorCard>
     preview_from_first_dataset_image(const std::filesystem::path& path) {
         auto lease = acquire_operation_lock(path);

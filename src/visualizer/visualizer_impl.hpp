@@ -146,6 +146,11 @@ namespace lfs::vis {
         lfs::Result<void> projectSetLicense(
             const lfs::io::project::ProjectLicense& license) override;
         lfs::Result<void> projectClearLicense() override;
+        lfs::Result<void>
+        projectSetPreview(
+            std::span<const std::byte> png_bytes,
+            const std::filesystem::path& expected_path = {},
+            std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
         bool consumeProjectSaveStarted() override;
@@ -270,6 +275,7 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;

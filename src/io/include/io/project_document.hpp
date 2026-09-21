@@ -381,7 +381,12 @@ namespace lfs::io::project {
         save_autosave(
             const std::filesystem::path& sidecar_path,
             const ProjectDocumentAutosaveOptions& options);
-
+        // Append THMB onto the current source generation without encoding
+        // dirty chapters or payloads. Clean proofs are rebound to the new
+        // head so a later save can carry the thumbnail forward.
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        save_preview(std::span<const std::byte> png_bytes,
+                     const ProjectDocumentSaveOptions& options = {});
         // Phase-A interactive shell. Heavy geometry and selection masks stay
         // deferred, while nodes and selection-group metadata are coherent.
         [[nodiscard]] lfs::Result<std::unique_ptr<lfs::core::Scene>>

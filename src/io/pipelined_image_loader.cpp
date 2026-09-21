@@ -2156,10 +2156,7 @@ namespace lfs::io {
             result.undistort = request.undistort;
 
             try {
-                // Every source is canonicalized once for this run before it is
-                // consumed from the encoded run cache. Never treat an original
-                // JPEG as an already-canonical blob.
-                const bool needs_requested_processing = true;
+                const bool needs_requested_processing = load_params_need_processing(request.params);
 
                 if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
                     result.jpeg_data = std::move(cached);
@@ -2178,10 +2175,23 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    result.needs_processing = needs_requested_processing;
-                    cold_queue_.push(std::move(result));
-                    std::lock_guard<std::mutex> lock(stats_mutex_);
-                    ++stats_.cold_path_misses;
+                    if (result.is_original_jpeg && !needs_requested_processing) {
+                        // An unchanged JPEG is already a usable encoded cache
+                        // entry. Avoid a decode/re-encode and its quality loss.
+                        auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
+                        put_in_jpeg_cache(result.cache_key, data);
+                        result.jpeg_data = std::move(data);
+                        result.needs_processing = false;
+                        result.is_cache_hit = true;
+                        hot_queue_.push(std::move(result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.hot_path_hits;
+                    } else {
+                        result.needs_processing = true;
+                        cold_queue_.push(std::move(result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.cold_path_misses;
+                    }
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());

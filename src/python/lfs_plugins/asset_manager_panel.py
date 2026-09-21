@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 import uuid
 import queue
 from datetime import datetime
@@ -1255,13 +1256,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False, False
 
     @staticmethod
-    def _has_renderable_project_viewport(path: str) -> bool:
+    def _is_active_project_path(path: str) -> bool:
         active_path = AssetManagerPanel._active_project_path()
         if not path or not active_path:
             return False
         try:
-            if Path(path).resolve() != Path(active_path).resolve():
-                return False
+            return Path(path).resolve() == Path(active_path).resolve()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _has_renderable_project_viewport(path: str) -> bool:
+        if not AssetManagerPanel._is_active_project_path(path):
+            return False
+        try:
             scene_getter = getattr(lf, "get_render_scene", None)
             exporter = getattr(lf, "export_viewport_image", None)
             if not callable(scene_getter) or not callable(exporter):
@@ -2759,16 +2767,57 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         source = str(self._dialog_data.get("source") or "first_dataset")
         after = self._gallery_thumbnail_callback(asset) if self._dialog_data.get("use_gallery_cover") else None
         path = str(asset["path"])
+        active = self._is_active_project_path(path)
+        project_id = str(asset.get("native_project_uuid") or asset.get("project_uuid") or asset["id"])
+        if active and project_id.startswith("recent:"):
+            card = self._native_io_call("inspect_project_card", path)
+            project_id = str(card.project_uuid)
         if source == "image_file":
             image_path = str(getattr(lf.ui, "open_image_dialog", lambda *_args: "")(""))
             if not image_path:
                 return False
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after, reverify_asset=True)
+            if active:
+                self._start_project_operation(
+                    asset["id"],
+                    tr("projects.action.update_thumbnail"),
+                    lambda _progress, _cancel: self._apply_encoded_active_preview(
+                        path, project_id, "encode_preview_from_image_file", image_path
+                    ),
+                    after=after,
+                    reverify_asset=True,
+                    closed_file=False,
+                )
+            else:
+                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after, reverify_asset=True)
         elif source == "viewport":
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._capture_viewport_preview(path, asset["id"]), after=after, reverify_asset=True)
+            self._start_project_operation(
+                asset["id"],
+                tr("projects.action.update_thumbnail"),
+                lambda _progress, _cancel: self._capture_viewport_preview(path, project_id),
+                after=after,
+                reverify_asset=True,
+                closed_file=False,
+            )
         else:
             native_name = "preview_from_first_embedded_image" if source == "first_embedded" else "preview_from_first_dataset_image"
-            self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after, reverify_asset=True)
+            encode_name = (
+                "encode_preview_from_first_embedded_image"
+                if source == "first_embedded"
+                else "encode_preview_from_first_dataset_image"
+            )
+            if active:
+                self._start_project_operation(
+                    asset["id"],
+                    tr("projects.action.update_thumbnail"),
+                    lambda _progress, _cancel: self._apply_encoded_active_preview(
+                        path, project_id, encode_name, path
+                    ),
+                    after=after,
+                    reverify_asset=True,
+                    closed_file=False,
+                )
+            else:
+                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after, reverify_asset=True)
         return True
 
     @staticmethod
@@ -2803,7 +2852,53 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             if not callable(exporter):
                 raise RuntimeError("The current viewport has no captured image")
             exporter(str(target), "png")
-            return AssetManagerPanel._native_io_call("set_project_preview", path, target.read_bytes())
+            png = target.read_bytes()
+        if not AssetManagerPanel._is_active_project_path(path):
+            raise RuntimeError("The current viewport no longer belongs to this project")
+        AssetManagerPanel._apply_active_project_preview(path, project_id, png)
+
+    @staticmethod
+    def _apply_encoded_active_preview(
+        path: str, project_id: str, native_name: str, *args: Any
+    ) -> None:
+        png = AssetManagerPanel._native_io_call(native_name, *args)
+        AssetManagerPanel._apply_active_project_preview(path, project_id, png)
+
+    @staticmethod
+    def _thumbnail_error_message(error: Any) -> str:
+        message = str(error)
+        for line in message.splitlines():
+            if line.strip().startswith("user_message:"):
+                return line.split("user_message:", 1)[1].strip()
+        return message
+
+    @staticmethod
+    def _apply_active_project_preview(path: str, project_id: str, png: Any) -> None:
+        apply = getattr(lf, "project_set_preview", None)
+        if not callable(apply):
+            raise RuntimeError("The active project cannot accept this thumbnail")
+        try:
+            apply(png, path=path, project_uuid=str(project_id or ""))
+        except RuntimeError as exc:
+            raise RuntimeError(AssetManagerPanel._thumbnail_error_message(exc)) from exc
+        poll = getattr(lf, "project_poll_write", None)
+        if not callable(poll):
+            return
+        deadline = time.monotonic() + 600.0
+        while time.monotonic() < deadline:
+            try:
+                state = poll()
+            except Exception as exc:
+                raise RuntimeError(AssetManagerPanel._thumbnail_error_message(exc)) from exc
+            if not isinstance(state, dict):
+                return
+            error = state.get("error") or ""
+            if error:
+                raise RuntimeError(AssetManagerPanel._thumbnail_error_message(error))
+            if not state.get("running"):
+                return
+            time.sleep(0.05)
+        raise RuntimeError("The project thumbnail write did not finish")
 
     def _start_project_operation(
         self,
@@ -2816,6 +2911,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         content_row: Optional[Dict[str, Any]] = None,
         operation_kind: str = "",
         reverify_asset: bool = False,
+        closed_file: bool = True,
     ) -> None:
         if self._contents_busy(asset_id):
             return
@@ -2889,14 +2985,23 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._dirty_selection()
 
         def worker() -> None:
-            from .project_operations import ProjectOperations
-            store = ProjectOperations(lf.io)
             facts = None
             inspection_error = ""
 
             try:
-                store.run(operation_id, asset, title,
-                    lambda: operation(lambda *_args: None, cancel.is_set), backup=backup, metadata=metadata)
+                if closed_file:
+                    from .project_operations import ProjectOperations
+                    store = ProjectOperations(lf.io)
+                    store.run(
+                        operation_id,
+                        asset,
+                        title,
+                        lambda: operation(lambda *_args: None, cancel.is_set),
+                        backup=backup,
+                        metadata=metadata,
+                    )
+                else:
+                    operation(lambda *_args: None, cancel.is_set)
                 error = None
             except Exception as exc:
                 _log.exception("Project worker failed operation=%s path=%s", title, asset["path"])

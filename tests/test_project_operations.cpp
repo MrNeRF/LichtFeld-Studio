@@ -439,4 +439,113 @@ namespace {
                   "The project is open for writing in another LichtFeld Studio");
     }
 
+    TEST(ProjectOperations, ClosedFilePreviewWriteDoesNotIncludeUnsavedLiveEdits) {
+        TemporaryDirectory temporary;
+        const auto path = make_document(temporary.path / "stale-preview.licht");
+        auto live = require_result(ProjectDocument::open(path));
+        require_status(live.edit_project().dom().set("marker", "unsaved"));
+        const std::vector<std::byte> preview{
+            std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        static_cast<void>(require_result(set_project_preview(path, preview)));
+        auto disk = require_result(ProjectDocument::open(path));
+        const auto marker = disk.project().dom().get<std::string>("marker");
+        EXPECT_TRUE(!marker.has_value() || *marker != "unsaved");
+        EXPECT_EQ(
+            require_result(require_result(ProjectReader::open(path)).read_preview()),
+            preview);
+        EXPECT_EQ(live.project().dom().get<std::string>("marker"),
+                  std::optional<std::string>{"unsaved"});
+    }
+
+    TEST(ProjectOperations, LiveDocumentThumbnailOnlyWritePreservesDirtyChapters) {
+        TemporaryDirectory temporary;
+        const auto path = make_document(temporary.path / "thumb-only.licht");
+        auto live = require_result(ProjectDocument::open(path));
+        require_status(live.edit_project().dom().set("marker", "unsaved"));
+        ASSERT_TRUE(live.dirty());
+        const std::vector<std::byte> preview{
+            std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        ProjectDocumentSaveOptions options;
+        options.index_compression = IndexCompression::StoredForDeterministicTests;
+        options.disk_reserve_bytes = 0;
+        options.regenerate_dataset_preview = false;
+        static_cast<void>(require_result(live.save_preview(preview, options)));
+        EXPECT_TRUE(live.dirty());
+        EXPECT_EQ(live.project().dom().get<std::string>("marker"),
+                  std::optional<std::string>{"unsaved"});
+        auto disk = require_result(ProjectDocument::open(path));
+        const auto disk_marker = disk.project().dom().get<std::string>("marker");
+        EXPECT_TRUE(!disk_marker.has_value() || *disk_marker != "unsaved");
+        EXPECT_EQ(
+            require_result(require_result(ProjectReader::open(path)).read_preview()),
+            preview);
+        static_cast<void>(require_result(live.save(path, options)));
+        auto saved = require_result(ProjectDocument::open(path));
+        const auto saved_marker = saved.project().dom().get<std::string>("marker");
+        ASSERT_TRUE(saved_marker.has_value());
+        EXPECT_EQ(*saved_marker, "unsaved");
+        EXPECT_EQ(
+            require_result(require_result(ProjectReader::open(path)).read_preview()),
+            preview);
+    }
+
+    TEST(ProjectOperations, ThumbnailPreservesUnsavedLazyPayloadsAndRemovals) {
+        TemporaryDirectory temporary;
+        const auto path = make_document(temporary.path / "thumb-payloads.licht");
+        auto live = require_result(ProjectDocument::open(path));
+        const auto removed = fixed_uuid(6101);
+        const auto changed = fixed_uuid(6102);
+        const auto added = fixed_uuid(6103);
+        const auto old_payload = checkpoint_payload(1);
+        const auto new_payload = checkpoint_payload(2);
+        for (const auto id : {removed, changed}) {
+            require_status(live.set_checkpoint(id, require_result(LazyChunkValue::from_owned(old_payload, id))));
+        }
+        static_cast<void>(require_result(save_document(live, path)));
+        ASSERT_TRUE(live.remove_checkpoint(removed));
+        for (const auto id : {changed, added}) {
+            require_status(live.set_checkpoint(id, require_result(LazyChunkValue::from_owned(new_payload, id))));
+        }
+        const std::vector<std::byte> preview{std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        static_cast<void>(require_result(live.save_preview(preview)));
+        ASSERT_TRUE(live.dirty());
+        EXPECT_EQ(live.find_checkpoint(removed), nullptr);
+        ASSERT_NE(live.find_checkpoint(added), nullptr);
+        auto disk = require_result(ProjectReader::open(path));
+        ASSERT_NE(disk.find(FOURCC_CKPT, removed), nullptr);
+        EXPECT_EQ(disk.find(FOURCC_CKPT, removed)->row_kind, RowKind::Live);
+        EXPECT_EQ(require_result(disk.read_chunk(*disk.find(FOURCC_CKPT, changed))), old_payload);
+        EXPECT_EQ(disk.find(FOURCC_CKPT, added), nullptr);
+        static_cast<void>(require_result(save_document(live, path)));
+        auto saved = require_result(ProjectReader::open(path));
+        EXPECT_EQ(saved.find(FOURCC_CKPT, removed)->row_kind, RowKind::Tombstone);
+        for (const auto id : {changed, added}) {
+            ASSERT_NE(saved.find(FOURCC_CKPT, id), nullptr);
+            EXPECT_EQ(require_result(saved.read_chunk(*saved.find(FOURCC_CKPT, id))), new_payload);
+        }
+        EXPECT_EQ(require_result(saved.read_preview()), preview);
+    }
+
+    TEST(ProjectOperations, LiveDocumentPreviewSaveKeepsUnsavedEdits) {
+        TemporaryDirectory temporary;
+        const auto path = make_document(temporary.path / "live-preview.licht");
+        auto live = require_result(ProjectDocument::open(path));
+        require_status(live.edit_project().dom().set("marker", "unsaved"));
+        const std::vector<std::byte> preview{
+            std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+        ProjectDocumentSaveOptions options;
+        options.index_compression = IndexCompression::StoredForDeterministicTests;
+        options.disk_reserve_bytes = 0;
+        options.preview_png = preview;
+        options.regenerate_dataset_preview = false;
+        static_cast<void>(require_result(live.save(path, options)));
+        auto disk = require_result(ProjectDocument::open(path));
+        const auto marker = disk.project().dom().get<std::string>("marker");
+        ASSERT_TRUE(marker.has_value());
+        EXPECT_EQ(*marker, "unsaved");
+        EXPECT_EQ(
+            require_result(require_result(ProjectReader::open(path)).read_preview()),
+            preview);
+    }
+
 } // namespace

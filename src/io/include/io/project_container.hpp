@@ -549,6 +549,7 @@ namespace lfs::io::project {
         // in-process lock holder wait instead of failing immediately.
         std::chrono::milliseconds writer_lock_wait{0};
         lfs::core::Uuid expected_project_uuid;
+        lfs::core::Uuid expected_commit_uuid;
     };
 
     struct ChunkWriteOptions {

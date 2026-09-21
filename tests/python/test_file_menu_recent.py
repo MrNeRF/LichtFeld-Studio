@@ -572,20 +572,66 @@ def test_immediate_import_error_reports_reason(monkeypatch):
     assert "load failed" in file_menu.lf.warning_messages[0]
 
 
-def test_new_project_while_training_opens_dialog_without_prompt(monkeypatch):
+def test_new_project_opens_unsaved_workspace_without_create_dialog(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
-    file_menu.lf.is_training_active = lambda: True
-    file_menu.lf.project_is_dirty = lambda: True
-    file_menu.lf.project_has_path = lambda: True
     dialogs = []
     monkeypatch.setattr(import_module("lfs_plugins.import_panels"),
                         "open_new_project_panel", dialogs.append)
 
     assert file_menu.NewProjectOperator().execute(None) == {"FINISHED"}
 
-    assert dialogs == [""]
-    assert file_menu.lf.new_project_calls == []
+    assert file_menu.lf.new_project_calls == [(True, False)]
+    assert file_menu.lf.project_create_calls == []
     assert file_menu.lf.confirm_dialogs == []
+    assert dialogs == []
+
+
+@pytest.mark.parametrize("has_path", [False, True])
+@pytest.mark.parametrize("choice", ["save", "discard", "cancel", "save_failed"])
+def test_new_project_protects_unsaved_work(monkeypatch, has_path, choice):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: has_path
+    saves = []
+
+    def save(*args, **kwargs):
+        saves.append((args, kwargs))
+        assert file_menu.lf.new_project_calls == []
+        if choice == "save_failed":
+            return False
+        file_menu.lf.project_has_path = lambda: True
+        return True
+
+    file_menu.lf.project_save = save
+    file_menu.lf.project_save_as = save
+    file_menu.NewProjectOperator().execute(None)
+    assert file_menu.lf.new_project_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    save_label = "tr:common.save" if has_path else "tr:menu.file.save_project_as"
+    assert title == "tr:menu.file.new_project"
+    assert buttons == [save_label, "tr:unsaved_work.continue_without_saving", "tr:common.cancel"]
+    callback({"save": save_label, "save_failed": save_label,
+              "discard": buttons[1], "cancel": buttons[2]}[choice])
+    assert file_menu.lf.new_project_calls == ([(True, False)] if choice in ("save", "discard") else [])
+    assert len(saves) == int(choice in ("save", "save_failed"))
+    if saves:
+        assert saves[0] == ((() if has_path else ("",)), {"wait": True})
+    assert file_menu.lf.project_create_calls == []
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_new_project_asks_before_stopping_training(monkeypatch, stop):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.is_training_active = lambda: True
+    file_menu.NewProjectOperator().execute(None)
+    assert file_menu.lf.new_project_calls == []
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:project_switch.stop_training_title"
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+    callback(buttons[0 if stop else 1])
+    assert file_menu.lf.new_project_calls == ([(True, True)] if stop else [])
+    assert file_menu.lf.project_create_calls == []
 
 
 def test_open_recent_while_training_prompts_instead_of_opening(

@@ -2551,6 +2551,180 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           ActiveProjectPreviewWritePreservesEditsAndQueuesSave) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "preview-live.licht";
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "unsaved-preview-edit"),
+                lfs::core::NULL_NODE);
+            const std::vector<std::byte> preview{
+                std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+
+            auto held = viewer.jobs().init(
+                JobType::ProjectWrite,
+                "Held writer for thumbnail race");
+            ASSERT_TRUE(held);
+            auto previewed = viewer.projectSetPreview(
+                preview, project_path);
+            ASSERT_TRUE(previewed)
+                << lfs::format_for_developer(previewed.error());
+            auto queued_save = viewer.projectSave(false);
+            ASSERT_TRUE(queued_save)
+                << lfs::format_for_developer(queued_save.error());
+
+            std::jthread worker([&] {
+                viewer.jobs().work(*held);
+                viewer.jobs().finishWork(*held, false);
+            });
+            worker.join();
+            auto completion = viewer.jobs().update(*held);
+            ASSERT_TRUE(completion);
+            ASSERT_EQ(
+                completion->status, JobStatus::CompletionPending);
+            viewer.jobs().completed(*held);
+            viewer.jobs().free(*held);
+            EXPECT_TRUE(viewer.projectPollWrite()->running);
+            EXPECT_FALSE(viewer.project_lifecycle_->prepareTrainingStartProject());
+            viewer.projectWaitWrite();
+            EXPECT_FALSE(viewer.projectPollWrite()->running);
+            auto queued_disk = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(project_path));
+            const auto queued_nodes = lfs::test::licht::require_result(queued_disk.scene_graph().nodes());
+            EXPECT_TRUE(std::ranges::any_of(queued_nodes, [](const auto& node) {
+                return node.name == "unsaved-preview-edit";
+            }));
+            auto queued_reader = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(project_path));
+            EXPECT_EQ(lfs::test::licht::require_result(queued_reader.read_preview()), preview);
+        }
+
+        std::filesystem::remove(project_path);
+        write_empty_project(project_path);
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                }));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "unsaved-preview-edit"),
+                lfs::core::NULL_NODE);
+            const std::vector<std::byte> preview{
+                std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+            auto previewed = viewer.projectSetPreview(
+                preview, project_path);
+            ASSERT_TRUE(previewed)
+                << lfs::format_for_developer(previewed.error());
+            viewer.projectWaitWrite();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    return info && !info->project_write_running &&
+                           !viewer.jobs().anyRunning(
+                               JobType::ProjectWrite);
+                }));
+            auto dirty_after_thumbnail = viewer.projectIsDirty();
+            ASSERT_TRUE(dirty_after_thumbnail);
+            EXPECT_TRUE(*dirty_after_thumbnail);
+            auto reader = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(
+                    project_path));
+            EXPECT_EQ(
+                lfs::test::licht::require_result(
+                    reader.read_preview()),
+                preview);
+            auto disk = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+            auto nodes = lfs::test::licht::require_result(
+                disk.scene_graph().nodes());
+            EXPECT_TRUE(std::ranges::none_of(
+                nodes, [](const auto& node) {
+                    return node.name == "unsaved-preview-edit";
+                }));
+
+            ASSERT_TRUE(viewer.projectSave(false));
+            viewer.projectWaitWrite();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            auto dirty_after_save = viewer.projectIsDirty();
+            ASSERT_TRUE(dirty_after_save);
+            EXPECT_FALSE(*dirty_after_save);
+            auto saved_reader = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(
+                    project_path));
+            EXPECT_EQ(
+                lfs::test::licht::require_result(
+                    saved_reader.read_preview()),
+                preview);
+            auto saved_doc = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+            auto saved_nodes = lfs::test::licht::require_result(
+                saved_doc.scene_graph().nodes());
+            EXPECT_TRUE(std::ranges::any_of(
+                saved_nodes, [](const auto& node) {
+                    return node.name == "unsaved-preview-edit";
+                }));
+            ASSERT_TRUE(arm_running_trainer(viewer));
+            auto rejected = viewer.projectSetPreview(preview, project_path);
+            EXPECT_FALSE(rejected);
+            EXPECT_TRUE(viewer.project_lifecycle_->pending_preview_png_.empty());
+        }
+        std::filesystem::remove(project_path);
+        write_empty_project(project_path);
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info && info->hydration_state == "complete";
+            }));
+            const std::vector<std::byte> preview{std::byte{'p'}, std::byte{'n'}, std::byte{'g'}};
+            auto external = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(project_path));
+            ASSERT_TRUE(external.save_preview(preview));
+            ASSERT_TRUE(viewer.projectSetPreview(preview, project_path));
+            viewer.projectWaitWrite();
+            EXPECT_FALSE(viewer.projectPollWrite()->error.empty());
+            EXPECT_TRUE(viewer.project_lifecycle_->pending_preview_png_.empty());
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                viewer.project_lifecycle_->updateMaintenance();
+                EXPECT_FALSE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            ForceExitDiscardDeletesAutosaveSidecarOnTeardown) {
         const auto& temporary = temporary_.path;
         const auto project_path =

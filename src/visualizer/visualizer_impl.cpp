@@ -4245,6 +4245,22 @@ namespace lfs::vis {
         return project_lifecycle_->clearLicense();
     }
 
+    lfs::Result<void> VisualizerImpl::projectSetPreview(
+        const std::span<const std::byte> png_bytes,
+        const std::filesystem::path& expected_path,
+        std::string expected_project_uuid) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->setPreview(
+            png_bytes, expected_path,
+            std::move(expected_project_uuid));
+    }
+
     lfs::Result<ProjectWritePoll>
     VisualizerImpl::projectPollWrite() {
         if (!project_lifecycle_) {

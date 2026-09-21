@@ -105,6 +105,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -302,6 +303,33 @@ namespace {
         return lfs::vis::post_guarded_and_wait<void>(
             viewer, context,
             [&viewer] { return viewer.projectClearLicense(); },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<void> post_project_preview_set_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        std::vector<std::byte> png_bytes,
+        std::filesystem::path expected_path,
+        std::string expected_project_uuid) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectSetPreview(
+                png_bytes, expected_path, expected_project_uuid);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_set_preview",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer, png_bytes = std::move(png_bytes),
+             expected_path = std::move(expected_path),
+             expected_project_uuid =
+                 std::move(expected_project_uuid)]() mutable {
+                return viewer.projectSetPreview(
+                    png_bytes, expected_path, expected_project_uuid);
+            },
             python_viewer_shutdown_error());
     }
 
@@ -1332,6 +1360,70 @@ NB_MODULE(lichtfeld, m) {
             }
         },
         "Clear the license metadata for the active project");
+    m.def(
+        "project_set_preview",
+        [](const nb::bytes& png, const bool wait,
+           const std::string& path, const std::string& project_uuid) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_set_preview failed: no visualizer is available");
+            }
+            std::vector<std::byte> png_bytes(
+                static_cast<const std::byte*>(png.data()),
+                static_cast<const std::byte*>(png.data()) + png.size());
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_preview_set_to_viewer(
+                    *viewer, std::move(png_bytes),
+                    python_utf8_path(path), project_uuid);
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_set_preview failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+            if (!wait) {
+                return true;
+            }
+            {
+                nb::gil_scoped_release release;
+                const lfs::core::TaskContext context{
+                    .name = "python.project_set_preview.wait",
+                    .domain = lfs::ErrorDomain::Python,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                };
+                if (auto posted =
+                        lfs::vis::post_guarded_and_wait<void>(
+                            *viewer, context,
+                            [viewer]() -> lfs::Result<void> {
+                                viewer->projectWaitWrite();
+                                return {};
+                            },
+                            python_viewer_shutdown_error());
+                    !posted) {
+                    throw std::runtime_error(std::format(
+                        "project_set_preview wait failed: {}",
+                        lfs::format_for_developer(posted.error())));
+                }
+            }
+            auto poll = viewer->projectPollWrite();
+            if (!poll) {
+                throw std::runtime_error(std::format(
+                    "project_set_preview wait failed: {}",
+                    lfs::format_for_developer(poll.error())));
+            }
+            if (!poll->error.empty()) {
+                throw std::runtime_error(poll->error);
+            }
+            return true;
+        },
+        nb::arg("png_bytes"),
+        nb::arg("wait") = false,
+        nb::arg("path") = "",
+        nb::arg("project_uuid") = "",
+        "Write a thumbnail onto the active project without saving unsaved edits");
     m.def(
         "project_poll_write", []() {
             nb::dict result;

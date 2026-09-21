@@ -28,6 +28,7 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
     class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
     class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -244,6 +245,10 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         setLicense(const lfs::io::project::ProjectLicense& license);
         [[nodiscard]] lfs::Result<void> clearLicense();
+        [[nodiscard]] lfs::Result<void>
+        setPreview(std::span<const std::byte> png_bytes,
+                   const std::filesystem::path& expected_path = {},
+                   std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
@@ -326,6 +331,7 @@ namespace lfs::vis::project {
             std::string* error_message = nullptr);
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -454,6 +460,7 @@ namespace lfs::vis::project {
             TrainingExplicitSave,
             TrainingCloseSave,
             DatasetEmbed,
+            Thumbnail,
         };
 
         using DeclinedRecoveryIdentity = DismissedRecoveryEntry;
@@ -596,7 +603,17 @@ namespace lfs::vis::project {
         waitOutTrainerPublishForExplicitSave();
         [[nodiscard]] bool
         queueExplicitSaveIfTrainerWriterInFlight(bool regenerate_preview);
+        [[nodiscard]] bool
+        queueExplicitSaveIfNonWaitableProjectWriteInFlight(
+            bool regenerate_preview);
         void processPendingExplicitSave();
+        void processPendingThumbnailWrite();
+        [[nodiscard]] lfs::Result<std::vector<std::byte>>
+        explicitSavePreviewPng(bool regenerate_preview);
+        void clearPendingExplicitPreview();
+        [[nodiscard]] lfs::Result<void>
+        startThumbnailWrite();
+        [[nodiscard]] lfs::Result<void> thumbnailWriteAllowed() const;
         [[nodiscard]] lfs::Result<void>
         ensureDocumentMatchesBoundMaster();
         [[nodiscard]] lfs::Result<void>
@@ -819,6 +836,11 @@ namespace lfs::vis::project {
         std::atomic<CloseSaveState>
             close_save_state_{CloseSaveState::Idle};
         std::optional<bool> pending_explicit_save_regenerate_preview_;
+        std::vector<std::byte> pending_preview_png_;
+        std::filesystem::path pending_preview_path_;
+        std::string pending_preview_project_uuid_;
+        std::uint64_t pending_preview_generation_ = 0;
+        std::uint64_t in_flight_preview_generation_ = 0;
         mutable std::mutex close_save_mutex_;
         std::string close_save_error_;
         std::string hydration_error_;

@@ -103,10 +103,13 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
+        test_converter_output_paths.cpp
         test_converter_overwrite.cpp
         licht_format_test_runtime.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
         ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
         ${CMAKE_SOURCE_DIR}/src/core/crash_handler.cpp
         ${CMAKE_SOURCE_DIR}/src/core/error.cpp
@@ -432,6 +435,7 @@ set(TEST_FILES
     test_provenance.cpp
     test_converter_usd.cpp
     test_converter_licht.cpp
+    test_converter_output_paths.cpp
     test_converter_overwrite.cpp
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
@@ -677,6 +681,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
