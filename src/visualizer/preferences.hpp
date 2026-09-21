@@ -63,6 +63,8 @@ namespace lfs::vis {
 
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();
+        void setOpenProjectManagerAtStartup(bool enabled);
+        [[nodiscard]] bool openProjectManagerAtStartup();
         void setRememberProjectManagerState(bool enabled);
         [[nodiscard]] bool rememberProjectManagerState();
         void setProjectManagerState(std::string_view serialized_state);

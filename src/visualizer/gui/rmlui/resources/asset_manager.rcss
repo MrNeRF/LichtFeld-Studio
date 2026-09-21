@@ -986,6 +986,7 @@
 .asset-view-toggle-icons { display: flex; flex: 0 0 auto; height: 24dp; gap: 8dp; }
 .asset-view-button { width: 24dp; height: 24dp; min-width: 24dp; min-height: 24dp; padding: 0; }
 .asset-view-button img { width: 16dp; height: 16dp; }
+.asset-toolbar-view img { width: 16dp; height: 16dp; }
 
 #asset-main-row {
     position: relative;
@@ -1035,7 +1036,12 @@
 .asset-gallery-empty-search { display: flex; align-items: center; gap: 8dp; white-space: nowrap; }
 .asset-gallery-notice, .gallery-completion, .gallery-empty { padding: 8dp 12dp; }
 .asset-gallery-scroll { flex: 1 1 0dp; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#asset-gallery.is-loading > .asset-list-header, #asset-gallery.is-loading > .asset-gallery-scroll { display: none; }
 .asset-scroll-shell { min-width: 0; }
+.asset-catalog-loading { flex: 1 1 0dp; min-width: 0; min-height: 96dp; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10dp; }
+.asset-loading-label { font-size: 12dp; }
+.asset-loading-track { width: 96dp; height: 3dp; overflow: hidden; border-radius: 2dp; }
+.asset-loading-fill { display: block; width: 100%; height: 100%; animation: gallery-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 
 .asset-card-grid { display: flex; flex-direction: column; gap: 0; padding: 12dp; }
 .asset-card-grid-window { display: flex; flex-wrap: wrap; gap: 12dp; align-items: flex-start; }
@@ -1200,15 +1206,16 @@
 .asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { display: flex; }
 .asset-shell.is-narrow #asset-info-thumbnail, .asset-shell.is-compact #asset-info-thumbnail { align-self: center; }
 .asset-shell.is-compact .asset-toolbar-filter, .asset-shell.is-compact .asset-sort-button { display: none; }
-.asset-shell.is-compact .asset-toolbar-view { display: block; }
-.asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-compact .asset-thumbnail-slider, .asset-shell.is-compact .asset-check-gallery { display: none; }
+.asset-shell.is-compact .asset-toolbar-view { display: inline-flex; }
+.asset-shell.is-compact .asset-thumbnail-slider, .asset-shell.is-compact .asset-check-gallery { display: none; }
 .asset-shell.is-compact .asset-import-button { display: none; }
 .asset-shell.is-compact .asset-add-existing-icon { display: block; }
 .asset-shell.is-narrow .asset-toolbar-filter, .asset-shell.is-narrow .asset-sort-button { display: none; }
-.asset-shell.is-narrow .asset-toolbar-view { display: block; }
-.asset-shell.is-narrow .asset-view-toggle-icons, .asset-shell.is-narrow .asset-thumbnail-slider { display: none; }
+.asset-shell.is-narrow .asset-toolbar-view { display: inline-flex; }
+.asset-shell.is-narrow .asset-thumbnail-slider { display: none; }
 .asset-shell.is-narrow .asset-check-gallery,
-.asset-shell.is-compact .asset-check-gallery { display: inline-flex; width: 24dp; min-width: 24dp; max-width: 24dp; padding: 0; }
+.asset-shell.is-compact .asset-check-gallery { width: 24dp; min-width: 24dp; max-width: 24dp; padding: 0; }
+.asset-shell.is-narrow .asset-check-gallery { display: inline-flex; }
 .asset-shell.is-narrow .asset-check-gallery .asset-button-text,
 .asset-shell.is-compact .asset-check-gallery .asset-button-text,
 .asset-shell.is-narrow .asset-check-gallery .gallery-checked,
@@ -1218,13 +1225,12 @@
 .asset-shell.is-narrow .asset-import-button { display: none; }
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 
-.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; row-gap: 16dp; }
+.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; column-gap: 4dp; row-gap: 16dp; }
 .asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
+.asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-narrow .asset-view-toggle-icons { gap: 4dp; }
 
 .asset-shell.is-narrow #asset-popup-toolbar,
 .asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
-.asset-shell.is-compact .asset-check-gallery { display: inline-flex; }
-.asset-shell.is-compact .asset-toolbar-view, .asset-shell.is-narrow .asset-toolbar-view { flex: 1; }
 .asset-shell.is-compact .asset-panel-close, .asset-shell.is-narrow .asset-panel-close { margin-left: 0; }
 .asset-shell.is-medium .asset-import-button { display: none; }
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }

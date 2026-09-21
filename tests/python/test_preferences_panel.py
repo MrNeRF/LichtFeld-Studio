@@ -67,7 +67,11 @@ def preferences_panel_module(monkeypatch):
         navigation_speed=8.0,
         project_location="",
         embed_dataset_by_default=False,
-        project_manager_preferences={"defaultView": "remember", "rememberState": True},
+        project_manager_preferences={
+            "defaultView": "remember",
+            "openAtStartup": True,
+            "rememberState": True,
+        },
     )
 
     def set_project_location(path):
@@ -362,7 +366,7 @@ def preferences_panel_module(monkeypatch):
         lambda: setattr(
             state,
             "project_manager_preferences",
-            {"defaultView": "remember", "rememberState": True},
+            {"defaultView": "remember", "openAtStartup": True, "rememberState": True},
         ),
     )
     return module, state
@@ -383,10 +387,12 @@ def test_project_manager_preferences_round_trip_and_reset(preferences_panel_modu
     panel = module.PreferencesPanel()
 
     panel._set_project_manager_default_view("gallery")
+    panel._set_project_manager_open_at_startup(False)
     panel._set_project_manager_remember_state(False)
 
     assert state.project_manager_preferences == {
         "defaultView": "gallery",
+        "openAtStartup": False,
         "rememberState": False,
     }
 
@@ -394,6 +400,7 @@ def test_project_manager_preferences_round_trip_and_reset(preferences_panel_modu
 
     assert state.project_manager_preferences == {
         "defaultView": "remember",
+        "openAtStartup": True,
         "rememberState": True,
     }
 
@@ -488,6 +495,20 @@ def test_general_preferences_expose_project_location_controls():
     assert 'data-value="project_location"' in rml
     assert 'data-event-click="browse_project_location"' in rml
     assert 'data-event-click="use_default_project_location"' in rml
+
+
+def test_project_manager_uses_a_standard_section_and_uniform_control_width():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "preferences.rml").read_text(encoding="utf-8")
+    rcss = (resources / "preferences.rcss").read_text(encoding="utf-8")
+
+    assert 'data-event-click="toggle_section(\'project_manager\')"' in rml
+    assert 'data-if="project_manager_expanded"' in rml
+    assert "preferences-subheading" not in rml
+    select_rule = rcss.split(".preferences-select {", 1)[1].split("}", 1)[0]
+    assert "box-sizing: border-box;" in select_rule
+    assert "width: 200dp;" in select_rule
 
 
 def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):

@@ -12,6 +12,7 @@ import lichtfeld as lf
 
 DEFAULTS = {
     "defaultView": "remember",
+    "openAtStartup": True,
     "rememberState": True,
 }
 
@@ -21,7 +22,7 @@ def _validate(key: str, value: Any) -> Any:
         if text not in {"remember", "gallery", "list"}:
             raise ValueError("Unsupported Project Manager default view")
         return text
-    if key == "rememberState" and isinstance(value, bool):
+    if key in {"openAtStartup", "rememberState"} and isinstance(value, bool):
         return value
     raise ValueError("Unknown Project Manager preference")
 
@@ -56,6 +57,8 @@ def set_preference(key: str, value: Any) -> None:
     validated = _validate(key, value)
     if key == "defaultView":
         lf.ui.set_project_manager_default_view(validated)
+    elif key == "openAtStartup":
+        lf.ui.set_project_manager_open_at_startup(validated)
     else:
         lf.ui.set_project_manager_remember_state(validated)
 

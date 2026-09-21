@@ -5210,6 +5210,7 @@ namespace lfs::python {
                 auto& preferences = vis::UserPreferences::instance();
                 nb::dict result;
                 result["defaultView"] = preferences.projectManagerDefaultView();
+                result["openAtStartup"] = preferences.openProjectManagerAtStartup();
                 result["rememberState"] = preferences.rememberProjectManagerState();
                 return result;
             },
@@ -5221,6 +5222,13 @@ namespace lfs::python {
                 vis::UserPreferences::instance().setProjectManagerDefaultView(view);
             },
             nb::arg("view"), "Set the default Project Manager view");
+
+        m.def(
+            "set_project_manager_open_at_startup",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setOpenProjectManagerAtStartup(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager opens at application startup");
 
         m.def(
             "set_project_manager_remember_state",

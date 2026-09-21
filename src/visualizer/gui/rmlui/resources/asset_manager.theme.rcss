@@ -82,6 +82,7 @@
 }
 
 .asset-refresh-button img,
+.asset-toolbar-view img,
 .asset-folder-menu img,
 .asset-card-menu img {
     image-color: @{alpha(text,0.90)};
@@ -94,6 +95,7 @@
 }
 
 .asset-refresh-button:hover img,
+.asset-toolbar-view:hover img,
 .asset-folder-menu:hover img,
 .asset-card-menu:hover img,
 .inspector-more:hover img {
@@ -230,6 +232,18 @@
 
 .asset-gallery-scan-status {
     color: @{text_dim};
+}
+
+.asset-loading-label {
+    color: @{text_dim};
+}
+
+.asset-loading-track {
+    background-color: @{statusbar.progress_bg};
+}
+
+.asset-loading-fill {
+    background-color: @{primary};
 }
 
 .asset-gallery-scroll::-webkit-scrollbar-track {

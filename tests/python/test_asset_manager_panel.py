@@ -1590,7 +1590,7 @@ def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypa
     assert restored_widths == [468.0]
 
 
-def test_project_manager_state_captures_panel_visibility_and_outer_width(panel_module, monkeypatch):
+def test_project_manager_state_captures_outer_width_without_transient_visibility(panel_module, monkeypatch):
     stored = []
     monkeypatch.setattr(
         panel_module,
@@ -1599,14 +1599,37 @@ def test_project_manager_state_captures_panel_visibility_and_outer_width(panel_m
     )
     monkeypatch.setattr(panel_module, "read_project_manager_state", lambda: {})
     monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
-    monkeypatch.setattr(panel_module.lf.ui, "is_panel_enabled", lambda _panel_id: True, raising=False)
     monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 512.0, raising=False)
 
     panel = panel_module.AssetManagerPanel()
     panel._persist_project_manager_state()
 
-    assert stored[-1]["panel_open"] is True
+    assert "panel_open" not in stored[-1]
     assert stored[-1]["panel_width"] == 512.0
+
+
+def test_project_manager_state_preserves_last_width_when_native_geometry_is_unavailable(
+        panel_module, monkeypatch):
+    stored = []
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"panel_width": 468.0, "panel_open": False, "future_key": "keep"},
+    )
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 0.0, raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._persist_project_manager_state()
+
+    assert stored[-1]["panel_width"] == 468.0
+    assert stored[-1]["future_key"] == "keep"
+    assert "panel_open" not in stored[-1]
 
 
 def test_disabling_project_manager_state_keeps_project_chrome_and_avoids_writes(panel_module, monkeypatch):
@@ -3395,8 +3418,18 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
 
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "asset_manager.rml").read_text()
+    rcss = (resources / "asset_manager.rcss").read_text()
     assert 'class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"' in rml
     assert 'class="asset-button asset-button--icon asset-panel-close"' in rml
+    assert rml.count('class="asset-button asset-button--icon asset-view-button"') == 2
+    compact_rules = rcss.split(
+        ".asset-shell.is-compact .asset-toolbar-filter", 1
+    )[1].split(".asset-shell.is-medium", 1)[0]
+    assert ".asset-shell.is-compact .asset-view-toggle-icons" in compact_rules
+    icon_rule = compact_rules.split(
+        ".asset-shell.is-compact .asset-view-toggle-icons", 1
+    )[1].split("}", 1)[0]
+    assert "display: none" not in icon_rule
 
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET
@@ -3480,6 +3513,9 @@ def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module
     panel = panel_module.AssetManagerPanel()
     model = StrictBindingModel()
     panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings['catalog_loading']() is False
+    panel._backend_load_active = True
+    assert model.func_bindings['catalog_loading']() is True
     assert model.func_bindings['check_gallery_tooltip']().startswith('projects.action.check_gallery')
     panel._gallery_state['message'] = 'Sign in'
     assert panel._gallery_notice_text() == ''

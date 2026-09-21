@@ -36,9 +36,6 @@
           <button class="asset-button asset-button--text asset-sort-button" data-event-click="open_sort_menu" data-attr-title="sort_tooltip">
             <span class="asset-button-text">{{sort_label}}</span>
           </button>
-          <button class="asset-button asset-button--text asset-toolbar-view" data-event-click="open_view_menu">
-            <span class="asset-button-text">{{view_menu_label}}</span>
-          </button>
           <div class="asset-view-toggle asset-view-toggle-icons">
             <button class="asset-button asset-button--icon asset-view-button"
                     data-class-is-active="is_gallery_view"
@@ -65,6 +62,10 @@
             <span class="asset-check-gallery-icon" aria-hidden="true">&#x21BB;</span>
             <span class="asset-button-text">{{check_gallery_label}}</span>
             <span class="gallery-checked text-muted">{{gallery_checked}}</span>
+          </button>
+          <button class="asset-button asset-button--icon asset-toolbar-view" data-event-click="open_view_menu"
+                  data-tooltip="common.more" aria-label="{{view_menu_label}}">
+            <img src="../icon/more-vertical.png"/>
           </button>
           <button class="asset-button asset-button--text asset-button--primary asset-import-button"
                   data-event-click="on_import_project" data-attr-title="import_project_tooltip">
@@ -151,7 +152,7 @@
         <div class="asset-resize-handle asset-resize-handle--vertical" data-resize="navigator" tabindex="0" aria-label="{{resize_navigator_label}}"></div>
 
         <div class="asset-results-stack">
-        <section id="asset-gallery">
+        <section id="asset-gallery" data-class-is-loading="catalog_loading">
           <div id="asset-results-header" class="asset-gallery-header">
             <div class="asset-gallery-header-row">
               <div class="asset-gallery-header-copy">
@@ -183,6 +184,10 @@
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
             <div class="gallery-empty" data-if="gallery_local_empty"><button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:projects.action.add_folder</button></div>
+          </div>
+          <div class="asset-catalog-loading" data-if="catalog_loading" role="status">
+            <span class="asset-loading-label">@tr:status.loading</span>
+            <div class="asset-loading-track"><span class="asset-loading-fill"></span></div>
           </div>
           <div class="asset-list-header" data-if="is_list_view"
                data-class-is-wide="asset_list_wide"

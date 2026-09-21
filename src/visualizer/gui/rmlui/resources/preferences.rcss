@@ -76,6 +76,35 @@ body.floating-panel {
     margin-bottom: 5dp;
 }
 
+.preferences-setting {
+    margin-bottom: 10dp;
+}
+
+.preferences-setting .preferences-row {
+    margin-bottom: 0;
+}
+
+.preferences-setting-hint {
+    margin-top: 3dp;
+}
+
+.preferences-project-location .preferences-row {
+    flex-direction: column;
+    gap: 4dp;
+}
+
+.preferences-project-location .preferences-label {
+    max-width: none;
+}
+
+.preferences-project-location .preferences-path-control {
+    box-sizing: border-box;
+    flex-basis: auto;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-left: 0;
+}
+
 .preferences-label {
     flex: 1 1 auto;
     min-width: 100dp;
@@ -85,6 +114,7 @@ body.floating-panel {
 }
 
 .preferences-select {
+    box-sizing: border-box;
     flex: 0 0 200dp;
     width: 200dp;
     min-width: 140dp;

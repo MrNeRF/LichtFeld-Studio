@@ -63,6 +63,7 @@ class PreferencesPanel(Panel):
     EXPANDABLE_SECTIONS = (
         "language",
         "project_location",
+        "project_manager",
         "gallery",
         "appearance",
         "scene_rendering",
@@ -191,6 +192,11 @@ class PreferencesPanel(Panel):
             self._set_project_manager_default_view,
         )
         model.bind(
+            "project_manager_open_at_startup",
+            lambda: read_project_manager_preferences()["openAtStartup"],
+            self._set_project_manager_open_at_startup,
+        )
+        model.bind(
             "project_manager_remember_state",
             lambda: read_project_manager_preferences()["rememberState"],
             self._set_project_manager_remember_state,
@@ -312,6 +318,7 @@ class PreferencesPanel(Panel):
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             project_manager_preferences["defaultView"],
+            project_manager_preferences["openAtStartup"],
             project_manager_preferences["rememberState"],
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
@@ -785,6 +792,13 @@ class PreferencesPanel(Panel):
         except (OSError, TypeError, ValueError):
             return
         self._notify_project_manager_preferences_changed()
+        self._refresh_selection()
+
+    def _set_project_manager_open_at_startup(self, enabled):
+        try:
+            set_project_manager_preference("openAtStartup", bool(enabled))
+        except (OSError, TypeError, ValueError):
+            return
         self._refresh_selection()
 
     def _set_project_manager_remember_state(self, enabled):
@@ -1325,4 +1339,5 @@ class PreferencesPanel(Panel):
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
             self._handle.dirty("project_manager_default_view")
+            self._handle.dirty("project_manager_open_at_startup")
             self._handle.dirty("project_manager_remember_state")

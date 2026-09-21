@@ -325,11 +325,13 @@ def _build_builtin_panel_steps(lf):
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
         _register_lazy_panel(lf, "gallery_file")
-        from .project_manager_preferences import read_preferences, read_state
+        from .project_manager_preferences import read_preferences
 
         preferences = read_preferences()
-        remembered = read_state() if preferences["rememberState"] else {}
-        if remembered.get("panel_open") is True:
+        # When the startup overlay is visible, native UI opens Projects only
+        # after the user dismisses it. If the overlay is disabled, preserve the
+        # same preference by opening the panel as soon as it is registered.
+        if preferences["openAtStartup"] and not lf.ui.is_startup_visible():
             lf.ui.set_panel_enabled("lfs.asset_manager", True)
 
     def overlays():

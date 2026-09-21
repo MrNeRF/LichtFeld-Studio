@@ -13,9 +13,15 @@ from lfs_plugins import project_manager_preferences as preferences
 @pytest.fixture
 def canonical_store(monkeypatch):
     store = SimpleNamespace(
-        preferences={"defaultView": "remember", "rememberState": True},
+        preferences={"defaultView": "remember", "openAtStartup": True, "rememberState": True},
         state_json="{}",
         reset_count=0,
+    )
+    monkeypatch.setattr(
+        preferences.lf.ui,
+        "set_project_manager_open_at_startup",
+        lambda value: store.preferences.__setitem__("openAtStartup", value),
+        raising=False,
     )
     monkeypatch.setattr(
         preferences.lf.ui,
@@ -63,7 +69,11 @@ def canonical_store(monkeypatch):
 
 
 def test_invalid_native_values_fall_back_to_defaults(canonical_store):
-    canonical_store.preferences = {"defaultView": "unsupported", "rememberState": "yes"}
+    canonical_store.preferences = {
+        "defaultView": "unsupported",
+        "openAtStartup": "yes",
+        "rememberState": "yes",
+    }
     canonical_store.state_json = "not json"
 
     assert preferences.read_preferences() == preferences.DEFAULTS
@@ -72,11 +82,13 @@ def test_invalid_native_values_fall_back_to_defaults(canonical_store):
 
 def test_preferences_and_state_round_trip_through_canonical_api(canonical_store):
     preferences.set_preference("defaultView", "gallery")
+    preferences.set_preference("openAtStartup", False)
     preferences.set_preference("rememberState", False)
     preferences.set_state({"view_mode": "list", "navigator_width": 312.5})
 
     assert preferences.read_preferences() == {
         "defaultView": "gallery",
+        "openAtStartup": False,
         "rememberState": False,
     }
     assert preferences.read_state() == {
@@ -99,7 +111,12 @@ def test_reset_is_delegated_to_canonical_store(canonical_store):
 
 @pytest.mark.parametrize(
     ("key", "value"),
-    [("defaultView", "tiles"), ("rememberState", 1), ("unknown", True)],
+    [
+        ("defaultView", "tiles"),
+        ("openAtStartup", 1),
+        ("rememberState", 1),
+        ("unknown", True),
+    ],
 )
 def test_invalid_preferences_are_rejected(canonical_store, key, value):
     with pytest.raises(ValueError):

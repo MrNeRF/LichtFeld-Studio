@@ -215,6 +215,14 @@ namespace lfs::vis::gui {
         last_mouse_valid_ = false;
     }
 
+    void StartupOverlay::dismissFromUserInput() {
+        if (!visible_)
+            return;
+        dismiss();
+        if (user_dismiss_callback_)
+            user_dismiss_callback_();
+    }
+
     void StartupOverlay::setPluginLoadState(const bool started,
                                             const bool active,
                                             float progress,
@@ -819,10 +827,10 @@ namespace lfs::vis::gui {
 
             if (key_action) {
                 LOG_DEBUG("StartupOverlay: dismissed by key action");
-                dismiss();
+                dismissFromUserInput();
             } else if (mouse_clicked) {
                 LOG_DEBUG("StartupOverlay: dismissed by mouse click");
-                dismiss();
+                dismissFromUserInput();
             }
         }
     }

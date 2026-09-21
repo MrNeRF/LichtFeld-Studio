@@ -9,8 +9,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <utility>
 
 namespace Rml {
     class Context;
@@ -34,6 +36,7 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss();
+        void setUserDismissCallback(std::function<void()> callback) { user_dismiss_callback_ = std::move(callback); }
         void setPluginLoadState(bool started, bool active, float progress, std::string stage);
         [[nodiscard]] bool isVisible() const { return visible_; }
         [[nodiscard]] bool blocksUnderlayInput() const;
@@ -60,6 +63,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasInputActivity(const PanelInputState& input) const;
         InputForwardResult forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
                                         float overlay_w, float overlay_h);
+        void dismissFromUserInput();
 
         struct PluginLoadState {
             bool active = false;
@@ -93,6 +97,7 @@ namespace lfs::vis::gui {
         bool has_applied_plugin_load_state_ = false;
         bool plugin_load_state_started_ = false;
         bool plugin_load_complete_ = true;
+        std::function<void()> user_dismiss_callback_;
 
         Rml::EventListener* link_listener_ = nullptr;
         Rml::EventListener* lang_listener_ = nullptr;

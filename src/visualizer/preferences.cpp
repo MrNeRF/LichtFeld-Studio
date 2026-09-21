@@ -617,6 +617,28 @@ namespace lfs::vis {
         return knownProjectManagerView(value) ? value : "remember";
     }
 
+    void UserPreferences::setOpenProjectManagerAtStartup(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["open_at_startup"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::openProjectManagerAtStartup() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return true;
+        const auto open = project_manager->find("open_at_startup");
+        return open == project_manager->end() || !open->is_boolean()
+                   ? true
+                   : open->get<bool>();
+    }
+
     void UserPreferences::setRememberProjectManagerState(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

@@ -2723,6 +2723,9 @@ def get_project_manager_preferences() -> dict:
 def set_project_manager_default_view(view: str) -> None:
     """Set the default Project Manager view"""
 
+def set_project_manager_open_at_startup(enabled: bool) -> None:
+    """Set whether Project Manager opens at application startup"""
+
 def set_project_manager_remember_state(enabled: bool) -> None:
     """Set whether Project Manager layout state is remembered"""
 

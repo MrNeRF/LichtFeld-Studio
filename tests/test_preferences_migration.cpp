@@ -237,19 +237,23 @@ TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInI
 
     auto& preferences = lfs::vis::UserPreferences::instance();
     EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
     EXPECT_TRUE(preferences.rememberProjectManagerState());
     EXPECT_EQ(json::parse(preferences.projectManagerState()), json::object());
 
     preferences.setProjectManagerDefaultView("gallery");
+    preferences.setOpenProjectManagerAtStartup(false);
     preferences.setRememberProjectManagerState(false);
     preferences.setProjectManagerState(R"({"view_mode":"list","navigator_width":312.5})");
 
     EXPECT_EQ(preferences.projectManagerDefaultView(), "gallery");
+    EXPECT_FALSE(preferences.openProjectManagerAtStartup());
     EXPECT_FALSE(preferences.rememberProjectManagerState());
     EXPECT_EQ(json::parse(preferences.projectManagerState()).at("view_mode"), "list");
     const auto persisted = readPreferences(*paths);
     ASSERT_TRUE(persisted.at("project_manager").is_object());
     EXPECT_EQ(persisted.at("project_manager").at("default_view"), "gallery");
+    EXPECT_EQ(persisted.at("project_manager").at("open_at_startup"), false);
     EXPECT_EQ(persisted.at("project_manager").at("remember_state"), false);
     EXPECT_EQ(persisted.at("theme"), "light");
 
@@ -259,6 +263,7 @@ TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInI
     EXPECT_FALSE(reset.contains("project_manager"));
     EXPECT_EQ(reset.at("theme"), "light");
     EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
     EXPECT_TRUE(preferences.rememberProjectManagerState());
 }
 
@@ -272,6 +277,7 @@ TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContam
                                  {"theme", "dark"},
                                  {"project_manager", {
                                                          {"default_view", "tiles"},
+                                                         {"open_at_startup", "yes"},
                                                          {"remember_state", "yes"},
                                                          {"state", json::array({1, 2, 3})},
                                                      }},
@@ -279,6 +285,7 @@ TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContam
 
     auto& preferences = lfs::vis::UserPreferences::instance();
     EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
     EXPECT_TRUE(preferences.rememberProjectManagerState());
     EXPECT_EQ(json::parse(preferences.projectManagerState()), json::object());
     EXPECT_THROW(preferences.setProjectManagerDefaultView("tiles"), std::invalid_argument);

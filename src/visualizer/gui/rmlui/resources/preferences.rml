@@ -33,6 +33,7 @@
           <span class="text-accent">@tr:preferences.projects</span>
         </div>
         <div class="section-content" data-if="project_location_expanded">
+          <div class="preferences-setting preferences-project-location" data-tooltip="preferences.project_location_description">
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.project_location</span>
             <div class="preferences-path-control">
@@ -43,13 +44,20 @@
               <button class="btn btn--secondary" data-event-click="use_default_project_location">@tr:preferences.use_default</button>
             </div>
           </div>
-          <span class="preferences-description">{{ project_location_hint }}</span>
-          <span class="preferences-description">@tr:preferences.project_location_description</span>
-          <div class="preferences-row preferences-checkbox-row">
+          <span class="preferences-description preferences-setting-hint">{{ project_location_hint }}</span>
+          </div>
+          <div class="preferences-setting">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.embed_dataset_by_default_description">
             <span class="preferences-label">@tr:preferences.embed_dataset_by_default</span>
             <input type="checkbox" data-checked="embed_dataset_by_default" />
           </div>
-          <span class="preferences-description">@tr:preferences.embed_dataset_by_default_description</span>
+          </div>
+        </div>
+        <div class="section-header text-accent" data-class-is-expanded="project_manager_expanded" data-event-click="toggle_section('project_manager')">
+          <span class="section-arrow text-accent" data-class-is-expanded="project_manager_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.project_manager_title</span>
+        </div>
+        <div class="section-content" data-if="project_manager_expanded">
           <div class="preferences-row" data-tooltip="preferences.project_manager_default_view_description">
             <span class="preferences-label">@tr:preferences.project_manager_default_view</span>
             <select class="preferences-select" data-value="project_manager_default_view">
@@ -57,6 +65,10 @@
               <option value="gallery">@tr:preferences.project_manager_view_grid</option>
               <option value="list">@tr:preferences.project_manager_view_list</option>
             </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.project_manager_open_at_startup_description">
+            <span class="preferences-label">@tr:preferences.project_manager_open_at_startup</span>
+            <input type="checkbox" data-checked="project_manager_open_at_startup" />
           </div>
           <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.project_manager_remember_state_description">
             <span class="preferences-label">@tr:preferences.project_manager_remember_state</span>

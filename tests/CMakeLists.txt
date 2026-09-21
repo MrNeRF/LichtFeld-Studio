@@ -62,6 +62,7 @@ if(BUILD_VISUALIZER_TESTS)
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
         lfs_visualizer
+        lfs_core
         GTest::gtest_main
     )
     add_test(

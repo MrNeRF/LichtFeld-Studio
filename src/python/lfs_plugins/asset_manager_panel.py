@@ -435,22 +435,28 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._dirty_layout_fields()
         self._request_model_update()
 
-    def _persist_project_manager_state(self, *, panel_open: Optional[bool] = None) -> None:
+    def _persist_project_manager_state(self) -> None:
         try:
             if not read_project_manager_preferences()["rememberState"]:
                 return
-            state = self.capture_chrome()
+            # Merge with the previous device state so a temporarily unavailable
+            # native geometry query cannot erase the last valid outer width.
+            state = read_project_manager_state()
+            state.update(self.capture_chrome())
             # Selection belongs to the current catalog, not to device chrome.
             state.pop("selected_folder_id", None)
-            if panel_open is None:
-                is_panel_enabled = getattr(lf.ui, "is_panel_enabled", None)
-                panel_open = bool(is_panel_enabled(self.id)) if callable(is_panel_enabled) else self._panel_mounted
-            state["panel_open"] = bool(panel_open)
+            # Startup visibility is an explicit preference, not transient panel
+            # registry state observed during application shutdown.
+            state.pop("panel_open", None)
+            panel_width = self._observed_outer_panel_width
             get_left_dock_width = getattr(lf.ui, "get_left_dock_width", None)
             if callable(get_left_dock_width):
-                panel_width = float(get_left_dock_width())
-                if math.isfinite(panel_width) and panel_width > 0.0:
-                    state["panel_width"] = panel_width
+                current_width = float(get_left_dock_width())
+                if math.isfinite(current_width) and current_width > 0.0:
+                    panel_width = current_width
+            if (isinstance(panel_width, (int, float))
+                    and math.isfinite(panel_width) and panel_width > 0.0):
+                state["panel_width"] = float(panel_width)
             set_project_manager_state(state)
         except (OSError, TypeError, ValueError, AttributeError) as exc:
             self._log_warn("Failed to save Project Manager preferences: %s", exc)
@@ -656,13 +662,18 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("asset_search_empty", self.get_asset_search_empty)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
+        model.bind_func("catalog_loading", lambda: self._backend_load_active)
         model.bind_func("scan_active", self.get_scan_active)
         model.bind_func("scan_status", self.get_scan_status)
         model.bind_func("has_scan_status", self.get_has_scan_status)
-        model.bind_func("no_folders", lambda: not self._asset_index_folders())
+        model.bind_func(
+            "no_folders",
+            lambda: not self._backend_load_active and not self._asset_index_folders(),
+        )
         model.bind_func(
             "empty_folder",
-            lambda: bool(self._asset_index_folders())
+            lambda: not self._backend_load_active
+            and bool(self._asset_index_folders())
             and self._selected_folder_id in self._asset_index_folders()
             and not self._filtered_assets(),
         )
@@ -3889,6 +3900,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         previous = self._host_geometry
         self._host_geometry = geometry
+        if not self._is_floating and math.isfinite(geometry[0]) and geometry[0] > 0.0:
+            previous_width = self._observed_outer_panel_width
+            self._observed_outer_panel_width = geometry[0]
+            if previous_width is not None and abs(previous_width - geometry[0]) > 0.5:
+                self._outer_panel_width_save_deadline = time.monotonic() + 0.25
         if (previous is None or abs(previous[1] - geometry[1]) > 0.5
                 or breakpoint_for_width(previous[0]) != breakpoint_for_width(geometry[0])):
             self._layout_signature = None
@@ -4773,7 +4789,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if self._outer_panel_width_save_deadline and now >= self._outer_panel_width_save_deadline:
             self._outer_panel_width_save_deadline = 0.0
-            self._persist_project_manager_state(panel_open=True)
+            self._persist_project_manager_state()
 
     def _refresh_after_project_write(self) -> bool:
         poll_write = getattr(lf, "project_poll_write", None)
@@ -4861,7 +4877,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._start_inspection_refresh()
         if self._asset_index is not None and not _folder_scan_completed_in_process:
             self._scan_asset_folders()
-        self._persist_project_manager_state(panel_open=True)
+        self._persist_project_manager_state()
 
     def on_update(self, doc):
         self._drain_ui_callbacks()
@@ -4935,7 +4951,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _on_close_panel(self, _handle=None, _event=None, _args=None):
         self._dismiss_gallery_undo()
-        self._persist_project_manager_state(panel_open=False)
+        self._persist_project_manager_state()
         lf.ui.set_panel_enabled(self.id, False)
 
     @staticmethod
