@@ -8,6 +8,11 @@ from .keymap_bindings import KeymapBindingsSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .panels import panel_class
+from .project_manager_preferences import (
+    read_preferences as read_project_manager_preferences,
+    reset_preferences as reset_project_manager_preferences,
+    set_preference as set_project_manager_preference,
+)
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
@@ -181,6 +186,16 @@ class PreferencesPanel(Panel):
         model.bind("project_location", lambda: self._project_location, self._set_project_location_draft)
         model.bind_func("project_location_hint", self._project_location_hint)
         model.bind(
+            "project_manager_default_view",
+            lambda: read_project_manager_preferences()["defaultView"],
+            self._set_project_manager_default_view,
+        )
+        model.bind(
+            "project_manager_remember_state",
+            lambda: read_project_manager_preferences()["rememberState"],
+            self._set_project_manager_remember_state,
+        )
+        model.bind(
             "embed_dataset_by_default",
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False),
             self._set_embed_dataset_by_default,
@@ -279,6 +294,7 @@ class PreferencesPanel(Panel):
             self._keymap.ensure_binding_rows()
 
     def _state(self):
+        project_manager_preferences = read_project_manager_preferences()
         return (
             lf.ui.get_theme(),
             lf.ui.get_theme_family(),
@@ -295,6 +311,8 @@ class PreferencesPanel(Panel):
             float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
+            project_manager_preferences["defaultView"],
+            project_manager_preferences["rememberState"],
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
@@ -752,6 +770,30 @@ class PreferencesPanel(Panel):
         setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
         if setter:
             setter(bool(enabled))
+
+    @staticmethod
+    def _notify_project_manager_preferences_changed():
+        getter = getattr(lf.ui, "get_panel_object", None)
+        panel = getter("lfs.asset_manager") if callable(getter) else None
+        reload_preferences = getattr(panel, "reload_project_manager_preferences", None)
+        if callable(reload_preferences):
+            reload_preferences()
+
+    def _set_project_manager_default_view(self, value):
+        try:
+            set_project_manager_preference("defaultView", str(value))
+        except (OSError, TypeError, ValueError):
+            return
+        self._notify_project_manager_preferences_changed()
+        self._refresh_selection()
+
+    def _set_project_manager_remember_state(self, enabled):
+        try:
+            set_project_manager_preference("rememberState", bool(enabled))
+        except (OSError, TypeError, ValueError):
+            return
+        self._notify_project_manager_preferences_changed()
+        self._refresh_selection()
 
     def _on_project_location_change(self, _handle, event, args):
         if args:
@@ -1225,6 +1267,8 @@ class PreferencesPanel(Panel):
             setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
             if setter:
                 setter(False)
+            reset_project_manager_preferences()
+            self._notify_project_manager_preferences_changed()
             self._read_project_location()
         elif section == "appearance":
             lf.ui.set_theme("dark")
@@ -1280,3 +1324,5 @@ class PreferencesPanel(Panel):
             self._dirty_mcp()
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
+            self._handle.dirty("project_manager_default_view")
+            self._handle.dirty("project_manager_remember_state")

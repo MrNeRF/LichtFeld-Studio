@@ -50,6 +50,18 @@
             <input type="checkbox" data-checked="embed_dataset_by_default" />
           </div>
           <span class="preferences-description">@tr:preferences.embed_dataset_by_default_description</span>
+          <div class="preferences-row" data-tooltip="preferences.project_manager_default_view_description">
+            <span class="preferences-label">@tr:preferences.project_manager_default_view</span>
+            <select class="preferences-select" data-value="project_manager_default_view">
+              <option value="remember">@tr:preferences.project_manager_view_remember</option>
+              <option value="gallery">@tr:preferences.project_manager_view_grid</option>
+              <option value="list">@tr:preferences.project_manager_view_list</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.project_manager_remember_state_description">
+            <span class="preferences-label">@tr:preferences.project_manager_remember_state</span>
+            <input type="checkbox" data-checked="project_manager_remember_state" />
+          </div>
         </div>
         <div class="section-header text-accent" data-class-is-expanded="gallery_expanded" data-event-click="toggle_section('gallery')">
           <span class="section-arrow text-accent" data-class-is-expanded="gallery_expanded">&#x25B6;</span>

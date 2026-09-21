@@ -53,6 +53,10 @@ namespace lfs::vis {
             return position == "top" || position == "centered" || position == "free";
         }
 
+        [[nodiscard]] bool knownProjectManagerView(std::string_view view) {
+            return view == "remember" || view == "gallery" || view == "list";
+        }
+
         constexpr float kDefaultZoomSpeed = 11.0f;
         constexpr float kDefaultNavigationSpeed = 8.0f;
         constexpr float kMinNavigationSpeed = 1.0f;
@@ -586,6 +590,85 @@ namespace lfs::vis {
             return 0.5f;
         const float value = it->get<float>();
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
+
+    void UserPreferences::setProjectManagerDefaultView(const std::string_view value) {
+        if (!knownProjectManagerView(value))
+            throw std::invalid_argument("Unsupported Project Manager default view");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["default_view"] = std::string(value);
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::projectManagerDefaultView() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return "remember";
+        const auto view = project_manager->find("default_view");
+        if (view == project_manager->end() || !view->is_string())
+            return "remember";
+        const auto value = view->get<std::string>();
+        return knownProjectManagerView(value) ? value : "remember";
+    }
+
+    void UserPreferences::setRememberProjectManagerState(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["remember_state"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::rememberProjectManagerState() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return true;
+        const auto remember = project_manager->find("remember_state");
+        return remember == project_manager->end() || !remember->is_boolean()
+                   ? true
+                   : remember->get<bool>();
+    }
+
+    void UserPreferences::setProjectManagerState(const std::string_view serialized_state) {
+        const auto state = json::parse(serialized_state.begin(), serialized_state.end());
+        if (!state.is_object())
+            throw std::invalid_argument("Project Manager state must be an object");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["state"] = state;
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::projectManagerState() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return "{}";
+        const auto state = project_manager->find("state");
+        return state != project_manager->end() && state->is_object()
+                   ? state->dump()
+                   : "{}";
+    }
+
+    void UserPreferences::resetProjectManagerPreferences() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("project_manager");
+        impl_->saveLocked();
     }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {

@@ -325,6 +325,12 @@ def _build_builtin_panel_steps(lf):
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
         _register_lazy_panel(lf, "gallery_file")
+        from .project_manager_preferences import read_preferences, read_state
+
+        preferences = read_preferences()
+        remembered = read_state() if preferences["rememberState"] else {}
+        if remembered.get("panel_open") is True:
+            lf.ui.set_panel_enabled("lfs.asset_manager", True)
 
     def overlays():
         from .overlays import register as register_overlays

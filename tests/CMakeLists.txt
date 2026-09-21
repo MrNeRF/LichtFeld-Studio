@@ -48,6 +48,7 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
+        test_preferences_migration.cpp
     )
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -531,7 +532,6 @@ set(TEST_FILES
     test_rendering_refactor_services.cpp
     test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
-    test_preferences_migration.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
@@ -627,6 +627,13 @@ set(TEST_FILES
     test_tcp_responder.cpp
     test_error_envelope.cpp
 )
+
+# Preference tests are part of the focused CPU visualizer suite when that
+# target is enabled (notably on Windows CI), and remain in the full suite on
+# configurations that do not build the focused target.
+if(NOT BUILD_VISUALIZER_TESTS)
+    list(APPEND TEST_FILES test_preferences_migration.cpp)
+endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).

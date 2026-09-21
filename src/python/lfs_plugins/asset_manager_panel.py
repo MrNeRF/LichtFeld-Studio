@@ -50,6 +50,11 @@ from .project_inspector import (
     thumbnail_source_options,
 )
 from .project_dialog import form_content
+from .project_manager_preferences import (
+    read_preferences as read_project_manager_preferences,
+    read_state as read_project_manager_state,
+    set_state as set_project_manager_state,
+)
 from .asset_watch import (
     AssetFolderScanProgress,
     scan_all_asset_folders,
@@ -290,11 +295,15 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._inspector_sections = {"project": True, "file": True, "gallery": True}
         self._info_thumbnail_geometry = None
         self._verify_results: Dict[str, str] = {}
+        self._observed_outer_panel_width = None
+        self._outer_panel_width_save_deadline = 0.0
         self._init_gallery()
+        self._restore_project_manager_preferences()
 
     def capture_chrome(self) -> Dict[str, Any]:
         folder_id = self._selected_folder_id if self._selected_folder_id in self._asset_index_folders() else SCOPE_ALL
         return {
+            "view_mode": self._view_mode,
             "folders_collapsed": self._folders_collapsed,
             "sidebar_height": self._sidebar_height,
             "bottom_panel_height": self._info_preferred_height,
@@ -313,7 +322,37 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }
 
     def apply_chrome(self, payload: Any) -> None:
+        preferences = read_project_manager_preferences()
+        remembered = {}
+        if preferences["rememberState"]:
+            remembered = read_project_manager_state()
+            if remembered:
+                payload = remembered
+        self._apply_chrome_payload(payload, preferences, device_state=bool(remembered))
+
+    def _apply_chrome_payload(
+        self,
+        payload: Any,
+        preferences: Optional[Dict[str, Any]] = None,
+        *,
+        device_state: bool = False,
+    ) -> None:
+        preferences = preferences or read_project_manager_preferences()
         if isinstance(payload, dict):
+            if device_state:
+                panel_width = payload.get("panel_width")
+                set_left_dock_width = getattr(lf.ui, "set_left_dock_width", None)
+                if (
+                    callable(set_left_dock_width)
+                    and isinstance(panel_width, (int, float))
+                    and not isinstance(panel_width, bool)
+                    and math.isfinite(panel_width)
+                    and panel_width > 0.0
+                ):
+                    set_left_dock_width(float(panel_width))
+            view_mode = payload.get("view_mode")
+            if preferences["defaultView"] == "remember" and view_mode in {"gallery", "list"}:
+                self._view_mode = view_mode
             widths = payload.get("navigator_widths")
             if not isinstance(widths, dict):
                 legacy_width = payload.get("navigator_width")
@@ -377,8 +416,43 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             # Old sidebar heights are superseded by content/viewport sizing.
             self._layout_signature = None
             self._sync_panel_layout()
+        if preferences["defaultView"] in {"gallery", "list"}:
+            self._view_mode = preferences["defaultView"]
         if self._handle:
             self._handle.dirty_all()
+
+    def _restore_project_manager_preferences(self) -> None:
+        preferences = read_project_manager_preferences()
+        payload = read_project_manager_state() if preferences["rememberState"] else {}
+        self._apply_chrome_payload(payload, preferences, device_state=bool(payload))
+
+    def reload_project_manager_preferences(self) -> None:
+        self._restore_project_manager_preferences()
+        self._reset_scroll()
+        self._refresh_records(assets=True)
+        self._dirty_fields("is_gallery_view", "is_list_view", "thumbnail_size")
+        self._dirty_layout_fields()
+        self._request_model_update()
+
+    def _persist_project_manager_state(self, *, panel_open: Optional[bool] = None) -> None:
+        try:
+            if not read_project_manager_preferences()["rememberState"]:
+                return
+            state = self.capture_chrome()
+            # Selection belongs to the current catalog, not to device chrome.
+            state.pop("selected_folder_id", None)
+            if panel_open is None:
+                is_panel_enabled = getattr(lf.ui, "is_panel_enabled", None)
+                panel_open = bool(is_panel_enabled(self.id)) if callable(is_panel_enabled) else self._panel_mounted
+            state["panel_open"] = bool(panel_open)
+            get_left_dock_width = getattr(lf.ui, "get_left_dock_width", None)
+            if callable(get_left_dock_width):
+                panel_width = float(get_left_dock_width())
+                if math.isfinite(panel_width) and panel_width > 0.0:
+                    state["panel_width"] = panel_width
+            set_project_manager_state(state)
+        except (OSError, TypeError, ValueError, AttributeError) as exc:
+            self._log_warn("Failed to save Project Manager preferences: %s", exc)
 
     def _start_backend_initialization(self) -> None:
         if self._backend_load_active or not BACKEND_AVAILABLE:
@@ -852,6 +926,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._reset_scroll()
         self._refresh_records(assets=True)
         self._dirty_fields("thumbnail_size")
+        self._persist_project_manager_state()
 
     def set_search_query(self, value: str) -> None:
         self._search_query = str(value or "")
@@ -908,6 +983,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._reset_scroll()
         self._refresh_records(assets=True)
         self._dirty_fields("sort_label", "sort_tooltip")
+        self._persist_project_manager_state()
 
     def open_sort_menu(self, _handle=None, _event=None, _args=None) -> None:
         self._show_shared_context_menu(self._sort_menu_items(), self._choose_sort)
@@ -1386,12 +1462,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def toggle_operations(self, _handle=None, _ev=None, _args=None) -> None:
         self._operations_expanded = not self.get_operations_expanded()
         self._dirty_fields("inspector_operations_expanded")
+        self._persist_project_manager_state()
 
     def toggle_inspector_section(self, _handle=None, _ev=None, args=None) -> None:
         section = str(args[0]) if args else ""
         if section in self._inspector_sections:
             self._inspector_sections[section] = not self._inspector_sections[section]
             self._dirty_fields("inspector_" + section + "_expanded")
+            self._persist_project_manager_state()
 
     def open_inspector_menu(self, _handle=None, _ev=None, _args=None) -> None:
         asset_id = self.get_selected_asset_id()
@@ -2071,6 +2149,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._folder_layout_initialized = True
         self._layout_signature = None
         self._dirty_fields("folders_collapsed", "folders_expanded")
+        self._persist_project_manager_state()
 
     def set_view_mode(self, _handle, _ev, args):
         mode = str(args[0]) if args else ""
@@ -2080,6 +2159,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._reset_scroll()
         self._refresh_records(assets=True)
         self._dirty_fields("is_gallery_view", "is_list_view")
+        self._persist_project_manager_state()
 
     def toggle_inspector(self, _handle=None, _ev=None, _args=None):
         self._inspector_expanded = not self._inspector_expanded
@@ -4442,6 +4522,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",
                 *(f"asset_list_{name}_width" for name in ("name", "gallery", "size", "modified", "folder"))
             )
+        self._persist_project_manager_state()
 
     def _on_resize_mousemove(self, event) -> None:
         try:
@@ -4510,6 +4591,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 )
             else:
                 self._dirty_fields("bottom_panel_resize_dragging")
+            self._persist_project_manager_state()
             self._stop_event(event)
 
     def _resolve_event_value(self, args, event, attribute: str) -> str:
@@ -4565,6 +4647,28 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._layout_signature = None
             self._dirty_layout_fields()
         return changed
+
+    def _sync_outer_panel_width_preference(self) -> None:
+        if self._is_floating or not read_project_manager_preferences()["rememberState"]:
+            self._outer_panel_width_save_deadline = 0.0
+            return
+        getter = getattr(lf.ui, "get_left_dock_width", None)
+        if not callable(getter):
+            return
+        width = float(getter())
+        if not math.isfinite(width) or width <= 0.0:
+            return
+        now = time.monotonic()
+        if self._observed_outer_panel_width is None:
+            self._observed_outer_panel_width = width
+            return
+        if abs(width - self._observed_outer_panel_width) > 0.5:
+            self._observed_outer_panel_width = width
+            self._outer_panel_width_save_deadline = now + 0.25
+            return
+        if self._outer_panel_width_save_deadline and now >= self._outer_panel_width_save_deadline:
+            self._outer_panel_width_save_deadline = 0.0
+            self._persist_project_manager_state(panel_open=True)
 
     def _refresh_after_project_write(self) -> bool:
         poll_write = getattr(lf, "project_poll_write", None)
@@ -4652,10 +4756,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._start_inspection_refresh()
         if self._asset_index is not None and not _folder_scan_completed_in_process:
             self._scan_asset_folders()
+        self._persist_project_manager_state(panel_open=True)
 
     def on_update(self, doc):
         self._drain_ui_callbacks()
         changed = self._sync_panel_space_state()
+        self._sync_outer_panel_width_preference()
         changed = self._sync_default_folder_path() or changed
         changed = self._refresh_after_project_write() or changed
         changed = self._sync_panel_layout(doc) or changed
@@ -4671,6 +4777,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return changed
 
     def on_unmount(self, doc):
+        self._persist_project_manager_state()
         RuntimeState.projects_panel_visible.value = False
         self._layout_recheck_pending = False
         self._thumbnail_menu_visible = False
@@ -4723,6 +4830,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _on_close_panel(self, _handle=None, _event=None, _args=None):
         self._dismiss_gallery_undo()
+        self._persist_project_manager_state(panel_open=False)
         lf.ui.set_panel_enabled(self.id, False)
 
     @staticmethod

@@ -67,6 +67,7 @@ def preferences_panel_module(monkeypatch):
         navigation_speed=8.0,
         project_location="",
         embed_dataset_by_default=False,
+        project_manager_preferences={"defaultView": "remember", "rememberState": True},
     )
 
     def set_project_location(path):
@@ -345,6 +346,25 @@ def preferences_panel_module(monkeypatch):
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")
+    monkeypatch.setattr(
+        module,
+        "read_project_manager_preferences",
+        lambda: dict(state.project_manager_preferences),
+    )
+    monkeypatch.setattr(
+        module,
+        "set_project_manager_preference",
+        lambda key, value: state.project_manager_preferences.__setitem__(key, value),
+    )
+    monkeypatch.setattr(
+        module,
+        "reset_project_manager_preferences",
+        lambda: setattr(
+            state,
+            "project_manager_preferences",
+            {"defaultView": "remember", "rememberState": True},
+        ),
+    )
     return module, state
 
 
@@ -356,6 +376,26 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_project_manager_preferences_round_trip_and_reset(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    panel._set_project_manager_default_view("gallery")
+    panel._set_project_manager_remember_state(False)
+
+    assert state.project_manager_preferences == {
+        "defaultView": "gallery",
+        "rememberState": False,
+    }
+
+    panel._reset_section("general")
+
+    assert state.project_manager_preferences == {
+        "defaultView": "remember",
+        "rememberState": True,
+    }
 
 
 def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):

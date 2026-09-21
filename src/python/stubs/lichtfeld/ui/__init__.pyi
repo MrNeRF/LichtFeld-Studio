@@ -413,6 +413,12 @@ def reset_window_state() -> str:
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 
+def get_left_dock_width() -> float:
+    """Get the current left dock width in logical pixels"""
+
+def set_left_dock_width(width: float) -> None:
+    """Set the left dock width in logical pixels"""
+
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
@@ -2710,6 +2716,24 @@ def set_navigation_speed_preference(speed: float) -> None:
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
+
+def get_project_manager_preferences() -> dict:
+    """Get Project Manager preferences from the canonical user preferences store"""
+
+def set_project_manager_default_view(view: str) -> None:
+    """Set the default Project Manager view"""
+
+def set_project_manager_remember_state(enabled: bool) -> None:
+    """Set whether Project Manager layout state is remembered"""
+
+def get_project_manager_state() -> str:
+    """Get remembered Project Manager layout state as JSON"""
+
+def set_project_manager_state(state: str) -> None:
+    """Set remembered Project Manager layout state from JSON"""
+
+def reset_project_manager_preferences() -> None:
+    """Reset Project Manager preferences and remembered layout state"""
 
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""

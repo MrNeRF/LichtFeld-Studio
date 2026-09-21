@@ -5205,6 +5205,48 @@ namespace lfs::python {
             "Get the default WASD navigation speed");
 
         m.def(
+            "get_project_manager_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["defaultView"] = preferences.projectManagerDefaultView();
+                result["rememberState"] = preferences.rememberProjectManagerState();
+                return result;
+            },
+            "Get Project Manager preferences from the canonical user preferences store");
+
+        m.def(
+            "set_project_manager_default_view",
+            [](const std::string& view) {
+                vis::UserPreferences::instance().setProjectManagerDefaultView(view);
+            },
+            nb::arg("view"), "Set the default Project Manager view");
+
+        m.def(
+            "set_project_manager_remember_state",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setRememberProjectManagerState(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager layout state is remembered");
+
+        m.def(
+            "get_project_manager_state",
+            [] { return vis::UserPreferences::instance().projectManagerState(); },
+            "Get remembered Project Manager layout state as JSON");
+
+        m.def(
+            "set_project_manager_state",
+            [](const std::string& state) {
+                vis::UserPreferences::instance().setProjectManagerState(state);
+            },
+            nb::arg("state"), "Set remembered Project Manager layout state from JSON");
+
+        m.def(
+            "reset_project_manager_preferences",
+            [] { vis::UserPreferences::instance().resetProjectManagerPreferences(); },
+            "Reset Project Manager preferences and remembered layout state");
+
+        m.def(
             "get_scene_reconstruction_options",
             [] {
                 nb::list backends;
