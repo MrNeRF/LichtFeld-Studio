@@ -2785,11 +2785,25 @@ namespace lfs::vis {
             selection_out = resetBoolScratchBuffer(session.working_selection, total);
             success = buildPolygonSelection(session.points, selection_out);
             break;
-        case SelectionShape::Rings:
-            selection_out = resetBoolScratchBuffer(session.working_selection, total);
-            success = buildRingSelection(
-                session.cursor_pos, selection_out, true, !include_polygon_cursor, picked_ring_id_out);
+        case SelectionShape::Rings: {
+            if (!session.working_selection.is_valid() || session.working_selection.numel() != total) {
+                resetBoolScratchBuffer(session.working_selection, total);
+                session.ring_has_hit = false;
+            }
+            auto& hit = resetBoolScratchBuffer(session.live_delta_selection, total);
+            int picked_ring_id = -1;
+            if (buildRingSelection(session.cursor_pos, hit, true, false, &picked_ring_id)) {
+                applyFilters(hit, session.filters, effectiveNodeMask(session.filters.restrict_to_selected_nodes));
+                rendering::merge_selection_mask_or(session.working_selection, hit);
+                session.ring_has_hit |= picked_ring_id >= 0;
+            }
+            if (picked_ring_id_out) {
+                *picked_ring_id_out = picked_ring_id;
+            }
+            selection_out = session.working_selection;
+            success = session.ring_has_hit;
             break;
+        }
         case SelectionShape::Box:
         case SelectionShape::Sphere:
             selection_out = resetBoolScratchBuffer(session.working_selection, total);

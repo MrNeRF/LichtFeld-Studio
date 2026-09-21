@@ -1225,13 +1225,10 @@
 .asset-shell.is-narrow .asset-import-button { display: none; }
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 
-.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; column-gap: 4dp; row-gap: 16dp; }
-.asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
+.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { column-gap: 4dp; }
+.asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { min-width: 0; flex: 1 1 0dp; }
 .asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-narrow .asset-view-toggle-icons { gap: 4dp; }
 
-.asset-shell.is-narrow #asset-popup-toolbar,
-.asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
-.asset-shell.is-compact .asset-panel-close, .asset-shell.is-narrow .asset-panel-close { margin-left: 0; }
 .asset-shell.is-medium .asset-import-button { display: none; }
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
 

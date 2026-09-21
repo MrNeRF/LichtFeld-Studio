@@ -2595,11 +2595,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._show_project_form()
 
     def _project_form(self):
-        if self._dialog_kind == "update_thumbnail":
-            asset = self._get_selected_asset() or {}
-            self._dialog_data["gallery_cover_available"] = bool(asset.get("id") in self._gallery_state.get("links", {}) and self._gallery_scene(asset))
-            self._dialog_data["gallery_cover_blocked"] = not self._gallery_state.get("signed_in") or self._gallery_state.get("busy", False)
-            self._dialog_data["gallery_cover_reason"] = "projects.gallery.eligibility.busy" if self._gallery_state.get("signed_in") else "projects.gallery.eligibility.connect"
         return form_content(self._dialog_kind, self._dialog_data, tr=tr,
                             confirm_label=self.get_dialog_confirm_label(), busy=self._dialog_busy)
 
@@ -2623,8 +2618,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         for key in ("destination", "format", "source", "name", "license_choice", "license_name", "license_text", "attribution"):
             if key in values:
                 self._dialog_data[key] = str(values[key])
-        if "use_gallery_cover" in values:
-            self._dialog_data["use_gallery_cover"] = bool(values["use_gallery_cover"])
 
     def _project_form_changed(self, key, values) -> None:
         if key != self._dialog_key or not self._dialog_kind:
@@ -2799,7 +2792,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _start_thumbnail_operation(self, asset: Dict[str, Any]) -> bool:
         source = str(self._dialog_data.get("source") or "first_dataset")
-        after = self._gallery_thumbnail_callback(asset) if self._dialog_data.get("use_gallery_cover") else None
         path = str(asset["path"])
         active = self._is_active_project_path(path)
         project_id = str(asset.get("native_project_uuid") or asset.get("project_uuid") or asset["id"])
@@ -2817,18 +2809,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     lambda _progress, _cancel: self._apply_encoded_active_preview(
                         path, project_id, "encode_preview_from_image_file", image_path
                     ),
-                    after=after,
                     reverify_asset=True,
                     closed_file=False,
                 )
             else:
-                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), after=after, reverify_asset=True)
+                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call("preview_from_image_file", path, image_path), reverify_asset=True)
         elif source == "viewport":
             self._start_project_operation(
                 asset["id"],
                 tr("projects.action.update_thumbnail"),
                 lambda _progress, _cancel: self._capture_viewport_preview(path, project_id),
-                after=after,
                 reverify_asset=True,
                 closed_file=False,
             )
@@ -2846,12 +2836,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     lambda _progress, _cancel: self._apply_encoded_active_preview(
                         path, project_id, encode_name, path
                     ),
-                    after=after,
                     reverify_asset=True,
                     closed_file=False,
                 )
             else:
-                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), after=after, reverify_asset=True)
+                self._start_project_operation(asset["id"], tr("projects.action.update_thumbnail"), lambda _progress, _cancel: self._native_io_call(native_name, path), reverify_asset=True)
         return True
 
     @staticmethod

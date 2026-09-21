@@ -352,6 +352,13 @@ namespace lfs::python {
         return generation_;
     }
 
+    uint64_t PyScene::render_generation() const {
+        if (!is_valid()) {
+            throw std::runtime_error("Scene reference is no longer valid");
+        }
+        return scene_->renderGeneration();
+    }
+
     int32_t PyScene::add_group(const std::string& name, int32_t parent) {
         if (auto* const scene_manager = get_scene_manager()) {
             std::string parent_name;
@@ -1257,6 +1264,8 @@ namespace lfs::python {
                  "Check if scene reference is still valid (thread-safe)")
             .def_prop_ro("generation", &PyScene::generation,
                          "Generation counter when scene was acquired")
+            .def_prop_ro("render_generation", &PyScene::render_generation,
+                         "Scene content revision, excluding Gaussian selection changes")
             // Node CRUD
             .def("add_group", &PyScene::add_group,
                  nb::arg("name"), nb::arg("parent") = core::NULL_NODE,

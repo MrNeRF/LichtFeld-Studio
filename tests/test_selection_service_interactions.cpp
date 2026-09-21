@@ -578,3 +578,40 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositions
     EXPECT_LT(values[5], -1.0e7f);
     EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
 }
+
+TEST_F(SelectionServiceInteractionsTest, RingsStrokeKeepsEveryHoveredGaussian) {
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Replace,
+        {10.0f, 10.0f}, 0.0f));
+    service_->setTestingHoveredGaussianId(1);
+    service_->updateInteractiveSelection({80.0f, 80.0f});
+    service_->refreshInteractivePreview();
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
+    EXPECT_EQ(result.affected_count, 2u);
+}
+
+TEST_F(SelectionServiceInteractionsTest, RingsStrokeCanRemoveSeveralGaussians) {
+    set_initial_selection({1, 1});
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Remove,
+        {10.0f, 10.0f}, 0.0f));
+    service_->setTestingHoveredGaussianId(1);
+    service_->updateInteractiveSelection({80.0f, 80.0f});
+    service_->refreshInteractivePreview();
+    ASSERT_TRUE(service_->finishInteractiveSelection().success);
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+}
+
+TEST_F(SelectionServiceInteractionsTest, CancelingRingsStrokePreservesTheOriginalSelection) {
+    set_initial_selection({0, 1});
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Replace,
+        {10.0f, 10.0f}, 0.0f));
+    service_->cancelInteractiveSelection();
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}

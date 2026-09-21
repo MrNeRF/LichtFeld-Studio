@@ -3059,18 +3059,22 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
 
 
-def test_gallery_cover_refreshes_the_saved_project_card(panel_module, monkeypatch):
-    panel, local, remote = _gallery_fixture(panel_module)
+def test_thumbnail_dialog_only_updates_the_local_project(panel_module):
+    panel, local, _ = _gallery_fixture(panel_module)
+    panel._select_asset_id(local["id"])
+    panel._dialog_kind = "update_thumbnail"
+    panel._dialog_data = {"path": local["path"], "source": "viewport",
+                          "sources": ["viewport"], "use_gallery_cover": True,
+                          "gallery_cover_available": True}
+    body, _ = panel._project_form()
+    assert 'use_gallery_cover' not in body
     calls = []
-    service = SimpleNamespace(identity=lambda: "account", set_cover=lambda *args: calls.append(("cover", args)))
-    controller = SimpleNamespace(service=service, refresh=lambda: None, _schedule_poll=lambda: None)
-    panel._controller = lambda: controller
-    panel._library_command = lambda *args: calls.append(args)
-    monkeypatch.setattr(panel_module.lf, "io", SimpleNamespace(
-        inspect_project=lambda _: SimpleNamespace(project_uuid=local["id"]),
-        read_preview=lambda _: b"saved thumbnail"), raising=False)
-    panel._gallery_thumbnail_callback(local)()
-    assert calls == [("verify_asset", local["id"]), ("cover", (local["id"], remote, b"saved thumbnail"))]
+    panel._start_project_operation = lambda *args, **kwargs: calls.append(kwargs)
+    assert panel._start_thumbnail_operation(local)
+    assert len(calls) == 1
+    assert calls[0].get("after") is None
+    assert calls[0]["reverify_asset"] is True
+
 
 def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)

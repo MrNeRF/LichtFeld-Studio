@@ -746,30 +746,6 @@ class GalleryAssetMixin:
         return {"title": fields.get("title", display_name(asset)),
                 "description": fields.get("description", "")}
 
-    def _gallery_thumbnail_callback(self, asset):
-        import copy
-        controller = self._controller()
-        identity, scene = controller.service.identity(), copy.deepcopy(self._gallery_scene(asset))
-        def finished():
-            try:
-                if controller.service.identity() != identity:
-                    raise ValueError(tr("error.account_changed"))
-                if not scene or asset["id"] not in self._gallery_state.get("links", {}):
-                    raise ValueError(tr("error.link"))
-                if str(lf.io.inspect_project(asset["path"]).project_uuid) != asset["id"]:
-                    raise ValueError(tr("error.project_changed"))
-                self._library_command("verify_asset", asset["id"])
-                png = lf.io.read_preview(asset["path"])
-                controller.service.set_cover(asset["id"], scene, png)
-                controller._after_service = controller.refresh
-                controller._schedule_poll()
-            except Exception as exc:
-                log_failure("update_gallery_thumbnail", exc, path=asset["path"])
-                from .gallery_messages import localize_message
-                self._gallery_notice = localize_message(str(exc))
-                self._request_model_update()
-        return finished
-
     def _open_replacement_review(self, asset):
         from .gallery_file_panel import open_gallery_file_panel
         controller, scene = self._controller(), self._gallery_scene(asset)

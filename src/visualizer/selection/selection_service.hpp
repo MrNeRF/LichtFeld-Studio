@@ -206,6 +206,7 @@ namespace lfs::vis {
             bool preview_dirty = false;
             core::Tensor working_selection;
             core::Tensor live_delta_selection;
+            bool ring_has_hit = false;
             std::vector<bool> live_preview_node_mask;
             size_t preview_brush_point_count = 0;
             uint64_t generation = 0;

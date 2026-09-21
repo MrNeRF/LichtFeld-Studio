@@ -5618,7 +5618,10 @@ namespace lfs::vis::project {
         }
         const bool training_write_window =
             isTrainingWriteWindowOpen();
+        const auto* const gui = viewer_.getGuiManager();
+        const bool modal_open = gui && gui->modalOverlay() && gui->isModalWindowOpen();
         if (!training_write_window &&
+            !modal_open &&
             !isScratchBoundSession() &&
             compaction_suggested_ &&
             settings_.compaction_idle_seconds !=

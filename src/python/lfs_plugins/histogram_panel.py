@@ -71,6 +71,7 @@ class HistogramPanel(Panel):
         self._compare_x_bin_count = DEFAULT_COMPARE_X_BIN_COUNT
         self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
         self._scene_generation = -1
+        self._scene_data_generation = -1
         self._selection_generation = self._selection_generation_value()
         self._history_generation = -1
         self._selected_nodes_signature: tuple[int, ...] = ()
@@ -359,7 +360,7 @@ class HistogramPanel(Panel):
         model.bind_func("undo_enabled", self._can_undo)
         model.bind_func("redo_enabled", self._can_redo)
         model.bind_func("clear_enabled", self._has_any_mark)
-        model.bind_func("delete_enabled", lambda: self._has_any_mark() and self._marked_count > 0)
+        model.bind_func("delete_enabled", lambda: not self._computing and self._has_any_mark() and self._marked_count > 0)
         model.bind("metric_id", lambda: self._metric_id, self._set_metric_id)
         model.bind("compare_metric_id", lambda: self._compare_metric_id, self._set_compare_metric_id)
         model.bind("log_scale_enabled", lambda: self._log_scale_enabled, self._set_log_scale_enabled)
@@ -438,15 +439,18 @@ class HistogramPanel(Panel):
 
         space_changed = self._sync_panel_space_state()
         scene_generation = lf.get_scene_generation()
+        data_generation = self._scene_data_generation_value()
         history_generation = self._history_generation_value()
         current_lang = lf.ui.get_current_language()
         trainer_state = RuntimeState.trainer_state.value
         selection_signature = self._scene_node_selection_signature()
         selection_generation = self._selection_generation_value()
         scene_changed = scene_generation != self._scene_generation
+        data_changed = data_generation != self._scene_data_generation
         history_changed = history_generation != self._history_generation
+        nodes_changed = selection_signature != self._selected_nodes_signature
         selection_changed = (
-            selection_signature != self._selected_nodes_signature or
+            nodes_changed or
             selection_generation != self._selection_generation
         )
         sync_selection_from_scene = False
@@ -454,11 +458,12 @@ class HistogramPanel(Panel):
                 history_generation == self._history_generation and
                 trainer_state == self._trainer_state and
                 current_lang == self._last_lang and
+                not data_changed and
                 not selection_changed and
                 not space_changed):
             return False
 
-        if self._dragging_mark or self._dragging_compare_mark:
+        if (self._dragging_mark or self._dragging_compare_mark) and not (data_changed or nodes_changed):
             self._scene_generation = scene_generation
             self._selection_generation = selection_generation
             self._history_generation = history_generation
@@ -470,32 +475,38 @@ class HistogramPanel(Panel):
                 self._pending_selection_commit = max(self._pending_selection_commit, 2)
             return False
 
-        if scene_changed or history_changed:
+        if scene_changed or history_changed or selection_changed:
             if self._pending_selection_commit > 0:
                 self._pending_selection_commit -= 1
             else:
                 self._selection_owned = False
                 sync_selection_from_scene = True
 
-        if selection_changed:
+        if nodes_changed:
             self._clear_all_marks(clear_scene=False)
 
+        refresh_data = data_changed or nodes_changed or trainer_state != self._trainer_state or current_lang != self._last_lang
         self._scene_generation = scene_generation
+        self._scene_data_generation = data_generation
         self._selection_generation = selection_generation
         self._history_generation = history_generation
         self._selected_nodes_signature = selection_signature
         self._last_lang = current_lang
         self._trainer_state = trainer_state
         self._rebuild_metric_options()
-        self._refresh()
-        if sync_selection_from_scene and not (self._dragging_mark or self._dragging_compare_mark):
+        if refresh_data:
+            self._refresh()
+        if sync_selection_from_scene and not (self._computing or self._dragging_mark or self._dragging_compare_mark):
             self._sync_panel_selection_from_scene()
+        if self._handle:
+            self._handle.dirty_all()
         return True
 
     def on_scene_changed(self, doc):
         del doc
-        self._scene_generation = -1
-        self._cancel_histogram_compute()
+        if self._scene_data_generation_value() != self._scene_data_generation:
+            self._scene_generation = -1
+            self._cancel_histogram_compute()
 
     def on_unmount(self, doc):
         self._cancel_histogram_compute()
@@ -1056,7 +1067,7 @@ class HistogramPanel(Panel):
         if bin_count == self._histogram_bin_count:
             return
         self._histogram_bin_count = bin_count
-        if self._show_chart:
+        if self._show_chart or self._computing:
             if self._handle:
                 self._refresh()
             else:
@@ -1069,7 +1080,7 @@ class HistogramPanel(Panel):
         if bin_count == self._compare_x_bin_count:
             return
         self._compare_x_bin_count = bin_count
-        if self._show_compare_card:
+        if self._show_compare_card or self._computing:
             if self._handle:
                 self._refresh()
             else:
@@ -1082,7 +1093,7 @@ class HistogramPanel(Panel):
         if bin_count == self._compare_y_bin_count:
             return
         self._compare_y_bin_count = bin_count
-        if self._show_compare_card:
+        if self._show_compare_card or self._computing:
             if self._handle:
                 self._refresh()
             else:
@@ -1146,9 +1157,9 @@ class HistogramPanel(Panel):
             )
             return
 
-        scene_generation = int(lf.get_scene_generation())
-        selection_generation = self._selection_generation_value()
-        cache_key = self._histogram_cache_key(scene_generation, selection_generation)
+        cache_key = self._histogram_cache_key(
+            self._scene_data_generation_value(), self._scene_node_selection_signature()
+        )
         cached = self._histogram_cache.get(cache_key)
         if cached is not None:
             self._cancel_histogram_compute()
@@ -1166,13 +1177,13 @@ class HistogramPanel(Panel):
             view_only=view_only,
         )
 
-    def _histogram_cache_key(self, scene_generation: int, selection_generation: int) -> tuple:
+    def _histogram_cache_key(self, scene_generation: int, node_selection: tuple[int, ...]) -> tuple:
         """Identify a result by data identity and every histogram query parameter."""
         return (
             int(scene_generation),
             self._metric_id,
             int(self._histogram_bin_count),
-            int(selection_generation),
+            tuple(node_selection),
             self._compare_metric_id,
             int(self._compare_x_bin_count),
             int(self._compare_y_bin_count),
@@ -1184,6 +1195,10 @@ class HistogramPanel(Panel):
 
     def _set_computing(self):
         self._computing = True
+        if self._show_chart:
+            if self._handle:
+                self._handle.dirty_all()
+            return
         self._show_chart = False
         self._show_compare_card = False
         self._show_compare_chart = False
@@ -1272,7 +1287,7 @@ class HistogramPanel(Panel):
 
         def apply_result():
             if token != self._histogram_compute_token or cache_key != self._histogram_cache_key(
-                int(lf.get_scene_generation()), self._selection_generation_value()
+                self._scene_data_generation_value(), self._scene_node_selection_signature()
             ):
                 return
             kind = result.get("kind")
@@ -1285,6 +1300,7 @@ class HistogramPanel(Panel):
                 while len(self._histogram_cache) > _HISTOGRAM_CACHE_LIMIT:
                     self._histogram_cache.popitem(last=False)
                 self._apply_histogram_result(result)
+                self._sync_panel_selection_from_scene()
             elif kind == "empty":
                 self._apply_empty_histogram_result(result)
             elif kind == "error":
@@ -3458,6 +3474,8 @@ class HistogramPanel(Panel):
             self._commit_histogram_mask_selection(inverted, apply_scene=True, force_full_domain=force_full_domain)
 
     def _on_keydown(self, event):
+        if self._computing:
+            return
         key = int(event.get_parameter("key_identifier", "0"))
         ctrl_pressed = self._event_primary_shortcut_pressed(event)
 
@@ -3495,7 +3513,7 @@ class HistogramPanel(Panel):
         return lower_value + (upper_value - lower_value) * weight
 
     def _on_chart_mousedown(self, event):
-        if not self._show_chart or self._chart_el is None or self._hist_edges is None:
+        if self._computing or not self._show_chart or self._chart_el is None or self._hist_edges is None:
             return
         if int(event.get_parameter("button", "0")) != 0:
             return
@@ -3545,7 +3563,7 @@ class HistogramPanel(Panel):
         event.stop_propagation()
 
     def _on_compare_chart_mousedown(self, event):
-        if not self._show_compare_chart or self._compare_chart_el is None:
+        if self._computing or not self._show_compare_chart or self._compare_chart_el is None:
             return
         if int(event.get_parameter("button", "0")) != 0:
             return
@@ -4043,6 +4061,11 @@ class HistogramPanel(Panel):
             return -1
 
     @staticmethod
+    def _scene_data_generation_value() -> int:
+        scene = lf.get_scene()
+        return int(getattr(scene, "render_generation", lf.get_scene_generation()))
+
+    @staticmethod
     def _selection_generation_value() -> int:
         try:
             return int(RuntimeState.selection_generation.value)
@@ -4165,7 +4188,7 @@ class HistogramPanel(Panel):
         )
 
     def _on_delete_marked(self, _handle, _event, _args):
-        if not self._has_any_mark() or self._marked_count <= 0:
+        if self._computing or not self._has_any_mark() or self._marked_count <= 0:
             return
 
         if self._panel_selection_mask is None:
