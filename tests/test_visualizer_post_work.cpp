@@ -25,6 +25,7 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "io/project_inspector.hpp"
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/session_chapters.hpp"
@@ -2472,6 +2473,189 @@ namespace lfs::vis {
                 std::filesystem::is_regular_file(
                     sidecar));
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CleanProjectWorksAfterFirstSaveWithoutReopen) {
+        const auto project_path =
+            temporary_.path / "cleanup-fresh.licht";
+        const auto reopened_path =
+            temporary_.path / "cleanup-reopened.licht";
+        const auto save_history_size =
+            [](const std::filesystem::path& path) {
+                return lfs::test::licht::require_result(
+                           lfs::io::project::
+                               inspect_project_details(path))
+                    .save_history.size();
+            };
+
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(
+                viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+
+            auto untitled = viewer.projectGetInfo();
+            ASSERT_TRUE(untitled);
+            ASSERT_EQ(untitled->hydration_state, "empty");
+            ASSERT_FALSE(untitled->path.has_value());
+
+            ASSERT_NE(
+                viewer.getScene().addGroup("Imported scene"),
+                lfs::core::NULL_NODE);
+            auto first_save = viewer.projectSaveAs(
+                project_path, false);
+            ASSERT_TRUE(first_save)
+                << lfs::format_for_developer(first_save.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(std::filesystem::is_regular_file(
+                project_path));
+
+            for (int index = 0; index < 4; ++index) {
+                ASSERT_NE(
+                    viewer.getScene().addGroup(
+                        std::format("Older save {}", index + 1)),
+                    lfs::core::NULL_NODE);
+                auto saved = viewer.projectSave(false);
+                ASSERT_TRUE(saved)
+                    << lfs::format_for_developer(saved.error());
+                ASSERT_TRUE(pumpUntil(
+                    viewer.work_queue_mutex_, viewer.work_queue_,
+                    [&] {
+                        return !viewer.jobs().anyRunning(
+                            JobType::ProjectWrite);
+                    }));
+            }
+
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            ASSERT_EQ(info->hydration_state, "empty");
+            ASSERT_TRUE(info->path.has_value());
+            ASSERT_FALSE(info->project_write_running);
+            ASSERT_FALSE(info->dirty);
+
+            std::filesystem::copy_file(project_path, reopened_path);
+            ASSERT_EQ(save_history_size(reopened_path), 5u);
+
+            auto compacted = viewer.projectCompact();
+            ASSERT_TRUE(compacted)
+                << lfs::format_for_developer(compacted.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            auto compact_info = viewer.projectGetInfo();
+            ASSERT_TRUE(compact_info);
+            EXPECT_TRUE(compact_info->project_write_error.empty())
+                << compact_info->project_write_error;
+            EXPECT_EQ(compact_info->hydration_state, "empty");
+            const auto compacted_copy =
+                temporary_.path / "cleanup-compacted.licht";
+            std::filesystem::copy_file(project_path, compacted_copy);
+            EXPECT_EQ(save_history_size(compacted_copy), 1u);
+
+            for (int index = 0; index < 4; ++index) {
+                ASSERT_NE(
+                    viewer.getScene().addGroup(
+                        std::format("Post-compact save {}",
+                                    index + 1)),
+                    lfs::core::NULL_NODE);
+                auto saved = viewer.projectSave(false);
+                ASSERT_TRUE(saved)
+                    << lfs::format_for_developer(saved.error());
+                ASSERT_TRUE(pumpUntil(
+                    viewer.work_queue_mutex_, viewer.work_queue_,
+                    [&] {
+                        return !viewer.jobs().anyRunning(
+                            JobType::ProjectWrite);
+                    }));
+            }
+            auto post_compact = viewer.projectGetInfo();
+            ASSERT_TRUE(post_compact);
+            ASSERT_EQ(post_compact->hydration_state, "empty");
+            ASSERT_FALSE(post_compact->project_write_running);
+            ASSERT_FALSE(post_compact->dirty);
+            const auto pre_clean_copy =
+                temporary_.path / "cleanup-pre-clean.licht";
+            std::filesystem::copy_file(project_path, pre_clean_copy);
+            ASSERT_EQ(save_history_size(pre_clean_copy), 5u);
+
+            std::string clean_error = "not started";
+            lfs::core::events::cmd::ProjectCompact{
+                .clean = true,
+                .on_started =
+                    [&](const std::string& message) {
+                        clean_error = message;
+                    },
+            }
+                .emit();
+            ASSERT_TRUE(clean_error.empty()) << clean_error;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            auto cleaned_info = viewer.projectGetInfo();
+            ASSERT_TRUE(cleaned_info);
+            EXPECT_TRUE(cleaned_info->project_write_error.empty())
+                << cleaned_info->project_write_error;
+            EXPECT_EQ(cleaned_info->hydration_state, "empty");
+        }
+        EXPECT_EQ(save_history_size(project_path), 1u);
+        EXPECT_EQ(save_history_size(reopened_path), 5u);
+
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(
+                viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(
+                reopened_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_,
+                viewer.work_queue_));
+            auto hydrated = viewer.projectGetInfo();
+            ASSERT_TRUE(hydrated);
+            ASSERT_EQ(hydrated->hydration_state, "complete");
+            ASSERT_FALSE(hydrated->project_write_running);
+            ASSERT_EQ(save_history_size(reopened_path), 5u);
+
+            std::string clean_error = "not started";
+            lfs::core::events::cmd::ProjectCompact{
+                .clean = true,
+                .on_started =
+                    [&](const std::string& message) {
+                        clean_error = message;
+                    },
+            }
+                .emit();
+            ASSERT_TRUE(clean_error.empty()) << clean_error;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            auto cleaned_info = viewer.projectGetInfo();
+            ASSERT_TRUE(cleaned_info);
+            EXPECT_TRUE(cleaned_info->project_write_error.empty())
+                << cleaned_info->project_write_error;
+            EXPECT_EQ(cleaned_info->hydration_state, "complete");
+        }
+        EXPECT_EQ(save_history_size(reopened_path), 1u);
     }
 
     TEST_F(VisualizerImplResetTest,

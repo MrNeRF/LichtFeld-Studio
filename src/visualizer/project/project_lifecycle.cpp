@@ -4746,12 +4746,17 @@ namespace lfs::vis::project {
                 "Compaction cannot make the recovery base unreachable",
                 "project.recovery");
         }
-        if (hydration_.load(std::memory_order_acquire) !=
-            Hydration::Complete) {
+        // Empty after first save is already bound; Complete is opened-from-disk.
+        const auto hydration = hydration_.load(
+            std::memory_order_acquire);
+        if (hydration != Hydration::Empty &&
+            hydration != Hydration::Complete) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
-                "Wait for project opening to finish before compacting.",
-                "Compaction requires a fully hydrated project",
+                hydration == Hydration::Failed
+                    ? "The project did not finish opening."
+                    : "Wait for project opening to finish before compacting.",
+                "Compaction requires a fully opened project",
                 "project.hydration");
         }
         if (viewer_.jobs().anyRunning(
