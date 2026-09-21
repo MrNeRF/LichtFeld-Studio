@@ -775,7 +775,7 @@ def test_add_folder_uses_real_directory_picker(panel_module):
     panel_module.lf._test_state.folder_dialog_path = selected
     calls = []
     panel._asset_index = _index(
-        add_folder=lambda path: calls.append(path)
+        add_folder=lambda path, recursive=None: calls.append((path, recursive))
         or SimpleNamespace(id="selected-folder"),
 
     )
@@ -786,7 +786,7 @@ def test_add_folder_uses_real_directory_picker(panel_module):
 
     assert len(panel_module.lf._test_state.confirm_dialogs) == 1
     panel_module.lf._test_state.confirm_dialogs[-1][3]("projects.action.include_subfolders")
-    assert calls == [selected]
+    assert calls == [(selected, True)]
     assert panel._selected_folder_id == "selected-folder"
 
 def test_folder_counts_match_search_results(panel_module):
@@ -2398,7 +2398,9 @@ def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
     panel._asset_index = _index(
-        add_folder=lambda path: SimpleNamespace(id="selected-folder", path=path),
+        add_folder=lambda path, recursive=None: SimpleNamespace(
+            id="selected-folder", path=path, recursive=recursive
+        ),
 
     )
     assert panel._add_folder_from_path("/tmp/mrnf_local") == "selected-folder"
@@ -2406,6 +2408,36 @@ def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
     assert one_calls == [("selected-folder", "/tmp/mrnf_local")]
     assert all_calls == []
     panel.on_unmount(_Document())
+
+
+def test_rescan_folder_preserves_non_recursive_policy(panel_module):
+    calls = []
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        folders={
+            "selected-folder": {
+                "id": "selected-folder",
+                "path": "/tmp/mrnf_local",
+                "recursive": False,
+            }
+        }
+    )
+    panel.refresh_catalog = lambda **kwargs: calls.append(("refresh", kwargs))
+    panel._scan_asset_folders = lambda **kwargs: calls.append(("scan", kwargs))
+
+    panel._handle_folder_context_action("rescan", "selected-folder")
+
+    assert calls == [
+        ("refresh", {"scan_folders": False}),
+        (
+            "scan",
+            {
+                "folder_id": "selected-folder",
+                "directory": "/tmp/mrnf_local",
+                "recursive": False,
+            },
+        ),
+    ]
 
 def test_on_mount_scans_all_folders_only_before_first_completed_scan(
     panel_module, monkeypatch

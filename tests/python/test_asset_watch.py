@@ -55,6 +55,64 @@ def test_real_folder_mapping_is_normalized_and_persisted(tmp_path: Path):
     assert reloaded.folders[folder.id]["path"] == str(selected.resolve())
 
 
+def test_non_recursive_folder_policy_is_persisted_and_reloaded(tmp_path: Path):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    default.mkdir()
+    selected.mkdir()
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path, default_folder_path=default)
+    index.load()
+
+    folder = index.add_folder(str(selected), recursive=False)
+
+    assert folder is not None
+    stored = json.loads(library_path.read_text(encoding="utf-8"))
+    assert stored["folders"][folder.id]["recursive"] is False
+    reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
+    assert reloaded.load() is True
+    assert reloaded.folders[folder.id]["recursive"] is False
+
+
+def test_global_scan_respects_non_recursive_folder_policy(
+    monkeypatch, tmp_path: Path
+):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    nested = selected / "nested"
+    default.mkdir()
+    nested.mkdir(parents=True)
+    top_level = selected / "top-level.licht"
+    nested_project = nested / "nested.licht"
+    top_level.write_bytes(b"top")
+    nested_project.write_bytes(b"nested")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspection),
+    )
+    index = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=default,
+    )
+    index.load()
+    folder = index.add_folder(str(selected), recursive=False)
+    assert folder is not None
+
+    reloaded = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=default,
+    )
+    assert reloaded.load() is True
+    result = scan_all_asset_folders(reloaded)
+
+    assert result.discovered == 1
+    assert {project["path"] for project in reloaded.assets.values()} == {
+        str(top_level)
+    }
+
+
 def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
     nested = tmp_path / "nested"
     nested.mkdir()

@@ -482,7 +482,7 @@ def scan_all_asset_folders(
     progress: AssetFolderScanProgress | None = None,
 ) -> AssetFolderScanResult:
     """Scan every real folder, assigning projects to the most-specific root."""
-    roots: list[tuple[Path, str]] = []
+    roots: list[tuple[Path, str, bool]] = []
     seen_roots = set()
     for folder_id, folder in (getattr(index, "folders", {}) or {}).items():
         directory = str(folder.get("path") or "").strip()
@@ -497,7 +497,7 @@ def scan_all_asset_folders(
         if key in seen_roots:
             continue
         seen_roots.add(key)
-        roots.append((root, folder_id))
+        roots.append((root, folder_id, folder.get("recursive", True) is not False))
 
     roots.sort(
         key=lambda item: (
@@ -511,13 +511,14 @@ def scan_all_asset_folders(
 
     def _iter_all() -> Iterator[tuple[str, str]]:
         seen_paths: set[str] = set()
-        for root, assigned_folder_id in roots:
+        for root, assigned_folder_id, recursive in roots:
             if cancel_event is not None and cancel_event.is_set():
                 return
             if progress is not None:
                 progress.report(current_root=str(root))
             for path in iter_licht_projects(
-                str(root), cancel_event, progress, scan_cache=cache
+                str(root), cancel_event, progress,
+                scan_cache=cache, recursive=recursive,
             ):
                 path_key = os.path.normcase(path)
                 if path_key in seen_paths:
@@ -535,7 +536,8 @@ def scan_all_asset_folders(
             was_cancelled = cancel_event is not None and cancel_event.is_set()
             added, already, failed, _ = _commit_registration_batch(
                 index, discovered, cancel_event,
-                folder_ids={folder_id for _root, folder_id in roots}, save=True,
+                folder_ids={folder_id for _root, folder_id, _recursive in roots},
+                save=True,
             )
             was_cancelled = was_cancelled or (
                 cancel_event is not None and cancel_event.is_set()

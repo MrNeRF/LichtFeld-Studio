@@ -2288,7 +2288,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _add_folder_from_path(self, directory: str, *, recursive: bool = True) -> Optional[str]:
         if not self._asset_index or not directory.strip():
             return None
-        folder = self._library_command("add_folder", directory.strip())
+        folder = self._library_command(
+            "add_folder", directory.strip(), recursive=recursive
+        )
         if folder is None:
             return None
         self._selected_folder_id = folder.id
@@ -3361,7 +3363,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "rescan":
             folder = self._asset_index_folders().get(folder_id, {})
             self.refresh_catalog(scan_folders=False)
-            self._scan_asset_folders(folder_id=folder_id, directory=str(folder.get("path") or ""))
+            self._scan_asset_folders(
+                folder_id=folder_id,
+                directory=str(folder.get("path") or ""),
+                recursive=folder.get("recursive", True) is not False,
+            )
         elif action == "settings":
             lf.ui.set_panel_enabled("lfs.preferences", True)
         elif action == "remove":

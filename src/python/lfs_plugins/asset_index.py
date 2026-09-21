@@ -321,6 +321,7 @@ def is_supported_asset_path(path: str) -> bool:
 class Folder:
     id: str
     path: str
+    recursive: bool = True
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -329,15 +330,21 @@ class Folder:
         return directory.name or str(directory)
 
     def to_storage_dict(self) -> Dict[str, Any]:
-        return {**self.extra, "path": self.path}
+        record = {**self.extra, "path": self.path}
+        if not self.recursive:
+            record["recursive"] = False
+        return record
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        record = {
             "id": self.id,
             "name": self.name,
             "path": self.path,
             "is_default": self.id == DEFAULT_FOLDER_ID,
         }
+        if not self.recursive:
+            record["recursive"] = False
+        return record
 
 
 @dataclass
@@ -1201,13 +1208,19 @@ class AssetIndex:
         normalized = False
 
         stored_default_path = ""
+        stored_default_recursive = True
         stored_default_extra: Dict[str, Any] = {}
         for folder_id, value in folders_data.items():
             if not isinstance(folder_id, str) or not isinstance(value, dict):
                 raise ValueError("Invalid Asset Manager folder record")
             folder_extra = {
-                key: item for key, item in value.items() if key != "path"
+                key: item
+                for key, item in value.items()
+                if key not in {"path", "recursive"}
             }
+            raw_recursive = value.get("recursive", True)
+            recursive = raw_recursive if isinstance(raw_recursive, bool) else True
+            normalized = normalized or not isinstance(raw_recursive, bool)
             raw_path = str(value.get("path") or "").strip()
             if not raw_path:
                 normalized = True
@@ -1216,6 +1229,7 @@ class AssetIndex:
             normalized = normalized or path != raw_path
             if folder_id == DEFAULT_FOLDER_ID:
                 stored_default_path = path
+                stored_default_recursive = recursive
                 stored_default_extra = folder_extra
                 continue
             if self._path_key(path) == self._path_key(self._default_folder_path):
@@ -1223,17 +1237,20 @@ class AssetIndex:
                 continue
             before = len(self._folders)
             added_folder = self._add_folder_record(path, preferred_id=folder_id)
+            added_folder.recursive = recursive
             added_folder.extra.update(folder_extra)
             normalized = normalized or len(self._folders) == before or path != raw_path
 
         self._ensure_default_folder()
+        self._folders[DEFAULT_FOLDER_ID].recursive = stored_default_recursive
         self._folders[DEFAULT_FOLDER_ID].extra.update(stored_default_extra)
         if (
             stored_default_path
             and self._path_key(stored_default_path)
             != self._path_key(self._default_folder_path)
         ):
-            self._add_folder_record(stored_default_path)
+            migrated_folder = self._add_folder_record(stored_default_path)
+            migrated_folder.recursive = stored_default_recursive
             normalized = True
 
         seen_paths = set()
@@ -1640,7 +1657,12 @@ class AssetIndex:
                 temp_path.unlink(missing_ok=True)
 
     @_synchronized
-    def add_folder(self, directory: str) -> Optional[Folder]:
+    def add_folder(
+        self,
+        directory: str,
+        *,
+        recursive: Optional[bool] = None,
+    ) -> Optional[Folder]:
         path = Path(_normalize_path(directory))
         if not path.is_dir():
             return None
@@ -1653,9 +1675,17 @@ class AssetIndex:
             None,
         )
         if existing is not None:
+            if recursive is None or existing.recursive == bool(recursive):
+                return existing
+            previous_state = self._snapshot_state(folder_ids=[existing.id])
+            existing.recursive = bool(recursive)
+            if not self.save():
+                self._restore_state(previous_state)
+                return None
             return existing
         previous_state = self._snapshot_state()
         folder = self._add_folder_record(str(path))
+        folder.recursive = True if recursive is None else bool(recursive)
         if not self.save():
             self._restore_state(previous_state)
             return None
