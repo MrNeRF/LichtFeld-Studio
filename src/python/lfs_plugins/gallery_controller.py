@@ -370,14 +370,22 @@ class GalleryController:
                         or reviewed_dirty is not None and (
                             lf.project_is_dirty() != reviewed_dirty or capture_view(lf) != local_view)):
                     raise ValueError(tr("error.project_changed"))
+                # A closed review only has the last Gallery snapshot. Preserve
+                # the actual saved view loaded after approval, including tracks
+                # that were not selected for replacement in the review.
+                if reviewed_dirty is None and lf.project_is_dirty():
+                    raise ValueError(tr("error.project_changed"))
+                apply_local_view = capture_view(lf) if reviewed_dirty is None else local_view
                 metadata = copy.deepcopy(local)
                 if decisions.get("text") == "gallery":
                     for key in ("title", "description"):
                         metadata[key] = remote.get(key, "")
-                view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else local_view)
-                track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else local_view.get("cameraPath"))
+                view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else apply_local_view)
+                track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else apply_local_view.get("cameraPath"))
                 if decisions.get("track") == "both":
-                    track = combine_camera_tracks(local_view["cameraPath"], remote_view["cameraPath"])
+                    if not apply_local_view.get("cameraPath"):
+                        raise ValueError(tr("error.project_changed"))
+                    track = combine_camera_tracks(apply_local_view["cameraPath"], remote_view["cameraPath"])
                 if track is not None:
                     view["cameraPath"] = track
                 else:

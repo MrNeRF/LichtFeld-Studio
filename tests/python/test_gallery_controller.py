@@ -1895,3 +1895,75 @@ def test_open_project_review_still_guards_dirty_and_view(gallery, monkeypatch, t
     assert opened == []
     assert actions == []
     assert path.read_bytes() == b"published project"
+
+
+@pytest.mark.parametrize("view_choice,track_choice,dirty,has_track", [
+    (None, None, False, True),
+    ("gallery", None, False, True),
+    (None, "gallery", False, True),
+    (None, "both", False, True),
+    (None, "both", False, False),
+    (None, None, True, True),
+])
+def test_closed_review_preserves_saved_local_view(
+        gallery, monkeypatch, tmp_path, view_choice, track_choice, dirty, has_track):
+    from lfs_plugins.gallery_sync import shared_fields
+    from test_gallery_product_regressions import _capture_review
+
+    controller, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path, other = tmp_path / "saved.licht", tmp_path / "other.licht"
+    path.write_bytes(b"locally saved view with exposure=2")
+    other.write_bytes(b"other project")
+    old_track = {"duration": 1, "keyframes": [{"time": 0, "label": "published"}]}
+    saved_track = {"duration": 2, "keyframes": [{"time": 1, "label": "saved"}]}
+    remote_track = {"duration": 3, "keyframes": [{"time": 0, "label": "gallery"}]}
+    published = scene(viewerSettings={"exposure": 1, "cameraPath": old_track})
+    remote = scene(viewerSettings={"exposure": 3 if view_choice == "gallery" else 1, "cameraPath": remote_track})
+    remote.update(title="New Gallery title", metadataRevision="new-title")
+    state.update(scenes=[remote], links={"project": dict(
+        sceneId=remote["id"], commitUuid="published-commit", sharedFields=shared_fields(published),
+        contentRevision="original", metadataRevision="original")})
+    controller._state = state
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    current = [str(other)]
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": current[0]}, raising=False)
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_open",
+                        lambda p, *a, **kw: current.__setitem__(0, p), raising=False)
+    def capture_opened_view(_lf):
+        assert current[0] == str(path), "The previous project's view must not be captured"
+        return dict(exposure=2, **({"cameraPath": copy.deepcopy(saved_track)} if has_track else {}))
+    monkeypatch.setattr(module, "capture_view", capture_opened_view)
+    monkeypatch.setattr(import_module("lfs_plugins.training_confirm"), "confirm_discard_work_then",
+                        lambda title, cb: cb(False))
+    controller._resolve_pending_uploads = lambda project, scene, identity, cb: cb()
+    controller._begin_settings_apply = lambda asset, scene, metadata, **kw: actions.append(metadata)
+    reviews = _capture_review(monkeypatch)
+    controller.resolve_asset({"id": "project", "path": str(path), "commit_uuid": "new-local-save"},
+                             {"title": published["title"], "description": published["description"]}, apply_only=True)
+    assert current == [str(other)]
+    decisions = {"text": "gallery"}
+    if view_choice:
+        decisions["view"] = view_choice
+    if track_choice:
+        decisions["track"] = track_choice
+    reviews[0]["on_submit"](decisions)
+    assert actions == []
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: dirty, raising=False)
+    if dirty or (track_choice == "both" and not has_track):
+        with pytest.raises(ValueError, match="changed"):
+            controller._open_continuation[2]()
+        assert actions == []
+        return
+    controller._open_continuation[2]()
+    assert len(actions) == 1
+    assert actions[0]["title"] == "New Gallery title"
+    assert actions[0]["viewerSettings"]["exposure"] == (3 if view_choice == "gallery" else 2)
+    expected_track = remote_track if track_choice == "gallery" else saved_track
+    if track_choice == "both":
+        expected_track = {"duration": 5, "keyframes": [
+            {"time": 1, "label": "saved"}, {"time": 2, "label": "gallery"}]}
+    assert actions[0]["viewerSettings"]["cameraPath"] == expected_track
