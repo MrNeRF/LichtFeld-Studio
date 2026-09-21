@@ -1569,6 +1569,12 @@ def test_project_manager_state_is_device_chrome_not_catalog_selection(panel_modu
 def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypatch):
     restored_widths = []
     monkeypatch.setattr(
+        panel_module.lf.ui,
+        "get_panel",
+        lambda _id: SimpleNamespace(space=panel_module.lf.ui.PanelSpace.LEFT_DOCK),
+        raising=False,
+    )
+    monkeypatch.setattr(
         panel_module,
         "read_project_manager_preferences",
         lambda: {"defaultView": "remember", "rememberState": True},
@@ -1588,6 +1594,59 @@ def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypa
     panel_module.AssetManagerPanel()
 
     assert restored_widths == [468.0]
+
+
+def test_project_manager_state_does_not_resize_left_dock_while_floating(panel_module, monkeypatch):
+    restored_widths = []
+    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "panel_width": 468.0},
+    )
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "set_left_dock_width",
+        lambda width: restored_widths.append(width),
+        raising=False,
+    )
+
+    panel = panel_module.AssetManagerPanel()
+
+    assert restored_widths == []
+    info.space = panel_module.lf.ui.PanelSpace.LEFT_DOCK
+    panel._sync_panel_space_state()
+    assert restored_widths == [468.0]
+
+
+def test_floating_project_manager_preserves_remembered_left_dock_width(panel_module, monkeypatch):
+    stored = []
+    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "panel_width": 468.0},
+    )
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 712.0, raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._sync_panel_space_state()
+    panel._persist_project_manager_state()
+
+    assert stored[-1]["panel_width"] == 468.0
 
 
 def test_project_manager_state_captures_outer_width_without_transient_visibility(panel_module, monkeypatch):
