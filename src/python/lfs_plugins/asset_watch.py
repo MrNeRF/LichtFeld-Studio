@@ -170,10 +170,17 @@ class _DirectoryScanCache:
                 mtime_ns = raw_entry.get("mtime_ns")
                 dirs = raw_entry.get("dirs")
                 licht = raw_entry.get("licht")
+                recursive = raw_entry.get("recursive")
+                if recursive is None:
+                    # Entries written before scan depth became part of the
+                    # cache contract cannot reveal how they were produced.
+                    self._changed = True
+                    continue
                 if (
                     not isinstance(mtime_ns, int)
                     or not isinstance(dirs, list)
                     or not isinstance(licht, list)
+                    or not isinstance(recursive, bool)
                     or not all(isinstance(name, str) and Path(name).name == name for name in dirs)
                     or not all(isinstance(name, str) and Path(name).name == name for name in licht)
                 ):
@@ -182,6 +189,7 @@ class _DirectoryScanCache:
                     "mtime_ns": int(mtime_ns),
                     "dirs": list(dirs),
                     "licht": list(licht),
+                    "recursive": recursive,
                 }
             self._entries = entries
         except FileNotFoundError:
@@ -190,14 +198,24 @@ class _DirectoryScanCache:
             self._entries = {}
             _log.warning("Ignoring invalid Asset Manager scan cache %s: %s", self._path, exc)
 
-    def trusted(self, directory: str, mtime_ns: int) -> dict[str, Any] | None:
+    def trusted(
+        self,
+        directory: str,
+        mtime_ns: int,
+        *,
+        recursive: bool,
+    ) -> dict[str, Any] | None:
         self._load()
         key = _directory_key(directory)
         if _directory_mtime_is_recent(mtime_ns):
             self.drop(key, recursive=False)
             return None
         entry = self._entries.get(key)
-        if entry is None or entry["mtime_ns"] != int(mtime_ns):
+        if (
+            entry is None
+            or entry["mtime_ns"] != int(mtime_ns)
+            or entry["recursive"] is not recursive
+        ):
             return None
         return entry
 
@@ -219,7 +237,15 @@ class _DirectoryScanCache:
         if removed:
             self._changed = True
 
-    def replace(self, directory: str, mtime_ns: int, dirs: list[str], licht: list[str]) -> None:
+    def replace(
+        self,
+        directory: str,
+        mtime_ns: int,
+        dirs: list[str],
+        licht: list[str],
+        *,
+        recursive: bool,
+    ) -> None:
         self._load()
         key = _directory_key(directory)
         previous = self._entries.get(key)
@@ -231,7 +257,12 @@ class _DirectoryScanCache:
         if _directory_mtime_is_recent(mtime_ns):
             self.drop(key, recursive=False)
             return
-        entry = {"mtime_ns": int(mtime_ns), "dirs": list(dirs), "licht": list(licht)}
+        entry = {
+            "mtime_ns": int(mtime_ns),
+            "dirs": list(dirs),
+            "licht": list(licht),
+            "recursive": recursive,
+        }
         if previous != entry:
             self._entries[key] = entry
             self._changed = True
@@ -350,7 +381,11 @@ def iter_licht_projects(
                 "Asset folder %s is very large (>10000 directories); consider a smaller folder",
                 root,
             )
-        cached = cache.trusted(current_text, int(stat.st_mtime_ns))
+        cached = cache.trusted(
+            current_text,
+            int(stat.st_mtime_ns),
+            recursive=recursive,
+        )
         if cached is not None:
             for name in cached["licht"]:
                 if cancel_event is not None and cancel_event.is_set():
@@ -418,6 +453,7 @@ def iter_licht_projects(
             int(stat.st_mtime_ns),
             [path.name for path in kept_directories],
             licht_names,
+            recursive=recursive,
         )
         pending.extend(reversed(kept_directories))
 

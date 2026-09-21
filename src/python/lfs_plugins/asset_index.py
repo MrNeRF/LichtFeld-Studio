@@ -1074,10 +1074,26 @@ class AssetIndex:
                 changed = True
 
             scope = set(str(folder_id) for folder_id in (folder_ids or []))
-            for project in self._projects.values():
+            for project_uuid, project in list(self._projects.items()):
                 if scope and project.folder_id not in scope:
                     continue
                 if project.project_uuid in observed_by_uuid:
+                    continue
+                folder = self._folders.get(project.folder_id)
+                if (
+                    folder is not None
+                    and not folder.recursive
+                    and self._path_key(Path(project.path).parent)
+                    != self._path_key(folder.path)
+                ):
+                    self._remember_identity(
+                        project.path,
+                        project.project_uuid,
+                        allow_missing=True,
+                    )
+                    self._projects.pop(project_uuid, None)
+                    self._project_by_path.pop(self._path_key(project.path), None)
+                    changed = True
                     continue
                 if _stat_identity(project.path) is None:
                     self._remember_identity(project.path, None)
