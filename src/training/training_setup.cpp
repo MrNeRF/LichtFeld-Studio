@@ -1002,68 +1002,12 @@ namespace lfs::training {
         const int max_cap = params.optimization.max_cap;
 
         if (point_cloud && point_cloud->size() > 0) {
-            const lfs::core::CropBoxData* cropbox_data =
-                context.has_preserved_cropbox ? &context.preserved_cropbox_data : nullptr;
-
-            if (cropbox_data && cropbox_data->enabled) {
-                const glm::mat4 pointcloud_to_cropbox = glm::inverse(context.preserved_cropbox_transform);
-                const auto& means = point_cloud->means;
-                const auto& colors = point_cloud->colors;
-                const size_t num_points = point_cloud->size();
-
-                auto means_cpu = means.cpu();
-                auto colors_cpu = colors.cpu();
-                const float* means_ptr = means_cpu.ptr<float>();
-                const uint8_t* colors_ptr = colors_cpu.ptr<uint8_t>();
-
-                std::vector<float> filtered_means;
-                std::vector<uint8_t> filtered_colors;
-                filtered_means.reserve(num_points * 3);
-                filtered_colors.reserve(num_points * 3);
-
-                for (size_t i = 0; i < num_points; ++i) {
-                    const glm::vec3 pos(means_ptr[i * 3], means_ptr[i * 3 + 1], means_ptr[i * 3 + 2]);
-                    const glm::vec4 local_pos = pointcloud_to_cropbox * glm::vec4(pos, 1.0f);
-                    const glm::vec3 local = glm::vec3(local_pos) / local_pos.w;
-
-                    bool inside = local.x >= cropbox_data->min.x && local.x <= cropbox_data->max.x &&
-                                  local.y >= cropbox_data->min.y && local.y <= cropbox_data->max.y &&
-                                  local.z >= cropbox_data->min.z && local.z <= cropbox_data->max.z;
-
-                    if (cropbox_data->inverse)
-                        inside = !inside;
-
-                    if (inside) {
-                        filtered_means.push_back(means_ptr[i * 3]);
-                        filtered_means.push_back(means_ptr[i * 3 + 1]);
-                        filtered_means.push_back(means_ptr[i * 3 + 2]);
-                        filtered_colors.push_back(colors_ptr[i * 3]);
-                        filtered_colors.push_back(colors_ptr[i * 3 + 1]);
-                        filtered_colors.push_back(colors_ptr[i * 3 + 2]);
-                    }
-                }
-
-                const size_t filtered_count = filtered_means.size() / 3;
-                LOG_INFO("CropBox filtering: {} -> {} points", num_points, filtered_count);
-
-                if (filtered_count == 0) {
-                    return std::unexpected("CropBox filtered out all points");
-                }
-
-                auto filtered_means_tensor = lfs::core::Tensor::from_vector(
-                    filtered_means, {filtered_count, 3}, lfs::core::Device::CPU);
-                auto filtered_colors_tensor = lfs::core::Tensor::zeros(
-                    {filtered_count, 3}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                std::memcpy(filtered_colors_tensor.data_ptr(), filtered_colors.data(),
-                            filtered_colors.size() * sizeof(uint8_t));
-
-                point_cloud_to_use = lfs::core::PointCloud(filtered_means_tensor, filtered_colors_tensor);
-            } else {
-                point_cloud_to_use = *point_cloud;
-                if (max_cap > 0) {
-                    point_cloud_to_use.means = point_cloud_to_use.means.cpu();
-                    point_cloud_to_use.colors = point_cloud_to_use.colors.cpu();
-                }
+            // An enabled crop box previews the region and supplies ROI weights.
+            // Only an explicit Apply removes seed points before training.
+            point_cloud_to_use = *point_cloud;
+            if (max_cap > 0) {
+                point_cloud_to_use.means = point_cloud_to_use.means.cpu();
+                point_cloud_to_use.colors = point_cloud_to_use.colors.cpu();
             }
         } else {
             LOG_INFO("No point cloud provided, using random initialization");

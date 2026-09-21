@@ -382,7 +382,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, CancelledQueuedOwnerWorkDoesNotMutateGr
     EXPECT_TRUE(scene_has_type(scene, lfs::core::NodeType::CROPBOX));
 }
 
-TEST_F(TrainingSceneInitConcurrencyTest, PrepareCropboxFailureDoesNotMutateGraph) {
+TEST_F(TrainingSceneInitConcurrencyTest, PrepareKeepsSeedsOutsideEnabledCropbox) {
     lfs::core::Scene scene;
     ASSERT_TRUE(populate_init_scene(scene));
     lfs::core::NodeId cropbox_id = lfs::core::NULL_NODE;
@@ -406,8 +406,13 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareCropboxFailureDoesNotMutateGraph
     params.optimization.random = false;
 
     const auto prepared = lfs::training::prepareTrainingModel(params, scene);
-    ASSERT_FALSE(prepared);
-    EXPECT_NE(prepared.error().find("CropBox"), std::string::npos);
+    ASSERT_TRUE(prepared) << prepared.error();
+    ASSERT_TRUE(prepared->has_value());
+    EXPECT_EQ((*prepared)->model->size(), 8);
+    EXPECT_TRUE((*prepared)->has_preserved_cropbox);
+    EXPECT_TRUE((*prepared)->preserved_cropbox_data.enabled);
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.min, empty_box.min);
+    EXPECT_EQ((*prepared)->preserved_cropbox_data.max, empty_box.max);
     EXPECT_EQ(scene.getNodeCount(), node_count);
     EXPECT_EQ(scene.getTrainingModel(), nullptr);
 }
