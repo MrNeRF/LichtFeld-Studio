@@ -582,8 +582,6 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
         if link:
             scene = next((row for row in state.get("scenes", [])
                           if row.get("id") == link.get("sceneId")), None)
-            if scene is None:
-                raise ValueError(gallery_tr("error.refresh"))
         linked_fields = ((link or {}).get("localFields") or (link or {}).get("sharedFields")
                          or scene or {})
         project_name = str(getattr(card, "title", None) or project_path.stem)

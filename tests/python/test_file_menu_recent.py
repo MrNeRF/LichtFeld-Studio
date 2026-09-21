@@ -342,6 +342,223 @@ def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_p
         assert len(opened) == 1 and opened[0]["action"] == "update"
 
 
+def _linked_file_publish_harness(monkeypatch, tmp_path, snapshot):
+    """File → Publish for a linked saved project, using real asset_sync_state."""
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(
+        inspect_project_card=lambda _path: SimpleNamespace(
+            project_uuid="project-id", commit_uuid="commit-id", file_uuid="file-id",
+            title="Project", physical_file_size=5, has_preview=False,
+        )
+    )
+    calls = []
+    controller = SimpleNamespace(
+        upload_format="sog",
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False),
+        snapshot=lambda: snapshot,
+        refresh=lambda: calls.append("refresh"),
+        resolve_asset=lambda asset, details, **kwargs: calls.append(("resolve", kwargs)),
+        _schedule_poll=lambda: None,
+    )
+    from lfs_plugins import gallery_controller as controller_module
+    sync_calls = []
+    real_sync = controller_module.asset_sync_state
+
+    def capturing_sync(*args, **kwargs):
+        sync_calls.append((args, kwargs))
+        return real_sync(*args, **kwargs)
+
+    monkeypatch.setattr(controller_module, "get_gallery_controller", lambda: controller)
+    monkeypatch.setattr(controller_module, "asset_sync_state", capturing_sync)
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+
+    def invoke():
+        item = next(
+            item for item in file_menu.FileMenu().menu_items()
+            if item.get("label") == "tr:menu.file.publish_to_gallery"
+        )
+        item["callback"]()
+
+    return SimpleNamespace(
+        file_menu=file_menu,
+        controller=controller,
+        opened=opened,
+        calls=calls,
+        sync_calls=sync_calls,
+        invoke=invoke,
+        project=project,
+    )
+
+
+def _sync_scene_and_checked(sync_calls):
+    args, kwargs = sync_calls[-1]
+    return args[2], kwargs["checked"]
+
+
+def test_file_menu_linked_missing_scene_refreshes_before_checked(monkeypatch, tmp_path):
+    link = {"sceneId": "scene-id", "commitUuid": "commit-id"}
+    snapshot = {
+        "links": {"project-id": link},
+        "scenes": [{"id": "other-scene", "title": "Other"}],
+        "jobs": [],
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+
+    assert harness.calls == ["refresh"]
+    assert harness.opened == []
+    assert harness.file_menu.lf.message_dialogs == []
+    assert callable(harness.controller._after_service)
+    scene, checked = _sync_scene_and_checked(harness.sync_calls)
+    assert scene is None
+    assert checked is False
+    assert snapshot["links"]["project-id"] is link
+
+
+def test_file_menu_linked_checked_missing_scene_opens_publish_again_review(
+    monkeypatch, tmp_path
+):
+    link = {"sceneId": "scene-id", "commitUuid": "commit-id"}
+    snapshot = {
+        "links": {"project-id": link},
+        "scenes": [{"id": "other-scene", "title": "Other"}],
+        "jobs": [],
+        "checkedAt": 1,
+        "established": True,
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+
+    assert harness.calls == []
+    assert harness.file_menu.lf.message_dialogs == []
+    assert len(harness.opened) == 1
+    review = harness.opened[0]
+    assert review["action"] == "publish"
+    assert review["publish_new"] is True
+    assert review["scene"] is None
+    assert review["asset"]["id"] == "project-id"
+    assert review["expected_project_path"] == str(harness.project.resolve())
+    scene, checked = _sync_scene_and_checked(harness.sync_calls)
+    assert scene is None
+    assert checked is True
+    assert snapshot["links"]["project-id"] is link
+
+
+def test_file_menu_linked_missing_scene_after_refresh_can_publish_again(
+    monkeypatch, tmp_path
+):
+    link = {"sceneId": "scene-id", "commitUuid": "commit-id"}
+    snapshot = {
+        "links": {"project-id": link},
+        "scenes": [{"id": "other-scene", "title": "Other"}],
+        "jobs": [],
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+    assert harness.calls == ["refresh"]
+    assert harness.opened == []
+
+    snapshot["checkedAt"] = 1
+    snapshot["established"] = True
+    harness.controller._after_service()
+
+    assert len(harness.opened) == 1
+    review = harness.opened[0]
+    assert review["action"] == "publish"
+    assert review["publish_new"] is True
+    assert review["scene"] is None
+    assert harness.file_menu.lf.message_dialogs == []
+    scene, checked = _sync_scene_and_checked(harness.sync_calls)
+    assert scene is None
+    assert checked is True
+    assert snapshot["links"]["project-id"] is link
+
+
+def test_file_menu_linked_missing_scene_does_not_publish_when_listing_stays_unchecked(
+    monkeypatch, tmp_path
+):
+    snapshot = {
+        "links": {"project-id": {"sceneId": "scene-id", "commitUuid": "commit-id"}},
+        "scenes": [],
+        "jobs": [],
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+    harness.controller._after_service()
+
+    assert harness.opened == []
+    assert harness.file_menu.lf.message_dialogs == []
+    assert harness.calls == ["refresh"]
+    scene, checked = _sync_scene_and_checked(harness.sync_calls)
+    assert scene is None
+    assert checked is False
+
+
+def test_file_menu_linked_remote_deleted_marker_opens_publish_again_review(
+    monkeypatch, tmp_path
+):
+    link = {"sceneId": "scene-id", "commitUuid": "old", "remoteDeleted": True}
+    snapshot = {
+        "links": {"project-id": link},
+        "scenes": [],
+        "jobs": [],
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+
+    assert harness.calls == []
+    assert harness.file_menu.lf.message_dialogs == []
+    assert len(harness.opened) == 1
+    review = harness.opened[0]
+    assert review["action"] == "publish"
+    assert review["publish_new"] is True
+    assert review["scene"] is None
+    assert snapshot["links"]["project-id"] is link
+
+
+def test_file_menu_linked_alive_scene_opens_update_review(monkeypatch, tmp_path):
+    scene = {
+        "id": "scene-id",
+        "title": "Project",
+        "contentRevision": "c1",
+        "metadataRevision": "m1",
+        "status": "ready",
+    }
+    link = {
+        "sceneId": "scene-id",
+        "commitUuid": "old-commit",
+        "contentRevision": "c1",
+        "metadataRevision": "m1",
+    }
+    snapshot = {
+        "links": {"project-id": link},
+        "scenes": [scene],
+        "jobs": [],
+        "checkedAt": 1,
+        "established": True,
+    }
+    harness = _linked_file_publish_harness(monkeypatch, tmp_path, snapshot)
+    harness.invoke()
+
+    assert harness.calls == []
+    assert harness.file_menu.lf.message_dialogs == []
+    assert len(harness.opened) == 1
+    review = harness.opened[0]
+    assert review["action"] == "update"
+    assert review["publish_new"] is False
+    assert review["scene"] is scene
+    matched, checked = _sync_scene_and_checked(harness.sync_calls)
+    assert matched is scene
+    assert checked is True
+
+
 def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.project_has_path = lambda: False
