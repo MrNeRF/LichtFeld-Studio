@@ -2611,6 +2611,7 @@
   "projects.gallery.conflict.portal": "Gallery",
   "projects.gallery.conflict.both": "Both",
   "projects.gallery.conflict.text": "Title and description",
+  "projects.gallery.conflict.description": "Description",
   "projects.gallery.conflict.view": "View settings",
   "projects.gallery.conflict.track": "Camera track",
   "projects.gallery.conflict.content": "Scene content",

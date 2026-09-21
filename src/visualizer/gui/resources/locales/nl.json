@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "Galerijversie",
   "projects.gallery.conflict.both": "Beide versies",
   "projects.gallery.conflict.text": "Titel en beschrijving",
+  "projects.gallery.conflict.description": "Beschrijving",
   "projects.gallery.conflict.view": "Weergave-instellingen",
   "projects.gallery.conflict.track": "Camerapad",
   "projects.gallery.conflict.content": "Scène-inhoud",

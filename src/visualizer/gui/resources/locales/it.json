@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "Del Galleria",
   "projects.gallery.conflict.both": "Entrambe",
   "projects.gallery.conflict.text": "Titolo e descrizione",
+  "projects.gallery.conflict.description": "Descrizione",
   "projects.gallery.conflict.view": "Impostazioni di vista",
   "projects.gallery.conflict.track": "Percorso camera",
   "projects.gallery.conflict.content": "Contenuto della scena",

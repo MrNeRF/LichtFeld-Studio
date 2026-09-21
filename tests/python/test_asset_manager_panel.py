@@ -3392,6 +3392,47 @@ def test_portal_posters_obey_scope_and_release_on_scroll(panel_module, tmp_path)
     panel._gallery_state["posters"] = {}
     assert panel._format_asset_for_ui(row)["thumbnail_decorator"] == "none"
 
+def test_gallery_title_change_explains_the_field_without_opening(panel_module, monkeypatch):
+    translations = json.loads(
+        (Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales/en.json").read_text()
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: translations.get(key, key))
+    panel, local, remote = _gallery_fixture(panel_module)
+    remote["title"] = "Portal title"
+    remote["metadataRevision"] = "title-edit"
+    panel._select_asset_id(local["id"])
+    badge = panel._gallery_badge(local)
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+
+    assert badge["gallery_state"] == "remote"
+    assert badge["gallery_label"] == "Changes in gallery: Title"
+    assert "Published project" in badge["gallery_reason"]
+    assert "Portal title" in badge["gallery_reason"]
+    assert badge["gallery_has_reason"]
+    assert "Title" in badge["gallery_tooltip"]
+    assert model.func_bindings["gallery_selected_state"]() == "Changes in gallery: Title"
+    assert model.func_bindings["gallery_has_selected_reason"]()
+    assert "Portal title" in model.func_bindings["gallery_selected_reason"]()
+    assert panel_module.lf._test_state.opened == []
+
+
+def test_gallery_view_change_explains_the_viewer_settings(panel_module, monkeypatch):
+    translations = json.loads(
+        (Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales/en.json").read_text()
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: translations.get(key, key))
+    panel, local, remote = _gallery_fixture(panel_module)
+    remote["viewerSettings"] = {"exposure": 3}
+    remote["metadataRevision"] = "view-edit"
+    badge = panel._gallery_badge(local)
+
+    assert badge["gallery_state"] == "remote"
+    assert badge["gallery_label"] == "Changes in gallery: View settings"
+    assert "Different settings" in badge["gallery_reason"]
+    assert panel_module.lf._test_state.opened == []
+
+
 @pytest.mark.parametrize("domain,expected", [("presentationRevision", "equal"), ("contentRevision", "remote"), ("metadataRevision", "remote")])
 def test_freshness_uses_domain_tokens_not_presentation(panel_module, domain, expected):
     from lfs_plugins.gallery_controller import asset_sync_state

@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "Version de la Galerie",
   "projects.gallery.conflict.both": "Les deux",
   "projects.gallery.conflict.text": "Titre et description",
+  "projects.gallery.conflict.description": "Description",
   "projects.gallery.conflict.view": "Réglages de vue",
   "projects.gallery.conflict.track": "Parcours caméra",
   "projects.gallery.conflict.content": "Contenu de la scène",

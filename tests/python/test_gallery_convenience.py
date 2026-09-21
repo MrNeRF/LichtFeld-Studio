@@ -357,7 +357,7 @@ def test_published_scene_offers_copy_share_link_in_inspector(convenience, monkey
     button = rml.find('.//*[@data-event-click="gallery_copy"]')
     assert button is not None
     assert model.func_bindings[button.get('data-if')]() is True
-    assert model.func_bindings['g_action_copy']() == 'Copy share link'
+    assert model.func_bindings['g_action_copy']() == 'Copy link'
     calls = []
     monkeypatch.setattr(panel, '_controller', lambda: SimpleNamespace(open_portal=lambda *args: calls.append(args)))
     events['gallery_copy'](None, None, [])

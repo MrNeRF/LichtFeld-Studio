@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "Galerieversion",
   "projects.gallery.conflict.both": "Beide",
   "projects.gallery.conflict.text": "Titel und Beschreibung",
+  "projects.gallery.conflict.description": "Beschreibung",
   "projects.gallery.conflict.view": "Ansichtsparameter",
   "projects.gallery.conflict.track": "Kamerapfad",
   "projects.gallery.conflict.content": "Szeneninhalt",

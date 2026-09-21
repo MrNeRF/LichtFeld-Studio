@@ -342,66 +342,89 @@ class GalleryController:
         if not scene:
             raise ValueError(tr("error.refresh"))
         current = lf.project_poll_write().get("path")
-        if not current or Path(current).resolve() != Path(asset["path"]).resolve():
-            from .training_confirm import confirm_discard_work_then
-            identity = self._identity
-            def open_selected(stop_training):
-                lf.project_open(asset["path"], True, stop_training, keep_asset_manager_open=True)
-                self._open_continuation = (asset["path"], identity,
-                    lambda: self.resolve_asset(asset, details, apply_only=apply_only))
-                self._schedule_poll()
-            confirm_discard_work_then(tr("action.apply"), open_selected)
-            return
-        local = dict(details, viewerSettings=capture_view(lf))
+        current_open = bool(current and Path(current).resolve() == Path(asset["path"]).resolve())
         remote = copy.deepcopy(scene)
+        if current_open:
+            local = dict(details, viewerSettings=capture_view(lf))
+            project = self._project_identity()
+            reviewed_dirty = lf.project_is_dirty()
+        else:
+            local = stored_local_scene(link, details)
+            project = (asset["id"], str(Path(asset["path"]).resolve()))
+            reviewed_dirty = None
         groups = conflict_groups(asset, link, local, remote, apply_only=apply_only)
         if not groups:
             self._message = tr("state.equal")
             return
-        identity, project = self._identity, self._project_identity()
-        local_view, remote_view = local["viewerSettings"], remote.get("viewerSettings", {})
+        identity = self._identity
+        local_view, remote_view = local.get("viewerSettings") or {}, remote.get("viewerSettings", {})
         reviewed_stamp = file_stamp(asset["path"]) if Path(asset["path"]).is_file() else None
-        reviewed_dirty = lf.project_is_dirty()
 
         def apply(decisions, *, local_only=False):
             publish = not (apply_only or local_only)
-            if self.service.identity() != identity or self._project_identity() != project:
-                raise ValueError(tr("error.project_changed"))
-            if (reviewed_stamp is not None and file_stamp(asset["path"]) != reviewed_stamp
-                    or lf.project_is_dirty() != reviewed_dirty or capture_view(lf) != local_view):
-                raise ValueError(tr("error.project_changed"))
-            metadata = copy.deepcopy(local)
-            if decisions.get("text") == "gallery":
-                for key in ("title", "description"):
-                    metadata[key] = remote.get(key, "")
-            view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else local_view)
-            track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else local_view.get("cameraPath"))
-            if decisions.get("track") == "both":
-                track = combine_camera_tracks(local_view["cameraPath"], remote_view["cameraPath"])
-            if track is not None:
-                view["cameraPath"] = track
-            else:
-                view.pop("cameraPath", None)
-            metadata["viewerSettings"] = view
 
-            def start():
-                if decisions.get("content") == "gallery":
-                    local_environment_path = None
-                    if decisions.get("view") != "gallery":
-                        local_environment_path = str(lf.get_render_settings().environment_map_path) if view.get("environment") else ""
-                    self._pull_overrides = (scene["id"], metadata, identity, publish, local_environment_path)
-                    try:
-                        self.pull_asset(asset, scene)
-                    except Exception:
-                        self._pull_overrides = None
-                        raise
+            def run():
+                if self.service.identity() != identity or self._project_identity() != project:
+                    raise ValueError(tr("error.project_changed"))
+                if (reviewed_stamp is not None and file_stamp(asset["path"]) != reviewed_stamp
+                        or reviewed_dirty is not None and (
+                            lf.project_is_dirty() != reviewed_dirty or capture_view(lf) != local_view)):
+                    raise ValueError(tr("error.project_changed"))
+                metadata = copy.deepcopy(local)
+                if decisions.get("text") == "gallery":
+                    for key in ("title", "description"):
+                        metadata[key] = remote.get(key, "")
+                view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else local_view)
+                track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else local_view.get("cameraPath"))
+                if decisions.get("track") == "both":
+                    track = combine_camera_tracks(local_view["cameraPath"], remote_view["cameraPath"])
+                if track is not None:
+                    view["cameraPath"] = track
                 else:
-                    self._begin_settings_apply(asset, scene, metadata,
-                        publish=publish, replace_content="content" in decisions and publish,
-                        preserve_local_content="content" in decisions,
-                        use_gallery_environment=decisions.get("view") == "gallery" and bool(view.get("environment")))
-                self._schedule_poll()
-            self._resolve_pending_uploads(asset["id"], scene["id"], identity, start)
+                    view.pop("cameraPath", None)
+                metadata["viewerSettings"] = view
+
+                def start():
+                    if decisions.get("content") == "gallery":
+                        local_environment_path = None
+                        if decisions.get("view") != "gallery":
+                            local_environment_path = str(lf.get_render_settings().environment_map_path) if view.get("environment") else ""
+                        self._pull_overrides = (scene["id"], metadata, identity, publish, local_environment_path)
+                        try:
+                            self.pull_asset(asset, scene)
+                        except Exception:
+                            self._pull_overrides = None
+                            raise
+                    else:
+                        self._begin_settings_apply(asset, scene, metadata,
+                            publish=publish, replace_content="content" in decisions and publish,
+                            preserve_local_content="content" in decisions,
+                            use_gallery_environment=decisions.get("view") == "gallery" and bool(view.get("environment")))
+                    self._schedule_poll()
+                self._resolve_pending_uploads(asset["id"], scene["id"], identity, start)
+
+            if self.service.identity() != identity:
+                raise ValueError(tr("error.project_changed"))
+            if reviewed_stamp is not None and file_stamp(asset["path"]) != reviewed_stamp:
+                raise ValueError(tr("error.project_changed"))
+            if reviewed_dirty is not None:
+                current = lf.project_poll_write().get("path")
+                if (not current or Path(current).resolve() != Path(project[1])
+                        or self._project_identity() != project
+                        or lf.project_is_dirty() != reviewed_dirty or capture_view(lf) != local_view):
+                    raise ValueError(tr("error.project_changed"))
+                run()
+                return
+            path = lf.project_poll_write().get("path")
+            if not path or Path(path).resolve() != Path(asset["path"]).resolve():
+                from .training_confirm import confirm_discard_work_then
+                def open_selected(stop_training):
+                    lf.project_open(asset["path"], True, stop_training, keep_asset_manager_open=True)
+                    self._open_continuation = (asset["path"], identity, run)
+                    self._schedule_poll()
+                confirm_discard_work_then(tr("action.apply"), open_selected)
+                return
+            run()
 
         from .gallery_file_panel import open_gallery_file_panel
         self._decision_pending = True
@@ -1834,6 +1857,20 @@ def get_gallery_controller():
         _controller = GalleryController()
     return _controller
 
+def stored_local_scene(link, details=None):
+    """Last saved Studio fields for a linked item, without opening the project."""
+    fields = copy.deepcopy((link or {}).get("localFields") or (link or {}).get("sharedFields") or {})
+    local = dict(details or {})
+    for key in ("title", "description"):
+        local.setdefault(key, fields.get(key, ""))
+    local.setdefault("viewerSettings", fields.get("viewerSettings") or {})
+    return local
+
+
+def _change_labels(groups):
+    return list(dict.fromkeys(name for row in groups for name in row.get("fields") or [row["label"]] if name))
+
+
 def conflict_groups(asset, link, local, remote, *, apply_only=False):
     import json
     baseline = link.get("sharedFields", {})
@@ -1852,8 +1889,10 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False):
         mine_value, gallery_value = text(mine), text(gallery)
         values = tr("conflict.values", mine=mine_value, gallery=gallery_value)
         difference = values
+        fields = [tr({"text": "conflict.text", "view": "conflict.view", "track": "conflict.track"}[identifier])]
         if identifier == "text":
             changed = [key for key in ("title", "description") if mine.get(key) != gallery.get(key)]
+            fields = [tr("review.title" if key == "title" else "conflict.description") for key in changed]
             difference = tr("conflict.values", mine=" · ".join(text(mine.get(key, "")) for key in changed),
                             gallery=" · ".join(text(gallery.get(key, "")) for key in changed))
         elif identifier == "view":
@@ -1867,7 +1906,7 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False):
             difference = tr("conflict.track_counts", mine=len((mine or {}).get("keyframes", [])),
                             gallery=len((gallery or {}).get("keyframes", [])))
         rows.append(dict(id=identifier, label=tr({"text": "conflict.text", "view": "conflict.view", "track": "conflict.track"}[identifier]),
-            mine_value=mine_value, gallery_value=gallery_value,
+            mine_value=mine_value, gallery_value=gallery_value, fields=fields,
             difference=difference, values=values,
             choice="gallery" if apply_only or mine == base else "mine",
             can_both=identifier == "track" and bool(mine and gallery)))
@@ -1876,6 +1915,7 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False):
     if content_changed:
         mine, gallery = tr("conflict.local_content"), tr("conflict.gallery_content")
         rows.append(dict(id="content", label=tr("conflict.content"), mine_value=mine, gallery_value=gallery,
+            fields=[tr("conflict.content")],
             difference=tr("conflict.values", mine=mine, gallery=gallery), values=tr("conflict.values", mine=mine, gallery=gallery),
             choice="mine", can_both=False))
     return rows
@@ -1961,10 +2001,18 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     icon = "ring" if active else icons.get(visible, "cloud")
     if relationship == "local_file_problem":
         icon = "cloud-bang"
+    change_fields, change_detail = [], ""
+    if visible in ("remote", "remote_content", "diverged") and scene and link:
+        groups = conflict_groups(project, link, stored_local_scene(link), scene,
+                                 apply_only=visible != "diverged")
+        change_fields = _change_labels(groups)
+        change_detail = "\n".join(row["difference"] for row in groups if row.get("difference"))
     result = dict(relationship=relationship, freshness=freshness, activity=activity, state=visible,
                 icon=icon, tone="primary" if active else tones.get(visible, "text_dim"),
                 health_icon="bang" if health_tone else "", health_tone=health_tone,
                 active=active, jobId=job.get("id", ""), job=job, reason=reason,
+                change_fields=change_fields, change_summary=", ".join(change_fields),
+                change_detail=change_detail,
                 linked=bool(link), sceneReady=bool(scene and scene.get("status", "ready") == "ready"),
                 established=established, cachedUnverified=bool(cached_projection and not link), storage_issue=storage_issue, viewingCopy=bool(project.get("viewing_copy") or (link or {}).get("viewingCopy")),
                 remoteContent=remote_content, presentationChanged=presentation,

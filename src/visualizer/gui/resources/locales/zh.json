@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "图库版本",
   "projects.gallery.conflict.both": "两者都保留",
   "projects.gallery.conflict.text": "标题和描述",
+  "projects.gallery.conflict.description": "描述",
   "projects.gallery.conflict.view": "视图设置",
   "projects.gallery.conflict.track": "相机轨迹",
   "projects.gallery.conflict.content": "场景内容",

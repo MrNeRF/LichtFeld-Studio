@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "ギャラリー",
   "projects.gallery.conflict.both": "両方",
   "projects.gallery.conflict.text": "タイトルと説明",
+  "projects.gallery.conflict.description": "説明",
   "projects.gallery.conflict.view": "表示設定",
   "projects.gallery.conflict.track": "カメラ軌道",
   "projects.gallery.conflict.content": "シーンの内容",

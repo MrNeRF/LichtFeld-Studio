@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "갤러리 버전",
   "projects.gallery.conflict.both": "둘 다",
   "projects.gallery.conflict.text": "제목 및 설명",
+  "projects.gallery.conflict.description": "설명",
   "projects.gallery.conflict.view": "보기 설정",
   "projects.gallery.conflict.track": "카메라 경로",
   "projects.gallery.conflict.content": "장면 콘텐츠",

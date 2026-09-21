@@ -264,6 +264,8 @@ class GalleryAssetMixin:
             label = tr("state.viewing_copy") + " · " + label
         if facts["reason"] and facts["state"] == "error":
             label = tr("state.with_reason", state=label, reason=facts["reason"])
+        elif not facts["reason"] and facts.get("change_summary") and facts["state"] in ("remote", "diverged"):
+            label = tr("state.with_reason", state=label, reason=facts["change_summary"])
         if facts["health_icon"]:
             label = getattr(self, "_project_status_label", lambda _asset: label)(asset)
         job = next((j for j in self._gallery_state.get("jobs", ()) if j["id"] == facts["jobId"]), {})
@@ -281,8 +283,9 @@ class GalleryAssetMixin:
                         total=self._format_size(job["total"])) if facts["active"] and job.get("total") else ""
         gallery_action = primary.get("id", "")
         action_label = primary.get("label", "")
+        change_reason = facts["reason"] or facts.get("change_detail") or facts.get("change_summary") or ""
         return {"gallery_state": facts["state"], "gallery_label": label,
-                "gallery_reason": facts["reason"], "gallery_has_reason": bool(facts["reason"]),
+                "gallery_reason": change_reason, "gallery_has_reason": bool(change_reason),
                 "gallery_detail": detail, "gallery_bytes": byte_label,
                 "gallery_has_bytes": bool(byte_label),
                 "gallery_stored": stored,
@@ -290,7 +293,7 @@ class GalleryAssetMixin:
                 "gallery_can_pause": can_pause, "gallery_can_cancel": can_cancel,
                 "gallery_action_persistent": can_cancel or gallery_action in ("retry", "resume"),
                 "gallery_has_controls": can_cancel or bool(gallery_action),
-                "gallery_tooltip": "\n".join(filter(None, (label, facts["reason"], byte_label, detail, primary.get("reason")))),
+                "gallery_tooltip": "\n".join(filter(None, (label, facts.get("change_detail") or facts["reason"], byte_label, detail, primary.get("reason")))),
                 "health_badge": bool(facts["health_icon"]),
                 "health_tone": "asset-health-" + facts["health_tone"],
                 "gallery_ring": facts["active"],
@@ -380,10 +383,10 @@ class GalleryAssetMixin:
             "gallery_empty_pull": lambda: bool(self._gallery_state.get("scenes")) and not self._asset_index_assets(),
             "gallery_published_count": lambda: len(self._gallery_rows()),
             "gallery_attention_count": lambda: len(self._gallery_rows(True)),
-            "gallery_selected_reason": lambda: ((self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason") or self._gallery_facts(self._get_selected_asset()).get("reason")) if self._get_selected_asset() else ""),
+            "gallery_selected_reason": lambda: ((self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason") or self._gallery_badge(self._get_selected_asset()).get("gallery_reason")) if self._get_selected_asset() else ""),
             "gallery_has_selected_reason": lambda: bool(self._get_selected_asset() and (
                 self._gallery_badge(self._get_selected_asset()).get("gallery_action_reason")
-                or self._gallery_facts(self._get_selected_asset()).get("reason"))),
+                or self._gallery_badge(self._get_selected_asset()).get("gallery_reason"))),
             "gallery_selected_state": lambda: self._gallery_badge(self._get_selected_asset())["gallery_label"] if self._get_selected_asset() else "",
             "gallery_can_copy": lambda: self._gallery_verb_enabled(self._get_selected_asset() or {}, "copy"),
             "gallery_remote": lambda: bool((self._get_selected_asset() or {}).get("remote_only")),

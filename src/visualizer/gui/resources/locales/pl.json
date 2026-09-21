@@ -2612,6 +2612,7 @@
   "projects.gallery.conflict.portal": "Wersja z Galerii",
   "projects.gallery.conflict.both": "Obie wersje",
   "projects.gallery.conflict.text": "Tytuł i opis",
+  "projects.gallery.conflict.description": "Opis",
   "projects.gallery.conflict.view": "Ustawienia widoku",
   "projects.gallery.conflict.track": "Ścieżka kamery",
   "projects.gallery.conflict.content": "Zawartość sceny",
