@@ -785,6 +785,7 @@ namespace lfs::core {
 
         initial_point_cloud_.reset();
         scene_center_ = {};
+        training_data_origin_ = glm::vec3{0.0f};
         images_have_alpha_ = false;
         point_cloud_modified_ = false;
         training_model_uuid_ = {};
@@ -4191,6 +4192,7 @@ namespace lfs::core {
             staged->selection_group_counts_dirty_;
 
         initial_point_cloud_.swap(staged->initial_point_cloud_);
+        std::swap(training_data_origin_, staged->training_data_origin_);
         scene_center_.~Tensor();
         std::construct_at(
             &scene_center_, std::move(staged->scene_center_));

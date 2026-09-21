@@ -258,6 +258,28 @@ namespace lfs::training {
             return preview;
         }
 
+        glm::vec3 centralizedDatasetOrigin(const std::optional<lfs::io::ImportGeoreference>& georeference) {
+            if (!georeference) {
+                return glm::vec3{0.0f};
+            }
+            using Provenance = lfs::io::ImportWorldOriginProvenance;
+            if (georeference->world_origin_provenance != Provenance::CentralizeByCameras &&
+                georeference->world_origin_provenance != Provenance::CentralizeByPointCloud) {
+                return glm::vec3{0.0f};
+            }
+            const auto& origin = georeference->world_origin;
+            return {static_cast<float>(origin[0]), static_cast<float>(origin[1]), static_cast<float>(origin[2])};
+        }
+
+        void centerInitializationMeans(lfs::core::Tensor& means, const glm::vec3& origin) {
+            if (origin == glm::vec3{0.0f}) {
+                return;
+            }
+            const auto shift = lfs::core::Tensor::from_vector(
+                std::vector<float>{origin.x, origin.y, origin.z}, {3}, means.device());
+            means = means - shift;
+        }
+
         lfs::Result<void> attachDatasetPointCloud(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::Scene& scene,
@@ -271,6 +293,7 @@ namespace lfs::training {
                     return lfs::Status::failure(loaded.error());
                 }
                 point_cloud = std::move(*loaded);
+                centerInitializationMeans(point_cloud->means, scene.getTrainingDataOrigin());
             } else if (data.point_cloud && data.point_cloud->size() > 0) {
                 point_cloud = data.point_cloud;
                 if (verbose) {
@@ -328,6 +351,9 @@ namespace lfs::training {
             }
 
             auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
+            centerInitializationMeans(model->means(), graph_capture
+                                                          ? graph_capture->training_data_origin
+                                                          : scene.getTrainingDataOrigin());
             const lfs::core::Tensor scene_center =
                 graph_capture
                     ? graph_capture->scene_center
@@ -373,7 +399,8 @@ namespace lfs::training {
 
         std::expected<void, std::string> appendAddedSplats(
             const lfs::core::param::TrainingParameters& params,
-            lfs::core::SplatData& model) {
+            lfs::core::SplatData& model,
+            const glm::vec3& dataset_origin) {
             if (params.add_splat_paths.empty()) {
                 return {};
             }
@@ -397,6 +424,7 @@ namespace lfs::training {
                 if (!added) {
                     return std::unexpected(added.error());
                 }
+                centerInitializationMeans((*added)->means(), dataset_origin);
 
                 const size_t count = static_cast<size_t>((*added)->size());
                 if (i < params.add_splat_freeze.size() && params.add_splat_freeze[i] && count > 0) {
@@ -771,6 +799,7 @@ namespace lfs::training {
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
                 scene.setSceneCenter(load_result->scene_center);
+                scene.setTrainingDataOrigin(centralizedDatasetOrigin(load_result->georeference));
                 scene.setImagesHaveAlpha(load_result->images_have_alpha);
 
                 // Build dataset hierarchy in scene graph
@@ -861,6 +890,7 @@ namespace lfs::training {
         TrainingModelGraphCapture context;
         context.training_model = scene.getTrainingModel();
         context.scene_center = scene.getSceneCenter();
+        context.training_data_origin = scene.getTrainingDataOrigin();
         for (const auto* node : scene.getNodes()) {
             if (!node || node->type != lfs::core::NodeType::POINTCLOUD || !node->point_cloud) {
                 continue;
@@ -899,10 +929,13 @@ namespace lfs::training {
         lfs::core::SplatTensorAllocator tensor_allocator,
         const TrainingModelGraphCapture* graph_capture) {
 
+        const glm::vec3 dataset_origin = graph_capture
+                                             ? graph_capture->training_data_origin
+                                             : scene.getTrainingDataOrigin();
         const auto finalize_new_model = [&](lfs::core::SplatData& model)
             -> std::expected<void, std::string> {
             applyTrainingSHDegree(model, params.optimization.sh_degree);
-            if (auto result = appendAddedSplats(params, model); !result) {
+            if (auto result = appendAddedSplats(params, model, dataset_origin); !result) {
                 return result;
             }
             if (auto result = migrateTrainingModelToAllocator(params, model, tensor_allocator); !result) {
@@ -919,7 +952,7 @@ namespace lfs::training {
                 if (!loaded) {
                     return std::unexpected(std::move(loaded.error()));
                 }
-                if (auto result = appendAddedSplats(params, *loaded->model); !result) {
+                if (auto result = appendAddedSplats(params, *loaded->model, dataset_origin); !result) {
                     return std::unexpected(std::move(result.error()));
                 }
                 const int max_cap = params.optimization.max_cap;
@@ -939,7 +972,7 @@ namespace lfs::training {
 
         if (auto* model = graph_capture ? graph_capture->training_model : scene.getTrainingModel()) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
-            if (auto result = appendAddedSplats(params, *model); !result) {
+            if (auto result = appendAddedSplats(params, *model, dataset_origin); !result) {
                 return std::unexpected(std::move(result.error()));
             }
 
@@ -1178,6 +1211,7 @@ namespace lfs::training {
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
                 scene.setSceneCenter(load_result.scene_center);
+                scene.setTrainingDataOrigin(centralizedDatasetOrigin(load_result.georeference));
                 scene.setImagesHaveAlpha(load_result.images_have_alpha);
 
                 std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());

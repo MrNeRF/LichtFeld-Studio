@@ -2718,7 +2718,9 @@ def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
 def get_project_manager_preferences() -> dict:
-    """Get Project Manager preferences from the canonical user preferences store"""
+    """
+    Get Project Manager preferences from the canonical user preferences store
+    """
 
 def set_project_manager_default_view(view: str) -> None:
     """Set the default Project Manager view"""

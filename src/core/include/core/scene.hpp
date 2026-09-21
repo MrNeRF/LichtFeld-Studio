@@ -599,6 +599,10 @@ namespace lfs::core {
 
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
         void setSceneCenter(lfs::core::Tensor scene_center);
+        // Original dataset origin removed by centralization. External training
+        // initialization files must receive this same translation.
+        void setTrainingDataOrigin(const glm::vec3& origin) { training_data_origin_ = origin; }
+        [[nodiscard]] glm::vec3 getTrainingDataOrigin() const { return training_data_origin_; }
         void setImagesHaveAlpha(bool have_alpha) { images_have_alpha_ = have_alpha; }
 
         void setPointCloudModified(bool modified) { point_cloud_modified_ = modified; }
@@ -855,6 +859,7 @@ namespace lfs::core {
         void clearSelectionGroupCounts();
 
         std::shared_ptr<lfs::core::PointCloud> initial_point_cloud_;
+        glm::vec3 training_data_origin_{0.0f};
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
         bool point_cloud_modified_ = false;

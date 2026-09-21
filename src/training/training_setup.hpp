@@ -49,6 +49,7 @@ namespace lfs::training {
         bool has_preserved_cropbox = false;
         lfs::core::SplatData* training_model = nullptr;
         lfs::core::Tensor scene_center;
+        glm::vec3 training_data_origin{0.0f};
     };
 
     [[nodiscard]] TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene);
