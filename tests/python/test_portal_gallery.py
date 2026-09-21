@@ -579,6 +579,7 @@ def test_project_representation_failure_is_not_indefinite_processing(tmp_path, m
         return {"representations": [choice]}
     client = portal_gallery.PortalGalleryClient(SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request))
     client.max_file_bytes = 100
+    client.processing_deadline = portal_gallery.time.time() - 1
     used = []
     monkeypatch.setattr(client, "_download_representation", lambda *args: used.append(args[1]) or {"id": identifier})
     if status == "ready":
@@ -595,3 +596,75 @@ def test_project_representation_failure_is_not_indefinite_processing(tmp_path, m
         assert not used
     assert len(requests) == 1
     assert not (tmp_path / "project.licht").exists()
+
+
+@pytest.mark.parametrize("outcome", ["ready", "failed", "cancel", "account_changed"])
+def test_new_gallery_project_waits_for_preparation(tmp_path, monkeypatch, outcome):
+    data = (Path(__file__).parents[1] / "data" / "portable-sog.licht").read_bytes()
+    identifier = str(uuid.uuid4())
+    scene = dict(id=identifier, contentRevision="content", metadataRevision="metadata",
+                 presentationRevision="story", sourceFormat="licht", contentLength=len(data))
+    calls, waits = [], []
+    def request(method, path, body=None, **kwargs):
+        assert kwargs["expected_session"] == ("owner", "session")
+        if path.endswith("download-options"):
+            calls.append(path)
+            if len(calls) > 1 and outcome == "account_changed":
+                raise RuntimeError("The account changed")
+            status = "preparing" if len(calls) < 3 else outcome
+            return {"sceneId": identifier, "representations": [dict(
+                format="licht", status=status, representationId="project-pinned",
+                size=len(data) if status == "ready" else None,
+                sha256=hashlib.sha256(data).hexdigest() if status == "ready" else None)]}
+        return scene
+    def response(method, path, **kwargs):
+        assert len(calls) == 3
+        start, end = map(int, kwargs["headers"]["Range"].removeprefix("bytes=").split("-"))
+        return 206, {"Content-Range": f"bytes {start}-{end}/{len(data)}"}, data[start:end + 1]
+    cancel = SimpleNamespace(is_set=lambda: False,
+                             wait=lambda seconds: waits.append(seconds) or outcome == "cancel")
+    account = SimpleNamespace(base_url="https://portal.example", request_json_authenticated=request,
+                              request_response_authenticated=response)
+    client = portal_gallery.PortalGalleryClient(account, expected_session=("owner", "session"))
+    client.max_file_bytes = len(data) * 2
+    target = tmp_path / "local-copy.licht"
+    if outcome == "ready":
+        assert client.download(identifier, target, cancel=cancel) == scene
+        assert target.read_bytes() == data
+    else:
+        error, message = {
+            "failed": (ValueError, "could not prepare"),
+            "cancel": (portal_gallery.GalleryTransferCanceled, None),
+            "account_changed": (RuntimeError, "account changed"),
+        }[outcome]
+        with pytest.raises(error, match=message):
+            client.download(identifier, target, cancel=cancel)
+        assert not target.exists()
+        assert not list(tmp_path.glob("*.part"))
+    assert waits == ([1] if outcome in ("cancel", "account_changed") else [1, 1])
+
+
+def test_project_preparation_stops_at_its_deadline(tmp_path, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(portal_gallery.time, "time", lambda: clock[0])
+    monkeypatch.setattr(portal_gallery.time, "monotonic", lambda: clock[0])
+    identifier = str(uuid.uuid4())
+    calls, waits, states = [], [], []
+    def request(method, path, body=None):
+        calls.append(path)
+        assert len(calls) <= 3, "Preparation must have a bounded wait"
+        return {"representations": [{"format": "licht", "status": "preparing"}]}
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += 1
+        return False
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=request))
+    client.max_file_bytes = 100
+    client.processing_deadline = 1002.0
+    with pytest.raises(portal_gallery.GalleryProcessingTimeout):
+        client.download(identifier, tmp_path / "local.licht",
+                        cancel=SimpleNamespace(is_set=lambda: False, wait=wait), on_processing=states.append)
+    assert len(calls) == 3 and waits == [1, 1]
+    assert client.processing_deadline == 1002.0
+    assert all(state == {"stage": "preparing_download", "completed": 0, "total": 0} for state in states)
+    assert not list(tmp_path.iterdir())

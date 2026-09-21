@@ -1707,3 +1707,52 @@ def test_gallery_content_keeps_chosen_local_settings_pending(tmp_path, monkeypat
     assert link["localFields"] == chosen
     assert link["sharedFields"] == gallery_sync.shared_fields(job["result"])
     assert link["localFields"] != link["sharedFields"]
+
+
+@pytest.mark.parametrize("timeout_first", [False, True])
+@pytest.mark.parametrize("restart_message", [False, True])
+def test_download_preparation_tracks_progress_and_keep_waiting(tmp_path, monkeypatch, timeout_first, restart_message):
+    from lfs_plugins.gallery_transfer_ui import transfer_phase
+    from lfs_plugins.portal_gallery import GalleryProcessingTimeout
+    import time
+
+    service = connected(tmp_path, monkeypatch)
+    attempts, deadlines = [], []
+    def download(client, scene_id, path, **kwargs):
+        attempts.append(scene_id)
+        deadlines.append(client.processing_deadline)
+        if client.processing_deadline is None:
+            client.processing_deadline = time.time() + 60
+        kwargs["on_processing"]({"stage": "preparing_download", "completed": 0, "total": 0})
+        job = service.snapshot()["jobs"][0]
+        assert job["status"] == "running" and not job["needsAttention"]
+        assert transfer_phase(job) == "processing"
+        saved = json.loads((service.root / "sync.json").read_text())
+        saved_job = next(iter(saved["accounts"].values()))["jobs"][0]
+        assert saved_job["processingDeadline"] == client.processing_deadline
+        if timeout_first and len(attempts) == 1:
+            raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
+        if restart_message:
+            kwargs["on_message"]("Restarting from zero")
+        kwargs["on_progress"](8, 8)
+        downloading = service.snapshot()["jobs"][0]
+        assert transfer_phase(downloading) == "downloading"
+        assert downloading["message"] == ("Restarting from zero" if restart_message else "Downloading")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(b"payload!")
+        return _download_scene()
+    monkeypatch.setattr(Client, "download", download, raising=False)
+    service.download(_download_scene())
+    finish(service)
+    if timeout_first:
+        waiting = service.snapshot()["jobs"][0]
+        assert waiting["status"] == "paused" and waiting["needsAttention"]
+        assert not Path(waiting["path"]).exists()
+        service.resume(waiting["id"], keep_waiting=True)
+        finish(service)
+        assert deadlines[1] > waiting["processingDeadline"]
+    done = service.snapshot()["jobs"][0]
+    assert done["status"] == "completed", done
+    assert not done["serverProcessing"] and not done["needsAttention"]
+    assert transfer_phase(done) == "completed"
+    assert len(attempts) == (2 if timeout_first else 1)

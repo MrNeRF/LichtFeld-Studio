@@ -951,11 +951,17 @@ class GallerySync:
                 self._client()
                 with self._lock:
                     job.update(completed=done, total=total)
+                    if job.get("kind") == "download" and job.get("serverProcessing"):
+                        job["serverProcessing"] = False
+                        if job["message"] == "Preparing viewing copy":
+                            job["message"] = "Downloading"
+                            self.message = job["message"]
                     self.version += 1
 
             def processing(state):
                 label = {"queued": "Waiting for the portal", "assembling": "Assembling upload",
-                    "validating": "Checking scene", "publishing": "Publishing scene"}[state["stage"]]
+                    "validating": "Checking scene", "publishing": "Publishing scene",
+                    "preparing_download": "Preparing viewing copy"}[state["stage"]]
                 with self._lock:
                     job.update(serverProcessing=True, completed=state["completed"], total=state["total"], message=label)
                     if getattr(client, 'processing_deadline', None) and job.get('processingDeadline') != client.processing_deadline:
@@ -1090,6 +1096,7 @@ class GallerySync:
                     log_stage("export_staged", path=staged_path, bytes=staged_path.stat().st_size,
                               sha256=_fingerprint(staged_path), project_id=job["project"])
                     self._save()
+                client.processing_deadline = job.get('processingDeadline')
                 if job.get("kind") == "download":
                     def download_message(message):
                         with self._lock:
@@ -1098,11 +1105,12 @@ class GallerySync:
                             self.version += 1
                     scene = client.download(job["sceneId"], job["path"], on_progress=progress, cancel=self._cancel,
                         checkpoint=job.get('checkpoint'), on_checkpoint=checkpoint, on_message=download_message,
-                        final_destination=self._download_destination(job))
+                        final_destination=self._download_destination(job), on_processing=processing)
                     self._client()
                     with self._lock:
                         self._completion = {"id": str(uuid.uuid4()), "kind": "download"}
-                        job.update(status="completed", sha256=(job.get("checkpoint") or {}).get("sha256", ""),
+                        job.update(status="completed", serverProcessing=False,
+                                   sha256=(job.get("checkpoint") or {}).get("sha256", ""),
                                    downloadProject=_project_uuid(job["path"]), result=scene,
                                    message="Downloaded. Open as a new project when ready.")
                         self.message = job["message"]
@@ -1110,7 +1118,6 @@ class GallerySync:
                               bytes=job.get("total", 0), status="completed")
                     self._save()
                     return
-                client.processing_deadline = job.get('processingDeadline')
                 if not job.get("preparation"):
                     upload_path = Path(job["path"])
                     log_stage("export_staged", path=upload_path, bytes=upload_path.stat().st_size,

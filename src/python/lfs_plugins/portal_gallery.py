@@ -318,33 +318,52 @@ class PortalGalleryClient:
 
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
                  checkpoint=None, on_checkpoint=lambda value: None, on_message=lambda message: None,
-                 final_destination=None):
+                 final_destination=None, on_processing=lambda state: None):
         from .project_identity import ProjectPathIdentity
         destination_identity = ProjectPathIdentity.capture(destination)
         cancel = cancel or threading.Event()
         if self.max_file_bytes is None:
             self._request("GET", "/me")
-        try:
-            options = self._request("GET", f"/splats/{_identifier(scene_id)}/download-options")
-        except PortalHTTPError as exc:
-            if exc.status not in (404, 405):
-                raise
-            options = {}
-        if "representations" in options:
+        monotonic_deadline = None
+        while True:
+            if cancel.is_set():
+                raise GalleryTransferCanceled()
+            try:
+                options = self._request("GET", f"/splats/{_identifier(scene_id)}/download-options")
+            except PortalHTTPError as exc:
+                if exc.status not in (404, 405) or monotonic_deadline is not None:
+                    raise
+                options = {}
+            if "representations" not in options:
+                if monotonic_deadline is not None:
+                    raise PortalProtocolError("The prepared download is no longer available")
+                break
             choices = options["representations"]
             if not isinstance(choices, list):
                 raise PortalProtocolError("Invalid gallery download options")
             choice = next((item for item in choices if isinstance(item, dict) and item.get("format") == "licht"), None)
-            if choice:
-                status = choice.get("status")
-                if status == "failed":
-                    raise ValueError("The portal could not prepare this download. Please try again later.")
-                if status == "preparing":
-                    raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
-                if status != "ready":
-                    raise PortalProtocolError("Invalid gallery download status")
+            if not choice:
+                if monotonic_deadline is not None:
+                    raise PortalProtocolError("The prepared download is no longer available")
+                break
+            status = choice.get("status")
+            if status == "failed":
+                raise ValueError("The portal could not prepare this download. Please try again later.")
+            if status == "ready":
                 return self._download_representation(scene_id, choice, destination, cancel,
                     checkpoint, on_checkpoint, on_progress, on_message, final_destination, destination_identity)
+            if status != "preparing":
+                raise PortalProtocolError("Invalid gallery download status")
+            if monotonic_deadline is None:
+                if self.processing_deadline is None:
+                    self.processing_deadline = time.time() + PROCESSING_TIMEOUT
+                monotonic_deadline = time.monotonic() + max(0, min(
+                    PROCESSING_TIMEOUT, self.processing_deadline - time.time()))
+            on_processing({"stage": "preparing_download", "completed": 0, "total": 0})
+            if time.time() >= self.processing_deadline or time.monotonic() >= monotonic_deadline:
+                raise GalleryProcessingTimeout("The viewing copy is being prepared. Keep waiting to check again.")
+            if cancel.wait(1):
+                raise GalleryTransferCanceled("Stopped waiting for download preparation")
         payload = self._request("GET", f"/splats/{_identifier(scene_id)}/download")
         scene = payload["scene"]
         total = scene["contentLength"]
