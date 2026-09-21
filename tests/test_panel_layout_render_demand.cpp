@@ -628,7 +628,14 @@ TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand
     EXPECT_FALSE(layout.isResizeInteractionActive());
     EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), before.panel_width);
 
+    // The dock's content edge belongs to RmlUi (notably its scrollbar), so a
+    // click just inside the panel must not begin a native resize.
     input.mouse_x = before.panel_x + before.panel_width - 2.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
+
+    // The resize grip lives entirely on the viewport side of the boundary.
+    input.mouse_x = before.panel_x + before.panel_width + 2.0f;
     layout.renderLeftDock(ctx, true, false, input, s);
     EXPECT_TRUE(layout.isResizeInteractionActive());
     input.mouse_clicked[0] = false;

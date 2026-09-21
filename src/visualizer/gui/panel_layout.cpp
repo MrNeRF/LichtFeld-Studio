@@ -1120,7 +1120,10 @@ namespace lfs::vis::gui {
             .panel_x = screen.work_pos.x,
             .panel_width = panel_w,
             .toolbar_x = edge_x + toolbar_inset,
-            .edge_min_x = edge_x - edge_grab_w,
+            // Keep the resize hit area outside the dock. Extending it into the
+            // panel overlaps RmlUi's vertical scrollbar and turns a scrollbar
+            // thumb drag into a simultaneous dock resize.
+            .edge_min_x = edge_x,
             .edge_max_x = edge_x + edge_grab_w,
         };
     }
