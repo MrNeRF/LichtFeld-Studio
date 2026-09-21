@@ -333,6 +333,26 @@ namespace {
             python_viewer_shutdown_error());
     }
 
+    lfs::Result<lfs::vis::ProjectWritePoll> post_project_write_poll_to_viewer(
+        lfs::vis::Visualizer& viewer, const bool wait = false) {
+        const lfs::core::TaskContext context{
+            .name = "python.project_poll_write",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<lfs::vis::ProjectWritePoll>(
+            viewer, context,
+            [&viewer, wait]() -> lfs::Result<lfs::vis::ProjectWritePoll> {
+                if (wait) {
+                    viewer.projectWaitWrite();
+                }
+                // Polling settles completed writes and mutates the session.
+                return viewer.projectPollWrite();
+            },
+            python_viewer_shutdown_error());
+    }
+
     lfs::Error python_viewer_shutdown_error() {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Cancelled,
@@ -362,7 +382,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1262,7 +1282,7 @@ NB_MODULE(lichtfeld, m) {
             if (!started || !wait) {
                 return started;
             }
-            auto poll = viewer->projectPollWrite();
+            auto poll = post_project_write_poll_to_viewer(*viewer);
             if (!poll) {
                 return false;
             }
@@ -1386,29 +1406,10 @@ NB_MODULE(lichtfeld, m) {
             if (!wait) {
                 return true;
             }
-            {
+            auto poll = [&] {
                 nb::gil_scoped_release release;
-                const lfs::core::TaskContext context{
-                    .name = "python.project_set_preview.wait",
-                    .domain = lfs::ErrorDomain::Python,
-                    .operation_id = lfs::OperationId::generate(),
-                    .site = LFS_SOURCE_SITE_CURRENT(),
-                };
-                if (auto posted =
-                        lfs::vis::post_guarded_and_wait<void>(
-                            *viewer, context,
-                            [viewer]() -> lfs::Result<void> {
-                                viewer->projectWaitWrite();
-                                return {};
-                            },
-                            python_viewer_shutdown_error());
-                    !posted) {
-                    throw std::runtime_error(std::format(
-                        "project_set_preview wait failed: {}",
-                        lfs::format_for_developer(posted.error())));
-                }
-            }
-            auto poll = viewer->projectPollWrite();
+                return post_project_write_poll_to_viewer(*viewer, true);
+            }();
             if (!poll) {
                 throw std::runtime_error(std::format(
                     "project_set_preview wait failed: {}",
@@ -1432,7 +1433,10 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return result;
             }
-            auto poll = viewer->projectPollWrite();
+            auto poll = [&] {
+                nb::gil_scoped_release release;
+                return post_project_write_poll_to_viewer(*viewer);
+            }();
             if (!poll) {
                 throw std::runtime_error(
                     std::format(
