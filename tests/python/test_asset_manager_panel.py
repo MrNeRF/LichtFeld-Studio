@@ -3461,6 +3461,8 @@ def test_P13_space_toggles_quick_look_and_arrows_update_its_project(panel_module
 
 
 def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
+    import xml.etree.ElementTree as ET
+
     panel = panel_module.AssetManagerPanel()
     captured = {}
     panel._show_shared_context_menu = lambda items, choose: captured.update(
@@ -3480,7 +3482,28 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
     rcss = (resources / "asset_manager.rcss").read_text()
     assert 'class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"' in rml
     assert 'class="asset-button asset-button--icon asset-panel-close"' in rml
+    root = ET.fromstring(rml)
+    primary_toolbar = root.find(
+        ".//div[@class='toolbar-row toolbar-row-primary']"
+    )
+    assert primary_toolbar is not None
+    direct_child_classes = {
+        child.get("class", "") for child in list(primary_toolbar)
+    }
+    assert "asset-search-box" in direct_child_classes
+    assert "asset-button asset-button--icon asset-panel-close" in direct_child_classes
     assert rml.count('class="asset-button asset-button--icon asset-view-button"') == 2
+    toolbar_rules = [
+        rule.split("}", 1)[0]
+        for rule in rcss.split(".toolbar-row-primary {")[1:]
+    ]
+    assert any("position: relative" in rule for rule in toolbar_rules)
+    assert any("padding: 8dp 40dp 8dp 8dp" in rule for rule in toolbar_rules)
+    close_rule = rcss.split(".asset-panel-close {", 1)[1].split("}", 1)[0]
+    assert "position: absolute" in close_rule
+    assert "top: 8dp" in close_rule
+    assert "right: 8dp" in close_rule
+    assert "z-index: 1" in close_rule
     compact_rules = rcss.split(
         ".asset-shell.is-compact .asset-toolbar-filter", 1
     )[1].split(".asset-shell.is-medium", 1)[0]
@@ -3489,6 +3512,14 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
         ".asset-shell.is-compact .asset-view-toggle-icons", 1
     )[1].split("}", 1)[0]
     assert "display: none" not in icon_rule
+    search_rule = compact_rules.split(
+        ".asset-shell.is-compact .asset-search-box", 1
+    )[1].split("}", 1)[0]
+    assert "flex-basis: 100%" in search_rule
+    assert "min-width: 0" in search_rule
+    assert ".asset-shell.is-compact .toolbar-row-primary { column-gap: 2dp; }" in rcss
+    assert ".asset-shell.is-compact .asset-view-toggle-icons { gap: 2dp; }" in rcss
+
 
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET

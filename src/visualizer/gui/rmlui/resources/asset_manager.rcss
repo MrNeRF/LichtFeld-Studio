@@ -116,7 +116,11 @@
 }
 
 .asset-panel-close {
-    margin-left: auto;
+    position: absolute;
+    top: 8dp;
+    right: 8dp;
+    z-index: 1;
+    margin-left: 0;
 }
 
 /* ── Shell wrapper ─────────────────────────────────────── */
@@ -893,12 +897,13 @@
 
 .toolbar-row-primary {
     box-sizing: border-box;
+    position: relative;
     height: 40dp;
     min-height: 40dp;
     display: flex;
     align-items: center;
     gap: 8dp;
-    padding: 8dp;
+    padding: 8dp 40dp 8dp 8dp;
     flex-wrap: nowrap;
 }
 
@@ -1226,12 +1231,13 @@
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 
 .asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; column-gap: 4dp; row-gap: 16dp; }
-.asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; }
-.asset-shell.is-compact .asset-view-toggle-icons, .asset-shell.is-narrow .asset-view-toggle-icons { gap: 4dp; }
+.asset-shell.is-compact .toolbar-row-primary { column-gap: 2dp; }
+.asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; min-width: 0; }
+.asset-shell.is-compact .asset-view-toggle-icons { gap: 2dp; }
+.asset-shell.is-narrow .asset-view-toggle-icons { gap: 4dp; }
 
 .asset-shell.is-narrow #asset-popup-toolbar,
 .asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
-.asset-shell.is-compact .asset-panel-close, .asset-shell.is-narrow .asset-panel-close { margin-left: 0; }
 .asset-shell.is-medium .asset-import-button { display: none; }
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
 
