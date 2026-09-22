@@ -168,7 +168,7 @@ jobs:
           LFS_PREFLIGHT_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          python tools\windows_build_preflight.py --skip-source-checks --compile-commands %BUILD_DIR%\compile_commands.json --max-commands 128
+          python tools\windows_build_preflight.py --skip-source-checks --compile-commands %BUILD_DIR%\compile_commands.json --max-commands 512
 
       - name: Build
         shell: cmd

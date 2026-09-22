@@ -7405,8 +7405,8 @@ namespace lfs::vis::gui {
             updateInteractiveTransitionGuard();
             if (!first_render_completed_) {
                 first_render_completed_ = true;
-                if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                    rendering->markDirty(DirtyFlag::OVERLAY);
+                if (auto* const overlay_rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                    overlay_rendering->markDirty(DirtyFlag::OVERLAY);
             }
             return presented;
         }
