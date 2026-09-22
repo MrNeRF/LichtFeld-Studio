@@ -448,7 +448,8 @@ namespace lfs::python {
             const PreviewReadback readback,
             const std::optional<glm::vec3>& background_color_override,
             const std::optional<bool> orthographic_override = std::nullopt,
-            const std::optional<float> ortho_scale_override = std::nullopt) {
+            const std::optional<float> ortho_scale_override = std::nullopt,
+            const int reference_height = 0) {
             if (width <= 0 || height <= 0 || !std::isfinite(fov_degrees) || fov_degrees <= 0.0f) {
                 return std::nullopt;
             }
@@ -471,7 +472,8 @@ namespace lfs::python {
                     height,
                     background_color_override,
                     orthographic_override,
-                    ortho_scale_override);
+                    ortho_scale_override,
+                    reference_height);
             } else {
                 image = rendering_manager->renderPreviewImage(
                     scene_manager,
@@ -502,7 +504,8 @@ namespace lfs::python {
             const PreviewReadback readback,
             const std::optional<glm::vec3>& background_color_override,
             const std::optional<bool> orthographic_override = std::nullopt,
-            const std::optional<float> ortho_scale_override = std::nullopt) {
+            const std::optional<float> ortho_scale_override = std::nullopt,
+            const int reference_height = 0) {
             auto invoke_render = [&]() -> std::optional<core::Tensor> {
                 return renderViewOnViewerThread(
                     rotation,
@@ -513,7 +516,8 @@ namespace lfs::python {
                     readback,
                     background_color_override,
                     orthographic_override,
-                    ortho_scale_override);
+                    ortho_scale_override,
+                    reference_height);
             };
 
             auto* const viewer = get_visualizer();
@@ -1176,7 +1180,8 @@ namespace lfs::python {
                 PreviewReadback::UInt8Rgb,
                 background_color_override,
                 view_info.orthographic,
-                scaledViewInfoOrthoScale(view_info, height));
+                scaledViewInfoOrthoScale(view_info, height),
+                view_info.height);
             if (!image || !image->is_valid()) {
                 throw std::runtime_error("viewport export render failed");
             }
@@ -1223,6 +1228,7 @@ namespace lfs::python {
                     .focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov),
                     .width = width,
                     .height = height,
+                    .reference_height = view_info.height,
                     .orthographic_override = view_info.orthographic,
                     .ortho_scale_override = scaledViewInfoOrthoScale(view_info, height),
                     .mode = mode,

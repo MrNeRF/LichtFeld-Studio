@@ -529,6 +529,18 @@ namespace lfs::vis {
         return result;
     }
 
+    float RenderingManager::exportRasterizationScale(const int target_height, const int reference_height) const {
+        if (reference_height <= 0) {
+            return 1.0f;
+        }
+        // Use the actual viewport render resolution, including render scale.
+        // The caller's reference height covers exports before a frame is ready.
+        const int source_height = vulkan_viewport_image_size_.y > 0
+                                      ? vulkan_viewport_image_size_.y
+                                      : reference_height;
+        return static_cast<float>(target_height) / source_height;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
                                                                                 const glm::mat3& rotation,
                                                                                 const glm::vec3& position,
@@ -537,10 +549,12 @@ namespace lfs::vis {
                                                                                 const int height,
                                                                                 std::optional<glm::vec3> background_color_override,
                                                                                 std::optional<bool> orthographic_override,
-                                                                                std::optional<float> ortho_scale_override) {
+                                                                                std::optional<float> ortho_scale_override,
+                                                                                const int reference_height) {
         if (width <= 0 || height <= 0) {
             return {};
         }
+        const float rasterization_scale = exportRasterizationScale(height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -562,7 +576,8 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgb);
+                PreviewImageReadback::UInt8Rgb,
+                rasterization_scale);
         }
 
         return renderPreviewImageWithState(
@@ -579,7 +594,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb);
+            PreviewImageReadback::UInt8Rgb,
+            rasterization_scale);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -589,10 +605,12 @@ namespace lfs::vis {
                                                                                  const int width,
                                                                                  const int height,
                                                                                  std::optional<bool> orthographic_override,
-                                                                                 std::optional<float> ortho_scale_override) {
+                                                                                 std::optional<float> ortho_scale_override,
+                                                                                 const int reference_height) {
         if (width <= 0 || height <= 0) {
             return {};
         }
+        const float rasterization_scale = exportRasterizationScale(height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -614,7 +632,8 @@ namespace lfs::vis {
                 std::nullopt,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::UInt8Rgba);
+                PreviewImageReadback::UInt8Rgba,
+                rasterization_scale);
         }
 
         return renderPreviewImageWithState(
@@ -631,7 +650,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba);
+            PreviewImageReadback::UInt8Rgba,
+            rasterization_scale);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
@@ -796,7 +816,8 @@ namespace lfs::vis {
                                           request.width,
                                           request.height,
                                           request.orthographic_override,
-                                          request.ortho_scale_override)
+                                          request.ortho_scale_override,
+                                          request.reference_height)
                 : renderPreviewImageRgb8(scene_manager,
                                          request.rotation,
                                          request.translation,
@@ -805,7 +826,8 @@ namespace lfs::vis {
                                          request.height,
                                          std::nullopt,
                                          request.orthographic_override,
-                                         request.ortho_scale_override);
+                                         request.ortho_scale_override,
+                                         request.reference_height);
         if (last_vulkan_context_ &&
             last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
             return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
@@ -855,7 +877,8 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        const PreviewImageReadback readback) {
+        const PreviewImageReadback readback,
+        const float rasterization_scale) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
@@ -875,7 +898,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            readback_config.transparent_background_override);
+            readback_config.transparent_background_override,
+            rasterization_scale);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -892,7 +916,8 @@ namespace lfs::vis {
                     background_color_override,
                     orthographic_override,
                     ortho_scale_override,
-                    readback);
+                    readback,
+                    rasterization_scale);
             }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return {};
@@ -937,7 +962,8 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        std::optional<bool> transparent_background_override) {
+        std::optional<bool> transparent_background_override,
+        const float rasterization_scale) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -997,6 +1023,7 @@ namespace lfs::vis {
         request.frame_view.intrinsics_override = std::move(intrinsics_override);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
+        request.frame_view.rasterization_scale = rasterization_scale;
         request.raster_backend =
             lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
         request.gut = lfs::rendering::isGutBackend(request.raster_backend);
@@ -1038,7 +1065,8 @@ namespace lfs::vis {
         std::optional<glm::vec3> background_color_override,
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
-        const PreviewImageReadback readback) {
+        const PreviewImageReadback readback,
+        const float rasterization_scale) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -1098,7 +1126,8 @@ namespace lfs::vis {
                     orthographic_override,
                     ortho_scale_override,
                     background_color_override,
-                    readback_config.transparent_background_override);
+                    readback_config.transparent_background_override,
+                    rasterization_scale);
                 if (rendered) {
                     break;
                 }

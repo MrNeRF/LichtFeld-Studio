@@ -103,7 +103,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float color_exposure;
     uint32_t color_tonemapping;
     uint32_t splat_render_profile;
-    uint32_t color_padding;
+    float rasterization_scale;
 });
 static_assert(sizeof(VulkanGSRendererUniforms) == 208);
 static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);

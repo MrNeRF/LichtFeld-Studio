@@ -1797,6 +1797,10 @@ namespace lfs::vis {
             uniforms.shN_layout_slots = shN_layout_slots;
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
             uniforms.mip_filter = mip_filter ? 1u : 0u;
+            uniforms.rasterization_scale =
+                std::isfinite(frame_view.rasterization_scale) && frame_view.rasterization_scale > 0.0f
+                    ? frame_view.rasterization_scale
+                    : 1.0f;
 
             const auto intrinsics = frame_view.getCameraIntrinsics();
             uniforms.fx = intrinsics.focal_x;

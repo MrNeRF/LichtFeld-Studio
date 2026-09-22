@@ -978,10 +978,24 @@ void main(
     // projection (differentiable)
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
+    // Project in the source viewport's pixel units so fixed dilation and the
+    // 512-pixel covariance cap do not shrink splats in high-resolution exports.
+    // Rescale the footprint before binning into the full-resolution tile grid.
+    const float rasterization_scale = uniforms.rasterization_scale > 0.0f
+        ? uniforms.rasterization_scale : 1.0f;
+    Camera projection_cam = cam;
+    if (rasterization_scale != 1.0f) {
+        projection_cam.fx /= rasterization_scale;
+        projection_cam.fy /= rasterization_scale;
+        projection_cam.cx /= rasterization_scale;
+        projection_cam.cy /= rasterization_scale;
+        projection_cam.W = max(1, int(round(float(cam.W) / rasterization_scale)));
+        projection_cam.H = max(1, int(round(float(cam.H) / rasterization_scale)));
+    }
   #if LFS_3DGUT_PROJECTION
     Splat_2D_Vertex splat = project_gaussian_to_camera_gut(
         gauss,
-        cam,
+        projection_cam,
         active_sh,
         mean_ws,
         model_transforms,
@@ -993,7 +1007,7 @@ void main(
   #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,
-        cam,
+        projection_cam,
         active_sh,
         mean_ws,
         model_transforms,
@@ -1003,6 +1017,13 @@ void main(
         spark_rad_opacity_path,
         uniforms.splat_render_profile == 1u && !spark_rad_opacity_path);
   #endif
+    if (rasterization_scale != 1.0f) {
+        const float variance_scale = rasterization_scale * rasterization_scale;
+        splat.xyz_vs.xy = (splat.xyz_vs.xy + 0.5f) * rasterization_scale - 0.5f;
+        splat.cov_vs *= variance_scale;
+        splat.inv_cov_vs_opac.xyz /= variance_scale;
+        splat.det *= variance_scale * variance_scale;
+    }
   #else
     // backward
     float2 v_out_xy_vs = is_zero_grad ? float2(0) : v_output_xy_vs[g_idx];

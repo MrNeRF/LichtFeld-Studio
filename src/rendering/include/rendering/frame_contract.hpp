@@ -29,6 +29,9 @@ namespace lfs::rendering {
         glm::ivec2 size{0, 0};
         glm::ivec2 subregion_origin{0, 0};
         glm::ivec2 subregion_full_size{0, 0};
+        // Export pixels per source viewport pixel. Keep screen-space splat
+        // filtering and extent limits in the source viewport's pixel units.
+        float rasterization_scale = 1.0f;
         float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
         std::optional<CameraIntrinsics> intrinsics_override;
         float near_plane = DEFAULT_NEAR_PLANE;

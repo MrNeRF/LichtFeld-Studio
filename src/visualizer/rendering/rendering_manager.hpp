@@ -172,7 +172,8 @@ namespace lfs::vis {
                                                                   int width, int height,
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
-                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+                                                                  std::optional<float> ortho_scale_override = std::nullopt,
+                                                                  int reference_height = 0);
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
@@ -194,7 +195,8 @@ namespace lfs::vis {
                                                                    float focal_length_mm,
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
-                                                                   std::optional<float> ortho_scale_override = std::nullopt);
+                                                                   std::optional<float> ortho_scale_override = std::nullopt,
+                                                                   int reference_height = 0);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
                                                               SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
@@ -233,6 +235,8 @@ namespace lfs::vis {
             float focal_length_mm = 0.0f;
             int width = 0;
             int height = 0;
+            // Positive for viewport exports; zero keeps native-resolution rasterization.
+            int reference_height = 0;
             std::optional<bool> orthographic_override;
             std::optional<float> ortho_scale_override;
             ExportPostProcessMode mode = ExportPostProcessMode::Opaque;
@@ -628,6 +632,7 @@ namespace lfs::vis {
         void clearVulkanViewportImageState(glm::ivec2 size = {0, 0},
                                            bool flip_y = false,
                                            glm::ivec2 alloc_size = {0, 0});
+        [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -643,7 +648,8 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            PreviewImageReadback readback);
+            PreviewImageReadback readback,
+            float rasterization_scale = 1.0f);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -660,7 +666,8 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            std::optional<bool> transparent_background_override);
+            std::optional<bool> transparent_background_override,
+            float rasterization_scale = 1.0f);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -688,7 +695,8 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
-            PreviewImageReadback readback);
+            PreviewImageReadback readback,
+            float rasterization_scale = 1.0f);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;

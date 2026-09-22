@@ -1177,7 +1177,7 @@ struct Uniforms {
     float color_exposure;
     uint color_tonemapping;
     uint splat_render_profile;
-    uint color_padding;
+    float rasterization_scale;
 }
 
 // HiGS macro-tile grid (64x32 px macro tiles), derived from the legacy
