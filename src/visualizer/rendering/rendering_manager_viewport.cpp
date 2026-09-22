@@ -905,6 +905,8 @@ namespace lfs::vis {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
+        // Image exports need stable ties. Float previews (including sequencer
+        // thumbnails) keep the interactive sort and cold-frame warmup.
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
@@ -922,7 +924,8 @@ namespace lfs::vis {
             ortho_scale_override,
             background_color_override,
             readback_config.transparent_background_override,
-            rasterization_scale);
+            rasterization_scale,
+            readback != PreviewImageReadback::FloatRgb);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -986,7 +989,8 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
         std::optional<bool> transparent_background_override,
-        const float rasterization_scale) {
+        const float rasterization_scale,
+        const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -1068,7 +1072,8 @@ namespace lfs::vis {
             request,
             false,
             VksplatViewportRenderer::OutputSlot::Preview,
-            false);
+            false,
+            deterministic_export);
         if (!render_result) {
             return std::unexpected(render_result.error());
         }
@@ -1150,7 +1155,8 @@ namespace lfs::vis {
                     ortho_scale_override,
                     background_color_override,
                     readback_config.transparent_background_override,
-                    rasterization_scale);
+                    rasterization_scale,
+                    true);
                 if (rendered) {
                     break;
                 }

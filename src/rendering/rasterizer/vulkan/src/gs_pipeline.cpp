@@ -599,6 +599,9 @@ void VulkanGSPipeline::cleanup() {
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
         pending_compute_pipelines.clear();
+        banded_export_pipelines_.clear();
+        banded_export_initialized_ = false;
+        banded_export_active_ = false;
 
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
@@ -1936,6 +1939,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
                                              const uint32_t expected_workgroup_size_x) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
+    pipeline.spirv_path = spirv_path;
     all_compute_pipelines.push_back(&pipeline);
     const auto spirv_code = loadSpirv(spirv_path);
     if (expected_workgroup_size_x != 0 &&
@@ -1992,6 +1996,56 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
     pending_compute_pipelines.push_back(&pipeline);
 }
 
+void VulkanGSPipeline::setBandedExport(const bool enabled) {
+    if (enabled == banded_export_active_)
+        return;
+
+    if (enabled && !banded_export_initialized_) {
+        const size_t count = all_compute_pipelines.size();
+        const size_t pending_count = pending_compute_pipelines.size();
+        try {
+            for (size_t i = 0; i < count; ++i) {
+                auto* const pipeline = all_compute_pipelines[i];
+                const std::filesystem::path path(pipeline->spirv_path);
+                const std::string name = path.stem().string();
+                if (!name.starts_with("projection_forward") &&
+                    !name.starts_with("rasterize_forward") &&
+                    !name.starts_with("macro_raster") &&
+                    !name.starts_with("macro_compose") && name != "generate_keys_wave") {
+                    continue;
+                }
+                auto variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
+                auto* const variant_ptr = variant.get();
+                banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
+                createComputePipeline(*variant_ptr,
+                                      (path.parent_path() / (name + "_banded.spv")).string(),
+                                      pipeline->compatible_subgroup_size,
+                                      pipeline->expected_workgroup_size_x);
+            }
+            createPendingComputePipelines();
+        } catch (...) {
+            // A failed first export must leave the viewer usable and retryable.
+            for (auto& entry : banded_export_pipelines_)
+                destroyComputePipeline(*entry.second);
+            all_compute_pipelines.resize(count);
+            pending_compute_pipelines.resize(pending_count);
+            banded_export_pipelines_.clear();
+            throw;
+        }
+        banded_export_initialized_ = true;
+    }
+
+    // Swap once at the boundary, keeping ordinary dispatch recording unchanged.
+    // Both sets stay alive until renderer teardown, including in-flight uses.
+    for (auto& [pipeline, variant] : banded_export_pipelines_) {
+        std::swap(pipeline->shader, variant->shader);
+        std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
+        std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
+        std::swap(pipeline->pipeline, variant->pipeline);
+    }
+    banded_export_active_ = enabled;
+}
+
 void VulkanGSPipeline::createPendingComputePipelines() {
     if (pending_compute_pipelines.empty())
         return;
@@ -2029,6 +2083,10 @@ void VulkanGSPipeline::createPendingComputePipelines() {
     const VkResult result = vkCreateComputePipelines(
         device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
     if (result != VK_SUCCESS) {
+        for (const auto pipeline : pipelines) {
+            if (pipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, pipeline, nullptr);
+        }
         lfs::rendering::throw_vk_result(
             result,
             "vkCreateComputePipelines",

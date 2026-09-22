@@ -149,7 +149,32 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                 COMMENT "slangc ${OUT_NAME}.spv"
                 VERBATIM
         )
-        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_out} PARENT_SCOPE)
+        set(_outputs ${_out})
+        # Keep band-origin arithmetic out of interactive shaders. These variants
+        # are loaded lazily when the viewer first exports a banded image.
+        if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward|macro_raster|macro_compose)"
+           OR OUT_NAME STREQUAL "generate_keys_wave")
+                set(_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_banded.spv)
+                set(_banded_validation)
+                if(_VULKAN_SPIRV_VAL)
+                        set(_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_banded_out})
+                endif()
+                add_custom_command(
+                        OUTPUT ${_banded_out}
+                        COMMAND ${SLANGC}
+                                ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                ${_VULKAN_SLANG_FLAGS} ${_defs}
+                                -DLFS_BANDED_EXPORT_RENDER=1
+                                -I${_VULKAN_SHADER_SRC}/slang
+                                -o ${_banded_out}
+                        ${_banded_validation}
+                        DEPENDS ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                        COMMENT "slangc ${OUT_NAME}_banded.spv"
+                        VERBATIM
+                )
+                list(APPEND _outputs ${_banded_out})
+        endif()
+        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_outputs} PARENT_SCOPE)
 endfunction()
 
 function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)

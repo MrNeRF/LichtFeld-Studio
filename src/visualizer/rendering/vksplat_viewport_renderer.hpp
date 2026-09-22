@@ -146,7 +146,8 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
             OutputSlot output_slot = OutputSlot::Main,
-            bool synchronize_input_upload = false);
+            bool synchronize_input_upload = false,
+            bool deterministic_export = false);
         [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,

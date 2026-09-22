@@ -157,7 +157,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     // Binning and depth-wave boundaries stay calibrated to the full image;
     // only rasterize the macro tiles in this output band.
     const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
-    if (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height) {
+    if (full_frame_binning(uniforms) &&
+        (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height)) {
         if (thread_rank == 0u)
             macro_batch_active_mask[macro_batch_idx] = 0u;
         return;

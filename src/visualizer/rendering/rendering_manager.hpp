@@ -669,7 +669,8 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> transparent_background_override,
-            float rasterization_scale = 1.0f);
+            float rasterization_scale = 1.0f,
+            bool deterministic_export = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,

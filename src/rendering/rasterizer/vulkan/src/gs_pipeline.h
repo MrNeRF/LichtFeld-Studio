@@ -7,6 +7,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -109,6 +110,7 @@ public:
     bool writeTimestampNoExcept(int delta);
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
+    void setBandedExport(bool enabled);
 
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
@@ -263,6 +265,7 @@ protected:
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
         std::string diagnostic_name;
+        std::string spirv_path;
         bool compatible_subgroup_size = true;
         uint32_t expected_workgroup_size_x = 0;
 
@@ -294,6 +297,9 @@ protected:
 
     std::vector<_ComputePipeline*> all_compute_pipelines;
     std::vector<_ComputePipeline*> pending_compute_pipelines;
+    std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> banded_export_pipelines_;
+    bool banded_export_initialized_ = false;
+    bool banded_export_active_ = false;
 
     uint32_t queue_family_index;
 
