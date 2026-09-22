@@ -1425,7 +1425,8 @@ namespace lfs::vis {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
+                                    lfs::rendering::imageHeight(gt_tensor, gt_layout),
+                                    request.preview_max_dimension);
                                 gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, worker_stream);
                             }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
@@ -1445,7 +1446,8 @@ namespace lfs::vis {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     static_cast<int>(depth.shape()[1]),
-                                    static_cast<int>(depth.shape()[0]));
+                                    static_cast<int>(depth.shape()[0]),
+                                    request.preview_max_dimension);
                                 depth = lfs::core::undistort_mask(depth, scaled, worker_stream);
                             }
                             image = makeDepthDisplayTensor(
@@ -1467,7 +1469,8 @@ namespace lfs::vis {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(normal, normal_layout),
-                                    lfs::rendering::imageHeight(normal, normal_layout));
+                                    lfs::rendering::imageHeight(normal, normal_layout),
+                                    request.preview_max_dimension);
                                 normal = lfs::core::undistort_image(normal, scaled, worker_stream);
                             }
                             image = makeNormalDisplayTensor(normal);

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <limits>
@@ -755,30 +756,55 @@ namespace lfs::core {
     }
 
     UndistortParams scale_undistort_params(
-        const UndistortParams& params, const int actual_src_width, const int actual_src_height) {
-
-        if (actual_src_width == params.src_width && actual_src_height == params.src_height)
-            return params;
-
-        assert(actual_src_width > 0 && actual_src_height > 0);
-
-        const float sx = static_cast<float>(actual_src_width) / static_cast<float>(params.src_width);
-        const float sy = static_cast<float>(actual_src_height) / static_cast<float>(params.src_height);
-
+        const UndistortParams& params, const int actual_src_width, const int actual_src_height,
+        const int max_width) {
         UndistortParams scaled = params;
-        scaled.src_fx = params.src_fx * sx;
-        scaled.src_fy = params.src_fy * sy;
-        scaled.src_cx = params.src_cx * sx;
-        scaled.src_cy = params.src_cy * sy;
-        scaled.src_width = actual_src_width;
-        scaled.src_height = actual_src_height;
 
-        scaled.dst_fx = params.dst_fx * sx;
-        scaled.dst_fy = params.dst_fy * sy;
-        scaled.dst_width = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
-        scaled.dst_height = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
-        scaled.dst_cx = params.dst_cx * sx;
-        scaled.dst_cy = params.dst_cy * sy;
+        if (actual_src_width != params.src_width || actual_src_height != params.src_height) {
+            assert(actual_src_width > 0 && actual_src_height > 0);
+
+            const float sx = static_cast<float>(actual_src_width) / static_cast<float>(params.src_width);
+            const float sy = static_cast<float>(actual_src_height) / static_cast<float>(params.src_height);
+
+            scaled.src_fx = params.src_fx * sx;
+            scaled.src_fy = params.src_fy * sy;
+            scaled.src_cx = params.src_cx * sx;
+            scaled.src_cy = params.src_cy * sy;
+            scaled.src_width = actual_src_width;
+            scaled.src_height = actual_src_height;
+
+            scaled.dst_fx = params.dst_fx * sx;
+            scaled.dst_fy = params.dst_fy * sy;
+            scaled.dst_width = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
+            scaled.dst_height = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
+            scaled.dst_cx = params.dst_cx * sx;
+            scaled.dst_cy = params.dst_cy * sy;
+        }
+
+        if (max_width > 0 && (scaled.dst_width > max_width || scaled.dst_height > max_width)) {
+            const int old_width = scaled.dst_width;
+            const int old_height = scaled.dst_height;
+            int new_width;
+            int new_height;
+            if (old_width > old_height) {
+                new_width = max_width;
+                new_height = std::max(
+                    1, static_cast<int>(static_cast<std::int64_t>(old_height) * max_width / old_width));
+            } else {
+                new_height = max_width;
+                new_width = std::max(
+                    1, static_cast<int>(static_cast<std::int64_t>(old_width) * max_width / old_height));
+            }
+
+            const float dst_sx = static_cast<float>(new_width) / static_cast<float>(old_width);
+            const float dst_sy = static_cast<float>(new_height) / static_cast<float>(old_height);
+            scaled.dst_fx *= dst_sx;
+            scaled.dst_fy *= dst_sy;
+            scaled.dst_cx *= dst_sx;
+            scaled.dst_cy *= dst_sy;
+            scaled.dst_width = new_width;
+            scaled.dst_height = new_height;
+        }
 
         return scaled;
     }

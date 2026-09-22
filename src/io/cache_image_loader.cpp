@@ -492,7 +492,8 @@ namespace lfs::io {
                     const auto scaled = lfs::core::scale_undistort_params(
                         *params.undistort,
                         static_cast<int>(tensor.shape()[2]),
-                        static_cast<int>(tensor.shape()[1]));
+                        static_cast<int>(tensor.shape()[1]),
+                        params.max_width);
                     tensor = lfs::core::undistort_image(
                         tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
                     if (restore_uint8) {

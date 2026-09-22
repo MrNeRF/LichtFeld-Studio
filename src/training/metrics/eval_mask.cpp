@@ -72,7 +72,8 @@ namespace lfs::training {
                 if (camera.is_undistort_prepared()) {
                     const auto scaled = lfs::core::scale_undistort_params(
                         camera.undistort_params(),
-                        static_cast<int>(W), static_cast<int>(H));
+                        static_cast<int>(W), static_cast<int>(H),
+                        config.max_width);
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
                     rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
                     auto rgb_uint8 = lfs::core::Tensor::empty(

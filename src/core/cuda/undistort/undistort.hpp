@@ -28,7 +28,8 @@ namespace lfs::core {
         CameraModelType model, float blank_pixels = 0.0f);
 
     UndistortParams scale_undistort_params(
-        const UndistortParams& params, const int actual_src_width, const int actual_src_height);
+        const UndistortParams& params, const int actual_src_width, const int actual_src_height,
+        const int max_width = 0);
 
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream);
 

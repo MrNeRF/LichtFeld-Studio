@@ -614,7 +614,8 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(mask.shape()[1]),
-                static_cast<int>(mask.shape()[0]));
+                static_cast<int>(mask.shape()[0]),
+                max_width);
             mask = undistort_mask(mask, scaled, _stream);
         }
 
@@ -701,7 +702,8 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(depth.shape()[1]),
-                static_cast<int>(depth.shape()[0]));
+                static_cast<int>(depth.shape()[0]),
+                max_width);
             depth = undistort_mask(depth, scaled, _stream);
         }
 
@@ -816,7 +818,8 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(normal.shape()[2]),
-                static_cast<int>(normal.shape()[1]));
+                static_cast<int>(normal.shape()[1]),
+                max_width);
             normal = undistort_image(normal, scaled, _stream);
             normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
         }

@@ -5,6 +5,7 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "io/formats/colmap.hpp"
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
@@ -55,6 +56,34 @@ namespace {
         ASSERT_EQ(dst.ndim(), 2u);
         EXPECT_EQ(static_cast<int>(dst.shape()[0]), params.dst_height);
         EXPECT_EQ(static_cast<int>(dst.shape()[1]), params.dst_width);
+    }
+
+    UndistortParams make_expanding_undistort_params() {
+        const auto radial = Tensor::from_vector({-0.3f, 0.1f, -0.02f}, TensorShape({3}), Device::CPU);
+        return compute_undistort_params(
+            TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+            radial, Tensor(), CameraModelType::PINHOLE);
+    }
+
+    void expect_params_equal(const UndistortParams& actual, const UndistortParams& expected) {
+        EXPECT_FLOAT_EQ(actual.src_fx, expected.src_fx);
+        EXPECT_FLOAT_EQ(actual.src_fy, expected.src_fy);
+        EXPECT_FLOAT_EQ(actual.src_cx, expected.src_cx);
+        EXPECT_FLOAT_EQ(actual.src_cy, expected.src_cy);
+        EXPECT_FLOAT_EQ(actual.dst_fx, expected.dst_fx);
+        EXPECT_FLOAT_EQ(actual.dst_fy, expected.dst_fy);
+        EXPECT_FLOAT_EQ(actual.dst_cx, expected.dst_cx);
+        EXPECT_FLOAT_EQ(actual.dst_cy, expected.dst_cy);
+        EXPECT_EQ(actual.src_width, expected.src_width);
+        EXPECT_EQ(actual.src_height, expected.src_height);
+        EXPECT_EQ(actual.dst_width, expected.dst_width);
+        EXPECT_EQ(actual.dst_height, expected.dst_height);
+        EXPECT_EQ(actual.model_type, expected.model_type);
+        EXPECT_EQ(actual.num_distortion, expected.num_distortion);
+        EXPECT_EQ(actual.crop_solve_failed, expected.crop_solve_failed);
+        for (int i = 0; i < 12; ++i) {
+            EXPECT_FLOAT_EQ(actual.distortion[i], expected.distortion[i]);
+        }
     }
 
 } // namespace
@@ -415,6 +444,85 @@ TEST(ScaleUndistortParams, PreservesPrincipalPointOffset) {
     EXPECT_FLOAT_EQ(scaled.dst_cy, 6.0f);
     EXPECT_EQ(scaled.dst_width, 33);
     EXPECT_EQ(scaled.dst_height, 12);
+}
+
+TEST(ScaleUndistortParams, CapsOutputAndScalesDestinationIntrinsics) {
+    const auto params = make_expanding_undistort_params();
+    ASSERT_GT(std::max(params.dst_width, params.dst_height),
+              std::max(params.src_width, params.src_height));
+
+    constexpr int actual_src_width = TEST_W / 2;
+    constexpr int actual_src_height = TEST_H / 2;
+    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const int max_width = std::max(uncapped.dst_width, uncapped.dst_height) / 2;
+    ASSERT_GT(max_width, 0);
+
+    const auto capped = scale_undistort_params(
+        params, actual_src_width, actual_src_height, max_width);
+
+    int expected_width;
+    int expected_height;
+    if (uncapped.dst_width > uncapped.dst_height) {
+        expected_width = max_width;
+        expected_height = std::max(
+            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_height) * max_width /
+                                uncapped.dst_width));
+    } else {
+        expected_height = max_width;
+        expected_width = std::max(
+            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_width) * max_width /
+                                uncapped.dst_height));
+    }
+
+    EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
+    EXPECT_EQ(capped.dst_width, expected_width);
+    EXPECT_EQ(capped.dst_height, expected_height);
+    const float dst_sx = static_cast<float>(expected_width) / static_cast<float>(uncapped.dst_width);
+    const float dst_sy = static_cast<float>(expected_height) / static_cast<float>(uncapped.dst_height);
+    EXPECT_FLOAT_EQ(capped.dst_fx, uncapped.dst_fx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_fy, uncapped.dst_fy * dst_sy);
+    EXPECT_FLOAT_EQ(capped.dst_cx, uncapped.dst_cx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_cy, uncapped.dst_cy * dst_sy);
+    EXPECT_FLOAT_EQ(capped.src_fx, uncapped.src_fx);
+    EXPECT_FLOAT_EQ(capped.src_fy, uncapped.src_fy);
+    EXPECT_FLOAT_EQ(capped.src_cx, uncapped.src_cx);
+    EXPECT_FLOAT_EQ(capped.src_cy, uncapped.src_cy);
+    EXPECT_EQ(capped.src_width, uncapped.src_width);
+    EXPECT_EQ(capped.src_height, uncapped.src_height);
+
+    run_image_undistort(capped);
+    run_mask_undistort(capped);
+}
+
+TEST(ScaleUndistortParams, CapsOutputWhenSourceSizeMatches) {
+    const auto params = make_expanding_undistort_params();
+    const int max_width = std::max(params.src_width, params.src_height);
+    ASSERT_GT(std::max(params.dst_width, params.dst_height), max_width);
+
+    const auto capped = scale_undistort_params(
+        params, params.src_width, params.src_height, max_width);
+
+    EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
+    EXPECT_LT(capped.dst_width, params.dst_width);
+    EXPECT_LT(capped.dst_height, params.dst_height);
+}
+
+TEST(ScaleUndistortParams, NonRestrictiveCapsMatchUncappedResult) {
+    const auto params = make_expanding_undistort_params();
+    ASSERT_GT(std::max(params.dst_width, params.dst_height),
+              std::max(params.src_width, params.src_height));
+
+    constexpr int actual_src_width = TEST_W / 2;
+    constexpr int actual_src_height = TEST_H / 2;
+    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const int output_max = std::max(uncapped.dst_width, uncapped.dst_height);
+
+    for (const int max_width : {output_max, output_max + 1, 0, -1}) {
+        SCOPED_TRACE(max_width);
+        const auto actual = scale_undistort_params(
+            params, actual_src_width, actual_src_height, max_width);
+        expect_params_equal(actual, uncapped);
+    }
 }
 
 // ====================== Mask-image consistency ======================
