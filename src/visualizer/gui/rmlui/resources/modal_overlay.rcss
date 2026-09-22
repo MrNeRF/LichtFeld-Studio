@@ -49,7 +49,9 @@ body {
     font-size: 12dp;
     text-align: center;
     max-height: 400dp;
-    overflow: auto;
+    word-break: break-word;
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 .modal-input-row {
