@@ -297,7 +297,8 @@ public:
     // prepare_visible_chain fan-out + indirect depth sort + sorted-id snapshot.
     void executeSortPrimitivesByDepthVisible(const VulkanGSRendererUniforms& uniforms,
                                              VulkanGSPipelineBuffers& buffers,
-                                             size_t visible_capacity);
+                                             size_t visible_capacity,
+                                             bool deterministic_ties = false);
     // Per depth rank: conservative macro-tile coverage count, written in rank
     // order (combines the legacy apply-depth-ordering reorder with the
     // macro-granularity coverage). Feeds the visible-bounded cumsum.
@@ -470,6 +471,7 @@ protected:
         2));
     _ComputePipeline pipeline_prepare_visible_chain = _ComputePipeline(4);
     _ComputePipeline pipeline_copy_visible_indices = _ComputePipeline(3);
+    _ComputePipeline pipeline_prepare_stable_depth_sort = _ComputePipeline(6);
     struct _CumsumIndirectComputePipeline {
         _ComputePipeline block_scan = _ComputePipeline(4);
         _ComputePipeline scan_block_sums = _ComputePipeline(4);

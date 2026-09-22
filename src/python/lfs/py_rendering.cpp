@@ -1129,23 +1129,15 @@ namespace lfs::python {
             return rotation;
         }
 
-        [[nodiscard]] std::optional<float> scaledViewInfoOrthoScale(const vis::ViewInfo& view_info,
-                                                                    const int target_height) {
+        [[nodiscard]] std::optional<float> viewInfoOrthoScale(const vis::ViewInfo& view_info) {
             if (!view_info.orthographic) {
                 return std::nullopt;
             }
-            if (view_info.height <= 0 || target_height <= 0 ||
-                !std::isfinite(view_info.ortho_scale) || view_info.ortho_scale <= 0.0f) {
+            if (!std::isfinite(view_info.ortho_scale) || view_info.ortho_scale <= 0.0f) {
                 return std::nullopt;
             }
 
-            const double scale = static_cast<double>(view_info.ortho_scale) *
-                                 static_cast<double>(target_height) /
-                                 static_cast<double>(view_info.height);
-            if (!std::isfinite(scale) || scale <= 0.0) {
-                return std::nullopt;
-            }
-            return static_cast<float>(scale);
+            return view_info.ortho_scale;
         }
 
         [[nodiscard]] core::Tensor toU8Hwc(core::Tensor image) {
@@ -1180,7 +1172,7 @@ namespace lfs::python {
                 PreviewReadback::UInt8Rgb,
                 background_color_override,
                 view_info.orthographic,
-                scaledViewInfoOrthoScale(view_info, height),
+                viewInfoOrthoScale(view_info),
                 view_info.height);
             if (!image || !image->is_valid()) {
                 throw std::runtime_error("viewport export render failed");
@@ -1230,7 +1222,7 @@ namespace lfs::python {
                     .height = height,
                     .reference_height = view_info.height,
                     .orthographic_override = view_info.orthographic,
-                    .ortho_scale_override = scaledViewInfoOrthoScale(view_info, height),
+                    .ortho_scale_override = viewInfoOrthoScale(view_info),
                     .mode = mode,
                 };
                 return rendering_manager->renderExportImage(scene_manager, request);

@@ -1081,6 +1081,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     create_optional(pipeline_projection_forward_shn_q16_survivors, "projection_forward_shn_q16_survivors");
     create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
     create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
+    create_optional(pipeline_prepare_stable_depth_sort, "prepare_stable_depth_sort");
     create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
     create_optional(pipeline_cumsum_indirect.scan_block_sums, "cumsum_scan_block_sums_indirect");
     create_optional(pipeline_cumsum_indirect.add_block_offsets, "cumsum_add_block_offsets_indirect");
@@ -2752,7 +2753,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
 void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
-    size_t visible_capacity) {
+    size_t visible_capacity,
+    const bool deterministic_ties) {
     PerfTimer::Timer<PerfTimer::SortPrimitivesByDepth> timer(this);
     DEVICE_GUARD;
 
@@ -2807,6 +2809,50 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
         // count to the frame's *capacity* would mask exactly the clamping the
         // raw count exists to detect.
         recordVisibleCountReadback(buffers, static_cast<size_t>(uniforms.num_splats));
+    }
+
+    if (deterministic_ties) {
+        // Compact slots are assigned by atomics. Sort model ids first so the
+        // stable depth sort has a repeatable order for equal radial depths.
+        // The saved keys die before the final sorted-index snapshot, allowing
+        // reuse of its storage without another persistent allocation.
+        auto& saved_depth_keys = resizeDeviceBuffer(buffers.primitive_sort_indices, visible_capacity);
+        struct StableSortUniforms {
+            uint32_t capacity;
+            uint32_t restore_depth;
+            uint32_t pad0, pad1;
+        } stable_uniforms{prepare_uniforms.visible_capacity, 0, 0, 0};
+        executeComputeIndirect(
+            visible_dispatch,
+            indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
+            &stable_uniforms, sizeof(stable_uniforms),
+            pipeline_prepare_stable_depth_sort,
+            std::vector<TaggedBinding>{
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead},
+                {saved_depth_keys, BufferUse::ComputeWrite},
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.unsorted_gauss_idx().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+            });
+        executeSortIndirectCount(uniforms, buffers, 32,
+                                 buffers.visible_count.deviceBuffer, visible_dispatch,
+                                 visible_capacity, indirect::VisibleChainDispatch::kLayout,
+                                 indirect::VisibleChainDispatch::kRadixWordOffset);
+        stable_uniforms.restore_depth = 1;
+        executeComputeIndirect(
+            visible_dispatch,
+            indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
+            &stable_uniforms, sizeof(stable_uniforms),
+            pipeline_prepare_stable_depth_sort,
+            std::vector<TaggedBinding>{
+                {saved_depth_keys, BufferUse::ComputeRead},
+                {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                {saved_depth_keys, BufferUse::ComputeRead},
+                {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.unsorted_gauss_idx().deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+            });
     }
 
     {
@@ -2939,8 +2985,9 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const size_t alloc_grid_h =
         _CEIL_DIV(static_cast<size_t>(scratch_bucket.alloc_h), size_t{TILE_HEIGHT});
     const size_t alloc_macro_tiles =
-        _CEIL_DIV(alloc_grid_w, size_t{HIGS_MACRO_T16_W}) *
-        _CEIL_DIV(alloc_grid_h, size_t{HIGS_MACRO_T16_H});
+        std::max(num_macro,
+                 _CEIL_DIV(alloc_grid_w, size_t{HIGS_MACRO_T16_W}) *
+                     _CEIL_DIV(alloc_grid_h, size_t{HIGS_MACRO_T16_H}));
     if (scratch_bucket.alloc_w != scratch_bucket_alloc_w_ ||
         scratch_bucket.alloc_h != scratch_bucket_alloc_h_) {
         LOG_DEBUG(

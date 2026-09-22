@@ -152,6 +152,16 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
 
     const uint macro_tile_x = macro_tile_idx % mgw;
     const uint macro_tile_y = macro_tile_idx / mgw;
+    const uint2 render_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    // Binning and depth-wave boundaries stay calibrated to the full image;
+    // only rasterize the macro tiles in this output band.
+    const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
+    if (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height) {
+        if (thread_rank == 0u)
+            macro_batch_active_mask[macro_batch_idx] = 0u;
+        return;
+    }
     const float2 macro_origin = float2(float(macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH),
                                        float(macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT));
 
@@ -241,8 +251,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             any |= shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + thread_rank];
         const uint tile_x = macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES + (thread_rank % HIGS_MACRO_TILE_WIDTH_TILES);
         const uint tile_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES + (thread_rank / HIGS_MACRO_TILE_WIDTH_TILES);
-        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH < uniforms.image_width &&
-                                   tile_y * HIGS_TILE_HEIGHT < uniforms.image_height;
+        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH - render_origin.x < uniforms.image_width &&
+                                   tile_y * HIGS_TILE_HEIGHT - render_origin.y < uniforms.image_height;
         if (any != 0u && tile_in_image) {
             uint q;
             InterlockedAdd(shared_tile_queue_count, 1u, q);
@@ -282,7 +292,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
             const uint2 pix = tile_origin + uint2(pixel_linear % HIGS_TILE_WIDTH, pixel_linear / HIGS_TILE_WIDTH);
             pixel_state[p] = float4(0.0f, 0.0f, 0.0f, 1.0f);
-            pixel_active[p] = pix.x < uniforms.image_width && pix.y < uniforms.image_height;
+            pixel_active[p] = pix.x - render_origin.x < uniforms.image_width &&
+                              pix.y - render_origin.y < uniforms.image_height;
             pixel_coord[p] = float2(pix);
         }
 
@@ -418,7 +429,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         const float fx_t = (float(tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) - macro_origin.x) * (1.0f / HIGS_TILE_WIDTH);
         const float fy0_t = (float(tile_origin.y + (lane_id / HIGS_TILE_WIDTH)) - macro_origin.y) * (1.0f / HIGS_TILE_HEIGHT);
         const half px_x = half(fx_t);
-        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) < uniforms.image_width;
+        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH) - render_origin.x) < uniforms.image_width;
 
         half2 pix_y2[PIXEL_PAIRS];
         half2 acc_r[PIXEL_PAIRS];
@@ -430,8 +441,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             pix_y2[k] = half2(half(fy0_t + float(2u * k) * PIX_STEP_T),
                               half(fy0_t + float(2u * k + 1u) * PIX_STEP_T));
             const uint y0 = tile_origin.y + (lane_id / HIGS_TILE_WIDTH) + 2u * ROWS_PER_P * k;
-            const bool in0 = col_inside && y0 < uniforms.image_height;
-            const bool in1 = col_inside && (y0 + ROWS_PER_P) < uniforms.image_height;
+            const bool in0 = col_inside && y0 - render_origin.y < uniforms.image_height;
+            const bool in1 = col_inside && (y0 + ROWS_PER_P) - render_origin.y < uniforms.image_height;
             acc_r[k] = half2(0.0h, 0.0h);
             acc_g[k] = half2(0.0h, 0.0h);
             acc_b[k] = half2(0.0h, 0.0h);

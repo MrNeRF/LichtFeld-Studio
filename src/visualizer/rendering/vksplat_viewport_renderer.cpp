@@ -803,6 +803,7 @@ namespace lfs::vis {
                  (root / "generated/projection_forward_shn_q16_survivors.spv").string()},
                 {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
                 {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
+                {"prepare_stable_depth_sort", (root / "generated/prepare_stable_depth_sort.spv").string()},
                 {"cumsum_block_scan_indirect",
                  (root / "generated/cumsum_block_scan_indirect.spv").string()},
                 {"cumsum_scan_block_sums_indirect",
@@ -9062,8 +9063,23 @@ namespace lfs::vis {
         if (request.depth_view) {
             uniforms.mip_filter |= 2u;
         }
-        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_;
+        // Synchronous exports use the exact instance-count gate and must keep
+        // the same raster chain across every band, including a cold first band.
+        // The interactive viewport retains its deferred-count warmup.
+        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
+                                       output_slot != OutputSlot::Preview;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
+        if ((higs_active || request.gut) && output_slot == OutputSlot::Preview &&
+            request.frame_view.subregion_full_size.y > 0) {
+            // Keep projection and coverage decisions in full-image coordinates.
+            // HiGS also retains the full grid: repartitioning its depth waves
+            // per band changes half-precision blending and median depth.
+            uniforms.mip_filter |= 4u;
+            if (higs_active) {
+                uniforms.grid_width = _CEIL_DIV(uniforms.camera_width, TILE_WIDTH);
+                uniforms.grid_height = _CEIL_DIV(uniforms.camera_height, TILE_HEIGHT);
+            }
+        }
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
         renderer_.setDepthCapture(depth_capture_mode_);
@@ -9387,7 +9403,8 @@ namespace lfs::vis {
                 if (higs_active) {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
-                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity);
+                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity,
+                                                                      output_slot == OutputSlot::Preview);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");

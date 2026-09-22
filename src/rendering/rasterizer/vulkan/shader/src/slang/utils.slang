@@ -1100,13 +1100,14 @@ float2 ellipse_range_bound(
 int count_ellipse_grid_overlaps(
     float2 pixelspace_xy,
     float3 inv_cov,
-    rectangle grid
+    rectangle grid,
+    bool scan_rows
 ) {
     // count the number grid cells that overlap with an ellipse
 
     int n_tiles = 0;
 
-    if (grid.max_y-grid.min_y <= grid.max_x-grid.min_x) {
+    if (scan_rows) {
         for (uint16_t y = grid.min_y; y < grid.max_y; y++) {
             float y0 = y * TILE_HEIGHT - pixelspace_xy.y;
             float y1 = y0 + TILE_HEIGHT;
@@ -1178,6 +1179,24 @@ struct Uniforms {
     uint color_tonemapping;
     uint splat_render_profile;
     float rasterization_scale;
+}
+
+// mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
+// full-frame binning for banded exports (bit 2).
+bool full_frame_binning(Uniforms uniforms) {
+    return (uniforms.mip_filter & 4u) != 0u;
+}
+
+[ForceInline]
+rectangle clip_to_render_grid(rectangle rect, Uniforms uniforms) {
+    const uint2 lo = uint2(uniforms.render_origin_x / TILE_WIDTH,
+                          uniforms.render_origin_y / TILE_HEIGHT);
+    const uint2 hi = lo + uint2(uniforms.grid_width, uniforms.grid_height);
+    rect.min_x = uint16_t(clamp(uint(rect.min_x), lo.x, hi.x));
+    rect.max_x = uint16_t(clamp(uint(rect.max_x), lo.x, hi.x));
+    rect.min_y = uint16_t(clamp(uint(rect.min_y), lo.y, hi.y));
+    rect.max_y = uint16_t(clamp(uint(rect.max_y), lo.y, hi.y));
+    return rect;
 }
 
 // HiGS macro-tile grid (64x32 px macro tiles), derived from the legacy

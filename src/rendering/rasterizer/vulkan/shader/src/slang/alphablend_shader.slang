@@ -300,7 +300,12 @@ void main(
     }
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
-    float2 center_pix_coord = pix_coord;
+    const uint2 projection_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    float2 center_pix_coord = pix_coord + projection_origin;
+  #if SUBTILE_SIZE > 0
+    pix_coord_base += projection_origin;
+  #endif
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
 #if LFS_3DGUT_RASTERIZE
     float3 ray_origin = float3(0.0);

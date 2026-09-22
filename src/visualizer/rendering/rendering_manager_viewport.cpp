@@ -29,6 +29,9 @@ namespace lfs::vis {
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
         constexpr int kMinPreviewSubdivisionHeight = 512;
+        constexpr int kPreviewTileHeightAlignment = HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
+        static_assert(kPreviewTileHeightAlignment % TILE_HEIGHT == 0);
+        static_assert(kMinPreviewSubdivisionHeight % kPreviewTileHeightAlignment == 0);
 
         [[nodiscard]] bool isTileInstanceOverflow(const std::string_view error) {
             return error.find("tile-instance prefix sum overflowed signed 32-bit capacity") !=
@@ -58,7 +61,11 @@ namespace lfs::vis {
                 return 1;
             }
             const std::size_t max_pixels = kMaxNativePreviewPixelStateBytes / kPreviewPixelStateBytesPerPixel;
-            return std::max(1, static_cast<int>(max_pixels / static_cast<std::size_t>(width)));
+            const int height = static_cast<int>(max_pixels / static_cast<std::size_t>(width));
+            // Preserve the full image's macro/legacy tile boundaries. Changing
+            // the tile grouping changes blend rounding and median depth.
+            return std::max(kPreviewTileHeightAlignment,
+                            height / kPreviewTileHeightAlignment * kPreviewTileHeightAlignment);
         }
 
         [[nodiscard]] std::optional<float> sampleDepthTensorAt(
@@ -541,6 +548,20 @@ namespace lfs::vis {
         return static_cast<float>(target_height) / source_height;
     }
 
+    std::optional<float> RenderingManager::exportOrthoScale(const std::optional<float> scale,
+                                                            const int target_height,
+                                                            const int reference_height) const {
+        if (!scale || reference_height <= 0) {
+            return scale;
+        }
+        // Orthographic intrinsics are pixels per world unit at the actual
+        // viewport render resolution. Scale once to avoid double rounding.
+        const int source_height = vulkan_viewport_image_size_.y > 0
+                                      ? vulkan_viewport_image_size_.y
+                                      : reference_height;
+        return static_cast<float>(static_cast<double>(*scale) * target_height / source_height);
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(SceneManager* const scene_manager,
                                                                                 const glm::mat3& rotation,
                                                                                 const glm::vec3& position,
@@ -555,6 +576,7 @@ namespace lfs::vis {
             return {};
         }
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
+        ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -611,6 +633,7 @@ namespace lfs::vis {
             return {};
         }
         const float rasterization_scale = exportRasterizationScale(height, reference_height);
+        ortho_scale_override = exportOrthoScale(ortho_scale_override, height, reference_height);
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -1142,7 +1165,8 @@ namespace lfs::vis {
                     }
                     return {};
                 }
-                tile_height = std::max(kMinPreviewSubdivisionHeight, tile_height / 2);
+                tile_height = std::max(kMinPreviewSubdivisionHeight,
+                                       (tile_height / 2) / kPreviewTileHeightAlignment * kPreviewTileHeightAlignment);
                 band_height_limit = tile_height;
                 LOG_WARN("Gaussian preview band overflow at y={}; retrying with height={}",
                          tile_y,

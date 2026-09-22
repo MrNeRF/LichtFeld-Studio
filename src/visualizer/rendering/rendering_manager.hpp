@@ -235,7 +235,8 @@ namespace lfs::vis {
             float focal_length_mm = 0.0f;
             int width = 0;
             int height = 0;
-            // Positive for viewport exports; zero keeps native-resolution rasterization.
+            // Positive for viewport exports: ortho_scale_override is the source
+            // viewport scale. Zero keeps native-resolution rasterization and scale.
             int reference_height = 0;
             std::optional<bool> orthographic_override;
             std::optional<float> ortho_scale_override;
@@ -633,6 +634,7 @@ namespace lfs::vis {
                                            bool flip_y = false,
                                            glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
+        [[nodiscard]] std::optional<float> exportOrthoScale(std::optional<float> scale, int target_height, int reference_height) const;
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,

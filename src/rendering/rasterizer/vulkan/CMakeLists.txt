@@ -249,6 +249,7 @@ _vulkan_add_slang_shader(projection_forward_shn_f16_survivors vertex_shader.slan
 _vulkan_add_slang_shader(projection_forward_shn_q16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1)
 _vulkan_add_slang_shader(prepare_visible_chain        prepare_visible_chain.slang)
 _vulkan_add_slang_shader(copy_visible_indices         copy_visible_indices.slang)
+_vulkan_add_slang_shader(prepare_stable_depth_sort    prepare_stable_depth_sort.slang)
 _vulkan_add_slang_shader(cumsum_block_scan_indirect        cumsum.slang CUMSUM_PHASE=1 CUMSUM_INDIRECT=1)
 _vulkan_add_slang_shader(cumsum_scan_block_sums_indirect   cumsum.slang CUMSUM_PHASE=2 CUMSUM_INDIRECT=1)
 _vulkan_add_slang_shader(cumsum_add_block_offsets_indirect cumsum.slang CUMSUM_PHASE=3 CUMSUM_INDIRECT=1)
