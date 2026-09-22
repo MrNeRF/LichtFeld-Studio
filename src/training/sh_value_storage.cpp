@@ -360,9 +360,9 @@ namespace lfs::training::sh_value {
                 core::sh_value_quant::sorted_block_runs_scan_workspace_bytes(K, stream),
                 stream);
             const core::sh_value_quant::SortedBlockRunScratch run_scratch{
-                .flags = run_workspace.flags.as<std::int32_t>(),
-                .compact = run_workspace.compact.as<std::int32_t>(),
-                .scan = run_workspace.scan.get(),
+                .flags = run_workspace.flags.ptr<std::int32_t>(),
+                .compact = run_workspace.compact.ptr<std::int32_t>(),
+                .scan = run_workspace.scan.data_ptr(),
                 .scan_bytes = run_workspace.scan_bytes,
             };
 

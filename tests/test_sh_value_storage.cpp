@@ -3,11 +3,14 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
@@ -192,6 +195,54 @@ TEST(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
     EXPECT_LT(mse, 1e-6) << "MSE=" << mse;
     EXPECT_GT(psnr_from_mse(mse), 55.0) << "PSNR from MSE=" << psnr_from_mse(mse);
 
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+// Catches the q16 block-run workspace keeping buffers bound to the stream that first
+// grew it: growing it after that stream is destroyed freed on a dead handle, which
+// segfaults or reports cudaErrorContextIsDestroyed after switching projects.
+TEST(ShValueStorageTest, Q16WorkspaceGrowthAfterReleasedStreamDoesNotReportCudaFailure) {
+    auto loaded = lfs::io::load_ply(
+        std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+    SplatData& splat = loaded->value;
+    const auto rows = static_cast<size_t>(splat.size());
+    const Tensor canonical = splat.shN_canonical();
+    ASSERT_EQ(canonical.ndim(), 3u);
+    ASSERT_EQ(canonical.shape()[0], rows);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    cudaStream_t stream_a = nullptr;
+    cudaStream_t stream_b = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_a, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_b, cudaStreamNonBlocking), cudaSuccess);
+
+    const auto scatter_rows = [&](const cudaStream_t stream, const size_t count) {
+        CUDAStreamGuard stream_guard(stream);
+        const Tensor indices = Tensor::arange(static_cast<float>(count)).to(DataType::Int64);
+        LiveModelMutationGuard mutation_guard("q16_workspace_stream_lifetime_test");
+        sh_value::scatter_canonical_into_shN(
+            splat, indices, canonical.slice(0, 0, count).contiguous());
+    };
+
+    scatter_rows(stream_a, rows / 2);
+    CudaMemoryPool::instance().release_stream(stream_a);
+    ASSERT_EQ(cudaStreamDestroy(stream_a), cudaSuccess);
+
+    const auto log_generation = Logger::get().buffered_log_generation();
+    scatter_rows(stream_b, rows);
+
+    const auto logs = Logger::get().buffered_logs_since(log_generation, 64);
+    const bool stale_stream_free = std::any_of(
+        logs.begin(), logs.end(), [](const LogEntrySnapshot& entry) {
+            return entry.message.find("stream-ordered CUDA allocation free") != std::string::npos;
+        });
+    EXPECT_FALSE(stale_stream_free);
+
+    CudaMemoryPool::instance().release_stream(stream_b);
+    EXPECT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
