@@ -1707,7 +1707,7 @@
     "loaded_plugins": "Startup-Plugins geladen {}/{}",
     "drop_files_title": "Dateien hier ablegen um zu starten",
     "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP Datensatz oder Projektdatei",
-    "drop_files_hint": "Oder Datei > Datensatz importieren / PLY importieren verwenden",
+    "drop_files_hint": "Oder {path} verwenden",
     "drop_to_import": "Zum Importieren ablegen",
     "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP Datensatz oder Projekt",
     "discord": "Discord",

@@ -167,6 +167,7 @@ namespace lfs::vis::gui {
         shown_frames_ = 0;
         width_ = 0;
         height_ = 0;
+        fitted_dp_ratio_ = 0.0f;
         content_dirty_ = true;
         last_mouse_valid_ = false;
 
@@ -205,6 +206,8 @@ namespace lfs::vis::gui {
     }
 
     void StartupOverlay::dismiss() {
+        if (!visible_)
+            return;
         if (lfs::vis::loadLanguagePreference().empty()) {
             const auto& language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
             if (!language.empty())
@@ -213,14 +216,8 @@ namespace lfs::vis::gui {
         visible_ = false;
         input_ = nullptr;
         last_mouse_valid_ = false;
-    }
-
-    void StartupOverlay::dismissFromUserInput() {
-        if (!visible_)
-            return;
-        dismiss();
-        if (user_dismiss_callback_)
-            user_dismiss_callback_();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
     }
 
     void StartupOverlay::setPluginLoadState(const bool started,
@@ -480,10 +477,6 @@ namespace lfs::vis::gui {
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
 
-        if (auto* body = document_->GetElementById("body")) {
-            body->SetClass("vulkan-compat", rml_manager_ && rml_manager_->getVulkanRenderInterface() != nullptr);
-        }
-
         const bool is_light = t.isLightTheme();
         const auto logo_path = lfs::vis::getAssetPath(
             is_light ? "lichtfeld-splash-logo-dark.png" : "lichtfeld-splash-logo.png");
@@ -554,14 +547,54 @@ namespace lfs::vis::gui {
 
     bool StartupOverlay::isLanguageSelectHit(const float local_x, const float local_y) const {
         auto* lang_el = document_ ? document_->GetElementById("lang-select") : nullptr;
-        if (!lang_el)
+        const auto bounds = elementBorderRect(lang_el);
+        return bounds && bounds->contains(local_x, local_y);
+    }
+
+    std::optional<StartupOverlayRect> StartupOverlay::elementBorderRect(Rml::Element* const element) const {
+        if (!element)
+            return std::nullopt;
+
+        const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return std::nullopt;
+
+        const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+        return StartupOverlayRect{
+            .left = offset.x,
+            .top = offset.y,
+            .right = offset.x + size.x,
+            .bottom = offset.y + size.y,
+        };
+    }
+
+    std::optional<StartupOverlayRect> StartupOverlay::languageDropdownRect() const {
+        auto* lang_el = document_ ? document_->GetElementById("lang-select") : nullptr;
+        auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(lang_el);
+        if (!select || !select->IsSelectBoxVisible())
+            return std::nullopt;
+
+        for (int i = 0; i < select->GetNumChildren(true); ++i) {
+            auto* const child = select->GetChild(i);
+            if (child && child->GetTagName() == "selectbox")
+                return elementBorderRect(child);
+        }
+        return std::nullopt;
+    }
+
+    bool StartupOverlay::isLanguageDropdownHit(const float local_x, const float local_y) const {
+        const auto bounds = languageDropdownRect();
+        return bounds && bounds->contains(local_x, local_y);
+    }
+
+    bool StartupOverlay::blocksPointerInput(const float window_x, const float window_y) const {
+        if (!visible_ || !document_)
             return false;
 
-        const auto offset = lang_el->GetAbsoluteOffset(Rml::BoxArea::Border);
-        const float width = lang_el->GetOffsetWidth();
-        const float height = lang_el->GetOffsetHeight();
-        return local_x >= offset.x && local_y >= offset.y &&
-               local_x < offset.x + width && local_y < offset.y + height;
+        const auto card = elementBorderRect(document_->GetElementById("overlay-box"));
+        if (!card)
+            return false;
+        return startupOverlayBlocksPointer(*card, languageDropdownRect(), window_x, window_y);
     }
 
     bool StartupOverlay::isLinkHit(const float local_x, const float local_y) const {
@@ -684,12 +717,50 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    void StartupOverlay::render(const ViewportLayout& viewport, bool drag_hovering) {
-        if (!visible_)
-            return;
+    bool StartupOverlay::applyFitRatio(const int context_width,
+                                       const int context_height,
+                                       const float maximum_ratio) {
+        assert(rml_context_);
+        assert(document_);
 
-        static constexpr float MIN_VIEWPORT_SIZE = 100.0f;
-        if (viewport.size.x < MIN_VIEWPORT_SIZE || viewport.size.y < MIN_VIEWPORT_SIZE)
+        const auto card = elementBorderRect(document_->GetElementById("overlay-box"));
+        if (!card)
+            return false;
+
+        const float layout_ratio = rml_context_->GetDensityIndependentPixelRatio();
+        const float shadow_margin = rml_theme::layeredShadowPadding(theme(), 4) * layout_ratio;
+        constexpr float FIT_GUARD_PIXELS = 1.0f;
+        StartupOverlayRect visual_bounds{
+            .left = card->left - shadow_margin - FIT_GUARD_PIXELS,
+            .top = card->top - shadow_margin - FIT_GUARD_PIXELS,
+            .right = card->right + shadow_margin + FIT_GUARD_PIXELS,
+            .bottom = card->bottom + shadow_margin + FIT_GUARD_PIXELS,
+        };
+        if (const auto dropdown = languageDropdownRect()) {
+            visual_bounds.left = std::min(visual_bounds.left, dropdown->left);
+            visual_bounds.top = std::min(visual_bounds.top, dropdown->top);
+            visual_bounds.right = std::max(visual_bounds.right, dropdown->right);
+            visual_bounds.bottom = std::max(visual_bounds.bottom, dropdown->bottom);
+        }
+
+        const float fitted_ratio = startupOverlayFitDpRatio(
+            maximum_ratio, layout_ratio,
+            static_cast<float>(context_width), static_cast<float>(context_height),
+            visual_bounds);
+        if (std::abs(fitted_ratio - layout_ratio) <= 0.001f) {
+            fitted_dp_ratio_ = fitted_ratio;
+            return false;
+        }
+
+        rml_context_->SetDensityIndependentPixelRatio(fitted_ratio);
+        fitted_dp_ratio_ = fitted_ratio;
+        return true;
+    }
+
+    void StartupOverlay::render(const float window_x, const float window_y,
+                                const float window_width, const float window_height,
+                                const bool drag_hovering) {
+        if (!visible_)
             return;
 
         if (!rml_context_ || !document_)
@@ -704,16 +775,19 @@ namespace lfs::vis::gui {
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
-        const int ctx_w = static_cast<int>(viewport.size.x);
-        const int ctx_h = static_cast<int>(viewport.size.y);
+        const int ctx_w = static_cast<int>(window_width);
+        const int ctx_h = static_cast<int>(window_height);
         const bool size_changed = ctx_w != width_ || ctx_h != height_;
+        const float maximum_dp_ratio = rml_manager_->getDpRatio();
+        const bool density_changed =
+            std::abs(rml_context_->GetDensityIndependentPixelRatio() - fitted_dp_ratio_) > 0.001f;
         const std::size_t theme_signature = rml_theme::currentThemeSignature();
         const bool theme_changed = !has_theme_signature_ || theme_signature != last_theme_signature_;
         const auto language_generation = app_store().language_generation.get();
         const bool language_changed =
             !has_language_generation_ || language_generation != last_language_generation_;
-        bool refresh_cache = content_dirty_ || size_changed || theme_changed || language_changed ||
-                             shown_frames_ < 3;
+        bool refresh_cache = content_dirty_ || size_changed || density_changed ||
+                             theme_changed || language_changed || shown_frames_ < 3;
 
         if (theme_changed) {
             updateTheme();
@@ -747,22 +821,26 @@ namespace lfs::vis::gui {
 
         bool updated_this_frame = false;
         if (refresh_cache) {
+            rml_context_->SetDensityIndependentPixelRatio(maximum_dp_ratio);
             rml_context_->Update();
+            if (applyFitRatio(ctx_w, ctx_h, maximum_dp_ratio))
+                rml_context_->Update();
             updated_this_frame = true;
         }
 
         bool escape_consumed = false;
         bool rml_select_open = isLanguageSelectOpen();
+        const bool rml_select_was_open = rml_select_open;
         bool input_event_forwarded = false;
         const bool plugin_load_complete = isPluginLoadComplete();
         if (input_ && hasInputActivity(*input_) &&
             (plugin_load_complete || rml_select_open ||
-             isLanguageSelectHit(input_->mouse_x - viewport.pos.x,
-                                 input_->mouse_y - viewport.pos.y) ||
-             isLinkHit(input_->mouse_x - viewport.pos.x,
-                       input_->mouse_y - viewport.pos.y))) {
-            const auto input_result = forwardInput(*input_, viewport.pos.x, viewport.pos.y,
-                                                   viewport.size.x, viewport.size.y);
+             isLanguageSelectHit(input_->mouse_x - window_x,
+                                 input_->mouse_y - window_y) ||
+             isLinkHit(input_->mouse_x - window_x,
+                       input_->mouse_y - window_y))) {
+            const auto input_result = forwardInput(*input_, window_x, window_y,
+                                                   window_width, window_height);
             escape_consumed = input_result.escape_consumed;
             refresh_cache = refresh_cache || input_result.event_forwarded;
             input_event_forwarded = input_result.event_forwarded;
@@ -775,11 +853,51 @@ namespace lfs::vis::gui {
             has_language_generation_ = true;
             refresh_cache = true;
         }
-        if (input_event_forwarded || (refresh_cache && !updated_this_frame))
+        if (input_event_forwarded || (refresh_cache && !updated_this_frame)) {
             rml_context_->Update();
+            if (applyFitRatio(ctx_w, ctx_h, maximum_dp_ratio))
+                rml_context_->Update();
+        }
 
-        const float offset_x = viewport.pos.x;
-        const float offset_y = viewport.pos.y;
+        const bool select_interaction_active = rml_select_open || isLanguageSelectOpen();
+        ++shown_frames_;
+
+        bool clicked_language_select = false;
+        bool clicked_language_dropdown = false;
+        bool clicked_link = false;
+        if (input_) {
+            const float local_x = input_->mouse_x - window_x;
+            const float local_y = input_->mouse_y - window_y;
+            clicked_language_select = input_->mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
+            clicked_language_dropdown = input_->mouse_clicked[0] && isLanguageDropdownHit(local_x, local_y);
+            clicked_link = input_->mouse_clicked[0] && isLinkHit(local_x, local_y);
+        }
+
+        if (shown_frames_ > 2 && !drag_hovering && input_) {
+            const bool mouse_clicked =
+                input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
+            const bool key_action = (!escape_consumed && !select_interaction_active &&
+                                     hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE)) ||
+                                    (!select_interaction_active &&
+                                     (hasKey(input_->keys_pressed, SDL_SCANCODE_SPACE) ||
+                                      hasKey(input_->keys_pressed, SDL_SCANCODE_RETURN) ||
+                                      hasKey(input_->keys_pressed, SDL_SCANCODE_KP_ENTER)));
+
+            if (key_action) {
+                LOG_DEBUG("StartupOverlay: dismissed by key action");
+                dismiss();
+            } else if (mouse_clicked && !rml_select_was_open && !clicked_language_select &&
+                       !clicked_language_dropdown && !clicked_link) {
+                LOG_DEBUG("StartupOverlay: dismissed by mouse click");
+                dismiss();
+            }
+        }
+
+        if (!visible_)
+            return;
+
+        const float offset_x = window_x;
+        const float offset_y = window_y;
         rml_manager_->trackContextFrame(rml_context_,
                                         static_cast<int>(offset_x),
                                         static_cast<int>(offset_y));
@@ -790,49 +908,19 @@ namespace lfs::vis::gui {
             .cache_height = ctx_h,
             .offset_x = offset_x,
             .offset_y = offset_y,
-            .draw_width = viewport.size.x,
-            .draw_height = viewport.size.y,
+            .draw_width = window_width,
+            .draw_height = window_height,
             .refresh = refresh_cache,
             .foreground = true,
             .clip_enabled = true,
             .clip = {
                 .x1 = offset_x,
                 .y1 = offset_y,
-                .x2 = offset_x + viewport.size.x,
-                .y2 = offset_y + viewport.size.y,
+                .x2 = offset_x + window_width,
+                .y2 = offset_y + window_height,
             },
         });
         content_dirty_ = false;
-
-        ++shown_frames_;
-
-        bool clicked_language_select = false;
-        bool clicked_link = false;
-        if (input_) {
-            const float local_x = input_->mouse_x - viewport.pos.x;
-            const float local_y = input_->mouse_y - viewport.pos.y;
-            clicked_language_select = input_->mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
-            clicked_link = input_->mouse_clicked[0] && isLinkHit(local_x, local_y);
-        }
-
-        if (shown_frames_ > 2 && !rml_select_open && !clicked_language_select && !clicked_link &&
-            !drag_hovering && input_) {
-            const bool mouse_clicked =
-                input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
-            const bool key_action = (!escape_consumed &&
-                                     hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE)) ||
-                                    hasKey(input_->keys_pressed, SDL_SCANCODE_SPACE) ||
-                                    hasKey(input_->keys_pressed, SDL_SCANCODE_RETURN) ||
-                                    hasKey(input_->keys_pressed, SDL_SCANCODE_KP_ENTER);
-
-            if (key_action) {
-                LOG_DEBUG("StartupOverlay: dismissed by key action");
-                dismissFromUserInput();
-            } else if (mouse_clicked) {
-                LOG_DEBUG("StartupOverlay: dismissed by mouse click");
-                dismissFromUserInput();
-            }
-        }
     }
 
 } // namespace lfs::vis::gui

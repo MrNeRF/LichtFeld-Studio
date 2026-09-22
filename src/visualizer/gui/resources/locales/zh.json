@@ -1707,7 +1707,7 @@
     "loaded_plugins": "已加载启动插件 {}/{}",
     "drop_files_title": "将文件拖放到此处开始",
     "drop_files_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAP数据集或项目文件",
-    "drop_files_hint": "或使用 文件 > 导入数据集 / 导入PLY",
+    "drop_files_hint": "或使用 {path}",
     "drop_to_import": "放下以导入",
     "drop_to_import_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAP数据集或项目",
     "discord": "Discord",

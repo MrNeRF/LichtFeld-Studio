@@ -104,6 +104,11 @@ def _install_stub_modules(monkeypatch):
     video_state = {}
     document = _DocumentStub()
 
+    translations = {
+        "menu.file": "File",
+        "menu.file.import": "Import",
+        "startup.drop_files_hint": "Or use {path}",
+    }
     ui_stub = SimpleNamespace(
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
@@ -127,12 +132,13 @@ def _install_stub_modules(monkeypatch):
             NoFocusOnAppearing=64,
             NoBringToFrontOnFocus=128,
         )),
-        tr=lambda key: key,
+        tr=lambda key: translations.get(key, key),
         get_import_state=lambda: dict(import_state),
         get_video_export_state=lambda: dict(video_state),
         dismiss_import=lambda: dismiss_calls.append(True),
         cancel_video_export=lambda: cancel_calls.append(True),
         is_scene_empty=lambda: False,
+        is_panel_enabled=lambda _panel_id: False,
         is_drag_hovering=lambda: False,
         is_startup_visible=lambda: False,
         is_sequencer_visible=lambda: False,
@@ -314,3 +320,75 @@ def test_import_completion_hides_backdrop(overlays_module):
 
     assert document.model.bound_funcs["show_import_overlay"]() is True
     assert document.model.bound_funcs["show_import_backdrop"]() is False
+
+
+def test_empty_state_keeps_folder_omits_wide_text_and_does_not_redraw(
+        overlays_module, monkeypatch):
+    module, *_rest = overlays_module
+    redraw_calls = []
+    monkeypatch.setattr(module.lf.ui, "is_scene_empty", lambda: True)
+    monkeypatch.setattr(module.lf.ui, "request_redraw", lambda **kwargs: redraw_calls.append(kwargs),
+                        raising=False)
+    monkeypatch.setattr(
+        module.lf.ui,
+        "theme",
+        lambda: SimpleNamespace(palette=SimpleNamespace(
+            overlay_icon=(1.0, 1.0, 1.0, 1.0),
+            overlay_text=(0.9, 0.9, 0.9, 1.0),
+            overlay_text_dim=(0.7, 0.7, 0.7, 1.0),
+        )),
+        raising=False,
+    )
+
+    class Layout:
+        text_widths = {
+            "startup.drop_files_title": 100.0,
+            "startup.drop_files_subtitle": 220.0,
+            "Or use File > Import": 180.0,
+        }
+
+        def __init__(self):
+            self.lines = []
+            self.rects = []
+            self.text = []
+
+        def get_viewport_pos(self):
+            return (0.0, 0.0)
+
+        def get_viewport_size(self):
+            return (240.0, 300.0)
+
+        def set_next_window_pos(self, _pos):
+            pass
+
+        def set_next_window_size(self, _size):
+            pass
+
+        def begin_window(self, _name, _flags):
+            return True
+
+        def end_window(self):
+            pass
+
+        def draw_window_rect(self, *args):
+            self.rects.append(args)
+
+        def draw_window_line(self, *args):
+            self.lines.append(args)
+
+        def calc_text_size(self, text):
+            return (self.text_widths[text], 16.0)
+
+        def draw_window_text(self, _x, _y, text, _color):
+            self.text.append(text)
+
+    layout = Layout()
+    module._draw_empty_state_overlay(layout)
+
+    assert len(layout.rects) == 1
+    assert len(layout.lines) == 3
+    assert layout.text == [
+        "startup.drop_files_title",
+        "Or use File > Import",
+    ]
+    assert redraw_calls == []

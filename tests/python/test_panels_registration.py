@@ -383,13 +383,13 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
     assert any(effect[0] == "camera_preview" for effect in state.side_effects)
 
 
-def test_project_manager_auto_open_waits_for_startup_overlay(panels_module):
+def test_project_manager_auto_open_does_not_wait_for_startup_overlay(panels_module):
     module, state = panels_module
     state.lf.ui.is_startup_visible = lambda: True
 
     assert module.register_builtin_panels() is True
 
-    assert ("lfs.asset_manager", True) not in state.enabled
+    assert ("lfs.asset_manager", True) in state.enabled
 
 
 def test_lazy_panel_metadata_matches_real_classes(panels_module):

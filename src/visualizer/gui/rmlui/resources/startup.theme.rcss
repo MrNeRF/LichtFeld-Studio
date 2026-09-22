@@ -6,12 +6,6 @@
     background-color: @{startup.overlay_bg};
     border: 1dp @{startup.overlay_border};
     border-radius: 12dp;
-    @{startup.box_shadow}
-}
-
-body.vulkan-compat #overlay-box {
-    border-radius: 0;
-    box-shadow: none;
 }
 
 .dim-text,

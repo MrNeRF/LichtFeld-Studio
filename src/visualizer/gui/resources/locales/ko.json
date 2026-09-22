@@ -1707,7 +1707,7 @@
     "loaded_plugins": "시작 플러그인을 불러왔습니다 {}/{}",
     "drop_files_title": "시작하려면 파일을 여기에 드롭하세요",
     "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP 데이터셋 또는 프로젝트 파일",
-    "drop_files_hint": "또는 파일 > 데이터셋 가져오기 / PLY 가져오기 사용",
+    "drop_files_hint": "또는 {path} 사용",
     "drop_to_import": "가져오려면 드롭",
     "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP 데이터셋 또는 프로젝트",
     "discord": "Discord",

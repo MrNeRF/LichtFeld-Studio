@@ -1707,7 +1707,7 @@
     "loaded_plugins": "起動プラグインを読み込みました {}/{}",
     "drop_files_title": "ファイルをここにドロップして開始",
     "drop_files_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAPデータセット、またはプロジェクトファイル",
-    "drop_files_hint": "または ファイル > データセットをインポート / PLYをインポート を使用",
+    "drop_files_hint": "または {path} を使用",
     "drop_to_import": "ドロップしてインポート",
     "drop_to_import_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAPデータセット、またはプロジェクト",
     "discord": "Discord",

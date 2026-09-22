@@ -1705,7 +1705,7 @@
     "loaded_plugins": "Loaded plugins {}/{}",
     "drop_files_title": "Drop files here to get started",
     "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP dataset, or Project file",
-    "drop_files_hint": "Or use File > Import Dataset / Import Ply",
+    "drop_files_hint": "Or use {path}",
     "drop_to_import": "Drop to Import",
     "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP dataset, or Project",
     "discord": "Discord",

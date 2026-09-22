@@ -1707,7 +1707,7 @@
     "loaded_plugins": "Wczytano wtyczki startowe {}/{}",
     "drop_files_title": "Upuść pliki tutaj, aby rozpocząć",
     "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, zbiór danych COLMAP lub plik projektu",
-    "drop_files_hint": "Lub użyj Plik > Importuj Zbiór Danych / Importuj PLY",
+    "drop_files_hint": "Lub użyj {path}",
     "drop_to_import": "Upuść, aby Zaimportować",
     "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, zbiór danych COLMAP lub Projekt",
     "discord": "Discord",

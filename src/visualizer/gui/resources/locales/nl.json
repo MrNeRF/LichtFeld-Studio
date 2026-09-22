@@ -1707,7 +1707,7 @@
     "loaded_plugins": "Opstartplugins geladen {}/{}",
     "drop_files_title": "Sleep bestanden hierheen om te beginnen",
     "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP dataset of Projectbestand",
-    "drop_files_hint": "Of gebruik Bestand > Dataset Importeren / PLY Importeren",
+    "drop_files_hint": "Of gebruik {path}",
     "drop_to_import": "Loslaten om te importeren",
     "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, COLMAP dataset of Project",
     "discord": "Discord",
