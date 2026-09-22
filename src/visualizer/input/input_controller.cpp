@@ -61,7 +61,7 @@ namespace lfs::vis {
         void expandNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
                                    glm::vec3& world_min, glm::vec3& world_max,
                                    bool use_percentile = false) {
-            glm::vec3 local_min, local_max;
+            glm::vec3 local_min{0.0f}, local_max{0.0f};
             bool have_local = false;
             if (use_percentile) {
                 if (node.model && node.model->size() > 0)
@@ -1158,10 +1158,10 @@ namespace lfs::vis {
             if (press_consumed_camera_frustum) {
                 const double drag_dist = glm::length(glm::dvec2(x, y) - pressed_camera_frustum_pos);
                 const bool was_click = drag_dist < kCameraFrustumClickThreshold;
-                const auto tool_mode = getCurrentToolMode();
+                const auto release_tool_mode = getCurrentToolMode();
                 const bool allow_camera_frustum_pick =
-                    tool_mode == input::ToolMode::GLOBAL ||
-                    tool_mode == input::ToolMode::SELECTION;
+                    release_tool_mode == input::ToolMode::GLOBAL ||
+                    release_tool_mode == input::ToolMode::SELECTION;
                 if (allow_camera_frustum_pick &&
                     was_click && pressed_camera_frustum_id >= 0 &&
                     !over_gui && !over_transform_gizmo) {

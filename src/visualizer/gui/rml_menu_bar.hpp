@@ -100,7 +100,7 @@ namespace lfs::vis::gui {
         bool has_children = false;
         bool submenu_open = false;
         int callback_index = -1;
-        std::vector<MenuDropdownLeafView> children;
+        std::vector<MenuDropdownLeafView> children = {};
     };
 
     struct MenuDropdownRootView {

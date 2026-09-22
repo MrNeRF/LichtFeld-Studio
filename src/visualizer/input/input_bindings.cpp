@@ -111,8 +111,9 @@ namespace lfs::vis::input {
                 } else if constexpr (std::is_same_v<T, MouseDragTrigger>) {
                     return lhs.button == rhs.button && lhs.modifiers == rhs.modifiers &&
                            lhs.chord_key == rhs.chord_key;
+                } else {
+                    return false;
                 }
-                return false;
             },
                               a);
         }
@@ -894,8 +895,9 @@ namespace lfs::vis::input {
             } else if constexpr (std::is_same_v<T, MouseDragTrigger>) {
                 std::string chord = t.chord_key.has_value() ? getKeyName(*t.chord_key) + " + " : "";
                 return chord + result + getMouseButtonName(t.button) + " Drag";
+            } else {
+                return "Unknown";
             }
-            return "Unknown";
         },
                           *trigger);
     }

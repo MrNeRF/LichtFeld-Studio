@@ -88,8 +88,8 @@ namespace lfs::io::project {
     };
 
     struct ProjectDocumentOpenOptions {
-        ReaderOptions reader;
-        GeometryDecodeOptions geometry;
+        ReaderOptions reader = {};
+        GeometryDecodeOptions geometry = {};
         // Decode the KB-scale shell chapters only. Embedded scene payloads
         // remain clean source spans until stage_hydration() consumes them.
         bool defer_geometry_payloads = false;
@@ -104,10 +104,10 @@ namespace lfs::io::project {
         // A titled-project Save As uses a new catalog identity. Leave null
         // for ordinary saves, recovery publication, and first save.
         lfs::core::Uuid save_as_project_uuid = {};
-        std::optional<WriterLockLease> save_as_source_lock_lease;
-        std::vector<lfs::core::Uuid> save_as_excluded_checkpoints;
-        std::function<void(float, const std::string&)> save_as_progress;
-        std::function<bool()> save_as_cancel;
+        std::optional<WriterLockLease> save_as_source_lock_lease = std::nullopt;
+        std::vector<lfs::core::Uuid> save_as_excluded_checkpoints = {};
+        std::function<void(float, const std::string&)> save_as_progress = {};
+        std::function<bool()> save_as_cancel = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         // First-save replacement requires explicit caller authorization

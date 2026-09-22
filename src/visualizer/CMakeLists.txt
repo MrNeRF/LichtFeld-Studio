@@ -209,15 +209,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/terminal_element.cpp
 )
 
-# MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
-# /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
-# /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
-# These large visualizer TUs exceed the COFF section limit in Debug and need /bigobj.
+# These large visualizer TUs exceed the COFF section limit in Debug and need
+# /bigobj. Let CMake select the supported spelling of the C++23 language flag.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
-            PROPERTIES COMPILE_OPTIONS "/std:c++23;/bigobj"
+            PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp

@@ -5764,7 +5764,7 @@ namespace lfs::io {
             if (!parsed) {
                 return make_error(ErrorCode::CORRUPTED_DATA, parsed.error(), input);
             }
-            const std::uint32_t count = parsed->meta.count;
+            const auto count = parsed->meta.count;
             if (parsed->meta.base != *range.base || count != *range.count) {
                 return make_error(ErrorCode::CORRUPTED_DATA,
                                   std::format("Chunk {} range mismatch", c), input);
@@ -5795,7 +5795,7 @@ namespace lfs::io {
                 return make_error(ErrorCode::CORRUPTED_DATA, std::move(*err), input);
             }
 
-            if (auto appended = append_decoded_range(0, count); !appended) {
+            if (auto appended = append_decoded_range(0, static_cast<std::uint32_t>(count)); !appended) {
                 return appended;
             }
             if (progress &&

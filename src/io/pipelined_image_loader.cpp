@@ -1387,7 +1387,7 @@ namespace lfs::io {
             decoded.ptr<float>(), normal.ptr<float>(), height, width,
             static_cast<cudaStream_t>(cuda_stream));
         normal.set_stream(static_cast<cudaStream_t>(cuda_stream));
-        return lfs::core::resize_normal_prior(normal, height, width, static_cast<cudaStream_t>(cuda_stream));
+        return lfs::core::resize_normal_prior(normal, static_cast<int>(height), static_cast<int>(width), static_cast<cudaStream_t>(cuda_stream));
     }
 
     cudaEvent_t PipelinedImageLoader::record_sidecar_ready_event(cudaStream_t stream) {
@@ -2977,7 +2977,7 @@ namespace lfs::io {
                             static_cast<int>(normal_tensor.shape()[2]),
                             static_cast<int>(normal_tensor.shape()[1]));
                         normal_tensor = lfs::core::undistort_image(normal_tensor, scaled, sidecar_stream);
-                        normal_tensor = lfs::core::resize_normal_prior(normal_tensor.contiguous(), normal_tensor.shape()[1], normal_tensor.shape()[2], sidecar_stream);
+                        normal_tensor = lfs::core::resize_normal_prior(normal_tensor.contiguous(), static_cast<int>(normal_tensor.shape()[1]), static_cast<int>(normal_tensor.shape()[2]), sidecar_stream);
                     }
 
                     if (item.aux_target_width > 0 && item.aux_target_height > 0 &&

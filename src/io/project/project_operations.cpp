@@ -762,7 +762,7 @@ namespace lfs::io::project {
                     world = glm::make_mat4(found->second->local_transform.data()) * world;
                     parent = found->second->parent_uuid;
                 }
-                if (!visible || record.payload->reference_uuid && record.payload->fourcc != "DSRC") {
+                if (!visible || (record.payload->reference_uuid && record.payload->fourcc != "DSRC")) {
                     continue;
                 }
                 auto data = load_export_payload(

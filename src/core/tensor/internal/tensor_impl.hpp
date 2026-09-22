@@ -2306,7 +2306,7 @@ namespace lfs::core {
         const auto scalar_value = validated_scalar_operand(                                \
             other, #name, {DataType::Float32, DataType::Int32});                           \
         DataType result_dtype = promote_dtypes(dtype_, scalar_operand_dtype<T>());         \
-        if (true_division && result_dtype != DataType::Float32) {                          \
+        if constexpr (true_division) {                                                     \
             result_dtype = DataType::Float32;                                              \
         }                                                                                  \
         if (numel() == 0) {                                                                \
@@ -2343,7 +2343,7 @@ namespace lfs::core {
         const auto scalar_value = validated_scalar_operand(                                \
             other, #name, {DataType::Float32, DataType::Int32});                           \
         DataType result_dtype = promote_dtypes(dtype_, scalar_operand_dtype<T>());         \
-        if (true_division && result_dtype != DataType::Float32) {                          \
+        if constexpr (true_division) {                                                     \
             result_dtype = DataType::Float32;                                              \
         }                                                                                  \
         if (numel() == 0) {                                                                \

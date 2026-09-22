@@ -890,12 +890,12 @@ namespace lfs::io::project::detail {
             OVERLAPPED operation{};
             const DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
             if (!LockFileEx(handle, flags, 0, 1, 0, &operation)) {
-                const DWORD error = GetLastError();
+                const DWORD lock_error = GetLastError();
                 CloseHandle(handle);
                 return project_error(
                     lfs::ErrorCode::Unavailable, "The project is already open for writing.",
-                    std::format("LockFileEx denied the held lock with Windows error {}", error),
-                    lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(error),
+                    std::format("LockFileEx denied the held lock with Windows error {}", lock_error),
+                    lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(lock_error),
                     "Win32");
             }
             WriterLock result(lock_path, handle);

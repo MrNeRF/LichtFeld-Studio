@@ -1552,8 +1552,8 @@ namespace lfs::io {
                 output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
                 output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
                 output.num_planes = 1;
-                output.plane_info[0].height = heights[i];
-                output.plane_info[0].width = widths[i];
+                output.plane_info[0].height = static_cast<uint32_t>(heights[i]);
+                output.plane_info[0].width = static_cast<uint32_t>(widths[i]);
                 output.plane_info[0].row_stride = widths[i] * 3;
                 output.plane_info[0].num_channels = 3;
                 output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
@@ -1678,8 +1678,8 @@ namespace lfs::io {
                     output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
                     output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
                     output.num_planes = 1;
-                    output.plane_info[0].height = heights[member];
-                    output.plane_info[0].width = widths[member];
+                    output.plane_info[0].height = static_cast<uint32_t>(heights[member]);
+                    output.plane_info[0].width = static_cast<uint32_t>(widths[member]);
                     output.plane_info[0].row_stride = widths[member] * 3;
                     output.plane_info[0].num_channels = 3;
                     output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
@@ -2292,11 +2292,11 @@ namespace lfs::io {
         output_info.chroma_subsampling = is_grayscale ? NVIMGCODEC_SAMPLING_GRAY
                                                       : NVIMGCODEC_SAMPLING_444;
         output_info.num_planes = 1;
-        output_info.plane_info[0].height = height;
-        output_info.plane_info[0].width = width;
+        output_info.plane_info[0].height = static_cast<uint32_t>(height);
+        output_info.plane_info[0].width = static_cast<uint32_t>(width);
         output_info.plane_info[0].row_stride =
             width * num_components * (decode_uint8 ? sizeof(uint8_t) : sizeof(uint16_t));
-        output_info.plane_info[0].num_channels = num_components;
+        output_info.plane_info[0].num_channels = static_cast<uint32_t>(num_components);
         output_info.plane_info[0].sample_type = decode_uint8 ? NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8
                                                              : NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
         output_info.plane_info[0].precision = decode_uint8 ? 8 : 16;
@@ -2505,11 +2505,11 @@ namespace lfs::io {
                                                      ? NVIMGCODEC_SAMPLING_GRAY
                                                      : NVIMGCODEC_SAMPLING_444;
                 output_info.num_planes = 1;
-                output_info.plane_info[0].height = heights[i];
-                output_info.plane_info[0].width = widths[i];
+                output_info.plane_info[0].height = static_cast<uint32_t>(heights[i]);
+                output_info.plane_info[0].width = static_cast<uint32_t>(widths[i]);
                 output_info.plane_info[0].row_stride =
                     widths[i] * components[i] * sizeof(uint16_t);
-                output_info.plane_info[0].num_channels = components[i];
+                output_info.plane_info[0].num_channels = static_cast<uint32_t>(components[i]);
                 output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
                 output_info.plane_info[0].precision = 16;
                 output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;

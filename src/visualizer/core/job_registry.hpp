@@ -123,8 +123,8 @@ namespace lfs::vis {
             float progress = 0.0F;
             std::string stage;
             std::string error;
-            std::optional<lfs::ErrorCode> error_code;
-            std::optional<lfs::Error> typed_error;
+            std::optional<lfs::ErrorCode> error_code = std::nullopt;
+            std::optional<lfs::Error> typed_error = std::nullopt;
             bool cancel_requested = false;
             bool worker_canceled = false;
         };

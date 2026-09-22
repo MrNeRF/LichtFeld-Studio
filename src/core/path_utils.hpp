@@ -375,7 +375,11 @@ namespace lfs::core {
     inline std::FILE* open_file(const std::filesystem::path& path, const char* mode) {
 #ifdef _WIN32
         const auto wide_mode = utf8_to_wstring(mode != nullptr ? std::string(mode) : std::string{});
-        return wide_mode.empty() ? nullptr : _wfopen(path.wstring().c_str(), wide_mode.c_str());
+        if (wide_mode.empty()) {
+            return nullptr;
+        }
+        std::FILE* file = nullptr;
+        return _wfopen_s(&file, path.c_str(), wide_mode.c_str()) == 0 ? file : nullptr;
 #else
         return std::fopen(path.c_str(), mode);
 #endif

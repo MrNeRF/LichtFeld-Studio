@@ -123,7 +123,7 @@ namespace tinyusdz {
 
             uint64_t count = 0;
             if (VERSION_LESS_THAN_0_8_0(_version)) {
-                [[maybe_unused]] uint32_t shape_size = 0;
+                uint32_t shape_size = 0;
                 uint32_t legacy_count = 0;
                 if (!_sr->read4(&shape_size) || !_sr->read4(&legacy_count)) {
                     return false;

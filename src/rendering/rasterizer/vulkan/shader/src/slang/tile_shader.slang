@@ -101,7 +101,7 @@ void main(
     float4 inv_cov_opac = read_t4_float4(primitive_idx, inv_cov_vs_opacity);
 
     if (uniforms.splat_render_profile == 1u &&
-        is_gut_projection_mode(uniforms.camera_model) && !(uniforms.lod_enabled & 4u)) {
+        is_gut_projection_mode(uniforms.camera_model) && (uniforms.lod_enabled & 4u) == 0u) {
         // The vertex pass counts tiles using an ellipse enclosing the capped
         // portal quad. Emit that same ellipse; the stored inverse covariance
         // remains uncapped for the fragment shader's ray and quad evaluation.

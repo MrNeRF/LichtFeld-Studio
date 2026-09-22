@@ -181,7 +181,7 @@ namespace lfs::vis {
         ThemeVignette vignette;
         ThemeButton button;
         ThemeOverlay overlay;
-        ThemeGradients gradients;
+        ThemeGradients gradients = {};
 
         // Toolbar
         [[nodiscard]] ThemeColor toolbar_background() const;

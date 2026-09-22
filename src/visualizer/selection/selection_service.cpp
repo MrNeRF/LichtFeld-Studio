@@ -2787,7 +2787,7 @@ namespace lfs::vis {
             break;
         case SelectionShape::Rings: {
             if (!session.working_selection.is_valid() || session.working_selection.numel() != total) {
-                resetBoolScratchBuffer(session.working_selection, total);
+                (void)resetBoolScratchBuffer(session.working_selection, total);
                 session.ring_has_hit = false;
             }
             auto& hit = resetBoolScratchBuffer(session.live_delta_selection, total);

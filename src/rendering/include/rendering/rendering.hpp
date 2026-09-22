@@ -81,7 +81,7 @@ namespace lfs::rendering {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
         std::vector<bool> node_visibility_mask;
-        std::vector<int> node_active_sh_degrees; // Empty uses the model-wide limit (e.g. live training).
+        std::vector<int> node_active_sh_degrees = {}; // Empty uses the model-wide limit (e.g. live training).
     };
 
     struct GaussianScopedBoxFilter {

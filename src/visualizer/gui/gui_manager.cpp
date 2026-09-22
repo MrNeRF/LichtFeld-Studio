@@ -2419,43 +2419,6 @@ namespace lfs::vis::gui {
             return alpha;
         }
 
-        [[nodiscard]] glm::vec4 cameraFrustumColor(const lfs::core::Camera& camera,
-                                                   const size_t camera_index,
-                                                   const RenderSettings& settings,
-                                                   const std::span<const glm::vec3> per_camera_colors,
-                                                   const float alpha,
-                                                   const bool focused,
-                                                   const bool disabled,
-                                                   const bool emphasized) {
-            const bool has_override = camera_index < per_camera_colors.size();
-            const bool is_validation = camera.image_name().find("test") != std::string::npos;
-            glm::vec3 color = is_validation ? settings.eval_camera_color : settings.train_camera_color;
-            if (has_override) {
-                const glm::vec3 override_color = per_camera_colors[camera_index];
-                if (std::isfinite(override_color.x) &&
-                    std::isfinite(override_color.y) &&
-                    std::isfinite(override_color.z)) {
-                    color = override_color;
-                }
-            }
-
-            float final_alpha = alpha;
-            if (emphasized) {
-                color = glm::vec3(1.0f, 0.55f, 0.0f);
-                final_alpha = std::min(1.0f, final_alpha + 0.4f);
-            }
-            if (focused) {
-                color = is_validation ? glm::vec3(0.9f, 0.75f, 0.0f)
-                                      : glm::vec3(1.0f, 0.55f, 0.0f);
-                final_alpha = std::min(1.0f, final_alpha + 0.3f);
-            }
-            if (disabled) {
-                color = glm::mix(color, glm::vec3(0.5f), 0.5f);
-                final_alpha *= 0.5f;
-            }
-            return glm::vec4(color, std::clamp(final_alpha, 0.0f, 1.0f));
-        }
-
         [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
             const lfs::core::Camera& camera,
             const glm::mat4& visualizer_camera_to_world,
@@ -2611,9 +2574,9 @@ namespace lfs::vis::gui {
             std::uint64_t hash = 0;
             const glm::mat3 rotation = viewport.getRotationMatrix();
             const glm::vec3 translation = viewport.getTranslation();
-            for (size_t i = 0; i < 9; ++i)
+            for (int i = 0; i < 9; ++i)
                 hashCombine(hash, hashQuantizedFloat(rotation[i / 3][i % 3], 1.0e-6f));
-            for (size_t i = 0; i < 3; ++i)
+            for (int i = 0; i < 3; ++i)
                 hashCombine(hash, hashQuantizedFloat(translation[i], 1.0e-6f));
             return hash;
         }
@@ -2626,7 +2589,7 @@ namespace lfs::vis::gui {
             hashCombine(hash, settings.orthographic);
             hashCombine(hash, settings.equirectangular);
             hashCombine(hash, hashFloat(settings.ortho_scale));
-            for (size_t i = 0; i < 3; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 hashCombine(hash, hashFloat(settings.train_camera_color[i]));
                 hashCombine(hash, hashFloat(settings.eval_camera_color[i]));
             }
@@ -6021,8 +5984,8 @@ namespace lfs::vis::gui {
             localized_rml_language_generation_ = language_generation;
             ui_layout_settle_frames_ = std::max<uint8_t>(ui_layout_settle_frames_, 3);
             if (rmlui_manager_.refreshLocalizedDocuments()) {
-                if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
-                    rendering->markDirty(DirtyFlag::OVERLAY);
+                if (auto* const overlay_rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                    overlay_rendering->markDirty(DirtyFlag::OVERLAY);
             }
         }
 

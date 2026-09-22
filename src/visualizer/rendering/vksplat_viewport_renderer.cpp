@@ -5471,11 +5471,11 @@ namespace lfs::vis {
                         return std::unexpected(
                             "VkSplat q16/f16 SH requires a non-zero shN buffer device address");
                     }
-                    const auto n = splat_data.size();
+                    const auto splat_count = splat_data.size();
                     const auto rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
                     const std::size_t need_bytes = layout->shN_q16
-                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(n, rest) * 2u
-                                                       : lfs::core::sh_swizzled_f16_byte_count(n, rest);
+                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(splat_count, rest) * 2u
+                                                       : lfs::core::sh_swizzled_f16_byte_count(splat_count, rest);
                     if (need_bytes > buffers_.shN_committed_bytes) {
                         return std::unexpected(std::format(
                             "VkSplat shN BDA region is smaller than the live index footprint: "

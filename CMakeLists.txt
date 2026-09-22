@@ -330,6 +330,17 @@ else()
     message(STATUS "Compiler cache: disabled")
 endif()
 
+if(MSVC)
+    foreach(_lfs_language IN ITEMS C CXX CUDA)
+        set(CMAKE_${_lfs_language}_COMPILER_LAUNCHER
+            "${CMAKE_COMMAND}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/NormalizeMsvcFlags.cmake"
+            --
+            ${CMAKE_${_lfs_language}_COMPILER_LAUNCHER})
+    endforeach()
+    unset(_lfs_language)
+endif()
+
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
 set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
 
@@ -379,7 +390,7 @@ if(NVIDIA_SMI)
         set(LichtFeld-Studio_CUDA_ARCH "native")
     endif()
 else()
-    message(WARNING "nvidia-smi not found! We are likely in CI, default to 8.6.")
+    message(STATUS "nvidia-smi not found; using CUDA architecture 8.6 for this build")
     set(DETECTED_COMPUTE_CAP 8.6)
     set(LichtFeld-Studio_CUDA_ARCH "86")
 endif()
@@ -557,6 +568,10 @@ endif()
 
 if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+else()
+    # Device debug already includes line information; passing both flags makes
+    # nvcc and ptxas warn about the redundant, overridden -lineinfo option.
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>)
 endif()
 
 add_compile_definitions(

@@ -31,7 +31,7 @@ namespace lfs::vis::gui {
         std::optional<GalleryEncodedAsset> encoded;
         // An isolated document can supply tensors lazily on the export worker.
         // Empty for the live path, which already owns a SplatSnapshot.
-        std::function<std::shared_ptr<core::SplatData>()> load_payload;
+        std::function<std::shared_ptr<core::SplatData>()> load_payload = {};
         bool metadata_known = true;
     };
 

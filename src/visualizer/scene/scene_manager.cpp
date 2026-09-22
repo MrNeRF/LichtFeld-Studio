@@ -2239,7 +2239,7 @@ namespace lfs::vis {
             }
 
             glm::vec3 vertex(int64_t i) const {
-                assert(i >= 0 && i < verts_cpu.size(0));
+                assert(i >= 0 && static_cast<uint64_t>(i) < verts_cpu.size(0));
                 const float* p = verts_cpu.ptr<float>() + i * 3;
                 return {p[0], p[1], p[2]};
             }

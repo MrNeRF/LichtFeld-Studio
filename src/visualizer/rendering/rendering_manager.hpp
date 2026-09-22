@@ -93,7 +93,7 @@ namespace lfs::vis {
         };
 
         struct VulkanFrameResult {
-            std::shared_ptr<const lfs::core::Tensor> image;
+            std::shared_ptr<const lfs::core::Tensor> image = {};
             VkImage external_image = VK_NULL_HANDLE;
             VkImageView external_image_view = VK_NULL_HANDLE;
             VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;

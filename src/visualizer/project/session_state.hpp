@@ -98,8 +98,8 @@ namespace lfs::vis {
             lfs::io::project::ProjectSessionChapters chapters;
             // REFS-resolved paths (open-time). Apply injects these into live
             // owners; VIEW/SEQR chapters store UUIDs, not raw machine paths.
-            std::optional<std::filesystem::path> environment_map_path;
-            std::optional<std::filesystem::path> ply_sequence_directory;
+            std::optional<std::filesystem::path> environment_map_path = std::nullopt;
+            std::optional<std::filesystem::path> ply_sequence_directory = std::nullopt;
             std::uint64_t ticket = 0;
         };
 

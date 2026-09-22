@@ -363,14 +363,14 @@ namespace lfs::vis::gui {
         // Position only after layout, so flipping and clamping use the real
         // dimensions of the localized menu and its current font/theme.
         if (open_ && el_ctx_menu_) {
-            const float dp = std::max(mgr_->getDpRatio(), 1.0f);
+            const float menu_dp = std::max(mgr_->getDpRatio(), 1.0f);
             const auto menu_size = el_ctx_menu_->GetBox().GetSize(Rml::BoxArea::Border);
             const auto placement = placeContextMenu(
                 pending_x_, pending_y_, screen_x, screen_y,
                 static_cast<float>(w), static_cast<float>(h),
-                menu_size.x, menu_size.y, 4.0f * dp);
-            const float left_dp = placement.left / dp;
-            const float top_dp = placement.top / dp;
+                menu_size.x, menu_size.y, 4.0f * menu_dp);
+            const float left_dp = placement.left / menu_dp;
+            const float top_dp = placement.top / menu_dp;
             if (left_dp != last_menu_left_dp_ || top_dp != last_menu_top_dp_) {
                 el_ctx_menu_->SetProperty("left", std::format("{:.2f}dp", left_dp));
                 el_ctx_menu_->SetProperty("top", std::format("{:.2f}dp", top_dp));

@@ -250,9 +250,9 @@ namespace lfs::vis::project {
             const glm::mat3& value) {
             std::array<float, 9> result{};
             std::size_t index = 0;
-            for (std::size_t column = 0;
+            for (int column = 0;
                  column < 3; ++column) {
-                for (std::size_t row = 0;
+                for (int row = 0;
                      row < 3; ++row) {
                     result[index++] =
                         value[column][row];
@@ -265,9 +265,9 @@ namespace lfs::vis::project {
             const std::array<float, 9>& value) {
             glm::mat3 result{1.0f};
             std::size_t index = 0;
-            for (std::size_t column = 0;
+            for (int column = 0;
                  column < 3; ++column) {
-                for (std::size_t row = 0;
+                for (int row = 0;
                      row < 3; ++row) {
                     result[column][row] =
                         value[index++];
@@ -2496,7 +2496,7 @@ namespace lfs::vis::project {
                 retained_uuid;
             if (retained_clips &&
                 retained_clips->is_array()) {
-                const auto retained =
+                const auto retained_clip =
                     std::ranges::find_if(
                         *retained_clips,
                         [&](const Json& item) {
@@ -2507,13 +2507,13 @@ namespace lfs::vis::project {
                                        clip->node_uuid
                                            .to_string();
                         });
-                if (retained !=
+                if (retained_clip !=
                     retained_clips->end()) {
                     const auto reference =
-                        retained->find(
+                        retained_clip->find(
                             "directory_reference_uuid");
                     if (reference !=
-                            retained->end() &&
+                            retained_clip->end() &&
                         reference->is_string()) {
                         retained_uuid =
                             lfs::core::Uuid::

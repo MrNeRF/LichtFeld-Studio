@@ -650,8 +650,8 @@ namespace lfs::vis::gui {
 
         if (!input.viewport_keyboard_focus &&
             rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement())) {
-            const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                          input.key_alt, input.key_super);
+            const int focused_mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                                  input.key_alt, input.key_super);
             for (int sc : input.keys_pressed) {
                 if (sc == SDL_SCANCODE_ESCAPE && rml_input::cancelFocusedElement(*rml_context_)) {
                     result.escape_consumed = true;
@@ -661,7 +661,7 @@ namespace lfs::vis::gui {
 
                 const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyDown(rml_key, mods);
+                    rml_context_->ProcessKeyDown(rml_key, focused_mods);
                     result.event_forwarded = true;
                 }
             }
@@ -672,7 +672,7 @@ namespace lfs::vis::gui {
 
                 const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyUp(rml_key, mods);
+                    rml_context_->ProcessKeyUp(rml_key, focused_mods);
                     result.event_forwarded = true;
                 }
             }

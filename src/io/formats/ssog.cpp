@@ -794,7 +794,7 @@ namespace lfs::io {
                                                (56.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
                                            128.0 * 1024 * 1024;
             const size_t resident_workers = resident
-                                                ? std::max<size_t>(1, (free_cuda - resident_bytes) / workspace_bytes)
+                                                ? std::max<size_t>(1, static_cast<size_t>((free_cuda - resident_bytes) / workspace_bytes))
                                                 : 1;
             const size_t cpu_workers = units.size() > 6
                                            ? std::clamp<size_t>(std::thread::hardware_concurrency() / 4, 1, 6)

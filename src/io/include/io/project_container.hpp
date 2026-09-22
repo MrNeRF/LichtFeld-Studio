@@ -268,7 +268,7 @@ namespace lfs::io::project {
         std::uint64_t commit_offset = 0;
         std::uint64_t committed_file_end = 0;
         std::uint32_t commit_crc32c_echo = 0;
-        std::optional<PreviewLocator> preview;
+        std::optional<PreviewLocator> preview = std::nullopt;
         std::uint32_t head_crc32c = 0;
     };
 
@@ -523,33 +523,33 @@ namespace lfs::io::project {
         lfs::core::Uuid project_uuid;
         lfs::core::Uuid file_uuid;
         ContainerRole role = ContainerRole::Master;
-        lfs::core::Uuid base_explicit_commit_uuid;
+        lfs::core::Uuid base_explicit_commit_uuid = {};
         std::uint64_t autosave_sequence = 0;
-        lfs::core::Uuid sidecar_snapshot_uuid;
+        lfs::core::Uuid sidecar_snapshot_uuid = {};
         std::uint64_t creation_time_unix_ns = 0;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        CommitBoundaryObserver boundary_observer;
+        CommitBoundaryObserver boundary_observer = {};
         // Sidecars use the master path here so creation, replacement, and
         // recovery cleanup all share the master's exclusive writer lock.
         ReaderOptions writer_lock_anchor_compatibility = {};
-        std::optional<std::filesystem::path> writer_lock_anchor;
+        std::optional<std::filesystem::path> writer_lock_anchor = std::nullopt;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
     };
 
     struct AppendOptions {
-        ReaderOptions compatibility;
+        ReaderOptions compatibility = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        CommitBoundaryObserver boundary_observer;
+        CommitBoundaryObserver boundary_observer = {};
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
         // Writers that must not lose their generation to a transient
         // in-process lock holder wait instead of failing immediately.
         std::chrono::milliseconds writer_lock_wait{0};
-        lfs::core::Uuid expected_project_uuid;
-        lfs::core::Uuid expected_commit_uuid;
+        lfs::core::Uuid expected_project_uuid = {};
+        lfs::core::Uuid expected_commit_uuid = {};
     };
 
     struct ChunkWriteOptions {
@@ -557,12 +557,12 @@ namespace lfs::io::project {
         Compression compression = Compression::Stored;
         bool tensor_payload = false;
         bool block_crcs = false;
-        std::optional<std::uint64_t> expected_stream_bytes;
+        std::optional<std::uint64_t> expected_stream_bytes = std::nullopt;
     };
 
     struct CommitOptions {
         CommitKind kind = CommitKind::Explicit;
-        lfs::core::Uuid commit_uuid;
+        lfs::core::Uuid commit_uuid = {};
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t wallclock_unix_ns = 0;
         // The 1.1 container can still carry 1.0-compatible commits.  A
@@ -592,13 +592,13 @@ namespace lfs::io::project {
         // must complete the final append, full CRC verification, and durable
         // publication before exposing it as the destination.
         bool private_staging = false;
-        std::function<void(float, const std::string&)> progress;
-        std::function<bool()> cancel;
+        std::function<void(float, const std::string&)> progress = {};
+        std::function<bool()> cancel = {};
         // Optional PROJ metadata prepared by a closed-file Contents operation.
         // It is published atomically with the compacted file.
-        std::vector<std::byte> project_chapter_override;
+        std::vector<std::byte> project_chapter_override = {};
         // Closed-file cleanup excludes only checkpoints not bound to the scene.
-        std::vector<lfs::core::Uuid> excluded_checkpoints;
+        std::vector<lfs::core::Uuid> excluded_checkpoints = {};
         lfs::core::Uuid expected_source_commit_uuid = {};
     };
 

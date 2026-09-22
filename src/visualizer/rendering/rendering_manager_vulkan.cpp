@@ -807,7 +807,7 @@ namespace lfs::vis {
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
                     if (dist_from_split < kMinBarWidthPx * 0.5f) {
-                        glm::vec3 color = kDividerColor;
+                        glm::vec3 divider_color = kDividerColor;
                         const float dist_from_center =
                             std::abs(static_cast<float>(y) + 0.5f - center_y);
                         const float handle_h = std::min(kHandleHeightPx, static_cast<float>(rect_h));
@@ -821,19 +821,19 @@ namespace lfs::vis {
                                 (glm::vec2(handle_w, handle_h) * 0.5f - glm::vec2(corner_radius));
                             if (corner_dist.x <= 0.0f || corner_dist.y <= 0.0f ||
                                 glm::length(corner_dist) <= corner_radius) {
-                                color = kDividerColor * 0.8f;
+                                divider_color = kDividerColor * 0.8f;
                                 const float local_y = static_cast<float>(y) + 0.5f - center_y;
                                 for (int i = -kGripLineCount; i <= kGripLineCount; ++i) {
                                     const float line_y = static_cast<float>(i) * kGripSpacingPx;
                                     if (std::abs(local_y - line_y) < kGripWidthPx &&
                                         dist_from_split < kGripLengthPx * 0.5f) {
-                                        color = glm::vec3(0.9f);
+                                        divider_color = glm::vec3(0.9f);
                                         break;
                                     }
                                 }
                             }
                         }
-                        write(idx, color);
+                        write(idx, divider_color);
                     }
                 }
             }

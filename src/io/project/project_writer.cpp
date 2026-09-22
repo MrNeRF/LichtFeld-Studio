@@ -3130,18 +3130,18 @@ namespace lfs::io::project {
                     std::move(boundary).error(),
                     "replacement-published observer");
             }
-            if (auto validation =
+            if (auto published_validation =
                     validate_authority(impl_->destination_path);
-                !validation) {
+                !published_validation) {
                 auto rollback = detail::rollback_atomic_replace(
                     *replacement, impl_->destination_path);
                 if (!rollback) {
-                    lfs::Error error = std::move(validation).error();
+                    lfs::Error error = std::move(published_validation).error();
                     error = std::move(error).with_suppressed(
                         std::move(rollback).error());
                     return status_failure(std::move(error));
                 }
-                return validation;
+                return published_validation;
             }
             impl_->committed = true;
             impl_->cursor = *committed_end;
