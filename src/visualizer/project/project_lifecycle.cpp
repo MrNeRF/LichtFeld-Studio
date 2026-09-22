@@ -6291,7 +6291,10 @@ namespace lfs::vis::project {
             const bool splat_already_captured =
                 fourcc == "SPLT" &&
                 captured_splat != captured_splat_serials_.end() &&
-                captured_splat->second >= sync_scene_serial;
+                // A rename or selection change can advance the scene serial
+                // while a capture finishes. Its bytes are still current when
+                // geometry is clean, and its provenance must still be recorded.
+                (captured_splat->second >= sync_scene_serial || !capture_payloads);
             if (fourcc == "SPLT") {
                 live_splats.insert(node->uuid);
             } else if (fourcc == "PCLD") {
