@@ -1322,6 +1322,9 @@ if(TARGET nvimgcodec)
     install(TARGETS nvimgcodec
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        # Keep SDK headers out of the application's default runtime install.
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT Development EXCLUDE_FROM_ALL
     )
     if(TARGET nvjpeg_ext)
         install(TARGETS nvjpeg_ext
