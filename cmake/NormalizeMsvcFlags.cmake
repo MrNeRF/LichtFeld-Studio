@@ -44,18 +44,21 @@ foreach(_lfs_index RANGE ${_lfs_first_argument} ${_lfs_last_argument})
     endif()
 endforeach()
 
-set(_lfs_command "")
+set(_lfs_command "execute_process(COMMAND")
 foreach(_lfs_index RANGE ${_lfs_first_argument} ${_lfs_last_argument})
     set(_lfs_argument "${CMAKE_ARGV${_lfs_index}}")
     _lfs_flag_group("${_lfs_argument}" _lfs_group)
     if(NOT _lfs_group STREQUAL "" AND NOT _lfs_index EQUAL _lfs_last_${_lfs_group})
         continue()
     endif()
-    string(REPLACE ";" "\\;" _lfs_argument "${_lfs_argument}")
-    list(APPEND _lfs_command "${_lfs_argument}")
+    # CMake lists cannot preserve an element ending in a backslash, as used by
+    # MSVC's /Fd directory argument. Evaluate quoted references to the original
+    # argv entries so backslashes, semicolons and empty arguments stay intact.
+    string(APPEND _lfs_command " \"\${CMAKE_ARGV${_lfs_index}}\"")
 endforeach()
 
-execute_process(COMMAND ${_lfs_command} RESULT_VARIABLE _lfs_result)
+string(APPEND _lfs_command " RESULT_VARIABLE _lfs_result)")
+cmake_language(EVAL CODE "${_lfs_command}")
 if(_lfs_result MATCHES "^[0-9]+$")
     cmake_language(EXIT ${_lfs_result})
 endif()
