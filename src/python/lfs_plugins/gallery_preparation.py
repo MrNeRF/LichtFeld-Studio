@@ -170,6 +170,35 @@ def publication_view_metadata(root, value):
         return result
 
 
+def publication_preview(png):
+    """Keep admissible covers unchanged; bound full viewport captures for upload."""
+    import struct
+    import tempfile
+
+    message = "The project thumbnail must be a bounded PNG image."
+    if (not isinstance(png, bytes) or not 33 <= len(png) <= 16 * 1024**2
+            or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR"):
+        raise ValueError(message)
+    width, height = struct.unpack_from(">II", png, 16)
+    if not (0 < width <= 32768 and 0 < height <= 32768 and width * height <= 32 * 1024**2):
+        raise ValueError(message)
+    if len(png) <= 2 * 1024**2 and max(width, height) <= 2048:
+        return png
+
+    import lichtfeld as lf
+    # Reuse the native 512-pixel project thumbnail encoder, including on Windows.
+    # Keep the selected preview pinned; never read a later project generation.
+    with tempfile.TemporaryDirectory(prefix="lfs-gallery-preview-") as directory:
+        source = Path(directory) / "preview.png"
+        source.write_bytes(png)
+        bounded = lf.io.encode_preview_from_image_file(source)
+    if (not isinstance(bounded, bytes) or not 33 <= len(bounded) <= 2 * 1024**2
+            or bounded[:8] != b"\x89PNG\r\n\x1a\n" or bounded[12:16] != b"IHDR"
+            or not all(0 < n <= 2048 for n in struct.unpack_from(">II", bounded, 16))):
+        raise ValueError(message)
+    return bounded
+
+
 def attach_preview(path, png, *, cancel=None):
     """Add THMB to the fresh publishing subset, preserving every scene payload.
 
@@ -185,10 +214,7 @@ def attach_preview(path, png, *, cancel=None):
     temporary = path.with_name("project.licht.preview.tmp")
     if path.name != "project.licht" or path.is_symlink() or temporary.is_symlink():
         raise ValueError("The prepared project was redirected.")
-    if (not isinstance(png, bytes) or not 33 <= len(png) <= 2 * 1024**2
-            or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR"
-            or not all(0 < n <= 2048 for n in struct.unpack_from(">II", png, 16))):
-        raise ValueError("The project thumbnail must be a bounded PNG image.")
+    png = publication_preview(png)
     def aligned(value):
         return (value + 63) // 64 * 64
     def checksum(value):

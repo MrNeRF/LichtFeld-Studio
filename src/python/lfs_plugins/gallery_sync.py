@@ -125,7 +125,9 @@ def _validate_journal(data):
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId"))
             optional_text(job, ("failureReason", "previewPng", "destinationPath", "downloadProject"))
-            require(len(job.get("previewPng", "")) <= 3 * 1024**2)
+            # Older writers saved full viewport PNGs here. The whole journal is
+            # already byte-bounded; one oversized cover must not hide every link
+            # and upload key. Validate/resize its image when preparing that job.
             if "handoff" in job:
                 handoff = job["handoff"]
                 require(data["version"] == 3 and isinstance(handoff, dict))
@@ -297,6 +299,7 @@ class GallerySync:
             with self._lock:
                 self._check_journal_ready()
                 self._prune_jobs()
+                _validate_journal(self._data)
                 encoded = json.dumps(self._data, allow_nan=False)
                 if len(encoded.encode()) > MAX_JOURNAL_BYTES:
                     raise ValueError("Gallery transfer history is too large to save. Keep the recovery folder for help.")
@@ -788,7 +791,9 @@ class GallerySync:
             job["publishAsNew"] = job["metadata"].pop("_publishAsNew", False)
             preview = job["metadata"].pop("_previewPng", None)
             if preview is not None:
-                job["previewPng"] = preview
+                import base64
+                job["previewPng"] = base64.b64encode(gallery_preparation.publication_preview(
+                    base64.b64decode(preview, validate=True))).decode("ascii")
             handoff = job["metadata"].pop("_handoff", None)
             target = job["metadata"].get("replaceSceneId")
             if target and not handoff and (linked or {}).get("sceneId") != target and any(key != project_id and value["sceneId"] == target
@@ -1685,6 +1690,7 @@ class GallerySync:
                 self._unlink_temporary(path)
             job.pop("cleanupPending", None)
             job["preparedRemoved"] = True
+            job.pop("previewPng", None)
             self._save()
             log_stage("export_cleanup", job_id=job["id"], path=job["path"], status=job["status"])
         except (ValueError, OSError) as exc:

@@ -1317,7 +1317,7 @@ class GalleryController:
                 raise ValueError(tr("error.project_changed"))
             if not preview:
                 raise ValueError(tr("error.preview"))
-            metadata["_previewPng"] = base64.b64encode(preview).decode("ascii")
+            metadata["_previewPng"] = base64.b64encode(gallery_preparation.publication_preview(preview)).decode("ascii")
 
     def _owns_export(self, state):
         return bool(self._export_pending and state.get("path")
