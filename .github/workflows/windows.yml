@@ -122,6 +122,9 @@ jobs:
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Normalize vcpkg path
+        run: '"VCPKG_ROOT=$([System.IO.Path]::GetFullPath($env:VCPKG_ROOT))" >> $env:GITHUB_ENV'
+
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
         uses: actions/cache@v6

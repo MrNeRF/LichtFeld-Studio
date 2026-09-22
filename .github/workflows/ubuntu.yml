@@ -89,6 +89,9 @@ jobs:
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
 
+      - name: Normalize vcpkg path
+        run: echo "VCPKG_ROOT=$(realpath -m "$VCPKG_ROOT")" >> "$GITHUB_ENV"
+
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
         uses: actions/cache@v6
