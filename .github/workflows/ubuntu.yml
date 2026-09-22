@@ -39,7 +39,7 @@ jobs:
           apt-get install -y git
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
@@ -91,7 +91,7 @@ jobs:
 
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_ROOT }}
           key: vcpkg-tool-${{ runner.os }}-2026-02-21
@@ -112,14 +112,14 @@ jobs:
           EOF
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /github/home/.cache/ccache
           key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
 
       - name: Cache vcpkg packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /github/home/.cache/vcpkg/archives
           key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
@@ -161,7 +161,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Generate error-debt census
         run: python3 tools/error_debt_census.py > error-debt-census.json
@@ -174,7 +174,7 @@ jobs:
 
       - name: Upload error-debt census
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: error-debt-census
           path: error-debt-census.json

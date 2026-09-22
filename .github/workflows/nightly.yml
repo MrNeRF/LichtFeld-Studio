@@ -50,7 +50,7 @@ jobs:
     steps:
       - name: Decide whether package build is needed
         id: decide
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const inputs = context.payload.inputs || {};
@@ -191,7 +191,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
@@ -211,7 +211,7 @@ jobs:
 
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_ROOT }}
           key: vcpkg-tool-${{ runner.os }}-2026-03-12
@@ -225,7 +225,7 @@ jobs:
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
       - name: Cache vcpkg_installed
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.BUILD_DIR }}/vcpkg_installed
           key: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
@@ -326,7 +326,7 @@ jobs:
       # GitHub Actions artifact quota.
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-nightly-diagnostics-${{ github.run_number }}
           if-no-files-found: ignore
