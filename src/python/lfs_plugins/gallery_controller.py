@@ -1266,7 +1266,8 @@ class GalleryController:
         pending = job["_register"]
         if self.service.busy:
             return
-        if pending.get("canceled") or self._import_detached or job["_accountIdentity"] != self.service.identity():
+        if (pending.get("canceled") and pending["phase"] == "staging"
+                or self._import_detached or job["_accountIdentity"] != self.service.identity()):
             self._import_pending = None
             self._message = tr("error.account_changed" if self._import_detached else "info.canceled")
             return

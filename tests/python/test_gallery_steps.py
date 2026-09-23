@@ -311,7 +311,8 @@ def test_download_keep_cancel_characterization(open_case, phase):
         panel._finish_register_download(panel._import_pending)
     panel._action_pause()
     panel._finish_register_download(panel._import_pending)
-    assert panel._import_pending is None and panel._pulled_project is None
+    assert panel._import_pending is None
+    assert (panel._pulled_project is not None) is (phase == "linking")
     assert actions == (["viewing copy", "link requested"] if phase == "linking" else [])
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == "ready"
@@ -331,6 +332,20 @@ def test_download_keep_failure_characterization(open_case, phase):
         panel._finish_register_download(panel._import_pending)
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == ("failed" if phase == "linking" else "ready")
+
+
+def test_cancel_after_download_link_submission_reports_completed_link(open_case):
+    panel, state, actions, source, opened, stage, journal = open_case
+    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+        "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
+    panel._finish_register_download(panel._import_pending)
+    assert actions == ["viewing copy", "link requested"]
+    panel._action_pause()
+    panel._finish_register_download(panel._import_pending)
+    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    assert panel._import_pending is None
+    assert journal["linkOperation"]["state"] == "ready"
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
 
 
 @pytest.mark.parametrize("outcome,keeps_export,queued", [
