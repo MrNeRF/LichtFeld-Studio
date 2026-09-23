@@ -134,122 +134,15 @@ class GalleryController:
         self._operation_project = project
         self._operation_title = title
 
-    @property
-    def _export_pending(self):
-        return self._publish_steps.pending
+    def _active_import_steps(self):
+        return self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
 
-    @_export_pending.setter
-    def _export_pending(self, value):
-        self._publish_steps.pending = value
-
-    @property
-    def _prepared_commit(self):
-        return self._publish_steps.prepared_commit
-
-    @_prepared_commit.setter
-    def _prepared_commit(self, value):
-        self._publish_steps.prepared_commit = value
-
-    @property
-    def _export_cancelled(self):
-        return self._publish_steps.cancelled
-
-    @_export_cancelled.setter
-    def _export_cancelled(self, value):
-        self._publish_steps.cancelled = value
-
-    @property
-    def _export_identity(self):
-        return self._publish_steps.identity
-
-    @_export_identity.setter
-    def _export_identity(self, value):
-        self._publish_steps.identity = value
-
-    @property
-    def _export_progress(self):
+    def _active_preparation_steps(self):
         if self._local_update_steps.pending:
-            return self._local_update_steps.progress
+            return self._local_update_steps
         if self._download_open_steps.pending:
-            return self._download_open_steps.progress
-        return self._publish_steps.progress
-
-    @_export_progress.setter
-    def _export_progress(self, value):
-        if self._local_update_steps.pending:
-            self._local_update_steps.progress = value
-        elif self._download_open_steps.pending:
-            self._download_open_steps.progress = value
-        else:
-            self._publish_steps.progress = value
-
-    @property
-    def _preparation_failure(self):
-        return self._publish_steps.preparation_failure
-
-    @_preparation_failure.setter
-    def _preparation_failure(self, value):
-        self._publish_steps.preparation_failure = value
-
-    @property
-    def _reupload_reason(self):
-        return self._publish_steps.reupload_reason
-
-    @_reupload_reason.setter
-    def _reupload_reason(self, value):
-        self._publish_steps.reupload_reason = value
-
-    @property
-    def _import_pending(self):
-        return self._local_update_steps.pending or self._download_open_steps.pending
-
-    @_import_pending.setter
-    def _import_pending(self, value):
-        if value is None:
-            self._local_update_steps.pending = None
-            self._download_open_steps.pending = None
-        elif value.get("_update"):
-            self._local_update_steps.pending = value
-            self._download_open_steps.pending = None
-        else:
-            self._download_open_steps.pending = value
-            self._local_update_steps.pending = None
-
-    @property
-    def _import_detached(self):
-        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
-        return machine.detached
-
-    @_import_detached.setter
-    def _import_detached(self, value):
-        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
-        machine.detached = value
-
-    @property
-    def _import_started(self):
-        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
-        return machine.started
-
-    @_import_started.setter
-    def _import_started(self, value):
-        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
-        machine.started = value
-
-    @property
-    def _pull_overrides(self):
-        return self._local_update_steps.overrides
-
-    @_pull_overrides.setter
-    def _pull_overrides(self, value):
-        self._local_update_steps.overrides = value
-
-    @property
-    def _pulled_project(self):
-        return self._download_open_steps.pulled_project
-
-    @_pulled_project.setter
-    def _pulled_project(self, value):
-        self._download_open_steps.pulled_project = value
+            return self._download_open_steps
+        return self._publish_steps
 
     def _account_changed(self, _state):
         def update():
@@ -407,7 +300,7 @@ class GalleryController:
             raise ValueError(tr("error.project_changed"))
         self._operation_project = project
         self._operation_title = details.get("title") or asset.get("name", "")
-        self._reupload_reason = None
+        self._publish_steps.reupload_reason = None
         self._last_canceled = False
         scene = None
         if update:
@@ -531,11 +424,11 @@ class GalleryController:
                         local_environment_path = None
                         if decisions.get("view") != "gallery":
                             local_environment_path = str(lf.get_render_settings().environment_map_path) if view.get("environment") else ""
-                        self._pull_overrides = (scene["id"], metadata, identity, publish, local_environment_path)
+                        self._local_update_steps.overrides = (scene["id"], metadata, identity, publish, local_environment_path)
                         try:
                             self.pull_asset(asset, scene)
                         except Exception:
-                            self._pull_overrides = None
+                            self._local_update_steps.overrides = None
                             raise
                     else:
                         self._begin_settings_apply(asset, scene, metadata,
@@ -813,7 +706,7 @@ class GalleryController:
             else:
                 def apply(job=job):
                     self._refresh_model()
-                    if self._pull_overrides and self._pull_overrides[0] == job["result"]["id"]:
+                    if self._local_update_steps.overrides and self._local_update_steps.overrides[0] == job["result"]["id"]:
                         self._begin_local_update(job, self._project_identity())
                     else:
                         self._action_update_local(job["id"])
@@ -853,7 +746,7 @@ class GalleryController:
                     kind="upload", status="paused", interrupted=True, handoffIntent=True, completed=0, total=0,
                     metadata={"title": tr("replacement.title")}, message=tr("state.interrupted")))
         state["batchQueued"] = len(self._update_queue)
-        state["preparationFailure"] = dict(self._preparation_failure, nativePreparation=True) if self._preparation_failure else None
+        state["preparationFailure"] = dict(self._publish_steps.preparation_failure, nativePreparation=True) if self._publish_steps.preparation_failure else None
         state["jobs"].extend({"id": "queue:" + entry["asset"]["id"], "project": entry["asset"]["id"],
             "status": "queued", "kind": "upload", "batchQueued": True,
             "metadata": {"title": entry["scene"].get("title") or entry["asset"].get("name", "")}}
@@ -879,10 +772,10 @@ class GalleryController:
                     message=localize_message(self._message or state.get("message", "")),
                     actionError=localize_message(self._failure_notice),
                     actionErrorId=(state.get("actionFailure") or {}).get("id", ""),
-                    phase=self.phase(), preparationProgress=self._export_progress,
+                    phase=self.phase(), preparationProgress=self._active_preparation_steps().progress,
                     undoPull=copy.deepcopy(self._undo_pull), undoHistory=undo_history,
                     operationProject=self._operation_project,
-                    pulledProject=copy.deepcopy(self._pulled_project), reuploadReason=copy.deepcopy(self._reupload_reason))
+                    pulledProject=copy.deepcopy(self._download_open_steps.pulled_project), reuploadReason=copy.deepcopy(self._publish_steps.reupload_reason))
 
     def undo_records(self, state=None):
         state = self.service.snapshot() if state is None else state
@@ -957,9 +850,9 @@ class GalleryController:
         self._message = pending["error"]
 
     def phase(self):
-        if self._import_pending or getattr(self, "_settings_pending", None):
+        if self._active_import_steps().pending or getattr(self, "_settings_pending", None):
             return "applying"
-        if self._export_pending or self._save_pending:
+        if self._publish_steps.pending or self._save_pending:
             return "preparing"
         return "idle"
 
@@ -1160,12 +1053,12 @@ class GalleryController:
         self._refresh_model()
 
     def _panel_busy(self):
-        return self.service.busy or self._decision_pending or bool(self._export_pending or self._import_pending or self._save_pending or self._settings_pending or self._native_use)
+        return self.service.busy or self._decision_pending or bool(self._publish_steps.pending or self._active_import_steps().pending or self._save_pending or self._settings_pending or self._native_use)
 
     def _metadata_busy(self):
         self._release_native_use()
         return (getattr(self.service, "metadata_busy", self.service.busy) or self._decision_pending
-                or bool(self._export_pending or self._import_pending or self._save_pending or self._settings_pending or self._native_use))
+                or bool(self._publish_steps.pending or self._active_import_steps().pending or self._save_pending or self._settings_pending or self._native_use))
 
     def _check_identity(self):
         identity = self.service.identity()
@@ -1174,10 +1067,10 @@ class GalleryController:
         self._identity = identity
         self._state = dict(self._state, scenes=[], links={}, jobs=[], posters={}, identity=identity)
         self._last_snapshot = None
-        self._reupload_reason = None
-        self._preparation_failure = None
+        self._publish_steps.reupload_reason = None
+        self._publish_steps.preparation_failure = None
         self._failure_notice = ""
-        self._pulled_project = None
+        self._download_open_steps.pulled_project = None
         self._update_queue = []
         self._batch_rows = []
         self._batch_retries = {}
@@ -1185,7 +1078,7 @@ class GalleryController:
         self._pull_requests.clear()
         self._cancel_requests.clear()
         self._open_continuation = None
-        self._pull_overrides = None
+        self._local_update_steps.overrides = None
         self._undo_pull = None
         self._settings_pending = None
         self._after_service = None
@@ -1195,17 +1088,17 @@ class GalleryController:
         self._refresh_pending = False
         self._refresh_requested = bool(identity[-1])
         self.service.pause()
-        if self._export_pending:
+        if self._publish_steps.pending:
             self._cancel_own_export()
-            self._export_cancelled = True
+            self._publish_steps.cancelled = True
         if self._save_pending:
             self._save_pending["canceled"] = True
-        if self._import_pending:
+        if self._active_import_steps().pending:
             # Keep tracking owned native work, but never register or link the
             # previous account's download after a switch.
-            self._import_detached = True
+            self._active_import_steps().detached = True
         self._message = "Account changed. Refresh to load your gallery."
-        if self._import_pending:
+        if self._active_import_steps().pending:
             self._message = "Account changed. Finishing the local import without linking it to this account."
         return True
 
@@ -1223,7 +1116,7 @@ class GalleryController:
         self._native_use = guard
 
     def _release_native_use(self):
-        if self._native_use is None or self._import_pending:
+        if self._native_use is None or self._active_import_steps().pending:
             return
         if getattr(self.service, "metadata_busy", self.service.busy) or lf.ui.get_import_state().get("active"):
             self._schedule_poll()
@@ -1241,27 +1134,27 @@ class GalleryController:
                 self._finish_current_project_save()
                 if self._save_pending:
                     return
-            if self._export_pending:
+            if self._publish_steps.pending:
                 self._finish_export()
-            if self._import_pending:
+            if self._active_import_steps().pending:
                 self._finish_import()
-                if self._import_pending:
+                if self._active_import_steps().pending:
                     native = lf.ui.get_import_state()
                     # The model refreshes when the service version changes.
                     # Progress painting must not clone the full history per frame.
-                    current = next((j for j in self._state["jobs"] if j["id"] == self._import_pending["id"]), {})
+                    current = next((j for j in self._state["jobs"] if j["id"] == self._active_import_steps().pending["id"]), {})
                     staged = current.get("stagedImport", {})
-                    self._export_progress = (100 * native.get("progress", 0) if native.get("active") else
+                    self._active_preparation_steps().progress = (100 * native.get("progress", 0) if native.get("active") else
                         min(100, 100 * staged.get("completed", 0) / max(1, staged.get("total", 0))))
         except Exception as exc:
             log_failure("advance_phases", exc)
             self._discard_update_preview()
             self._fail_settings_apply(exc)
-            pending = self._import_pending
+            pending = self._active_import_steps().pending
             if (pending and not self.service.busy and pending.get("_accountIdentity") == self.service.identity()
                     and callable(getattr(self.service, "fail_local_update", None))):
                 self.service.fail_local_update(pending["id"], friendly_error(exc))
-            self._export_pending = self._import_pending = self._save_pending = None
+            self._publish_steps.pending = self._local_update_steps.pending = self._download_open_steps.pending = self._save_pending = None
             self._message = friendly_error(exc)
             self._failure_notice = self._message
             self._refresh_model()
@@ -1307,7 +1200,7 @@ class GalleryController:
             raise ValueError("The project could not be saved. Resolve the save error before uploading.")
         self._save_pending = {"project": project, "identity": identity, "generation": generation + 1,
             "continuation": continuation}
-        self._export_progress = 0
+        self._active_preparation_steps().progress = 0
         self._message = "Saving your current project…"
         self._schedule_poll()
 
@@ -1397,9 +1290,9 @@ class GalleryController:
     def _action_pause(self):
         if self._save_pending:
             self._save_pending["canceled"] = True
-        if self._export_pending:
+        if self._publish_steps.pending:
             self._cancel_own_export()
-            self._export_cancelled = True
+            self._publish_steps.cancelled = True
             self._message = "Canceling scene preparation…"
         self._local_update_steps.cancel()
         self._download_open_steps.cancel()
