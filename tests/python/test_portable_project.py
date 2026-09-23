@@ -188,6 +188,21 @@ def test_gallery_publishing_corpus():
                     raise AssertionError(f'{name} unexpectedly accepted')
 
 
+def test_gallery_publishing_zip_timestamps_are_fixed():
+    corpus = FIXTURES / 'gallery_publishing'
+    for name in ('license_case.sog', 'valid_ssog_license.licht'):
+        if name.endswith('.licht'):
+            project = codec.ProjectFile(io.BytesIO((corpus / name).read_bytes()))
+            output = io.BytesIO()
+            project.copy_node(0, output)
+            stream = output
+        else:
+            stream = corpus / name
+        with ZipFile(stream) as archive:
+            for member in archive.infolist():
+                assert member.date_time == (1980, 1, 1, 0, 0, 0)
+
+
 def _validate(payload, count):
     return codec.validate_spz(codec.SliceReader(io.BytesIO(payload), 0, len(payload)), count)
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import struct
 import sys
 import uuid
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / 'src' / 'python'))
@@ -55,11 +55,11 @@ def zip_payload(kind, *, license_name=None, license_method=ZIP_STORED, license_d
     manifest = {'count': count + 1 if bad_count else count} if kind == 'sog' else {
         'counts': [count + 1 if bad_count else count], 'filenames': [name]}
     with ZipFile(output, 'w') as archive:
-        archive.writestr(name, json.dumps(manifest, sort_keys=True), compress_type=ZIP_STORED)
+        archive.writestr(ZipInfo(name), json.dumps(manifest, sort_keys=True), compress_type=ZIP_STORED)
         if license_name:
-            archive.writestr(license_name, license_data, compress_type=license_method)
+            archive.writestr(ZipInfo(license_name), license_data, compress_type=license_method)
         if extra:
-            archive.writestr(extra, b'extra', compress_type=extra_method)
+            archive.writestr(ZipInfo(extra), b'extra', compress_type=extra_method)
     return output.getvalue()
 
 
