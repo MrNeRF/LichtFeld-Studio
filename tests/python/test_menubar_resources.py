@@ -240,6 +240,22 @@ def test_rml_tooltips_request_only_pending_animation_frames():
     assert "rml_viewport_overlay_.needsAnimationFrame()" in gui_manager_cpp
 
 
+def test_shared_tooltips_wrap_words_and_preserve_line_breaks():
+    rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "components.rcss"
+    ).read_text(encoding="utf-8")
+    tooltip_rule = _rule_body(rcss, ".frame-tooltip")
+
+    assert re.search(r"\bword-break:\s*break-word\s*;", tooltip_rule)
+    assert re.search(r"\bwhite-space:\s*pre-line\s*;", tooltip_rule)
+
+
 def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     menu_bar_cpp = (
         PROJECT_ROOT
