@@ -70,6 +70,7 @@ namespace lfs::io {
             bool bundled_;
             std::string root_prefix_;
             uint64_t expansion_limit_ = MAX_ARCHIVE_BYTES;
+            std::optional<std::vector<uint8_t>> license_bytes_;
 
             static std::string safe_name(const std::string& name) {
                 const auto p = core::utf8_to_path(name);
@@ -78,7 +79,8 @@ namespace lfs::io {
                 for (const auto& part : p)
                     if (part == "..")
                         throw std::runtime_error("SSOG entry escapes archive root");
-                return p.lexically_normal().generic_string();
+                const auto generic = p.lexically_normal().generic_u8string();
+                return {reinterpret_cast<const char*>(generic.data()), generic.size()};
             }
 
             static std::string extension_of(const fs::path& path) {
@@ -92,6 +94,25 @@ namespace lfs::io {
             explicit EntryProvider(const fs::path& path) : bundled_(extension_of(path) == ".ssog" && !fs::is_directory(path)) {
                 if (!bundled_) {
                     base_ = fs::absolute(manifest_path(path)).parent_path();
+                    std::vector<fs::path> candidates;
+                    for (const auto& entry : fs::directory_iterator(base_)) {
+                        if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
+                            fs::is_regular_file(entry.symlink_status()))
+                            candidates.push_back(entry.path());
+                    }
+                    std::sort(candidates.begin(), candidates.end());
+                    for (const auto& candidate : candidates) {
+                        const auto size = fs::file_size(candidate);
+                        if (size > 64 * 1024)
+                            continue;
+                        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                        std::ifstream file(candidate, std::ios::binary);
+                        if (size && !file.read(reinterpret_cast<char*>(bytes.data()),
+                                               static_cast<std::streamsize>(size)))
+                            throw std::runtime_error("Cannot read SSOG license");
+                        license_bytes_ = std::move(bytes);
+                        break;
+                    }
                     return;
                 }
                 const auto size = fs::file_size(path);
@@ -120,6 +141,7 @@ namespace lfs::io {
                     archive_read_open_memory(reader.get(), bytes.data(), bytes.size()) != ARCHIVE_OK)
                     throw std::runtime_error("Cannot open SSOG ZIP archive");
                 archive_entry* entry = nullptr;
+                std::vector<std::string> license_names;
                 uint64_t total = 0;
                 // Inner SOG chunks inherit the outer allowance; nested ZIP
                 // compression must not multiply the original expansion limit.
@@ -142,18 +164,24 @@ namespace lfs::io {
                     if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry) || archive_entry_is_encrypted(entry))
                         throw std::runtime_error("SSOG archive entries must be regular files");
                     const auto n = archive_entry_size(entry);
-                    const auto extension = extension_of(fs::path(name));
+                    const auto basename = std::string_view(name).substr(name.find_last_of('/') + 1);
+                    const bool is_license = is_sog_license_member(basename);
+                    const auto dot = basename.rfind('.');
+                    auto extension = dot == std::string_view::npos ? std::string{} : std::string(basename.substr(dot));
+                    lfs::io::detail::ascii_lower_inplace(extension);
                     // A bundled unit contains several textures and uses the
                     // archive allowance, rather than a single image's limit.
                     const uint64_t limit = extension == ".json"  ? MAX_METADATA_BYTES
                                            : extension == ".sog" ? MAX_ARCHIVE_BYTES
                                                                  : MAX_ENCODED_IMAGE_BYTES;
-                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > expansion_limit_ - total)
+                    if (!archive_entry_size_is_set(entry) || n < 0 || (n == 0 && !is_license) || uint64_t(n) > limit || uint64_t(n) > expansion_limit_ - total)
                         throw std::runtime_error("SSOG archive entry exceeds size limit");
                     total += uint64_t(n);
                     auto [it, inserted] = entries_.try_emplace(name);
                     if (!inserted)
                         throw std::runtime_error("Duplicate SSOG archive entry");
+                    if (is_license && n <= 64 * 1024)
+                        license_names.push_back(name);
                     auto& data = it->second;
                     data.resize(static_cast<size_t>(n));
                     size_t offset = 0;
@@ -168,18 +196,31 @@ namespace lfs::io {
                     throw std::runtime_error("Invalid SSOG archive headers");
                 size_t manifests = 0;
                 for (const auto& [name, unused] : entries_) {
-                    if (fs::path(name).filename() == manifest) {
+                    const auto slash = name.rfind('/');
+                    if (std::string_view(name).substr(slash == std::string::npos ? 0 : slash + 1) == manifest) {
                         ++manifests;
-                        root_prefix_ = fs::path(name).parent_path().generic_string();
+                        root_prefix_ = slash == std::string::npos ? std::string{} : name.substr(0, slash);
                     }
                 }
                 if (manifests != 1)
                     throw std::runtime_error("Archive must contain exactly one " + manifest);
                 if (!root_prefix_.empty())
                     root_prefix_ += '/';
+                for (const auto& name : license_names) {
+                    const bool root_license = name.starts_with(root_prefix_) &&
+                                              is_sog_license_member(std::string_view(name).substr(root_prefix_.size()));
+                    if (entries_.at(name).empty() && !root_license)
+                        throw std::runtime_error("Empty SSOG entry is not a root license");
+                    if (root_license && !license_bytes_)
+                        license_bytes_ = entries_.at(name);
+                }
             }
 
         public:
+            const std::optional<std::vector<uint8_t>>& license_bytes() const {
+                return license_bytes_;
+            }
+
             Result<std::vector<uint8_t>> read(const std::string& raw_name, size_t limit) const {
                 try {
                     const auto name = safe_name(raw_name);
@@ -519,9 +560,14 @@ namespace lfs::io {
             return {};
         } catch (const std::exception& e) { return make_error(ErrorCode::INVALID_HEADER, std::string("Invalid SSOG: ") + e.what(), p); }
     }
-    Result<SplatData> load_ssog(const std::filesystem::path& p, const SsogLoadOptions& options) {
+    Result<SplatData> load_ssog(const std::filesystem::path& p, const SsogLoadOptions& options,
+                                std::optional<std::vector<uint8_t>>* license_bytes) {
         try {
+            if (license_bytes)
+                license_bytes->reset();
             const auto m = parse_manifest(p);
+            if (license_bytes)
+                *license_bytes = m.entries->license_bytes();
             const int level = options.lod_level < 0 ? static_cast<int>(m.files.size()) + options.lod_level : options.lod_level;
             if (level < 0 || level >= static_cast<int>(m.files.size()))
                 throw std::runtime_error("Requested LOD level out of range");

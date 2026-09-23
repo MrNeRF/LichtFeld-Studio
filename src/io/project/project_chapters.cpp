@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "io/filesystem_utils.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -20,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <regex>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -29,6 +31,122 @@
 #include <utility>
 
 namespace lfs::io::project {
+
+    namespace {
+        std::optional<std::string_view> trim_valid_utf8(std::string_view value) {
+            size_t first = value.size();
+            size_t last = 0;
+            for (size_t i = 0; i < value.size();) {
+                const size_t start = i;
+                const auto lead = static_cast<unsigned char>(value[i++]);
+                uint32_t codepoint = lead;
+                int following = 0;
+                if (lead >= 0xc2 && lead <= 0xdf) {
+                    codepoint = lead & 0x1f;
+                    following = 1;
+                } else if (lead >= 0xe0 && lead <= 0xef) {
+                    codepoint = lead & 0x0f;
+                    following = 2;
+                } else if (lead >= 0xf0 && lead <= 0xf4) {
+                    codepoint = lead & 0x07;
+                    following = 3;
+                } else if (lead >= 0x80) {
+                    return std::nullopt;
+                }
+                if (i + following > value.size())
+                    return std::nullopt;
+                for (int j = 0; j < following; ++j) {
+                    const auto next = static_cast<unsigned char>(value[i++]);
+                    if ((next & 0xc0) != 0x80)
+                        return std::nullopt;
+                    codepoint = (codepoint << 6) | (next & 0x3f);
+                }
+                if ((following == 2 && codepoint < 0x800) ||
+                    (following == 3 && codepoint < 0x10000) ||
+                    (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff)
+                    return std::nullopt;
+                const bool whitespace = (codepoint >= 0x09 && codepoint <= 0x0d) ||
+                                        (codepoint >= 0x1c && codepoint <= 0x20) ||
+                                        (codepoint >= 0x2000 && codepoint <= 0x200a) ||
+                                        codepoint == 0x85 || codepoint == 0xa0 ||
+                                        codepoint == 0x1680 || codepoint == 0x2028 ||
+                                        codepoint == 0x2029 || codepoint == 0x202f ||
+                                        codepoint == 0x205f || codepoint == 0x3000;
+                if (!whitespace) {
+                    first = std::min(first, start);
+                    last = i;
+                }
+            }
+            return first == value.size() ? std::string_view{} : value.substr(first, last - first);
+        }
+
+    } // namespace
+
+    std::optional<ProjectLicense> map_sog_license(std::span<const std::uint8_t> bytes) {
+        if (bytes.empty())
+            return std::nullopt;
+        std::string normalized(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        if (normalized.starts_with("\xef\xbb\xbf"))
+            normalized.erase(0, 3);
+        size_t position = 0;
+        while ((position = normalized.find("\r\n", position)) != std::string::npos)
+            normalized.replace(position, 2, "\n");
+        std::replace(normalized.begin(), normalized.end(), '\r', '\n');
+        const auto trimmed = trim_valid_utf8(normalized);
+        if (!trimmed || trimmed->empty())
+            return std::nullopt;
+        std::string text(*trimmed);
+
+        std::optional<std::string> license_field;
+        std::optional<std::string> author_field;
+        for (size_t start = 0; start <= text.size();) {
+            const size_t end = text.find('\n', start);
+            const std::string_view line(text.data() + start,
+                                        (end == std::string::npos ? text.size() : end) - start);
+            if (const size_t colon = line.find(':'); colon != std::string::npos) {
+                std::string key(*trim_valid_utf8(line.substr(0, colon)));
+                lfs::io::detail::ascii_lower_inplace(key);
+                const auto value = *trim_valid_utf8(line.substr(colon + 1));
+                if (key == "license" && !license_field)
+                    license_field = std::string(value);
+                else if (key == "author" && !author_field)
+                    author_field = std::string(value);
+            }
+            if (end == std::string::npos)
+                break;
+            start = end + 1;
+        }
+
+        static const std::regex cc_url(
+            R"(creativecommons\.org/(?:licenses/(by|by-sa|by-nc|by-nc-sa|by-nd|by-nc-nd)/(2\.0|2\.5|3\.0|4\.0)|publicdomain/zero/1\.0))",
+            std::regex_constants::icase);
+        std::smatch match;
+        std::string identifier;
+        if (std::regex_search(text, match, cc_url)) {
+            if (match[1].matched) {
+                identifier = "CC-";
+                for (const unsigned char c : match[1].str())
+                    identifier += c >= 'a' && c <= 'z' ? static_cast<char>(c - ('a' - 'A')) : static_cast<char>(c);
+                identifier += "-" + match[2].str();
+            } else {
+                identifier = "CC0-1.0";
+            }
+        } else if (license_field) {
+            std::string cleaned;
+            for (const unsigned char c : *license_field)
+                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') || c == '.' || c == '-')
+                    cleaned += static_cast<char>(c);
+            if (!cleaned.empty())
+                identifier = "LicenseRef-" + cleaned;
+        }
+        if (identifier.empty())
+            identifier = "LicenseRef-Custom";
+        if (author_field && !author_field->empty() && identifier != "CC0-1.0" &&
+            identifier != "LicenseRef-Proprietary")
+            text += "\nCredit: " + *author_field;
+        return ProjectLicense{std::move(identifier), std::move(text)};
+    }
 
     namespace {
 

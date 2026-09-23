@@ -247,6 +247,8 @@ namespace lfs::vis::project {
         license();
         [[nodiscard]] lfs::Result<void>
         setLicense(const lfs::io::project::ProjectLicense& license);
+        [[nodiscard]] lfs::Result<void> adoptImportLicense(
+            const std::optional<std::vector<uint8_t>>& license_bytes);
         [[nodiscard]] lfs::Result<void> clearLicense();
         [[nodiscard]] lfs::Result<void>
         setPreview(std::span<const std::byte> png_bytes,

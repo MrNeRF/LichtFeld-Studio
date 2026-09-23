@@ -304,6 +304,11 @@ namespace lfs::vis {
             std::make_unique<project::ProjectLifecycle>(
                 *this,
                 options_.project_lifecycle_settings_path);
+        scene_manager_->setImportLicenseCallback([this](const auto& bytes) {
+            if (auto adopted = project_lifecycle_->adoptImportLicense(bytes); !adopted)
+                LOG_WARN("Cannot set project license during splat import: {}",
+                         lfs::format_for_developer(adopted.error()));
+        });
 
         // Create main loop
         main_loop_ = std::make_unique<MainLoop>();

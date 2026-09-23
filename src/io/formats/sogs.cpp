@@ -970,7 +970,8 @@ namespace lfs::io {
         }
 
         std::expected<SplatData, std::string> read_sog_bundle(
-            const std::filesystem::path& path) {
+            const std::filesystem::path& path,
+            std::optional<std::vector<uint8_t>>* license_bytes) {
 
             LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
@@ -1081,7 +1082,9 @@ namespace lfs::io {
                                           filename == "sh0.webp" ||
                                           filename == "shN_centroids.webp" ||
                                           filename == "shN_labels.webp";
-                    if (!is_metadata && !is_image) {
+                    const bool is_license = license_bytes && !license_bytes->has_value() &&
+                                            is_sog_license_member(filename) && size <= 64 * 1024;
+                    if (!is_metadata && !is_image && !is_license) {
                         if (archive_read_data_skip(a) != ARCHIVE_OK) {
                             const char* detail = archive_error_string(a);
                             return std::unexpected(std::format(
@@ -1118,6 +1121,10 @@ namespace lfs::io {
 
                     if (is_metadata) {
                         metadata_json.assign(reinterpret_cast<const char*>(data.get()), size);
+                    } else if (is_license) {
+                        license_bytes->emplace();
+                        if (size)
+                            license_bytes->value().assign(data.get(), data.get() + size);
                     } else {
                         encoded_images.emplace(
                             filename, EncodedImage{std::move(data), size});
@@ -1233,7 +1240,30 @@ namespace lfs::io {
         }
     }
 
-    static Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
+    static Result<SplatData> read_sog_directory(
+        const std::filesystem::path& path,
+        std::optional<std::vector<uint8_t>>* license_bytes) {
+        if (license_bytes) {
+            std::vector<std::filesystem::path> candidates;
+            for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
+                    std::filesystem::is_regular_file(entry.symlink_status()))
+                    candidates.push_back(entry.path());
+            }
+            std::sort(candidates.begin(), candidates.end());
+            for (const auto& candidate : candidates) {
+                const auto size = std::filesystem::file_size(candidate);
+                if (size > 64 * 1024)
+                    continue;
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                std::ifstream file(candidate, std::ios::binary);
+                if (size && !file.read(reinterpret_cast<char*>(bytes.data()),
+                                       static_cast<std::streamsize>(size)))
+                    return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG license", candidate);
+                *license_bytes = std::move(bytes);
+                break;
+            }
+        }
         auto ready = prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
             const auto file_path = path / core::utf8_to_path(name);
             std::error_code ec;
@@ -1254,20 +1284,23 @@ namespace lfs::io {
         return (*ready)();
     }
 
-    Result<SplatData> load_sog(const std::filesystem::path& path) {
+    Result<SplatData> load_sog(const std::filesystem::path& path,
+                               std::optional<std::vector<uint8_t>>* license_bytes) {
         try {
+            if (license_bytes)
+                license_bytes->reset();
             if (!std::filesystem::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
             if (path.extension() == ".sog") {
-                auto result = read_sog_bundle(path);
+                auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
                 return std::move(*result);
             }
             if (path.filename() == "meta.json")
-                return read_sog_directory(path.parent_path());
+                return read_sog_directory(path.parent_path(), license_bytes);
             if (std::filesystem::is_directory(path))
-                return read_sog_directory(path);
+                return read_sog_directory(path, license_bytes);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unknown SOG format", path);
         } catch (const std::bad_alloc&) {
             return make_error(ErrorCode::RESOURCE_EXHAUSTED, "SOG input exceeds available memory", path);

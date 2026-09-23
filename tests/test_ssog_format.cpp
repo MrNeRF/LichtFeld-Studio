@@ -598,16 +598,30 @@ TEST(SsogFormat, GalleryWrapperAndBundledUnitsPreserveDecodedSplats) {
             }
         }
         const auto metadata = manifest.dump();
+        const std::string license = "Author: Example Author\nLicense: All Rights Reserved";
+        ASSERT_TRUE(outer->add_file("scene/license.txt", license.data(), license.size()));
+        ASSERT_TRUE(outer->add_file("scene/LICENSE.md", nullptr, 0));
+        ASSERT_TRUE(outer->add_file("scene/\xF0\x9F\x98\x80.txt", "x", 1));
         ASSERT_TRUE(outer->add_file("scene/lod-meta.json", metadata.data(), metadata.size()));
         ASSERT_TRUE(outer->close());
         ASSERT_TRUE(validate_ssog(output));
-        auto loaded = load_ssog(output);
+        std::optional<std::vector<uint8_t>> license_bytes;
+        auto loaded = load_ssog(output, {}, &license_bytes);
         ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_TRUE(license_bytes);
+        EXPECT_EQ(std::string(license_bytes->begin(), license_bytes->end()), license);
         EXPECT_EQ(loaded->size(), expected->size());
         EXPECT_EQ(loaded->means().cpu().to_vector(), expected->means().cpu().to_vector());
         EXPECT_EQ(loaded->scaling_raw().cpu().to_vector(), expected->scaling_raw().cpu().to_vector());
         EXPECT_EQ(loaded->sh0().cpu().to_vector(), expected->sh0().cpu().to_vector());
     }
+    const std::string folder_license = "License: Example terms";
+    std::ofstream(source / "license.txt", std::ios::binary) << folder_license;
+    std::optional<std::vector<uint8_t>> folder_license_bytes;
+    auto folder_loaded = load_ssog(source, {}, &folder_license_bytes);
+    ASSERT_TRUE(folder_loaded) << folder_loaded.error().format();
+    ASSERT_TRUE(folder_license_bytes);
+    EXPECT_EQ(std::string(folder_license_bytes->begin(), folder_license_bytes->end()), folder_license);
 }
 
 TEST(SsogFormat, GalleryBundlesRejectAmbiguousRootsAndUnsafeNestedEntries) {

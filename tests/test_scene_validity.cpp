@@ -31,6 +31,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
 #include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
 #include "training/components/bilateral_grid.hpp"
@@ -1543,6 +1545,38 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, GalleryPreviewAttachmentLeavesProjectLicenseUntouched) {
+        auto document = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+        ASSERT_TRUE(document);
+        lfs::vis::SceneManager manager;
+        int license_callbacks = 0;
+        manager.setImportLicenseCallback([&](const auto& bytes) {
+            ++license_callbacks;
+            EXPECT_TRUE(document->adopt_import_license(bytes));
+        });
+
+        const std::string notice = "License: Preview terms";
+        const auto attach = [&](const bool defer) {
+            lfs::io::LoadResult loaded;
+            loaded.data = std::shared_ptr<lfs::core::SplatData>(lfs::test::licht::make_splat(1).release());
+            loaded.license_bytes = std::vector<uint8_t>(notice.begin(), notice.end());
+            const auto group = manager.getScene().addGroup(defer ? "preview" : "regular");
+            ASSERT_NE(group, lfs::core::NULL_NODE);
+            EXPECT_FALSE(manager.attachLoadedSplatNode("preview.sog", "splat", true,
+                                                       std::move(loaded), true, group, defer)
+                             .empty());
+        };
+
+        attach(true);
+        EXPECT_EQ(license_callbacks, 0);
+        EXPECT_FALSE(document->project().license().value().has_value());
+
+        attach(false);
+        EXPECT_EQ(license_callbacks, 1);
+        EXPECT_EQ(document->project().license().value(),
+                  (lfs::io::project::ProjectLicense{"LicenseRef-Previewterms", notice}));
     }
 
     TEST_F(SceneValidityTest, ColmapSparsePathTracksSuccessfulLoadAndClearsOnReset) {
