@@ -1572,7 +1572,7 @@ class GalleryController:
             self._import_detached = True
         if job.get("_native_project"):
             expected = job["_native_project"]
-            if self._import_detached:
+            if self._import_detached or job.get("_opening", {}).get("canceled"):
                 self._import_pending = None
                 self._message = "Account changed. The downloaded project is kept locally."
                 return

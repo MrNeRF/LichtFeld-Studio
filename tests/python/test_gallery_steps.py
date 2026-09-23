@@ -169,3 +169,145 @@ def test_update_cancel_after_import_removes_only_its_preview(update_case):
     assert actions == ["cancel import", "hide preview", "remove preview"]
     assert project_path.read_bytes() == backup_path.read_bytes()
     assert journal["localUpdate"]["state"] == "ready"
+
+
+@pytest.fixture
+def open_case(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    source = tmp_path / "download.licht"
+    source.write_bytes(b"kept download")
+    opened = tmp_path / "opened.licht"
+    opened.write_bytes(b"new project")
+    native_scene = SimpleNamespace(is_valid=lambda: True, total_gaussian_count=2)
+    monkeypatch.setattr(module.lf, "get_scene", lambda: native_scene, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "is_training_active", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf, "project_open", lambda *args, **kwargs: actions.append("opened"), raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(opened)}, raising=False)
+    monkeypatch.setattr(module.lf.io, "inspect_project", lambda path: SimpleNamespace(project_uuid="new-project"))
+    monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: actions.append("view"))
+    monkeypatch.setattr(panel, "_mark_viewing_copy", lambda *args: actions.append("viewing copy"))
+    monkeypatch.setattr(panel, "_link_saved_download", lambda *args: actions.append("link requested") or "link")
+    monkeypatch.setattr(panel, "_refresh_model", lambda: None)
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(import_module("lfs_plugins.portable_project"), "ProjectFile",
+                        lambda source: SimpleNamespace(manifest={"nodes": [{"count": 2}]}))
+    project = SimpleNamespace(project_uuid="new-project")
+    index = SimpleNamespace(load=lambda: True, register_licht_asset=lambda *args, **kwargs: (project, True))
+    monkeypatch.setattr(import_module("lfs_plugins.asset_index"), "AssetIndex", lambda: index)
+    stage = {"id": "stage", "state": "ready", "projectPath": str(opened), "projectId": "new-project",
+             "projectStamp": module.file_stamp(opened)}
+    journal = {"id": "download", "stagedImport": stage, "linkOperation": {"id": "link", "state": "ready"}}
+    state["jobs"] = [journal]
+    panel.service.stage_download = lambda identifier: "stage"
+    panel.service.environment_path = lambda job: None
+    job = {"id": "download", "path": str(source), "result": {"title": "Gallery"}}
+    panel._open_download(job, state["identity"])
+    return panel, state, actions, source, opened, stage, journal
+
+
+def test_download_open_order_characterization(open_case):
+    panel, state, actions, source, opened, stage, journal = open_case
+    assert panel._import_pending["_opening"]["phase"] == "staging"
+    assert panel.snapshot()["message"] == "Checking downloaded scene…"
+    panel._finish_import()
+    assert panel._import_pending["_opening"]["phase"] == "opened"
+    assert actions == ["opened"] and source.exists() and opened.exists()
+    panel._finish_import()
+    assert actions == ["opened", "viewing copy", "view", "link requested"]
+    assert panel._import_pending["_link"] == "link"
+    assert "Saving its gallery link" in panel.snapshot()["message"]
+    panel._finish_import()
+    assert panel._import_pending is None
+    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    assert "saved and linked" in panel.snapshot()["message"]
+    assert journal["linkOperation"]["state"] == "ready" and source.read_bytes() == b"kept download"
+
+
+@pytest.mark.parametrize("phase", ["staging", "opened", "linking"])
+def test_download_open_cancel_characterization(open_case, phase):
+    panel, state, actions, source, opened, stage, journal = open_case
+    job = panel._import_pending
+    if phase == "opened":
+        panel._finish_import()
+    elif phase == "linking":
+        panel._finish_import()
+        panel._finish_import()
+    panel._action_pause()
+    if phase == "staging":
+        panel._finish_import()
+        assert panel._import_pending is None and not actions
+        assert "download is kept" in panel.snapshot()["message"]
+    elif phase == "opened":
+        panel._import_detached = True
+        panel._finish_import()
+        assert panel._import_pending is None and actions == ["opened"]
+        assert "kept locally" in panel.snapshot()["message"]
+    else:
+        panel._import_detached = True
+        panel._finish_import()
+        assert panel._import_pending is None and "refresh your gallery" in panel.snapshot()["message"]
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
+    assert journal["linkOperation"]["state"] == "ready"
+
+
+def test_cancel_after_native_open_does_not_register_or_link(open_case):
+    panel, state, actions, source, opened, stage, journal = open_case
+    panel._finish_import()
+    assert actions == ["opened"]
+    panel._action_pause()
+    panel._finish_import()
+    assert panel._import_pending is None
+    assert actions == ["opened"]
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
+    assert journal["linkOperation"]["state"] == "ready"
+
+
+@pytest.mark.parametrize("phase", ["staging", "opened", "linking"])
+def test_download_open_failure_characterization(open_case, monkeypatch, phase):
+    panel, state, actions, source, opened, stage, journal = open_case
+    module = import_module("lfs_plugins.gallery_controller")
+    if phase == "staging":
+        stage.update(state="failed", message="stage failed")
+    elif phase == "opened":
+        panel._finish_import()
+        opened.write_bytes(b"changed project")
+    else:
+        panel._finish_import()
+        panel._finish_import()
+        journal["linkOperation"].update(state="failed", message="link failed")
+    if phase == "linking":
+        panel._finish_import()
+        assert "could not be saved" in panel.snapshot()["message"]
+    else:
+        with pytest.raises(ValueError):
+            panel._finish_import()
+    assert source.read_bytes() == b"kept download" and opened.exists()
+    assert journal["linkOperation"]["state"] == ("failed" if phase == "linking" else "ready")
+
+
+@pytest.mark.parametrize("outcome,keeps_export,queued", [
+    ("active", True, False), ("canceled", False, False), ("failed", False, False),
+    ("completed", True, True), ("timeout", False, False), ("foreign", False, False),
+])
+def test_publish_preparation_characterization(gallery, monkeypatch, tmp_path, outcome, keeps_export, queued):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    export = tmp_path / "prepared.ply"
+    export.write_bytes(b"prepared scene")
+    panel._export_pending = (export, {"title": "Gallery"}, "project", 0)
+    panel._operation_title = "Gallery"
+    panel.service.queue_prepared_upload = lambda *args: actions.append("queued")
+    native = {"path": str(export), "active": outcome == "active", "progress": 0.5,
+              "outcome": outcome if outcome in ("canceled", "failed", "completed") else "waiting"}
+    if outcome == "foreign":
+        native["path"] = str(tmp_path / "other.ply")
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: native, raising=False)
+    panel._finish_export()
+    assert export.exists() is keeps_export
+    assert ("queued" in actions) is queued
+    assert (panel._export_pending is not None) is (outcome == "active")
+    assert panel.snapshot()["phase"] == ("preparing" if outcome == "active" else "idle")
+    assert panel.snapshot()["message"] == ("" if queued else panel._message)
+    assert state["jobs"] == []
