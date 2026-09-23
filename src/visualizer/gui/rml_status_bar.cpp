@@ -582,10 +582,10 @@ namespace lfs::vis::gui {
             }));
         };
 
-        bind(store.iteration);
+        // Step, loss and splat count change with every training step and FPS with
+        // every frame. The periodic refresh reads them, so they never force a
+        // redraw of their own.
         bind(store.total_iterations);
-        bind(store.loss);
-        bind(store.num_gaussians);
         bind(store.max_gaussians);
         bind(store.training_running);
         bind(store.training_state);
@@ -598,7 +598,6 @@ namespace lfs::vis::gui {
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
             reactive_fps_available_ = true;
             reactive_fps_value_ = fps;
-            markModelDirty();
         }));
         bind(store.mode_text);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {

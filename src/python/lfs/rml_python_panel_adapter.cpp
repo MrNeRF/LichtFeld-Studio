@@ -463,6 +463,7 @@ namespace lfs::vis::gui {
 
             if (run_update) {
                 try {
+                    const lfs::python::DocumentUpdateScope update_scope(doc);
                     nb::object result = panel_instance_.attr("on_update")(py_doc);
                     pending_dirty |= panelHookDirtyResult(
                         result, false, warned_non_bool_update_, "on_update");

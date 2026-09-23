@@ -5,6 +5,7 @@
 
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -43,6 +44,12 @@ namespace lfs::vis::gui {
 
         static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
             status_bar.model_.mcp_details_expanded = expanded;
+        }
+
+        static void bindStore(RmlStatusBar& status_bar) { status_bar.bindReactiveStore(); }
+        static void clearRedraw(RmlStatusBar& status_bar) { status_bar.model_dirty_ = false; }
+        [[nodiscard]] static bool redrawPending(const RmlStatusBar& status_bar) {
+            return status_bar.model_dirty_;
         }
 
         static void trackRenderedFrame(RmlStatusBar& status_bar,
@@ -390,6 +397,28 @@ namespace {
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    // Catches a status bar that redraws on every training step or every frame:
+    // step, loss, splat count and FPS arrive through its periodic refresh, while
+    // a training state change still redraws at once.
+    TEST(StatusBarRefreshTest, TrainingTelemetryWaitsForThePeriodicRefresh) {
+        lfs::vis::gui::RmlStatusBar status_bar;
+        lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar);
+        auto& store = lfs::vis::app_store();
+        (void)store.store().drain_dirty_into_frame();
+        lfs::vis::gui::RmlStatusBarTestAccess::clearRedraw(status_bar);
+
+        store.iteration.set(store.iteration.get() + 1);
+        store.loss.set(store.loss.get() + 0.5f);
+        store.num_gaussians.set(store.num_gaussians.get() + 1);
+        store.fps.set(store.fps.get() + 1.0f);
+        (void)store.store().drain_dirty_into_frame();
+        EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
+
+        store.training_state.set(store.training_state.get() + "_changed");
+        (void)store.store().drain_dirty_into_frame();
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
     }
 
     TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {

@@ -252,6 +252,19 @@ namespace lfs::python {
         std::unordered_map<std::string, Rml::ElementDocument*> documents_;
     };
 
+    // While a panel's update hook runs, dirty marks on that panel's own document
+    // are drawn in the same frame and must not ask for another one.
+    class DocumentUpdateScope {
+    public:
+        explicit DocumentUpdateScope(Rml::ElementDocument* doc);
+        ~DocumentUpdateScope();
+        DocumentUpdateScope(const DocumentUpdateScope&) = delete;
+        DocumentUpdateScope& operator=(const DocumentUpdateScope&) = delete;
+
+    private:
+        Rml::ElementDocument* previous_ = nullptr;
+    };
+
     bool consume_document_dirty(Rml::ElementDocument* doc);
     bool consume_document_update_request(Rml::ElementDocument* doc);
     bool is_document_dirty(Rml::ElementDocument* doc);

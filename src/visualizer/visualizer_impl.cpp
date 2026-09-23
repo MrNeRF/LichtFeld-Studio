@@ -1939,12 +1939,12 @@ namespace lfs::vis {
         });
 
         // Signal bridge event handlers
-        state::TrainingProgress::when([](const auto& event) {
-            auto& store = app_store();
-            lfs::core::reactive::BatchUpdate batch(store.store());
-            store.iteration.set(event.iteration);
-            store.loss.set(event.loss);
-            store.num_gaussians.set(static_cast<std::int64_t>(event.num_gaussians));
+        state::TrainingProgress::when([this](const auto& event) {
+            training_progress_publisher_.offer(
+                {.iteration = event.iteration,
+                 .loss = event.loss,
+                 .num_gaussians = static_cast<std::int64_t>(event.num_gaussians)},
+                std::chrono::steady_clock::now());
         });
 
         state::TrainingStarted::when([this](const auto& event) {
@@ -2450,6 +2450,10 @@ namespace lfs::vis {
             consider_timeout(std::max(kScheduledRedrawMinWaitSeconds,
                                       rendering_manager_->secondsUntilTrainingRefresh()),
                              "training_refresh");
+        if (const auto progress_wait =
+                training_progress_publisher_.secondsUntilDue(std::chrono::steady_clock::now()))
+            consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, *progress_wait),
+                             "training_progress");
 
         // Wake exactly when a pending tooltip is due so the reveal costs a single
         // frame instead of rendering continuously through the hover delay.
@@ -2608,6 +2612,7 @@ namespace lfs::vis {
         bool store_dirty = false;
         {
             LOG_TIMER_THRESHOLD("gui_render.reactive_store_drain", 0.05);
+            training_progress_publisher_.flushDue(std::chrono::steady_clock::now());
             store_dirty = app_store().store().drain_dirty_into_frame();
         }
 
@@ -2658,7 +2663,16 @@ namespace lfs::vis {
 
             project_frame_started =
                 std::chrono::steady_clock::now();
+            const bool preview_refresh_only =
+                gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
+                rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+            // A preview refresh parked until training frees the shared scratch
+            // changed nothing on screen; present once it has rendered.
+            if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
+                waitForNextEvent(is_training);
+                return;
+            }
             if (gui_manager_) {
                 gui_manager_->commitUiVisibilityTransitionIfFrameReady(
                     vulkan_frame.matches_viewport_extent);

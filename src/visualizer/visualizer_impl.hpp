@@ -21,6 +21,7 @@
 #include "scene/scene_manager.hpp"
 #include "tools/tool_base.hpp"
 #include "training/training_manager.hpp"
+#include "training/training_progress_publisher.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
 #include <atomic>
@@ -574,6 +575,14 @@ namespace lfs::vis {
                        viewport_resize_settle_ready;
             }
 
+            [[nodiscard]] bool onlySceneDirty() const {
+                return scene_dirty && !viewport_export_locked && !continuous_input &&
+                       !python_animation && !python_overlay && !python_redraw &&
+                       !gui_animation && !input_event && !posted_work && !render_work &&
+                       !store_dirty && !swapchain_resize_ready && !window_resize_paint_pending &&
+                       !viewport_resize_settle_ready;
+            }
+
             [[nodiscard]] bool needsContinuousLoop() const {
                 const bool resize_deferral_throttles_animation =
                     viewport_resize_deferring ||
@@ -700,6 +709,7 @@ namespace lfs::vis {
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
         std::atomic<bool> project_save_started_{false};
+        TrainingProgressPublisher training_progress_publisher_;
         bool pending_project_dataset_embed_ = false;
         std::optional<std::filesystem::path>
             pending_close_save_path_;

@@ -252,6 +252,7 @@ namespace lfs::vis {
         void markCameraPoseChanged();
 
         [[nodiscard]] bool pollDirtyState();
+        [[nodiscard]] DirtyMask pendingDirtyMask() const { return dirty_mask_.load(std::memory_order_relaxed); }
         // The training preview refreshes on its own cadence, not only when an
         // unrelated redraw happens to notice it is due.
         void pollTrainingRefresh(bool is_training);
