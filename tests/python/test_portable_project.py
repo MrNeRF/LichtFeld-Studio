@@ -144,6 +144,50 @@ FIXTURES = Path(__file__).parents[1] / "data"
 NATIVE_SPZ = Path(__file__).parents[1] / "data" / "spz"
 
 
+def test_gallery_publishing_corpus():
+    expected = json.loads((FIXTURES / 'gallery_publishing' / 'expected.json').read_text())
+    messages = {
+        'history': 'Project history is excluded',
+        'training': 'Training sources',
+        'unreferenced_asset': 'Unreferenced embedded assets',
+        'degree': 'Published lighting detail exceeds',
+        'unreferenced_member': 'Unreferenced files',
+        'license_size': 'license exceeds 64 KiB',
+        'invalid_project': 'Invalid portable LichtFeld project',
+        'spz_flags': 'SPZ flags are invalid',
+        'spz_extension': 'SPZ coordinate extension is invalid',
+        'spz_version': 'container version 4',
+    }
+    for name, item in expected.items():
+        data = (FIXTURES / 'gallery_publishing' / name).read_bytes()
+
+        def validate():
+            suffix = name.rsplit('.', 1)[1]
+            stream = io.BytesIO(data)
+            if suffix == 'licht':
+                project = codec.ProjectFile(stream)
+                assert project.manifest['format'] == 'lichtfeld-gallery'
+                for index in range(len(project.manifest['nodes'])):
+                    project.copy_node(index, io.BytesIO())
+                if 'environment' in project.manifest:
+                    project.copy_environment(io.BytesIO())
+            elif suffix == 'spz':
+                codec.validate_spz(codec.SliceReader(stream, 0, len(data)), 64)
+            else:
+                codec.validate_compressed(codec.SliceReader(stream, 0, len(data)), suffix, 1)
+
+        with unittest.TestCase().subTest(name=name):
+            if item['verdict'] == 'accept':
+                validate()
+            else:
+                try:
+                    validate()
+                except ValueError as error:
+                    assert messages[item['reason']] in str(error), name
+                else:
+                    raise AssertionError(f'{name} unexpectedly accepted')
+
+
 def _validate(payload, count):
     return codec.validate_spz(codec.SliceReader(io.BytesIO(payload), 0, len(payload)), count)
 

@@ -1,0 +1,71 @@
+{
+  "bad_manifest_count.sog": {
+    "reason": "invalid_project",
+    "verdict": "reject"
+  },
+  "deflated_texture.sog": {
+    "reason": "invalid_project",
+    "verdict": "reject"
+  },
+  "degree_over.licht": {
+    "reason": "degree",
+    "verdict": "reject"
+  },
+  "history.licht": {
+    "reason": "history",
+    "verdict": "reject"
+  },
+  "license_case.sog": {
+    "verdict": "accept"
+  },
+  "license_deflated.sog": {
+    "verdict": "accept"
+  },
+  "nested_license.sog": {
+    "reason": "unreferenced_member",
+    "verdict": "reject"
+  },
+  "oversized_license.sog": {
+    "reason": "license_size",
+    "verdict": "reject"
+  },
+  "spz_extension.spz": {
+    "reason": "spz_extension",
+    "verdict": "reject"
+  },
+  "spz_flags.spz": {
+    "reason": "spz_flags",
+    "verdict": "reject"
+  },
+  "spz_v3.spz": {
+    "reason": "spz_version",
+    "verdict": "reject"
+  },
+  "training.licht": {
+    "reason": "training",
+    "verdict": "reject"
+  },
+  "unreferenced_asset.licht": {
+    "reason": "unreferenced_asset",
+    "verdict": "reject"
+  },
+  "unreferenced_member.ssog": {
+    "reason": "unreferenced_member",
+    "verdict": "reject"
+  },
+  "valid_ply.licht": {
+    "verdict": "accept"
+  },
+  "valid_sog_environment.licht": {
+    "verdict": "accept"
+  },
+  "valid_spz.licht": {
+    "verdict": "accept"
+  },
+  "valid_spz_extension.spz": {
+    "verdict": "accept"
+  },
+  "valid_ssog_license.licht": {
+    "verdict": "accept"
+  }
+}
