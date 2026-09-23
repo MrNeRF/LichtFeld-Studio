@@ -574,7 +574,7 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
         "load",
         "inspector",
         "gallery:publish",
-        "rename",
+        "project:rename",
         "show_in_folder",
         "remove",
         "trash",
@@ -603,6 +603,7 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     actions = [entry["action"] for entry in menu["items"]]
     expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
     assert actions[:len(expected_prefix)] == expected_prefix
+    assert ("project:rename" in actions) == (status == "AVAILABLE")
     assert not menu["items"][0].get("separator_before", False)
     assert not item.get("separator_before", False)
     for entry in menu["items"]:
@@ -1338,17 +1339,39 @@ def test_unindexed_recent_open_actions_preserve_mru_and_library_safety(
     assert panel._delete_selected_assets() is False
     assert calls == []
 
-def test_rename_passes_name_to_update_asset_without_shadowing_command(panel_module):
+@pytest.mark.parametrize("active", [False, True])
+def test_card_rename_writes_project_title_and_library_name(panel_module, monkeypatch, tmp_path, active):
     panel = panel_module.AssetManagerPanel()
-    asset = _project()
+    asset = _project(path=str(tmp_path / "old-name.licht"))
     panel._asset_index = _index(assets={asset["id"]: asset})
+    if active:
+        panel_module.lf.project_poll_write = lambda: {"path": asset["path"]}
     calls = []
     panel._asset_index.update_asset = lambda *args, **kwargs: calls.append((args, kwargs))
     panel_module.lf.ui.input_dialog = lambda _title, _hint, _current, callback: callback("New name")
+    monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *_args, **_kwargs: None, raising=False)
+    panel_module.lf.io = SimpleNamespace(
+        set_project_title=lambda path, name: calls.append(("file", path, name))
+    )
+    def run_operation(_id, _title, operation, **kwargs):
+        assert kwargs.get("closed_file", True) is True
+        operation(lambda *_args: None, lambda: False)
+        kwargs["after"]()
 
-    panel.on_rename_asset(None, None, [asset["id"]])
+    panel._start_project_operation = run_operation
 
-    assert calls == [((asset["id"],), {"name": "New name"})]
+    rename_action = next(
+        item["action"] for item in panel._asset_context_menu_items(asset)
+        if item["label"] == "projects.action.rename"
+    )
+    panel._handle_asset_context_action(rename_action, asset["id"])
+    panel._dialog_data["name"] = "New name"
+    panel.confirm_project_dialog()
+
+    assert calls == [
+        ("file", asset["path"], "New name"),
+        ((asset["id"],), {"name": "New name"}),
+    ]
 
 def test_typeahead_places_caret_after_appended_character(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -2601,7 +2624,7 @@ def test_context_menu_shows_use_found_location_only_with_candidate(panel_module)
         "load",
         "inspector",
         "gallery:publish",
-        "rename",
+        "project:rename",
         "show_in_folder",
         "remove",
         "trash",

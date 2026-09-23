@@ -301,8 +301,6 @@
     "status.select_item": "세부정보를 보려면 프로젝트를 선택하세요",
     "status.one_item_selected": "1개 항목 선택됨",
     "status.multi_items_selected": "{count}개 항목 선택됨",
-    "dialog.rename_asset": "프로젝트 이름 바꾸기",
-    "dialog.enter_new_name": "새 이름 입력: {name}",
     "panel_title": "프로젝트",
     "tooltip.refresh": "프로젝트 파일을 확인하고 카탈로그 상태 새로 고침",
     "drag.open_project": "놓아서 프로젝트 열기",

@@ -301,8 +301,6 @@
     "status.select_item": "选择项目以查看其详细信息",
     "status.one_item_selected": "已选择 1 个文件夹",
     "status.multi_items_selected": "已选择 {count} 个文件夹",
-    "dialog.rename_asset": "重命名项目",
-    "dialog.enter_new_name": "输入新名称：{name}",
     "panel_title": "项目",
     "tooltip.refresh": "验证项目文件并刷新目录状态",
     "drag.open_project": "拖放以打开项目",

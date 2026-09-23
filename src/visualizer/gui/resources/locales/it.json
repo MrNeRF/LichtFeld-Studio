@@ -301,8 +301,6 @@
     "status.select_item": "Seleziona un progetto per visualizzarne i dettagli",
     "status.one_item_selected": "1 elemento selezionato",
     "status.multi_items_selected": "{count} elementi selezionati",
-    "dialog.rename_asset": "Rinomina progetto",
-    "dialog.enter_new_name": "Inserisci nuovo nome per: {name}",
     "panel_title": "Progetti",
     "tooltip.refresh": "Verifica i file di progetto e aggiorna lo stato del catalogo",
     "drag.open_project": "Rilascia per aprire il progetto",

@@ -301,8 +301,6 @@
     "status.select_item": "Selecteer een project om de details te bekijken",
     "status.one_item_selected": "1 item geselecteerd",
     "status.multi_items_selected": "{count} items geselecteerd",
-    "dialog.rename_asset": "Project hernoemen",
-    "dialog.enter_new_name": "Voer nieuwe naam in voor: {name}",
     "panel_title": "Projecten",
     "tooltip.refresh": "Projectbestanden verifiëren en catalogusstatus vernieuwen",
     "drag.open_project": "Neerzetten om het project te openen",

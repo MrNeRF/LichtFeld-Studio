@@ -3171,9 +3171,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "action": "use_found_location",
                 }
             )
+        if any(operation.get("action") == "rename" for operation in operation_actions(asset)):
+            items.append({"label": tr("projects.action.rename"), "action": "project:rename"})
         items.extend(
             [
-                {"label": tr("projects.action.rename"), "action": "rename"},
                 {
                     "label": tr("projects.action.show_in_folder"),
                     "action": "show_in_folder",
@@ -3221,8 +3222,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._dirty_inspector_layout()
         elif action == "use_found_location":
             self.on_use_found_location(None, None, [asset_id])
-        elif action == "rename":
-            self.on_rename_asset(None, None, [asset_id])
         elif action == "show_in_folder":
             self.on_show_in_folder(None, None, [asset_id])
         elif action == "remove":
@@ -3240,26 +3239,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._asset_context_menu_items(asset),
             lambda action: self._handle_asset_context_action(action, asset_id),
             anchor,
-        )
-
-    def on_rename_asset(self, _handle, _ev, args):
-        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        asset = self._asset_dict(asset_id)
-        if not asset or not self._asset_index:
-            return
-        current_name = str(asset.get("name") or Path(str(asset.get("path") or "")).stem)
-
-        def rename(name: Any) -> None:
-            value = str(name or "").strip()
-            if value and value != current_name:
-                self._library_command("update_asset", asset_id, name=value)
-                self.refresh_catalog(scan_folders=False)
-
-        lf.ui.input_dialog(
-            tr("projects.dialog.rename_asset"),
-            tr("projects.dialog.enter_new_name", name=current_name),
-            current_name,
-            rename,
         )
 
     def on_show_in_folder(self, _handle, _ev, args):
