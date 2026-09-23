@@ -127,11 +127,22 @@ class TestMeshIO:
             assert mesh2.n_vertices() == 3
             assert mesh2.n_faces() == 1
 
-    def test_read_test_cube(self, lf, test_data_dir):
-        cube_path = test_data_dir / "test_cube.obj"
-        if not cube_path.exists():
-            pytest.skip("test_cube.obj not found")
-
+    def test_read_test_cube(self, lf, tmp_path):
+        cube_path = tmp_path / "cube.obj"
+        cube_path.write_text(
+            "\n".join(
+                [f"v {x} {y} {z}" for x, y, z in (
+                    (0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                    (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1),
+                )] +
+                [f"f {a} {b} {c}" for a, b, c in (
+                    (1, 2, 3), (1, 3, 4), (5, 7, 6), (5, 8, 7),
+                    (1, 5, 6), (1, 6, 2), (2, 6, 7), (2, 7, 3),
+                    (3, 7, 8), (3, 8, 4), (4, 8, 5), (4, 5, 1),
+                )]
+            ),
+            encoding="utf-8",
+        )
         mesh = lf.mesh.read_trimesh(str(cube_path))
         assert mesh.n_vertices() == 8
         assert mesh.n_faces() == 12
