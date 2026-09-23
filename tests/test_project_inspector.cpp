@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checkpoint_format.hpp"
+#include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_inspector.hpp"
 #include "io/project_path.hpp"
@@ -184,6 +185,105 @@ namespace {
         }
         EXPECT_EQ(states[0], OpenState::Open);
         EXPECT_EQ(states[1], OpenState::Open);
+    }
+
+    TEST(ProjectInspector, FilterFactsMatchRealProjectContents) {
+        TemporaryDirectory temporary;
+        const auto write = [&](const std::string& name,
+                               const std::vector<std::pair<ChunkKey, std::vector<std::byte>>>& chunks) {
+            const auto path = temporary.path / (name + ".licht");
+            auto writer = require_result(ProjectWriter::create(path, create_options(1401)));
+            ProjectChapter project;
+            require_status(project.set_project_uuid(fixed_uuid(1000)));
+            require_status(project.set_created_at_unix_ns(1'700'000'000'000'000'000));
+            const auto project_bytes = project.to_bytes();
+            require_status(writer.plan_commit(commit_options(1401, 1)));
+            std::uint64_t bytes = project_bytes.size();
+            for (const auto& [key, payload] : chunks)
+                bytes += payload.size();
+            require_status(writer.preflight(bytes));
+            require_status(writer.write_chunk(fixed_key("PROJ", 1000), project_bytes));
+            for (const auto& [key, payload] : chunks)
+                require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+            return require_result(ProjectReader::open(path));
+        };
+
+        SceneGraphChapter training_scene;
+        const auto model_uuid = fixed_uuid(1402);
+        require_status(training_scene.upsert_node(SceneNodeRecord{
+            .uuid = model_uuid,
+            .type = "splat",
+            .name = "model",
+            .payload = PayloadBinding{
+                .fourcc = "CKPT",
+                .instance_uuid = fixed_uuid(1403),
+                .source_kind = "checkpoint",
+            },
+        }));
+        require_status(training_scene.set_training_model_uuid(model_uuid));
+        const auto checkpoint = checkpoint_payload(7);
+        const auto training = write("project-a", {{fixed_key("SCNG", 1000), training_scene.to_bytes()},
+                                                  {fixed_key("CKPT", 1403), checkpoint}});
+        EXPECT_TRUE(inspect_project_filter_facts(training).has_checkpoint);
+        EXPECT_FALSE(inspect_project_filter_facts(training).has_dataset);
+
+        SceneGraphChapter no_training_scene;
+        const auto unbound = write("project-b", {{fixed_key("SCNG", 1000), no_training_scene.to_bytes()},
+                                                 {fixed_key("CKPT", 1403), checkpoint}});
+        EXPECT_FALSE(inspect_project_filter_facts(unbound).has_checkpoint);
+        EXPECT_FALSE(inspect_project_filter_facts(unbound).has_dataset);
+
+        SceneGraphChapter dataset_scene;
+        require_status(dataset_scene.upsert_node(SceneNodeRecord{
+            .uuid = fixed_uuid(1404),
+            .type = "dataset",
+            .name = "project-data",
+        }));
+        const auto node_dataset = write("project-c", {{fixed_key("SCNG", 1000), dataset_scene.to_bytes()}});
+        EXPECT_TRUE(inspect_project_filter_facts(node_dataset).has_dataset);
+
+        ReferencesChapter references;
+        require_status(references.upsert(ReferenceRecord{
+            .uuid = fixed_uuid(1405),
+            .key = "data.root",
+            .kind = "images",
+            .locator = {.preferred = "project-data", .base = LocatorBase::Project},
+        }));
+        const auto referenced_dataset = write("project-d", {{fixed_key("REFS", 1000), references.to_bytes()}});
+        EXPECT_TRUE(inspect_project_filter_facts(referenced_dataset).has_dataset);
+
+        ParameterManagerSnapshot snapshot;
+        snapshot.mcmc_session = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        snapshot.mrnf_session = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        snapshot.igs_session = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        snapshot.mcmc_current = snapshot.mcmc_session;
+        snapshot.mrnf_current = snapshot.mrnf_session;
+        snapshot.igs_current = snapshot.igs_session;
+
+        ParametersChapter embedded_parameters;
+        require_status(embedded_parameters.set_snapshot(snapshot));
+        const auto embedded_bytes = byte_vector("{}");
+        const auto embedded_uuid = fixed_uuid(1406);
+        require_status(embedded_parameters.set_embedded_dataset(EmbeddedDatasetManifest{
+            .schema_version = 1,
+            .images_folder = "images",
+            .complete = true,
+            .entries = {{
+                .rel_path = "metadata.json",
+                .kind = "meta",
+                .chunk_uuid = embedded_uuid,
+                .bytes = embedded_bytes.size(),
+                .xxh3_128 = xxh3_128(embedded_bytes),
+            }},
+        }));
+        const auto embedded_dataset = write("project-e", {{fixed_key("PRMS", 1000), embedded_parameters.to_bytes()},
+                                                          {fixed_key("DSRC", 1406), embedded_bytes}});
+        EXPECT_TRUE(inspect_project_filter_facts(embedded_dataset).has_dataset);
+
+        const auto plain = write("project-f", {});
+        EXPECT_FALSE(inspect_project_filter_facts(plain).has_checkpoint);
+        EXPECT_FALSE(inspect_project_filter_facts(plain).has_dataset);
     }
 
 } // namespace

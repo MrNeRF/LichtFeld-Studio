@@ -707,6 +707,8 @@ class AssetIndex:
             project.inspection = {"version": 1, **facts}
         else:
             project.inspection = {"version": 1, "iteration": project.iteration}
+        project.inspection["has_checkpoint"] = bool(getattr(inspection, "has_checkpoint", False))
+        project.inspection["has_dataset"] = bool(getattr(inspection, "has_dataset", False))
         self._touch_catalog()
 
     @staticmethod

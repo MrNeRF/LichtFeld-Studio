@@ -733,11 +733,12 @@ def _register_discovered_streaming(
 
 
 def _existing_skips_inspection(existing: Any) -> bool:
-    return getattr(existing, "status", "AVAILABLE") not in _REINSPECT_STATUSES
+    return (getattr(existing, "status", "AVAILABLE") not in _REINSPECT_STATUSES
+            and {"has_checkpoint", "has_dataset"}.issubset(getattr(existing, "inspection", {})))
 
 
 def _known_path_is_unchanged(index: Any, existing: Any, path: str) -> bool:
-    if getattr(existing, "status", "AVAILABLE") in _REINSPECT_STATUSES:
+    if not _existing_skips_inspection(existing):
         return False
     try:
         stat = os.stat(path)
@@ -815,6 +816,8 @@ def _commit_registration_batch(
                                     role=SimpleNamespace(name=getattr(existing, "role", "MASTER")),
                                     open_state=SimpleNamespace(name=getattr(existing, "open_state", "OPEN")),
                                     has_preview=getattr(existing, "has_preview", False),
+                                    has_checkpoint=existing.inspection["has_checkpoint"],
+                                    has_dataset=existing.inspection["has_dataset"],
                                     iteration=getattr(existing, "iteration", None),
                                 ),
                                 path_identity,

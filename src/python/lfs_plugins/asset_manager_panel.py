@@ -1563,9 +1563,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if active == "missing":
             return not bool(asset.get("exists", True)) or str(asset.get("status") or "") == "MISSING"
         if active == "checkpoint":
-            return bool(asset.get("has_checkpoint") or asset.get("checkpoint_iteration"))
+            return bool((asset.get("inspection") or {}).get("has_checkpoint"))
         if active == "dataset":
-            return bool(asset.get("has_dataset") or asset.get("dataset_path"))
+            return bool((asset.get("inspection") or {}).get("has_dataset"))
         if active == "gallery":
             return bool(scene or asset.get("remote_only") or facts.get("relationship") not in (None, "unlinked"))
         return True

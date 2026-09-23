@@ -216,6 +216,8 @@ namespace lfs::python {
             io::project::ContainerRole role = io::project::ContainerRole::Master;
             io::project::OpenState open_state = io::project::OpenState::HardFail;
             bool has_preview = false;
+            bool has_checkpoint = false;
+            bool has_dataset = false;
             std::uint32_t preview_width = 0;
             std::uint32_t preview_height = 0;
             std::string fallback_preview_path;
@@ -500,6 +502,8 @@ namespace lfs::python {
             .def_ro("role", &PyProjectInspection::role)
             .def_ro("open_state", &PyProjectInspection::open_state)
             .def_ro("has_preview", &PyProjectInspection::has_preview)
+            .def_ro("has_checkpoint", &PyProjectInspection::has_checkpoint)
+            .def_ro("has_dataset", &PyProjectInspection::has_dataset)
             .def_ro("preview_width", &PyProjectInspection::preview_width)
             .def_ro("preview_height", &PyProjectInspection::preview_height)
             .def_ro("fallback_preview_path", &PyProjectInspection::fallback_preview_path);
@@ -1058,9 +1062,12 @@ namespace lfs::python {
                 std::string fallback_preview_path;
                 std::uint32_t preview_width = 0;
                 std::uint32_t preview_height = 0;
+                project::ProjectFilterFacts facts;
                 {
                     nb::gil_scoped_release release;
                     opened = project::ProjectReader::open(path, options);
+                    if (opened && opened->has_value())
+                        facts = project::inspect_project_filter_facts(**opened);
                     if (resolve_preview_fallback && opened && opened->has_value() &&
                         !(**opened).preview().has_value()) {
                         const auto& reader = **opened;
@@ -1133,6 +1140,8 @@ namespace lfs::python {
                     .role = reader.superblock().role,
                     .open_state = reader.open_state(),
                     .has_preview = reader.preview().has_value(),
+                    .has_checkpoint = facts.has_checkpoint,
+                    .has_dataset = facts.has_dataset,
                     .preview_width = preview_width,
                     .preview_height = preview_height,
                     .fallback_preview_path = std::move(fallback_preview_path),
@@ -1140,7 +1149,7 @@ namespace lfs::python {
             },
             nb::arg("path"),
             nb::arg("resolve_preview_fallback") = true,
-            "Inspect validated .licht container metadata without reading project payloads.");
+            "Inspect validated .licht metadata and lightweight project contents.");
 
         nb::class_<PyLoadResult>(m, "LoadResult")
             .def_prop_ro("splat_data", &PyLoadResult::get_splat_data, "Loaded splat data, or None")

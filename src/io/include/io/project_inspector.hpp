@@ -130,6 +130,14 @@ namespace lfs::io::project {
         std::vector<std::string> chapters_requiring_full_read;
     };
 
+    struct ProjectFilterFacts {
+        bool has_checkpoint = false;
+        bool has_dataset = false;
+    };
+
+    [[nodiscard]] LFS_IO_API ProjectFilterFacts
+    inspect_project_filter_facts(const ProjectReader& reader);
+
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     inspect_project_card(const std::filesystem::path& path);
 

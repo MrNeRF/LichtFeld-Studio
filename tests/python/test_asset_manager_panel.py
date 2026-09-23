@@ -891,6 +891,25 @@ def test_search_matches_path_and_type(panel_module):
         panel._search_query = query
         assert [row["id"] for row in panel.get_filtered_assets()] == [asset["id"]]
 
+def test_project_filters_use_catalog_inspection_for_unselected_projects(panel_module):
+    checkpoint = _project(
+        name="project-a",
+        path="project-a.licht",
+        inspection={"has_checkpoint": True, "has_dataset": True},
+    )
+    empty = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="project-b",
+        path="project-b.licht",
+        inspection={"has_checkpoint": False, "has_dataset": False},
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={checkpoint["id"]: checkpoint, empty["id"]: empty})
+
+    for active in ("checkpoint", "dataset"):
+        panel._active_filter = active
+        assert [row["id"] for row in panel.get_filtered_assets()] == [checkpoint["id"]]
+
 def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     first = _project(name="Bicycle")
     second = _project(

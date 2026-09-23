@@ -265,6 +265,12 @@ class ProjectInspection:
     def has_preview(self) -> bool: ...
 
     @property
+    def has_checkpoint(self) -> bool: ...
+
+    @property
+    def has_dataset(self) -> bool: ...
+
+    @property
     def preview_width(self) -> int: ...
 
     @property
@@ -818,9 +824,7 @@ def clear_project_license(path: str | os.PathLike) -> ProjectInspectorCard: ...
 def set_project_title(path: str | os.PathLike, title: str) -> ProjectInspectorCard: ...
 
 def inspect_project(path: str | os.PathLike, resolve_preview_fallback: bool = True) -> ProjectInspection:
-    """
-    Inspect validated .licht container metadata without reading project payloads.
-    """
+    """Inspect validated .licht metadata and lightweight project contents."""
 
 class LoadResult:
     @property

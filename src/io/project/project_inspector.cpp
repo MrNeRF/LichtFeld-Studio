@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -509,6 +510,50 @@ namespace lfs::io::project {
         }
 
     } // namespace
+
+    ProjectFilterFacts inspect_project_filter_facts(const ProjectReader& reader) {
+        ProjectFilterFacts facts;
+        if (reader.open_state() != OpenState::Open)
+            return facts;
+        std::vector<std::byte> bytes;
+        if (read_current_json(reader, FOURCC_SCNG, bytes) && !bytes.empty()) {
+            if (auto scene = SceneGraphChapter::from_bytes(bytes)) {
+                if (auto nodes = scene->nodes()) {
+                    facts.has_dataset = std::ranges::any_of(*nodes, [](const auto& node) {
+                        return node.type == "dataset" && !node.name.empty();
+                    });
+                }
+                if (auto training = scene->training_model_uuid(); training && *training) {
+                    facts.has_checkpoint = std::ranges::any_of(reader.chunks(), [&](const auto& row) {
+                        return row.row_kind == RowKind::Live && row.key.fourcc == FOURCC_CKPT &&
+                               read_checkpoint_header(reader, row, sizeof(core::CheckpointHeader)).has_value();
+                    });
+                }
+            }
+        }
+        if (!facts.has_dataset && read_current_json(reader, FOURCC_REFS, bytes) && !bytes.empty()) {
+            if (auto refs = ReferencesChapter::from_bytes(bytes)) {
+                if (auto records = refs->records()) {
+                    facts.has_dataset = std::ranges::any_of(*records, [](const auto& ref) {
+                        std::string kind = ref.kind;
+                        std::transform(kind.begin(), kind.end(), kind.begin(), [](unsigned char c) {
+                            return static_cast<char>(std::tolower(c));
+                        });
+                        return kind == "dataset" || kind == "images" || kind == "data";
+                    });
+                }
+            }
+        }
+        if (!facts.has_dataset && read_current_json(reader, FOURCC_PRMS, bytes) && !bytes.empty()) {
+            if (auto params = ParametersChapter::from_bytes(bytes)) {
+                const auto embedded = params->embedded_dataset();
+                const auto snapshot = params->snapshot();
+                facts.has_dataset = (embedded && embedded->has_value()) ||
+                                    (snapshot && !snapshot->dataset.data_path.empty());
+            }
+        }
+        return facts;
+    }
 
     std::pair<std::uint32_t, std::uint32_t>
     project_preview_dimensions(const ProjectReader& reader) {
