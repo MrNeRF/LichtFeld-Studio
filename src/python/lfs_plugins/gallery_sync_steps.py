@@ -18,13 +18,15 @@ from . import gallery_preparation
 
 
 class LocalUpdateSteps:
-    """Stage, import, save, back up, apply, save, and link a downloaded update.
+    """staging -> importing -> save_before_backup -> backup -> applying -> save_updated -> linking.
 
-    The preview may enter the open scene before backup, but saved local splats,
-    view and project content may change only after the backup is ready and the
-    saved generation and stamp still match. Cancellation through backup removes
-    the owned preview. After the updated save, the recovery copy is retained and
-    linking may be skipped; an apply failure reopens the unchanged saved file.
+    Import may add a hidden preview, and save_before_backup may save the
+    existing project. Old splats and the view are replaced only after the
+    backup is ready and the saved generation and stamp still match. Cancel
+    through backup removes the owned preview, leaving the baseline save.
+    Apply is synchronous; failure reopens that saved file. Cancel after the
+    updated save keeps the updated project and recovery copy. A submitted link
+    may still complete and must be checked by refreshing the gallery.
     """
 
     def __init__(self, ui):
@@ -252,12 +254,12 @@ class LocalUpdateSteps:
 
 
 class DownloadOpenSteps:
-    """Stage and open a saved download, register it, then persist its link.
+    """Open: staging -> opened -> registration -> linking; keep: staging -> linking.
 
-    Cancellation before native open leaves the download alone. Once opening
-    starts, cancellation keeps the new local file but skips registration and
-    linking. After link submission, the link result must be checked before the
-    UI can report completion.
+    Cancel at staging leaves the download alone. Cancel after native open
+    keeps the new local file but skips registration and linking. After link
+    submission, the journal result determines what the UI reports. The keep
+    path never changes the open document; late cancel cannot retract a link.
     """
 
     def __init__(self, ui):
@@ -265,6 +267,8 @@ class DownloadOpenSteps:
 
     def cancel(self):
         ui = self.ui
+        if ui._import_pending and ui._import_pending.get("_register"):
+            ui._import_pending["_register"]["canceled"] = True
         if ui._import_pending and ui._import_pending.get("_opening"):
             opening = ui._import_pending["_opening"]
             opening["canceled"] = True
@@ -376,14 +380,79 @@ class DownloadOpenSteps:
             ui._refresh_model()
             return
 
+    def start_keep(self, job, identity):
+        """Keep and link a portable project without changing the open document."""
+        ui = self.ui
+        if Path(job["path"]).suffix != ".licht":
+            raise ValueError(tr("error.format"))
+        if identity != ui.service.identity():
+            raise ValueError(tr("error.account_changed"))
+        ui._acquire_native_use(job["id"])
+        try:
+            stage_id = ui.service.stage_download(job["id"])
+        except Exception as exc:
+            log_failure("stage_download", exc, job_id=job["id"])
+            ui._release_native_use()
+            raise
+        ui._import_pending = dict(job, _accountIdentity=identity,
+            _register={"stage_id": stage_id, "phase": "staging"})
+        ui._import_detached = False
+        ui._message = tr("state.downloading", percent=100)
+        ui._schedule_poll()
+
+    def advance_keep(self, job):
+        ui = self.ui
+        pending = job["_register"]
+        if ui.service.busy:
+            return
+        if (pending.get("canceled") and pending["phase"] == "staging"
+                or ui._import_detached or job["_accountIdentity"] != ui.service.identity()):
+            ui._import_pending = None
+            ui._message = tr("error.account_changed" if ui._import_detached else "info.canceled")
+            return
+        current = next((j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
+        if pending["phase"] == "staging":
+            stage = current.get("stagedImport", {})
+            if stage.get("id") != pending["stage_id"] or stage.get("state") != "ready":
+                raise ValueError(stage.get("message") or tr("error.failed"))
+            path = stage["projectPath"]
+            from .asset_index import AssetIndex
+            index = AssetIndex()
+            if not index.load():
+                raise ValueError(tr("error.storage"))
+            if file_stamp(path) != stage.get("projectStamp"):
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
+            inspection = lf.io.inspect_project(path)
+            if str(inspection.project_uuid) != stage.get("projectId"):
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
+            previous = index.get_asset(str(inspection.project_uuid))
+            if previous and Path(previous.path).resolve() != Path(path).resolve() and Path(previous.path).exists():
+                # Never move an existing catalog entry to an unrelated copy.
+                raise ValueError(tr("error.link"))
+            project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
+            if project is None:
+                raise ValueError(index.last_error or tr("error.storage"))
+            ui._mark_viewing_copy(index, project)
+            pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
+                operation=ui._link_saved_download(job["id"], path, str(inspection.project_uuid)))
+            return
+        operation = current.get("linkOperation", {})
+        ui._import_pending = None
+        if operation.get("id") != pending["operation"] or operation.get("state") != "ready":
+            raise ValueError(operation.get("message") or tr("error.link"))
+        ui._pulled_project = {"id": pending["project"], "path": pending["path"], "jobId": job["id"]}
+        ui._message = tr("info.pulled")
+        ui._refresh_model()
+
 
 class PublishSteps:
-    """Save or verify a project, prepare an owned export, then queue upload.
+    """Review -> save or verify -> export -> queue upload.
 
-    An upload may start only from the reviewed saved project and account.
-    Cancellation and preparation failures remove only this operation's files.
-    A completed export is queued only after its commit matches the reviewed
-    version; the gallery journal owns the transfer after queueing.
+    Cancel during save stops its continuation. Cancel during export stops only
+    this operation's native export and removes its temporary preparation after
+    it ends. A completed export is queued only after its commit matches the
+    reviewed saved project and account. The journal owns the transfer after
+    queueing; cancellation there follows the normal transfer path.
     """
 
     def __init__(self, ui, asset_sync_state):

@@ -1220,8 +1220,6 @@ class GalleryController:
         self._schedule_poll()
 
     def _action_pause(self):
-        if self._import_pending and self._import_pending.get("_register"):
-            self._import_pending["_register"]["canceled"] = True
         if self._save_pending:
             self._save_pending["canceled"] = True
         if self._export_pending:
@@ -1244,66 +1242,10 @@ class GalleryController:
         self._open_download(job, identity)
 
     def _register_download(self, job, identity):
-        """Keep and link a portable project without changing the open document."""
-        if Path(job["path"]).suffix != ".licht":
-            raise ValueError(tr("error.format"))
-        if identity != self.service.identity():
-            raise ValueError(tr("error.account_changed"))
-        self._acquire_native_use(job["id"])
-        try:
-            stage_id = self.service.stage_download(job["id"])
-        except Exception as exc:
-            log_failure("stage_download", exc, job_id=job["id"])
-            self._release_native_use()
-            raise
-        self._import_pending = dict(job, _accountIdentity=identity,
-            _register={"stage_id": stage_id, "phase": "staging"})
-        self._import_detached = False
-        self._message = tr("state.downloading", percent=100)
-        self._schedule_poll()
+        return self._download_open_steps.start_keep(job, identity)
 
     def _finish_register_download(self, job):
-        pending = job["_register"]
-        if self.service.busy:
-            return
-        if (pending.get("canceled") and pending["phase"] == "staging"
-                or self._import_detached or job["_accountIdentity"] != self.service.identity()):
-            self._import_pending = None
-            self._message = tr("error.account_changed" if self._import_detached else "info.canceled")
-            return
-        current = next((j for j in self.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
-        if pending["phase"] == "staging":
-            stage = current.get("stagedImport", {})
-            if stage.get("id") != pending["stage_id"] or stage.get("state") != "ready":
-                raise ValueError(stage.get("message") or tr("error.failed"))
-            path = stage["projectPath"]
-            from .asset_index import AssetIndex
-            index = AssetIndex()
-            if not index.load():
-                raise ValueError(tr("error.storage"))
-            if file_stamp(path) != stage.get("projectStamp"):
-                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
-            inspection = lf.io.inspect_project(path)
-            if str(inspection.project_uuid) != stage.get("projectId"):
-                raise ValueError("The downloaded project identity changed. Prepare the download again.")
-            previous = index.get_asset(str(inspection.project_uuid))
-            if previous and Path(previous.path).resolve() != Path(path).resolve() and Path(previous.path).exists():
-                # Never move an existing catalog entry to an unrelated copy.
-                raise ValueError(tr("error.link"))
-            project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
-            if project is None:
-                raise ValueError(index.last_error or tr("error.storage"))
-            self._mark_viewing_copy(index, project)
-            pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
-                operation=self._link_saved_download(job["id"], path, str(inspection.project_uuid)))
-            return
-        operation = current.get("linkOperation", {})
-        self._import_pending = None
-        if operation.get("id") != pending["operation"] or operation.get("state") != "ready":
-            raise ValueError(operation.get("message") or tr("error.link"))
-        self._pulled_project = {"id": pending["project"], "path": pending["path"], "jobId": job["id"]}
-        self._message = tr("info.pulled")
-        self._refresh_model()
+        return self._download_open_steps.advance_keep(job)
 
     def _open_download(self, job, identity):
         return self._download_open_steps.start(job, identity)
