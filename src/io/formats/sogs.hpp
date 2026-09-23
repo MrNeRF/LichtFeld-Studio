@@ -6,8 +6,20 @@
 
 // Re-export public API
 #include "io/exporter.hpp"
+#include "io/filesystem_utils.hpp"
+#include <algorithm>
+#include <string>
+#include <string_view>
 
 namespace lfs::io {
+
+    inline bool is_sog_license_member(std::string_view name) {
+        if (name.find('/') != std::string_view::npos)
+            return false;
+        std::string lower(name);
+        detail::ascii_lower_inplace(lower);
+        return lower == "license" || lower == "license.txt" || lower == "license.md";
+    }
 
     inline constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
     inline constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
@@ -37,6 +49,7 @@ namespace lfs::io {
     std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&);
 
     // Internal: Loading function (not in public API)
-    Result<SplatData> load_sog(const std::filesystem::path& filepath);
+    Result<SplatData> load_sog(const std::filesystem::path& filepath,
+                               std::optional<std::vector<uint8_t>>* license_bytes = nullptr);
 
 } // namespace lfs::io

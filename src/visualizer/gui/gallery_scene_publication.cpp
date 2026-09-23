@@ -201,6 +201,10 @@ namespace lfs::vis::gui {
             throw std::runtime_error("gallery_project_not_supported: " + std::string(records.error().user_message()));
         publication.path = source.destination;
         publication.format = source.payload_format;
+        const auto source_license = document->project().license();
+        if (!source_license)
+            throw std::runtime_error(std::string(source_license.error().user_message()));
+        publication.published_license = *source_license;
         std::unordered_map<core::Uuid, const pj::SceneNodeRecord*> by_id;
         for (const auto& record : *records)
             by_id.emplace(record.uuid, &record);
@@ -394,6 +398,8 @@ namespace lfs::vis::gui {
             if (!result)
                 throw std::runtime_error(std::string(result.error().user_message()));
         };
+        if (request.published_license)
+            checked(document.set_license(*request.published_license));
         if (!request.published_timeline.is_null())
             checked(document.edit_sequencer().dom().set_json("timeline", request.published_timeline));
         checked(document.edit_sequencer().dom().set_json("loop_mode", request.published_loop_mode));

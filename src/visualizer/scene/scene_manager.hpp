@@ -19,6 +19,7 @@
 #include "training/components/ppisp_controller_pool.hpp"
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <glm/vec2.hpp>
 #include <mutex>
 #include <optional>
@@ -111,13 +112,18 @@ namespace lfs::vis {
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
-                                                        bool replace_scene);
+                                                        bool replace_scene,
+                                                        bool defer_import_license = false);
         [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
                                                         bool preserve_raw = false,
-                                                        core::NodeId parent = core::NULL_NODE);
+                                                        core::NodeId parent = core::NULL_NODE,
+                                                        bool defer_import_license = false);
+        void setImportLicenseCallback(std::function<void(const std::optional<std::vector<uint8_t>>&)> callback) {
+            import_license_callback_ = std::move(callback);
+        }
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
@@ -442,6 +448,7 @@ namespace lfs::vis {
         std::optional<core::Scene::SelectionStateSnapshot> selection_preview_before_;
         std::mutex consolidated_compaction_mutex_;
         std::jthread consolidated_compaction_thread_;
+        std::function<void(const std::optional<std::vector<uint8_t>>&)> import_license_callback_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
 

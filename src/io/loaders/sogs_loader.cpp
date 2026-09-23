@@ -98,7 +98,8 @@ namespace lfs::io {
         }
 
         LOG_INFO("Loading SOG file: {}", lfs::core::path_to_utf8(path));
-        auto splat_result = load_sog(path);
+        std::optional<std::vector<uint8_t>> license_bytes;
+        auto splat_result = load_sog(path, &license_bytes);
         if (!splat_result) {
             return std::unexpected(splat_result.error());
         }
@@ -117,7 +118,8 @@ namespace lfs::io {
             .loader_used = name(),
             .load_time = load_time,
             .warnings = {},
-            .georeference = std::nullopt};
+            .georeference = std::nullopt,
+            .license_bytes = std::move(license_bytes)};
 
         LOG_INFO("SOG loaded successfully in {}ms", load_time.count());
 

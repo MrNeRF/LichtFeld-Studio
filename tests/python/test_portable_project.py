@@ -3,7 +3,9 @@ import io
 import json
 from pathlib import Path
 import struct
+import tempfile
 import unittest
+from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 
 
 def rewrite_chapter(data, kind, change):
@@ -109,6 +111,33 @@ class PortableProjectTests(unittest.TestCase):
         self.assertEqual(stream.read(100),b'PUBLIC')
         with self.assertRaises(ValueError):stream.seek(-1)
         with self.assertRaises(ValueError):stream.seek(7)
+
+    def test_compressed_license_members(self):
+        cases = (
+            ('sog', 'license.txt', ZIP_STORED, b'License: Example', True),
+            ('sog', 'LICENSE.md', ZIP_DEFLATED, b'License: Example', True),
+            ('ssog', 'license', ZIP_STORED, b'License: Example', True),
+            ('sog', 'sub/license.txt', ZIP_STORED, b'License: Example', 'Unreferenced files'),
+            ('sog', 'license.txt', ZIP_STORED, b'x' * (64 * 1024 + 1), 'exceeds 64 KiB'),
+            ('sog', 'readme.txt', ZIP_STORED, b'Unreferenced', 'Unreferenced files'),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for index, (extension, name, compression, content, accepted) in enumerate(cases):
+                with self.subTest(extension=extension, name=name, accepted=accepted):
+                    path = Path(directory) / f'{index}.{extension}'
+                    manifest = 'meta.json' if extension == 'sog' else 'lod-meta.json'
+                    metadata = {'count': 1} if extension == 'sog' else {
+                        'counts': [1], 'filenames': ['lod-meta.json']}
+                    with ZipFile(path, 'w') as archive:
+                        archive.writestr(manifest, json.dumps(metadata))
+                        archive.writestr(name, content, compress_type=compression)
+                    payload = path.read_bytes()
+                    stream = codec.SliceReader(io.BytesIO(payload), 0, len(payload))
+                    if accepted is True:
+                        self.assertEqual(codec.validate_compressed(stream, extension, 1), 0)
+                    else:
+                        with self.assertRaisesRegex(ValueError, accepted):
+                            codec.validate_compressed(stream, extension, 1)
 
 from lfs_plugins import portable_project as codec
 FIXTURES = Path(__file__).parents[1] / "data"

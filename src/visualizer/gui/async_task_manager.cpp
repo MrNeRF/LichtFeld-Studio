@@ -24,7 +24,6 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "io/project_document.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -1140,7 +1139,8 @@ namespace lfs::vis::gui {
                         completion.request.path,
                         completion.request.name_hint,
                         splat_load_state_.gallery ? false : completion.request.is_visible,
-                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group);
+                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group,
+                        splat_load_state_.gallery.has_value());
                     if (splat_load_state_.gallery) {
                         scene_manager->getScene().setNodeTransform(node_name, completion.request.transform);
                         scene_manager->getScene().setNodeVisibility(node_name, true);
@@ -1669,6 +1669,10 @@ namespace lfs::vis::gui {
                 throw std::runtime_error("The scene changed while it was being prepared.");
             const auto document =
                 viewer_->project_lifecycle_ ? viewer_->project_lifecycle_->boundDocument() : nullptr;
+            auto current_license = viewer_->projectGetLicense();
+            if (!current_license)
+                throw std::runtime_error(std::string(current_license.error().user_message()));
+            publication.published_license = *current_license;
             publication.nodes.reserve(snapshots.size());
             for (size_t i = 0; i < snapshots.size(); ++i) {
                 publication.nodes.push_back(GalleryScenePublishNode{

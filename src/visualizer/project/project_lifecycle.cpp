@@ -8449,6 +8449,22 @@ namespace lfs::vis::project {
         return document_->set_license(license);
     }
 
+    lfs::Result<void> ProjectLifecycle::adoptImportLicense(
+        const std::optional<std::vector<uint8_t>>& license_bytes) {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        auto adopted = document_->adopt_import_license(license_bytes);
+        if (adopted)
+            cached_project_info_.reset();
+        return adopted;
+    }
+
     lfs::Result<void> ProjectLifecycle::clearLicense() {
         if (!document_) {
             return fail<void>(

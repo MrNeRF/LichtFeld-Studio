@@ -42,6 +42,7 @@ namespace lfs::vis::gui {
         project::SessionJson published_render;
         project::SessionJson published_camera;
         project::SessionJson published_timeline;
+        std::optional<lfs::io::project::ProjectLicense> published_license;
         std::string published_loop_mode = "once";
         float published_playback_speed = 1.0f;
         std::filesystem::path environment_source;

@@ -265,6 +265,27 @@ def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch,
         panel._finish_local_update(job)
     assert actions == ["project saved"] and update["phase"] == "linking"
 
+
+@pytest.mark.parametrize("suffix", [".sog", ".ssog"])
+def test_gallery_update_rejects_raw_splat_stage(gallery, monkeypatch, tmp_path, suffix):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    project = ("project", str(tmp_path / "current.licht"))
+    update = {"project": project, "phase": "staging", "stage_id": "stage"}
+    job = {"id": "download", "_update": update}
+    state["jobs"] = [{"id": "download", "stagedImport": {
+        "id": "stage", "state": "ready", "path": str(tmp_path / ("download" + suffix))}}]
+    calls = []
+    monkeypatch.setattr(panel, "_project_identity", lambda: project)
+    monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(get_node=lambda _: None), raising=False)
+    monkeypatch.setattr(module.lf, "load_file", lambda path: calls.append(path), raising=False)
+
+    with pytest.raises(ValueError, match="downloaded project identity or path changed"):
+        panel._finish_local_update(job)
+
+    assert not calls
+
+
 @pytest.mark.parametrize("outcome", ["success", "edited", "generation", "project", "account", "failed"])
 def test_update_final_save_links_only_its_clean_committed_project(gallery, monkeypatch, outcome):
     panel, state, actions = gallery

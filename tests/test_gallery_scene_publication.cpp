@@ -729,6 +729,34 @@ TEST(GalleryProjectExportTest, SavedSpzV4IsByteIdentical) {
     EXPECT_FALSE(publication.materialized_payload);
 }
 
+TEST(GalleryProjectExportTest, PublicationCarriesProjectLicenseAndItsAbsence) {
+    TemporaryDirectory temporary;
+    auto source_request = base_request(temporary.path / "source.scene", ExportFormat::GALLERY_SCENE);
+    source_request.nodes.push_back({.snapshot = cpu_snapshot(), .name = "splat"});
+    writeGalleryScenePublication(source_request, {}, {});
+    const auto source_path = source_request.path / "project.licht";
+
+    auto publish = [&](const std::string& name) {
+        GalleryScenePublishRequest request;
+        std::string commit;
+        prepareGalleryProjectPublication({source_path, temporary.path / name,
+                                          ExportFormat::GALLERY_SCENE, ""},
+                                         request, commit);
+        writeGalleryScenePublication(request, {}, {});
+        return require_result_ptr(ProjectDocument::open(request.path / "project.licht"));
+    };
+
+    auto without = publish("without.scene");
+    EXPECT_FALSE(require_result(without->project().license()).has_value());
+
+    auto source = require_result_ptr(ProjectDocument::open(source_path));
+    const lfs::io::project::ProjectLicense expected{"LicenseRef-Custom", "Use with attribution"};
+    require_status(source->set_license(expected));
+    static_cast<void>(require_result(source->save(source_path)));
+    auto with = publish("with.scene");
+    EXPECT_EQ(require_result(with->project().license()), expected);
+}
+
 TEST(GalleryProjectExportTest, PlyPayloadReencodesToRequestedSog) {
     TemporaryDirectory temporary;
     GalleryScenePublishRequest publication;

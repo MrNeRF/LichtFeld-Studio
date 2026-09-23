@@ -103,6 +103,9 @@ namespace lfs::io::project {
         friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
     };
 
+    [[nodiscard]] LFS_IO_API std::optional<ProjectLicense>
+    map_sog_license(std::span<const std::uint8_t> bytes);
+
     enum class WorldOriginProvenance : std::uint8_t {
         None,
         CentralizeByPointCloud,

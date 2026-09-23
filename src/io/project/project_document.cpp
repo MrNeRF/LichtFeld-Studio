@@ -2566,6 +2566,17 @@ namespace lfs::io::project {
         return edit_project().clear_license();
     }
 
+    lfs::Result<void> ProjectDocument::adopt_import_license(
+        const std::optional<std::vector<uint8_t>>& license_bytes) {
+        auto current = project().license();
+        if (!current)
+            return lfs::Status::failure(std::move(current).error());
+        if (current->has_value())
+            return {};
+        const auto candidate = license_bytes ? map_sog_license(*license_bytes) : std::nullopt;
+        return candidate ? set_license(*candidate) : lfs::Result<void>{};
+    }
+
     const ReferencesChapter& ProjectDocument::references() const noexcept {
         return impl_->references;
     }

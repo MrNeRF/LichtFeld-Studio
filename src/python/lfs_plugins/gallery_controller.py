@@ -1776,9 +1776,12 @@ class GalleryController:
             if scene.get_node(Path(stage["path"]).stem):
                 raise ValueError("The update preview already exists. Download the gallery item again.")
             if Path(stage["path"]).suffix == ".scene":
-                lf.load_gallery_scene(self._staged_nodes(stage["path"]), Path(stage["path"]).stem, hidden=True)
-            else:
+                lf.load_gallery_scene(self._staged_nodes(stage["path"]), Path(stage["path"]).stem,
+                    hidden=True)
+            elif Path(stage["path"]).suffix == ".licht":
                 lf.load_file(stage["path"])
+            else:
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
             update["phase"] = "importing"
             self._import_started = time.monotonic()
             return

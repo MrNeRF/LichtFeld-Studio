@@ -871,7 +871,8 @@ namespace lfs::vis {
                                                     const std::string& name_hint,
                                                     const bool is_visible,
                                                     lfs::io::LoadResult load_result,
-                                                    const bool replace_scene) {
+                                                    const bool replace_scene,
+                                                    const bool defer_import_license) {
         LOG_TIMER("SceneManager::attachLoadedSplatFile");
         (void)is_visible;
 
@@ -1065,6 +1066,8 @@ namespace lfs::vis {
                 .voxel_size = DEFAULT_VOXEL_SIZE}
                 .emit();
 
+            if (!defer_import_license && load_result.license_bytes && import_license_callback_)
+                import_license_callback_(load_result.license_bytes);
             return attached_name;
 
         } catch (const std::exception& e) {
@@ -1135,7 +1138,8 @@ namespace lfs::vis {
                                                     const std::string& name_hint,
                                                     const bool is_visible,
                                                     lfs::io::LoadResult load_result,
-                                                    const bool preserve_raw, const core::NodeId parent) {
+                                                    const bool preserve_raw, const core::NodeId parent,
+                                                    const bool defer_import_license) {
         LOG_TIMER_TRACE("SceneManager::attachLoadedSplatNode");
 
         try {
@@ -1256,6 +1260,8 @@ namespace lfs::vis {
             }
 
             LOG_DEBUG("Added '{}' ({} gaussians)", added_name, gaussian_count);
+            if (!defer_import_license && load_result.license_bytes && import_license_callback_)
+                import_license_callback_(load_result.license_bytes);
             return added_name;
 
         } catch (const std::exception& e) {
