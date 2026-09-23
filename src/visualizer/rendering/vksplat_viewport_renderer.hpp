@@ -188,6 +188,9 @@ namespace lfs::vis {
         // training indefinitely.
         void requestArenaHandoff();
         void cancelArenaHandoff();
+        // Keeps a pending reservation alive and reports whether the next render
+        // could claim the arena without waiting.
+        [[nodiscard]] bool pollArenaHandoff();
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's

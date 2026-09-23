@@ -230,14 +230,15 @@ namespace lfs::vis {
                 arena_->set_rendering_active(true);
                 render_pending_ = true;
                 try {
-                    // The pending-render flag (set above) keeps the trainer from
-                    // STARTING a new frame, so this bounded wait is normally one
-                    // training iteration. It times out instead of deadlocking on
-                    // refining iterations, where the trainer holds the frame
-                    // while blocked on the exclusive render lock our caller's
-                    // shared lock excludes.
+                    // The UI thread never waits for training: while the trainer
+                    // holds the frame, or its last frame still runs on the GPU,
+                    // this declines and the reservation below keeps the next
+                    // training frame out until the next viewport frame retries.
+                    // A longer wait would also deadlock on refining iterations,
+                    // where the trainer holds the frame while blocked on the
+                    // exclusive render lock our caller's shared lock excludes.
                     const auto token = handoff_token ? *handoff_token : 0;
-                    auto frame_id = arena_->try_begin_render_frame_for(15, token);
+                    auto frame_id = arena_->try_begin_render_frame_for(1, token);
                     if (!frame_id) {
                         if (handoff_token) {
                             *handoff_token = arena_->request_render_handoff(token);
@@ -2018,6 +2019,11 @@ namespace lfs::vis {
             arena->cancel_render_handoff(arena_handoff_token_);
         }
         arena_handoff_token_ = 0;
+    }
+
+    bool VksplatViewportRenderer::pollArenaHandoff() {
+        renewArenaHandoff();
+        return lfs::core::GlobalArenaManager::instance().get_arena().render_frame_ready(arena_handoff_token_);
     }
 
     void VksplatViewportRenderer::renewArenaHandoff() {

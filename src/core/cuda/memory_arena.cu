@@ -302,7 +302,34 @@ namespace lfs::core {
 
     std::optional<uint64_t> RasterizerMemoryArena::try_begin_render_frame_for(
         const uint32_t timeout_ms, const RenderHandoffToken token) {
-        return begin_frame_impl(nullptr, true, timeout_ms, token);
+        return begin_frame_impl(nullptr, true, timeout_ms, token, true);
+    }
+
+    bool RasterizerMemoryArena::render_frame_ready(const RenderHandoffToken token) const {
+        std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+        if (active_frames_ != 0) {
+            return false;
+        }
+        const bool other_reservation =
+            render_handoff_token_ != 0 && render_handoff_token_ != token &&
+            render_handoff_deadline_ > std::chrono::steady_clock::now();
+        return !other_reservation && !previous_frame_still_running();
+    }
+
+    bool RasterizerMemoryArena::previous_frame_still_running() const {
+        std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+        if (external_release_semaphore_ != nullptr || !last_frame_event_valid_ || !last_frame_event_) {
+            return false;
+        }
+        const cudaError_t status = cudaEventQuery(last_frame_event_);
+        if (status == cudaErrorNotReady) {
+            return true;
+        }
+        if (status != cudaSuccess) {
+            ensure_cuda_success(status, "cudaEventQuery(arena frame completion)", "fallback=event wait",
+                                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+        }
+        return false;
     }
 
     void RasterizerMemoryArena::note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value) {
@@ -359,19 +386,24 @@ namespace lfs::core {
 
     // Orders the new frame's work after the previous frame before the arena
     // offset resets and memory gets overwritten. Stream-aware frames chain via
-    // the completion event; streamless frames or a broken chain fall back to a
-    // device-wide sync. A pending Vulkan release is waited explicitly because
-    // neither the chain event nor a device sync can see in-flight Vulkan work.
+    // the completion event and streamless frames host-wait on it; only a broken
+    // chain falls back to a device-wide sync. A pending Vulkan release is waited
+    // explicitly because neither the chain event nor a device sync can see
+    // in-flight Vulkan work.
     cudaError_t RasterizerMemoryArena::wait_for_previous_frame(cudaStream_t stream) {
         cudaExternalSemaphore_t release_semaphore = nullptr;
         uint64_t release_value = 0;
         bool chain_ok = false;
+        cudaEvent_t previous_frame_event = nullptr;
         {
             std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
             release_semaphore = external_release_semaphore_;
             release_value = external_release_value_;
             external_release_semaphore_ = nullptr;
             external_release_value_ = 0;
+            if (!stream && last_frame_event_valid_) {
+                previous_frame_event = last_frame_event_;
+            }
             if (stream) {
                 if (last_frame_event_valid_) {
                     const cudaError_t chain_status =
@@ -415,9 +447,9 @@ namespace lfs::core {
                 }
                 chain_ok = false;
             } else if (wait_stream != nullptr) {
-                // The Vulkan tenant device-synced all prior CUDA work at its own
-                // streamless begin, and its arena work is Vulkan-only — this
-                // wait alone re-establishes the chain GPU-side.
+                // The Vulkan tenant waited for all prior CUDA arena work at its
+                // own streamless begin, and its arena work is Vulkan-only, so
+                // this wait alone re-establishes the chain GPU-side.
                 chain_ok = true;
             }
         }
@@ -425,13 +457,19 @@ namespace lfs::core {
         if (chain_ok) {
             return cudaSuccess;
         }
+        // The chain event covers every access of the previous stream-ordered
+        // frame; unrelated work queued after it need not drain first.
+        if (previous_frame_event != nullptr && release_semaphore == nullptr) {
+            return cudaEventSynchronize(previous_frame_event);
+        }
         return cudaDeviceSynchronize();
     }
 
     std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(
         cudaStream_t stream, const bool from_rendering,
         const std::optional<uint32_t> wait_timeout_ms,
-        const RenderHandoffToken render_handoff_token) {
+        const RenderHandoffToken render_handoff_token,
+        const bool decline_while_previous_frame_runs) {
         LFS_CUDA_BREADCRUMB_STREAM("arena.begin_frame", stream);
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
@@ -485,6 +523,9 @@ namespace lfs::core {
                         sync_cv_.wait_until(sync_lock, wake_deadline);
                     }
                 }
+            }
+            if (decline_while_previous_frame_runs && previous_frame_still_running()) {
+                return std::nullopt;
             }
             ++active_frames_;
             if (!from_rendering) {

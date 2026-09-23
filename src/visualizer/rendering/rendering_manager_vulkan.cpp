@@ -1627,6 +1627,24 @@ namespace lfs::vis {
             *last_vulkan_context_, *model, request, force_input_upload);
     }
 
+    // Camera and edit changes retry on the next frame. A passive training refresh
+    // parks instead, so the idle preview draws only once its render can proceed.
+    void RenderingManager::queueSharedScratchRetry(const DirtyMask retry_dirty) {
+        if ((retry_dirty & ~DirtyFlag::SPLATS) == 0) {
+            parked_arena_retry_ |= retry_dirty;
+            return;
+        }
+        dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
+    }
+
+    void RenderingManager::pollParkedArenaRetry() {
+        if (parked_arena_retry_ == 0 ||
+            (vksplat_viewport_renderer_ && !vksplat_viewport_renderer_->pollArenaHandoff())) {
+            return;
+        }
+        dirty_mask_.fetch_or(std::exchange(parked_arena_retry_, 0), std::memory_order_relaxed);
+    }
+
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
         if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
@@ -4298,7 +4316,7 @@ namespace lfs::vis {
                         has_cached_viewport_output &&
                         shared_scratch_retryable) {
                         const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
-                        dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
+                        queueSharedScratchRetry(retry_dirty);
                         const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                         if (vksplat_viewport_resize || !cached_size_matches) {
                             LOG_DEBUG("{} ({}); skipping cached viewport image, retry_dirty=0x{:x}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
@@ -4547,8 +4565,7 @@ namespace lfs::vis {
                 isRetryableSharedScratchUnavailable(render_error);
             if (shared_scratch_retryable) {
                 const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
-                dirty_mask_.fetch_or(retry_dirty,
-                                     std::memory_order_relaxed);
+                queueSharedScratchRetry(retry_dirty);
                 render_lock.reset();
                 const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                 if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {

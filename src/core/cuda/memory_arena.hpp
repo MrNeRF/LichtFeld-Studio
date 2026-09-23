@@ -262,8 +262,15 @@ namespace lfs::core {
             RenderHandoffToken current_token = 0);
         void cancel_render_handoff(RenderHandoffToken token);
         [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
+        // Never host-waits for GPU work: while the previous CUDA frame is still
+        // running on the GPU this declines like a busy arena, and the caller's
+        // reservation keeps the next training frame out until it retries.
         std::optional<uint64_t> try_begin_render_frame_for(
             uint32_t timeout_ms, RenderHandoffToken token = 0);
+        // True when a render holding this reservation could begin now without
+        // waiting: no frame is active, no other reservation is live, and the
+        // previous CUDA frame has finished on the GPU.
+        [[nodiscard]] bool render_frame_ready(RenderHandoffToken token = 0) const;
         void end_frame(uint64_t frame_id, bool from_rendering = false) { end_frame(frame_id, nullptr, from_rendering); }
         void end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering = false);
 
@@ -343,8 +350,12 @@ namespace lfs::core {
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                  std::optional<uint32_t> wait_timeout_ms,
-                                                 RenderHandoffToken render_handoff_token = 0);
+                                                 RenderHandoffToken render_handoff_token = 0,
+                                                 bool decline_while_previous_frame_runs = false);
         cudaError_t wait_for_previous_frame(cudaStream_t stream);
+        // True while the last stream-ordered frame's completion event is still
+        // pending on the GPU. Caller holds sync_mutex_.
+        [[nodiscard]] bool previous_frame_still_running() const;
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.

@@ -42,6 +42,15 @@ namespace {
         }
         return ok;
     }
+
+    // Keeps a stream busy until the flag is set, like kernels still running on
+    // the GPU after the CPU side has moved on.
+    void CUDART_CB hold_stream_until_released(void* flag) {
+        const auto* const released = static_cast<const std::atomic<bool>*>(flag);
+        while (!released->load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
 } // namespace
 
 class ArenaMetricsContentionTest : public ::testing::Test {
@@ -167,6 +176,97 @@ TEST_F(ArenaMetricsContentionTest, RenderHandoffReservesNextIdleWindowAfterLockU
     const auto next_training = arena.try_begin_frame(nullptr, false);
     ASSERT_TRUE(next_training.has_value());
     arena.end_frame(*next_training, nullptr, false);
+}
+
+// Catches a render begin that host-waits for the previous training frame's GPU
+// work (a device-wide or event sync on the UI thread) instead of declining and
+// keeping its reservation.
+TEST_F(ArenaMetricsContentionTest, RenderBeginDoesNotWaitForTrainingWorkStillOnTheGpu) {
+    RasterizerMemoryArena arena;
+    cudaStream_t training_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&training_stream, cudaStreamNonBlocking), cudaSuccess);
+    std::atomic<bool> released{false};
+    const auto training = arena.begin_frame(training_stream, false);
+    ASSERT_EQ(cudaLaunchHostFunc(training_stream, hold_stream_until_released, &released), cudaSuccess);
+    arena.end_frame(training, training_stream, false);
+
+    const auto token = arena.request_render_handoff();
+    auto attempt = std::async(std::launch::async, [&] {
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        return arena.try_begin_render_frame_for(15, token);
+    });
+    const bool returned = attempt.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    const bool declined = returned && !attempt.get().has_value();
+    EXPECT_TRUE(returned) << "render begin blocked on training work still running on the GPU";
+    EXPECT_TRUE(declined) << "render claimed the arena before the training frame finished on the GPU";
+    EXPECT_FALSE(arena.try_begin_frame(training_stream, false))
+        << "the render reservation must keep the next training frame out";
+
+    released.store(true, std::memory_order_release);
+    if (!returned) {
+        if (const auto blocked = attempt.get()) {
+            arena.end_frame(*blocked, nullptr, true);
+        }
+    }
+    ASSERT_EQ(cudaStreamSynchronize(training_stream), cudaSuccess);
+    if (declined) {
+        const auto frame = arena.try_begin_render_frame_for(15, arena.request_render_handoff(token));
+        ASSERT_TRUE(frame.has_value());
+        arena.end_frame(*frame, nullptr, true);
+    }
+    ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
+}
+
+// Catches a render begin that drains the whole device (for example an optimizer
+// step queued after the rasterizer frame) instead of only the arena's last frame.
+TEST_F(ArenaMetricsContentionTest, RenderBeginWaitsOnlyForTheArenaFrame) {
+    RasterizerMemoryArena arena;
+    cudaStream_t training_stream = nullptr;
+    cudaStream_t other_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&training_stream, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&other_stream, cudaStreamNonBlocking), cudaSuccess);
+    const auto training = arena.begin_frame(training_stream, false);
+    arena.end_frame(training, training_stream, false);
+    ASSERT_EQ(cudaStreamSynchronize(training_stream), cudaSuccess);
+    std::atomic<bool> released{false};
+    ASSERT_EQ(cudaLaunchHostFunc(other_stream, hold_stream_until_released, &released), cudaSuccess);
+
+    auto attempt = std::async(std::launch::async, [&] {
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        return arena.try_begin_render_frame_for(15);
+    });
+    const bool returned = attempt.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    released.store(true, std::memory_order_release);
+    const auto frame = attempt.get();
+    EXPECT_TRUE(returned) << "render begin waited for CUDA work that never touched the arena";
+    ASSERT_TRUE(frame.has_value());
+    arena.end_frame(*frame, nullptr, true);
+    ASSERT_EQ(cudaStreamSynchronize(other_stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(other_stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
+}
+
+// Catches a readiness poll that reports ready while training owns the arena or
+// its last frame still runs, or that ignores another live reservation.
+TEST_F(ArenaMetricsContentionTest, RenderFrameReadyOnlyWhenRenderCanBeginWithoutWaiting) {
+    RasterizerMemoryArena arena;
+    cudaStream_t training_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&training_stream, cudaStreamNonBlocking), cudaSuccess);
+    std::atomic<bool> released{false};
+    const auto training = arena.begin_frame(training_stream, false);
+    EXPECT_FALSE(arena.render_frame_ready());
+    ASSERT_EQ(cudaLaunchHostFunc(training_stream, hold_stream_until_released, &released), cudaSuccess);
+    arena.end_frame(training, training_stream, false);
+
+    const auto token = arena.request_render_handoff();
+    EXPECT_FALSE(arena.render_frame_ready(token));
+    released.store(true, std::memory_order_release);
+    ASSERT_EQ(cudaStreamSynchronize(training_stream), cudaSuccess);
+    EXPECT_TRUE(arena.render_frame_ready(token));
+    EXPECT_FALSE(arena.render_frame_ready());
+    arena.cancel_render_handoff(token);
+    EXPECT_TRUE(arena.render_frame_ready());
+    ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
 }
 
 TEST_F(ArenaMetricsContentionTest, ArenaContentionNeverDropsValidCachedFrame) {
