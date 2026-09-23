@@ -125,21 +125,21 @@ def test_native_refusal_keeps_exact_reason_and_never_opens(gallery, tmp_path, mo
     controller.service.root = tmp_path
     staging = tmp_path / 'export.scene'
     staging.mkdir()
-    controller._export_pending = (staging, {}, 'project', 0)
-    controller._export_identity = controller.service.identity()
-    controller._prepared_commit = 'reviewed'
+    controller._publish_steps.pending = (staging, {}, 'project', 0)
+    controller._publish_steps.identity = controller.service.identity()
+    controller._publish_steps.prepared_commit = 'reviewed'
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {
         'path': str(staging), 'active': False, 'outcome': 'failed', 'error': reason}, raising=False)
     monkeypatch.setattr(controller, '_remove_preparation', lambda _: None)
     monkeypatch.setattr(module.lf, 'project_open', lambda *a, **kw: pytest.fail('Refused publication opened a project'), raising=False)
     controller._finish_export()
-    assert controller._export_pending is None
+    assert controller._publish_steps.pending is None
     expected_message = {
         'gallery_project_not_supported': 'projects.gallery.eligibility.format',
         'gallery_project_payload_unavailable': 'projects.gallery.eligibility.external_payloads',
         'gallery_project_commit_mismatch': 'projects.gallery.error.project_changed',
     }[reason.split(':', 1)[0]]
-    assert controller._preparation_failure['message'] == reason
+    assert controller._publish_steps.preparation_failure['message'] == reason
     assert controller.snapshot()['message'] == expected_message
 
 
@@ -148,8 +148,8 @@ def test_native_commit_mismatch_never_queues_upload(gallery, tmp_path, monkeypat
     import lfs_plugins.gallery_controller as module
     staging = tmp_path / 'export.scene'
     staging.mkdir()
-    controller._export_pending = (staging, {}, 'project', 0)
-    controller._prepared_commit = 'reviewed'
+    controller._publish_steps.pending = (staging, {}, 'project', 0)
+    controller._publish_steps.prepared_commit = 'reviewed'
     monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {
         'path': str(staging), 'active': False, 'outcome': 'completed', 'commit_uuid': 'changed'}, raising=False)
     monkeypatch.setattr(controller, '_remove_preparation', lambda _: None)
@@ -253,7 +253,7 @@ def test_pull_and_open_finishes_and_releases_idle_poll(gallery, monkeypatch, tmp
     job['status'] = 'completed'
     state['completion'] = {'id': 'download-done'}
     controller._poll()
-    assert controller._import_pending['_opening']['phase'] == 'staging'
+    assert controller._download_open_steps.pending['_opening']['phase'] == 'staging'
     assert leases == ['acquired']
     if cancel:
         controller.command('pause')
@@ -263,7 +263,7 @@ def test_pull_and_open_finishes_and_releases_idle_poll(gallery, monkeypatch, tmp
     assert leases == ['acquired', 'released']
     assert len([call for call in calls if call != 'refresh']) == (0 if cancel else 1)
     assert calls.count('refresh') == 1
-    assert controller._import_pending is None and controller._native_use is None
+    assert controller._download_open_steps.pending is None and controller._native_use is None
     assert controller.phase() == 'idle' and not controller._panel_busy() and not controller._work_pending()
     before = len(scheduled)
     controller._poll()
@@ -315,11 +315,11 @@ def test_closed_update_uses_saved_file_proof_without_live_capture(gallery, monke
     if patch:
         assert calls[0][1] == ('scene', {'contentRevision': 'c', 'metadataRevision': 'm'}, details)
         assert calls[0][2] == {'commit_uuid': 'new', 'content_stamp': saved, 'project_id': 'project'}
-        assert controller._export_pending is None
+        assert controller._publish_steps.pending is None
     else:
-        assert controller._export_pending[1]['_contentStamp'] == saved
+        assert controller._publish_steps.pending[1]['_contentStamp'] == saved
     if not saved:
-        assert controller._reupload_reason['message'] == 'projects.gallery.info.reupload_encoding'
+        assert controller._publish_steps.reupload_reason['message'] == 'projects.gallery.info.reupload_encoding'
 
 
 @pytest.mark.parametrize('field', [None, 'portalOwnedHosts'])

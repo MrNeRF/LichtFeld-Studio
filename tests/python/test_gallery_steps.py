@@ -47,7 +47,7 @@ def update_case(gallery, monkeypatch, tmp_path):
                "linkOperation": {"id": "link", "state": "ready"}}
     state["jobs"] = [journal]
     panel.service.fail_local_update = lambda job_id, reason: journal["localUpdate"].update(state="failed", message=reason)
-    panel._import_pending = job
+    panel._local_update_steps.pending = job
     return panel, state, actions, nodes, update, poll, project_path, preview_path, backup_path, journal
 
 
@@ -66,9 +66,9 @@ def test_update_cancel_characterization(update_case, phase, keeps_preview, keeps
     assert update["canceled"] is True
     if phase == "save_updated":
         poll["generation"] = 4
-    panel._finish_local_update(panel._import_pending)
+    panel._finish_local_update(panel._local_update_steps.pending)
     assert ("preview" in nodes) is keeps_preview
-    assert (panel._import_pending is not None) is keeps_pending
+    assert (panel._local_update_steps.pending is not None) is keeps_pending
     assert panel.snapshot()["message"] == message
     assert project_path.read_bytes() == b"saved local project"
     assert preview_path.exists() and backup_path.read_bytes() == b"saved local project"
@@ -79,7 +79,7 @@ def test_update_cancel_characterization(update_case, phase, keeps_preview, keeps
 def test_update_success_order_characterization(update_case, monkeypatch):
     panel, state, actions, nodes, update, poll, project_path, preview_path, backup_path, journal = update_case
     module = import_module("lfs_plugins.gallery_controller")
-    job = panel._import_pending
+    job = panel._local_update_steps.pending
     nodes.clear()
     monkeypatch.setattr(panel, "_staged_nodes", lambda path: [])
     monkeypatch.setattr(module.lf, "load_gallery_scene", lambda *args, **kwargs: nodes.update(preview=SimpleNamespace(name="preview", uuid="incoming")), raising=False)
@@ -103,7 +103,7 @@ def test_update_success_order_characterization(update_case, monkeypatch):
     panel._finish_local_update(job)
     assert update["phase"] == "linking" and actions[-1] == "link requested"
     panel._finish_local_update(job)
-    assert panel._import_pending is None
+    assert panel._local_update_steps.pending is None
     assert panel.snapshot()["message"] == "Linked project updated. Your previous local work is kept in its recovery copy."
     assert project_path.exists() and preview_path.exists() and backup_path.exists()
 
@@ -135,7 +135,7 @@ def test_update_failure_characterization(update_case, monkeypatch, phase):
         journal["linkOperation"].update(state="failed", message="link failed")
     monkeypatch.setattr(module.lf, "project_open", lambda *args, **kwargs: actions.append("reopen"), raising=False)
     panel._advance_phases()
-    assert panel._import_pending is None
+    assert panel._local_update_steps.pending is None
     assert panel.snapshot()["actionError"]
     assert journal["localUpdate"]["state"] == "failed"
     assert project_path.read_bytes() == b"saved local project"
@@ -153,7 +153,7 @@ def test_update_waits_for_ready_backup_before_replacing_local_content(update_cas
     panel.service.busy = True
     monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: pytest.fail("Changed the view before backup"))
     monkeypatch.setattr(module.lf, "project_save", lambda **kwargs: pytest.fail("Saved a replacement before backup"), raising=False)
-    panel._finish_local_update(panel._import_pending)
+    panel._finish_local_update(panel._local_update_steps.pending)
     assert set(nodes) == {"local", "preview"} and actions == []
     assert project_path.read_bytes() == backup_path.read_bytes()
     assert journal["localUpdate"]["state"] == "preparing"
@@ -164,7 +164,7 @@ def test_update_cancel_after_import_removes_only_its_preview(update_case):
     nodes["local"] = SimpleNamespace(name="local", uuid="local")
     update["phase"] = "importing"
     panel._action_pause()
-    panel._finish_local_update(panel._import_pending)
+    panel._finish_local_update(panel._local_update_steps.pending)
     assert set(nodes) == {"local"}
     assert actions == ["cancel import", "hide preview", "remove preview"]
     assert project_path.read_bytes() == backup_path.read_bytes()
@@ -210,18 +210,18 @@ def open_case(gallery, monkeypatch, tmp_path):
 
 def test_download_open_order_characterization(open_case):
     panel, state, actions, source, opened, stage, journal = open_case
-    assert panel._import_pending["_opening"]["phase"] == "staging"
+    assert panel._download_open_steps.pending["_opening"]["phase"] == "staging"
     assert panel.snapshot()["message"] == "Checking downloaded scene…"
     panel._finish_import()
-    assert panel._import_pending["_opening"]["phase"] == "opened"
+    assert panel._download_open_steps.pending["_opening"]["phase"] == "opened"
     assert actions == ["opened"] and source.exists() and opened.exists()
     panel._finish_import()
     assert actions == ["opened", "viewing copy", "view", "link requested"]
-    assert panel._import_pending["_link"] == "link"
+    assert panel._download_open_steps.pending["_link"] == "link"
     assert "Saving its gallery link" in panel.snapshot()["message"]
     panel._finish_import()
-    assert panel._import_pending is None
-    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    assert panel._download_open_steps.pending is None
+    assert panel._download_open_steps.pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
     assert "saved and linked" in panel.snapshot()["message"]
     assert journal["linkOperation"]["state"] == "ready" and source.read_bytes() == b"kept download"
 
@@ -229,7 +229,7 @@ def test_download_open_order_characterization(open_case):
 @pytest.mark.parametrize("phase", ["staging", "opened", "linking"])
 def test_download_open_cancel_characterization(open_case, phase):
     panel, state, actions, source, opened, stage, journal = open_case
-    job = panel._import_pending
+    job = panel._download_open_steps.pending
     if phase == "opened":
         panel._finish_import()
     elif phase == "linking":
@@ -238,17 +238,17 @@ def test_download_open_cancel_characterization(open_case, phase):
     panel._action_pause()
     if phase == "staging":
         panel._finish_import()
-        assert panel._import_pending is None and not actions
+        assert panel._download_open_steps.pending is None and not actions
         assert "download is kept" in panel.snapshot()["message"]
     elif phase == "opened":
-        panel._import_detached = True
+        panel._download_open_steps.detached = True
         panel._finish_import()
-        assert panel._import_pending is None and actions == ["opened"]
+        assert panel._download_open_steps.pending is None and actions == ["opened"]
         assert "kept locally" in panel.snapshot()["message"]
     else:
-        panel._import_detached = True
+        panel._download_open_steps.detached = True
         panel._finish_import()
-        assert panel._import_pending is None and "refresh your gallery" in panel.snapshot()["message"]
+        assert panel._download_open_steps.pending is None and "refresh your gallery" in panel.snapshot()["message"]
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == "ready"
 
@@ -259,7 +259,7 @@ def test_cancel_after_native_open_does_not_register_or_link(open_case):
     assert actions == ["opened"]
     panel._action_pause()
     panel._finish_import()
-    assert panel._import_pending is None
+    assert panel._download_open_steps.pending is None
     assert actions == ["opened"]
     assert panel._message == import_module("lfs_plugins.gallery_sync_steps").tr("info.canceled")
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
@@ -291,29 +291,29 @@ def test_download_open_failure_characterization(open_case, monkeypatch, phase):
 
 def test_download_keep_order_characterization(open_case):
     panel, state, actions, source, opened, stage, journal = open_case
-    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+    panel._download_open_steps.pending = {"id": "download", "result": {"title": "Gallery"},
         "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
-    panel._finish_register_download(panel._import_pending)
-    assert panel._import_pending["_register"]["phase"] == "linking"
+    panel._finish_register_download(panel._download_open_steps.pending)
+    assert panel._download_open_steps.pending["_register"]["phase"] == "linking"
     assert actions == ["viewing copy", "link requested"]
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
-    panel._finish_register_download(panel._import_pending)
-    assert panel._import_pending is None
-    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    panel._finish_register_download(panel._download_open_steps.pending)
+    assert panel._download_open_steps.pending is None
+    assert panel._download_open_steps.pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
     assert journal["linkOperation"]["state"] == "ready"
 
 
 @pytest.mark.parametrize("phase", ["staging", "linking"])
 def test_download_keep_cancel_characterization(open_case, phase):
     panel, state, actions, source, opened, stage, journal = open_case
-    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+    panel._download_open_steps.pending = {"id": "download", "result": {"title": "Gallery"},
         "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
     if phase == "linking":
-        panel._finish_register_download(panel._import_pending)
+        panel._finish_register_download(panel._download_open_steps.pending)
     panel._action_pause()
-    panel._finish_register_download(panel._import_pending)
-    assert panel._import_pending is None
-    assert (panel._pulled_project is not None) is (phase == "linking")
+    panel._finish_register_download(panel._download_open_steps.pending)
+    assert panel._download_open_steps.pending is None
+    assert (panel._download_open_steps.pulled_project is not None) is (phase == "linking")
     assert actions == (["viewing copy", "link requested"] if phase == "linking" else [])
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == "ready"
@@ -322,29 +322,29 @@ def test_download_keep_cancel_characterization(open_case, phase):
 @pytest.mark.parametrize("phase", ["staging", "linking"])
 def test_download_keep_failure_characterization(open_case, phase):
     panel, state, actions, source, opened, stage, journal = open_case
-    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+    panel._download_open_steps.pending = {"id": "download", "result": {"title": "Gallery"},
         "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
     if phase == "staging":
         stage.update(state="failed", message="stage failed")
     else:
-        panel._finish_register_download(panel._import_pending)
+        panel._finish_register_download(panel._download_open_steps.pending)
         journal["linkOperation"].update(state="failed", message="link failed")
     with pytest.raises(ValueError):
-        panel._finish_register_download(panel._import_pending)
+        panel._finish_register_download(panel._download_open_steps.pending)
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == ("failed" if phase == "linking" else "ready")
 
 
 def test_cancel_after_download_link_submission_reports_completed_link(open_case):
     panel, state, actions, source, opened, stage, journal = open_case
-    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+    panel._download_open_steps.pending = {"id": "download", "result": {"title": "Gallery"},
         "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
-    panel._finish_register_download(panel._import_pending)
+    panel._finish_register_download(panel._download_open_steps.pending)
     assert actions == ["viewing copy", "link requested"]
     panel._action_pause()
-    panel._finish_register_download(panel._import_pending)
-    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
-    assert panel._import_pending is None
+    panel._finish_register_download(panel._download_open_steps.pending)
+    assert panel._download_open_steps.pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    assert panel._download_open_steps.pending is None
     assert journal["linkOperation"]["state"] == "ready"
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
 
@@ -358,7 +358,7 @@ def test_publish_preparation_characterization(gallery, monkeypatch, tmp_path, ou
     module = import_module("lfs_plugins.gallery_controller")
     export = tmp_path / "prepared.ply"
     export.write_bytes(b"prepared scene")
-    panel._export_pending = (export, {"title": "Gallery"}, "project", 0)
+    panel._publish_steps.pending = (export, {"title": "Gallery"}, "project", 0)
     panel._operation_title = "Gallery"
     panel.service.queue_prepared_upload = lambda *args: actions.append("queued")
     native = {"path": str(export), "active": outcome == "active", "progress": 0.5,
@@ -369,7 +369,7 @@ def test_publish_preparation_characterization(gallery, monkeypatch, tmp_path, ou
     panel._finish_export()
     assert export.exists() is keeps_export
     assert ("queued" in actions) is queued
-    assert (panel._export_pending is not None) is (outcome == "active")
+    assert (panel._publish_steps.pending is not None) is (outcome == "active")
     assert panel.snapshot()["phase"] == ("preparing" if outcome == "active" else "idle")
     assert panel.snapshot()["message"] == ("" if queued else panel._message)
     assert state["jobs"] == []
@@ -417,13 +417,13 @@ def test_publish_never_queues_a_different_prepared_commit(gallery, monkeypatch, 
     module = import_module("lfs_plugins.gallery_controller")
     export = tmp_path / "prepared.ply"
     export.write_bytes(b"prepared scene")
-    panel._export_pending = (export, {"title": "Gallery"}, "project", 0)
-    panel._prepared_commit = "reviewed"
+    panel._publish_steps.pending = (export, {"title": "Gallery"}, "project", 0)
+    panel._publish_steps.prepared_commit = "reviewed"
     panel.service.queue_prepared_upload = lambda *args: actions.append("queued")
     monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {
         "path": str(export), "active": False, "outcome": "completed", "commit_uuid": "different"}, raising=False)
     panel._finish_export()
     assert actions == [] and not export.exists()
-    assert panel._export_pending is None and panel._prepared_commit is None
+    assert panel._publish_steps.pending is None and panel._publish_steps.prepared_commit is None
     assert panel.snapshot()["preparationFailure"]["status"] == "error"
     assert state["jobs"] == []

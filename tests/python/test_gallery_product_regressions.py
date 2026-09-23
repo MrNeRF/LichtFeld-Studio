@@ -419,8 +419,8 @@ def test_resolve_mine_preserves_hdr_source_through_native_publish(gallery, monke
     panel.resolve_asset(asset, dict(title='Mine', description='', visibility='private'))
     _accept_review(reviews)
     _drain_settings(panel, service)
-    assert panel._export_pending, panel._message
-    assert len(actions) == 1 and panel._export_pending[1]['viewerSettings'] == {key: value for key, value in view.items() if value is not None}
+    assert panel._publish_steps.pending, panel._message
+    assert len(actions) == 1 and panel._publish_steps.pending[1]['viewerSettings'] == {key: value for key, value in view.items() if value is not None}
 
 def test_resolve_portal_retires_conflict_before_backup_and_relinks(gallery, tmp_path, monkeypatch):
     from test_gallery_sync import connected, finish, Client, downloaded_job
@@ -670,7 +670,7 @@ def test_resolve_mine_chain_queues_prepared_upload_and_finishes_equal(gallery, t
         assert choices['track'] == 'both' and choices['content'] == 'mine'
         assert restored[0]['duration'] == 12
         assert [f['time'] for f in restored[0]['keyframes']] == [.5, 4, 6.5, 10]
-    assert panel._export_pending, panel._message
+    assert panel._publish_steps.pending, panel._message
     panel._finish_export()
     finish(service)
     if both:
