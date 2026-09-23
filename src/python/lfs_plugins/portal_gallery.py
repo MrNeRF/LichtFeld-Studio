@@ -771,8 +771,15 @@ class PortalGalleryClient:
                                         http_status=getattr(exc, "code", "unknown"))
                             raise
                     put_part.attempts = 0
-                    return send()
-                etag = put_part()
+                    return retry_call(send, idempotent=True)
+                for renewal in range(2):
+                    try:
+                        etag = put_part()
+                        break
+                    except urllib.error.HTTPError as exc:
+                        if exc.code not in (401, 403) or renewal:
+                            raise
+                        exc.close()
                 parts[number] = {"partNumber": number, "etag": etag, "size": length}
                 completed += length
                 on_progress(completed, size)

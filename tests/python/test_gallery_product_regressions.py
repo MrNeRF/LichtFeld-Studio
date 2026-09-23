@@ -908,7 +908,9 @@ def test_upload_transport_failure_classification(tmp_path, monkeypatch, failure)
     assert job['completed'] == path.stat().st_size // 2
     assert not completed and not service.snapshot()['links']
     assert transfer_rows(service.snapshot())[0]['can_resume'] == resumable
-    assert len(calls) == 2
+    assert len(calls) == (5 if failure in ('socket', 'timeout', 'http500', 'http429') else 2)
+    assert all(req.full_url == calls[1].full_url and req.data == calls[1].data
+               and req.get_header('Authorization') is None for req in calls[1:])
     if transient:
         assert job['message'] == 'Paused (connection lost)'
         assert job['checkpoint']['uploadId'] == upload_id

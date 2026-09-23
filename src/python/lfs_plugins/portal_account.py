@@ -858,7 +858,8 @@ class PortalAccountService:
         )
 
     def _request_json(self, method, path, body=None, headers=None, *, timeout=None, response_options=None):
-        idempotent = method == "GET"
+        idempotent = method == "GET" or (method == "POST" and path.endswith("/complete")
+            and bool((body or {}).get("idempotencyKey")))
         original = self._current_credentials()
         def request():
             if headers and 'Authorization' in headers and self._current_credentials() != original:

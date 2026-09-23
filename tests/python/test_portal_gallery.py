@@ -509,8 +509,9 @@ def test_pinned_download_storage_redirect_never_forwards_account_token(tmp_path,
         client.download(identifier, tmp_path / "unsafe.licht")
 
 
-@pytest.mark.parametrize('method,attempts', [('GET', 4), ('HEAD', 1), ('POST', 1)])
-def test_only_get_requests_retry_transient_failures(monkeypatch, method, attempts):
+@pytest.mark.parametrize('method,key,attempts', [('GET', False, 4), ('HEAD', False, 1),
+    ('POST', False, 1), ('POST', True, 4)])
+def test_account_requests_retry_only_when_idempotent(monkeypatch, method, key, attempts):
     from lfs_plugins import portal_account, portal_retry
     service = object.__new__(portal_account.PortalAccountService)
     service._current_credentials = lambda: None
@@ -521,7 +522,7 @@ def test_only_get_requests_retry_transient_failures(monkeypatch, method, attempt
     service._request_json_once = fail
     monkeypatch.setattr(portal_retry.time, 'sleep', lambda _delay: None)
     with pytest.raises(PortalHTTPError):
-        service._request_json(method, '/uploads/id/complete', {'idempotencyKey': 'key'}, timeout=7)
+        service._request_json(method, '/uploads/id/complete', {'idempotencyKey': 'key'} if key else None, timeout=7)
     assert len(calls) == attempts
     assert all(kwargs['timeout'] == 7 for _args, kwargs in calls)
 
