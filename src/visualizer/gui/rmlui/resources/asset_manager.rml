@@ -288,7 +288,7 @@
           <div id="asset-inspector-content" class="asset-inspector-content">
             <div class="asset-info-empty" data-if="show_selection_none"><span class="asset-info-empty-text">{{select_item_hint}}</span></div>
             <div class="asset-info-empty inspector-multi" data-if="show_selection_multiple">
-              {{gallery_multi_summary}}
+              <span>{{gallery_multi_summary}}</span>
               <button class="btn btn--primary" data-if="gallery_can_publish_many" data-event-click="gallery_publish_many">{{gallery_publish_many}}</button>
               <button class="btn btn--secondary" data-if="gallery_can_update_many" data-event-click="gallery_update_many">{{gallery_update_many}}</button>
             </div>
@@ -302,7 +302,7 @@
                       <button class="btn btn--primary asset-button--toolbar24" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
                       <button class="btn btn--success asset-button--toolbar24" data-if="inspector_can_resume" data-event-click="on_load_asset" data-attr-title="resume_button_label"><span>{{resume_button_label}}</span></button>
                       <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attrif-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy">{{g_action_copy}}</button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy"><span>{{g_action_copy}}</span></button>
                       <button class="asset-button asset-button--small-icon inspector-more" data-event-click="open_inspector_menu" data-tooltip="common.more" data-attr-aria-label="inspector_more_label"><img src="../icon/more-vertical.png"/></button>
                     </div>
                   </div>

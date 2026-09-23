@@ -657,6 +657,30 @@ def test_list_view_exposes_the_same_more_menu_affordance(panel_module):
     assert "flex: 0 0 24dp;" in menu_rule
     assert "visibility: visible;" in menu_rule
 
+
+@pytest.mark.parametrize("filename", ("asset_manager.rml", "gallery_file_panel.rml"))
+def test_projects_flex_elements_wrap_text_labels(filename):
+    import xml.etree.ElementTree as ET
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    root = ET.fromstring((resources / filename).read_text())
+    flex_classes = {
+        "asset-button", "contents-action", "inspector-multi", "gallery-file-content",
+        "gallery-file-fields", "gallery-file-actions", "gallery-conflict",
+        "gallery-replacement", "gallery-choice-row", "gallery-choice-description",
+        "gallery-segmented", "gallery-cover-option", "setting-row",
+    }
+    flex_elements = [
+        element for element in root.iter()
+        if flex_classes.intersection(element.get("class", "").split())
+    ]
+    flex_elements.extend(root.findall('.//div[@class="inspector-actions"]/button'))
+    assert [
+        (element.tag, element.get("data-event-click"), element.text.strip())
+        for element in flex_elements if element.text and element.text.strip()
+    ] == []
+
+
 def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(
