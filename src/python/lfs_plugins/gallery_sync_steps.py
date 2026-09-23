@@ -292,95 +292,115 @@ class DownloadOpenSteps:
     path never changes the open document; late cancel cannot retract a link.
     """
 
-    def __init__(self, ui):
-        self.ui = ui
+    def __init__(self, service, app, clock, *, acquire_native_use, release_native_use,
+                 mark_viewing_copy, link_saved_download,
+                 refresh_model, schedule_poll, message_changed):
+        self.service = service
+        self.app = app
+        self.clock = clock
+        self.acquire_native_use = acquire_native_use
+        self.release_native_use = release_native_use
+        self.mark_viewing_copy = mark_viewing_copy
+        self.link_saved_download = link_saved_download
+        self.refresh_model = refresh_model
+        self.schedule_poll = schedule_poll
+        self.message_changed = message_changed
         self.pending = None
         self.detached = False
         self.started = None
         self.progress = 0
+        self.pulled_project = None
+        self.__message = ""
+
+    @property
+    def message(self):
+        return self.__message
+
+    @property
+    def _message(self):
+        return self.__message
+
+    @_message.setter
+    def _message(self, value):
+        self.__message = value
+        self.message_changed(self)
 
     def cancel(self):
-        ui = self.ui
-        if ui._import_pending and ui._import_pending.get("_register"):
-            ui._import_pending["_register"]["canceled"] = True
-        if ui._import_pending and ui._import_pending.get("_opening"):
-            opening = ui._import_pending["_opening"]
+        if self.pending and self.pending.get("_register"):
+            self.pending["_register"]["canceled"] = True
+        if self.pending and self.pending.get("_opening"):
+            opening = self.pending["_opening"]
             opening["canceled"] = True
             if opening["phase"] == "importing":
-                lf.ui.cancel_gallery_import()
+                self.app.ui.cancel_gallery_import()
 
     def start(self, job, identity):
-        ui = self.ui
-        if ui.service.identity() != identity:
+        if self.service.identity() != identity:
             raise ValueError("The account changed while saving. Review your gallery before opening the download.")
-        if lf.is_training_active() or lf.ui.get_import_state().get("active"):
+        if self.app.is_training_active() or self.app.ui.get_import_state().get("active"):
             raise ValueError("Finish training or the current import before opening the download.")
-        ui._acquire_native_use(job["id"])
-        stage_id = ui.service.stage_download(job["id"])
-        ui._import_pending = dict(job, _accountIdentity=identity,
-            _opening={"phase": "staging", "stage_id": stage_id, "scene": lf.get_scene()})
-        ui._import_detached = False
-        ui._import_started = time.monotonic()
-        ui._message = "Checking downloaded scene…"
-        ui._schedule_poll()
+        self.acquire_native_use(job["id"])
+        stage_id = self.service.stage_download(job["id"])
+        self.pending = dict(job, _accountIdentity=identity,
+            _opening={"phase": "staging", "stage_id": stage_id, "scene": self.app.get_scene()})
+        self.detached = False
+        self.started = self.clock()
+        self._message = "Checking downloaded scene…"
+        self.schedule_poll()
         return
 
     def advance(self):
-        ui = self.ui
-        job = ui._import_pending
+        job = self.pending
         if job.get("_register"):
-            ui._finish_register_download(job)
+            self.advance_keep(job)
             return
-        if job.get("_accountIdentity") is not None and ui.service.identity() != job["_accountIdentity"]:
-            ui._import_detached = True
+        if job.get("_accountIdentity") is not None and self.service.identity() != job["_accountIdentity"]:
+            self.detached = True
         if job.get("_native_project"):
             expected = job["_native_project"]
             canceled = job.get("_opening", {}).get("canceled")
-            if ui._import_detached or canceled:
-                ui._import_pending = None
-                ui._message = (tr("info.canceled") if canceled and not ui._import_detached
+            if self.detached or canceled:
+                self.pending = None
+                self._message = (tr("info.canceled") if canceled and not self.detached
                     else "Account changed. The downloaded project is kept locally.")
                 return
-            current_path = lf.project_poll_write().get("path")
+            current_path = self.app.project_poll_write().get("path")
             if (not current_path or Path(current_path).resolve() != Path(expected["path"]).resolve()
-                    or lf.get_scene().total_gaussian_count != expected["count"]):
-                if time.monotonic() - ui._import_started > 180:
-                    ui._import_pending = None
-                    ui._message = "Project loading did not finish. The downloaded .licht file is kept."
+                    or self.app.get_scene().total_gaussian_count != expected["count"]):
+                if self.clock() - self.started > 180:
+                    self.pending = None
+                    self._message = "Project loading did not finish. The downloaded .licht file is kept."
                 return
             from .asset_index import AssetIndex
             index = AssetIndex()
             if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
             if file_stamp(expected["path"]) != expected["projectStamp"]:
                 raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
-            inspection = lf.io.inspect_project(expected["path"])
+            inspection = self.app.io.inspect_project(expected["path"])
             if str(inspection.project_uuid) != expected["projectId"]:
                 raise ValueError("The downloaded project identity changed. Prepare the download again.")
             project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"], inspection=inspection)
             if project is None:
                 raise ValueError(index.last_error or "The project opened but could not be added to Asset Manager.")
-            ui._mark_viewing_copy(index, project)
-            restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=ui.service.environment_path(job))
-            operation = ui._link_saved_download(job["id"], expected["path"], expected["projectId"])
+            self.mark_viewing_copy(index, project)
+            restore_view(self.app, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
+            operation = self.link_saved_download(job["id"], expected["path"], expected["projectId"])
             job.pop("_native_project")
             job["_link"] = operation
             job["_registered_project"] = {"id": str(project.project_uuid), "path": expected["path"], "jobId": job["id"]}
-            ui._message = "Project opened. Saving its gallery link…"
-            return
-        if job.get("_update"):
-            ui._finish_local_update(job)
+            self._message = "Project opened. Saving its gallery link…"
             return
         opening = job.get("_opening")
         if opening and opening["phase"] == "staging":
-            if ui.service.busy:
+            if self.service.busy:
                 return
-            if ui._import_detached or opening.get("canceled") or not opening["scene"].is_valid() or lf.project_is_dirty():
-                ui._import_pending = None
-                ui._message = "Account or project changed. Your download is kept; open it again when ready."
+            if self.detached or opening.get("canceled") or not opening["scene"].is_valid() or self.app.project_is_dirty():
+                self.pending = None
+                self._message = "Account or project changed. Your download is kept; open it again when ready."
                 return
-            if lf.is_training_active() or lf.ui.get_import_state().get("active"):
+            if self.app.is_training_active() or self.app.ui.get_import_state().get("active"):
                 raise ValueError("Finish training or the current import before opening this download. Your download is kept.")
-            current = next(j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"])
+            current = next(j for j in self.service.snapshot()["jobs"] if j["id"] == job["id"])
             stage = current.get("stagedImport", {})
             if stage.get("id") != opening["stage_id"] or stage.get("state") != "ready":
                 raise ValueError(stage.get("message") or "The downloaded scene could not be prepared.")
@@ -390,63 +410,61 @@ class DownloadOpenSteps:
             with open(job["path"], "rb") as source:
                 prepared = ProjectFile(source)
                 count = sum(node["count"] for node in prepared.manifest["nodes"])
-            lf.project_open(stage["projectPath"], keep_asset_manager_open=True)
+            self.app.project_open(stage["projectPath"], keep_asset_manager_open=True)
             job["_native_project"] = {"path": stage["projectPath"], "count": count,
                 "projectId": stage["projectId"], "projectStamp": stage["projectStamp"]}
             opening["phase"] = "opened"
-            ui._import_started = time.monotonic()
-            ui._message = "Opening .licht project…"
+            self.started = self.clock()
+            self._message = "Opening .licht project…"
             return
         if job.get("_link"):
-            if ui._import_detached:
-                ui._import_pending = None
-                ui._message = "The download is saved in Asset Manager. Account changed; refresh your gallery to check its link."
-                ui._refresh_model()
+            if self.detached:
+                self.pending = None
+                self._message = "The download is saved in Asset Manager. Account changed; refresh your gallery to check its link."
+                self.refresh_model()
                 return
-            if ui.service.busy:
+            if self.service.busy:
                 return
-            current = next((j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
+            current = next((j for j in self.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
             operation = current.get("linkOperation", {})
-            ui._import_pending = None
+            self.pending = None
             if operation.get("id") == job["_link"] and operation.get("state") == "ready":
-                ui._message = "Downloaded scene saved and linked in Asset Manager."
-                ui._pulled_project = job.get("_registered_project")
+                self._message = "Downloaded scene saved and linked in Asset Manager."
+                self.pulled_project = job.get("_registered_project")
             else:
-                ui._message = "The download is saved in Asset Manager, but its gallery link could not be saved. Refresh your gallery before continuing."
-            ui._refresh_model()
+                self._message = "The download is saved in Asset Manager, but its gallery link could not be saved. Refresh your gallery before continuing."
+            self.refresh_model()
             return
 
     def start_keep(self, job, identity):
         """Keep and link a portable project without changing the open document."""
-        ui = self.ui
         if Path(job["path"]).suffix != ".licht":
             raise ValueError(tr("error.format"))
-        if identity != ui.service.identity():
+        if identity != self.service.identity():
             raise ValueError(tr("error.account_changed"))
-        ui._acquire_native_use(job["id"])
+        self.acquire_native_use(job["id"])
         try:
-            stage_id = ui.service.stage_download(job["id"])
+            stage_id = self.service.stage_download(job["id"])
         except Exception as exc:
             log_failure("stage_download", exc, job_id=job["id"])
-            ui._release_native_use()
+            self.release_native_use()
             raise
-        ui._import_pending = dict(job, _accountIdentity=identity,
+        self.pending = dict(job, _accountIdentity=identity,
             _register={"stage_id": stage_id, "phase": "staging"})
-        ui._import_detached = False
-        ui._message = tr("state.downloading", percent=100)
-        ui._schedule_poll()
+        self.detached = False
+        self._message = tr("state.downloading", percent=100)
+        self.schedule_poll()
 
     def advance_keep(self, job):
-        ui = self.ui
         pending = job["_register"]
-        if ui.service.busy:
+        if self.service.busy:
             return
         if (pending.get("canceled") and pending["phase"] == "staging"
-                or ui._import_detached or job["_accountIdentity"] != ui.service.identity()):
-            ui._import_pending = None
-            ui._message = tr("error.account_changed" if ui._import_detached else "info.canceled")
+                or self.detached or job["_accountIdentity"] != self.service.identity()):
+            self.pending = None
+            self._message = tr("error.account_changed" if self.detached else "info.canceled")
             return
-        current = next((j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
+        current = next((j for j in self.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
         if pending["phase"] == "staging":
             stage = current.get("stagedImport", {})
             if stage.get("id") != pending["stage_id"] or stage.get("state") != "ready":
@@ -458,7 +476,7 @@ class DownloadOpenSteps:
                 raise ValueError(tr("error.storage"))
             if file_stamp(path) != stage.get("projectStamp"):
                 raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
-            inspection = lf.io.inspect_project(path)
+            inspection = self.app.io.inspect_project(path)
             if str(inspection.project_uuid) != stage.get("projectId"):
                 raise ValueError("The downloaded project identity changed. Prepare the download again.")
             previous = index.get_asset(str(inspection.project_uuid))
@@ -468,17 +486,17 @@ class DownloadOpenSteps:
             project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
             if project is None:
                 raise ValueError(index.last_error or tr("error.storage"))
-            ui._mark_viewing_copy(index, project)
+            self.mark_viewing_copy(index, project)
             pending.update(phase="linking", path=path, project=str(inspection.project_uuid),
-                operation=ui._link_saved_download(job["id"], path, str(inspection.project_uuid)))
+                operation=self.link_saved_download(job["id"], path, str(inspection.project_uuid)))
             return
         operation = current.get("linkOperation", {})
-        ui._import_pending = None
+        self.pending = None
         if operation.get("id") != pending["operation"] or operation.get("state") != "ready":
             raise ValueError(operation.get("message") or tr("error.link"))
-        ui._pulled_project = {"id": pending["project"], "path": pending["path"], "jobId": job["id"]}
-        ui._message = tr("info.pulled")
-        ui._refresh_model()
+        self.pulled_project = {"id": pending["project"], "path": pending["path"], "jobId": job["id"]}
+        self._message = tr("info.pulled")
+        self.refresh_model()
 
 
 class PublishSteps:

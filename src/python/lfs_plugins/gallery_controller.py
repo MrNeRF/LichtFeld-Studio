@@ -59,7 +59,6 @@ class GalleryController:
         self._undo_pull = None
         self._settings_pending = None
         self._reupload_reason = None
-        self._pulled_project = None
         self._decision_pending = False
         self._last_canceled = False
         self._update_queue = []
@@ -83,7 +82,15 @@ class GalleryController:
             recover_update=lambda *args: self._recover_failed_update(*args),
             set_undo_pull=lambda value: setattr(self, "_undo_pull", value),
             message_changed=self._select_step_message)
-        self._download_open_steps = DownloadOpenSteps(self)
+        self._download_open_steps = DownloadOpenSteps(
+            self.service, lf, time.monotonic,
+            acquire_native_use=lambda job_id: self._acquire_native_use(job_id),
+            release_native_use=lambda: self._release_native_use(),
+            mark_viewing_copy=lambda index, project: self._mark_viewing_copy(index, project),
+            link_saved_download=lambda *args, **kwargs: self._link_saved_download(*args, **kwargs),
+            refresh_model=lambda: self._refresh_model(),
+            schedule_poll=lambda: self._schedule_poll(),
+            message_changed=self._select_step_message)
         self._publish_steps = PublishSteps(self, lambda *args: asset_sync_state(*args))
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
@@ -144,6 +151,14 @@ class GalleryController:
     @_pull_overrides.setter
     def _pull_overrides(self, value):
         self._local_update_steps.overrides = value
+
+    @property
+    def _pulled_project(self):
+        return self._download_open_steps.pulled_project
+
+    @_pulled_project.setter
+    def _pulled_project(self, value):
+        self._download_open_steps.pulled_project = value
 
     def _account_changed(self, _state):
         def update():
@@ -1320,6 +1335,11 @@ class GalleryController:
         return self._download_open_steps.start(job, identity)
 
     def _finish_import(self):
+        if self._local_update_steps.pending:
+            job = self._local_update_steps.pending
+            if job.get("_accountIdentity") is not None and self.service.identity() != job["_accountIdentity"]:
+                self._local_update_steps.detached = True
+            return self._finish_local_update(job)
         return self._download_open_steps.advance()
 
     @staticmethod
