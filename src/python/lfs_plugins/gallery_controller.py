@@ -28,17 +28,16 @@ class GalleryController:
         self._state = self.service.snapshot()
         self._identity = self._state["identity"]
         self._confirm = None
-        self._message = ""
+        self._ui_message = ""
+        self._message_source = None
         self._failure_notice = ""
-        self._import_pending = None
         self._save_pending = None
         self._export_pending = None
         self._prepared_commit = None
         self._export_cancelled = False
         self._export_identity = None
         self._export_progress = 0
-        self._import_started = None
-        self._import_detached = False
+        self._import_progress = 0
         self._native_use = None
         self._subscribers = {}
         self._timer = None
@@ -57,7 +56,6 @@ class GalleryController:
         self._pull_requests = {}
         self._cancel_requests = set()
         self._open_continuation = None
-        self._pull_overrides = None
         self._undo_pull = None
         self._settings_pending = None
         self._reupload_reason = None
@@ -69,12 +67,83 @@ class GalleryController:
         self._batch_retries = {}
         self._batch_current = None
         self._preparation_failure = None
-        self._local_update_steps = LocalUpdateSteps(self)
+        self._local_update_steps = LocalUpdateSteps(
+            self.service, lf, time.monotonic,
+            project_identity=lambda: self._project_identity(),
+            current_identity=lambda: self._identity,
+            visible_splats=lambda: self._visible_splats(),
+            staged_nodes=lambda path: self._staged_nodes(path),
+            acquire_native_use=lambda job_id: self._acquire_native_use(job_id),
+            save_project=lambda continuation, **kwargs: self._save_current_project(continuation, **kwargs),
+            save_pending=lambda: bool(self._save_pending),
+            link_saved_download=lambda *args, **kwargs: self._link_saved_download(*args, **kwargs),
+            refresh_model=lambda: self._refresh_model(),
+            schedule_poll=lambda: self._schedule_poll(),
+            apply_update=lambda *args: self._apply_local_update(*args),
+            recover_update=lambda *args: self._recover_failed_update(*args),
+            set_undo_pull=lambda value: setattr(self, "_undo_pull", value),
+            message_changed=self._select_step_message)
         self._download_open_steps = DownloadOpenSteps(self)
         self._publish_steps = PublishSteps(self, lambda *args: asset_sync_state(*args))
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
+
+    def _select_step_message(self, machine):
+        self._message_source = machine
+
+    @property
+    def _message(self):
+        return self._message_source.message if self._message_source is not None else self._ui_message
+
+    @_message.setter
+    def _message(self, value):
+        self._ui_message = value
+        self._message_source = None
+
+    @property
+    def _import_pending(self):
+        return self._local_update_steps.pending or self._download_open_steps.pending
+
+    @_import_pending.setter
+    def _import_pending(self, value):
+        if value is None:
+            self._local_update_steps.pending = None
+            self._download_open_steps.pending = None
+        elif value.get("_update"):
+            self._local_update_steps.pending = value
+            self._download_open_steps.pending = None
+        else:
+            self._download_open_steps.pending = value
+            self._local_update_steps.pending = None
+
+    @property
+    def _import_detached(self):
+        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
+        return machine.detached
+
+    @_import_detached.setter
+    def _import_detached(self, value):
+        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
+        machine.detached = value
+
+    @property
+    def _import_started(self):
+        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
+        return machine.started
+
+    @_import_started.setter
+    def _import_started(self, value):
+        machine = self._local_update_steps if self._local_update_steps.pending else self._download_open_steps
+        machine.started = value
+
+    @property
+    def _pull_overrides(self):
+        return self._local_update_steps.overrides
+
+    @_pull_overrides.setter
+    def _pull_overrides(self, value):
+        self._local_update_steps.overrides = value
 
     def _account_changed(self, _state):
         def update():
