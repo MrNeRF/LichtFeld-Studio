@@ -4,6 +4,7 @@ The base chapters and payloads come from the native writer fixtures beside this
 directory. Container records are packed afresh to keep the corpus compact.
 """
 import copy
+import gzip
 import io
 import json
 from pathlib import Path
@@ -178,8 +179,8 @@ def samples():
         ('nested_license.sog', {'license_name': 'sub/license.txt'}, 'reject', 'unreferenced_member'),
         ('oversized_license.sog', {'license_name': 'license.txt', 'license_data': b'x' * 65537}, 'reject', 'license_size'),
         ('unreferenced_member.ssog', {'extra': 'readme.txt'}, 'reject', 'unreferenced_member'),
-        ('deflated_texture.sog', {'extra': 'texture.webp', 'extra_method': ZIP_DEFLATED}, 'reject', 'invalid_project'),
-        ('bad_manifest_count.sog', {'bad_count': True}, 'reject', 'invalid_project'),
+        ('deflated_texture.sog', {'extra': 'texture.webp', 'extra_method': ZIP_DEFLATED}, 'reject', 'compressed_texture'),
+        ('bad_manifest_count.sog', {'bad_count': True}, 'reject', 'manifest_count'),
     ):
         yield name, zip_payload(name.rsplit('.', 1)[1], **kw), verdict, reason
     yield 'valid_spz_extension.spz', spz, 'accept', None
@@ -192,6 +193,8 @@ def samples():
     bad = bytearray(spz)
     struct.pack_into('<I', bad, 4, 3)
     yield 'spz_v3.spz', bytes(bad), 'reject', 'spz_version'
+    legacy = struct.pack('<III BBB x', 0x5053474e, 3, 64, 0, 12, 1)
+    yield 'spz_v3_gzip.spz', gzip.compress(legacy, mtime=0), 'reject', 'spz_legacy'
 
 
 def main():

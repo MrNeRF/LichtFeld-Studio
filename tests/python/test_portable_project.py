@@ -153,13 +153,21 @@ def test_gallery_publishing_corpus():
         'degree': 'Published lighting detail exceeds',
         'unreferenced_member': 'Unreferenced files',
         'license_size': 'license exceeds 64 KiB',
-        'invalid_project': 'Invalid portable LichtFeld project',
+        'compressed_texture': 'Invalid portable LichtFeld project',
+        'manifest_count': 'Invalid portable LichtFeld project',
         'spz_flags': 'SPZ flags are invalid',
         'spz_extension': 'SPZ coordinate extension is invalid',
         'spz_version': 'container version 4',
+        'spz_legacy': 'Not an SPZ payload',
     }
     for name, item in expected.items():
         data = (FIXTURES / 'gallery_publishing' / name).read_bytes()
+        if item.get('reason') == 'compressed_texture':
+            with ZipFile(io.BytesIO(data)) as archive:
+                assert archive.getinfo('texture.webp').compress_type == ZIP_DEFLATED
+        if item.get('reason') == 'manifest_count':
+            with ZipFile(io.BytesIO(data)) as archive:
+                assert json.loads(archive.read('meta.json'))['count'] != 1
 
         def validate():
             suffix = name.rsplit('.', 1)[1]

@@ -1,10 +1,10 @@
 {
   "bad_manifest_count.sog": {
-    "reason": "invalid_project",
+    "reason": "manifest_count",
     "verdict": "reject"
   },
   "deflated_texture.sog": {
-    "reason": "invalid_project",
+    "reason": "compressed_texture",
     "verdict": "reject"
   },
   "degree_over.licht": {
@@ -39,6 +39,10 @@
   },
   "spz_v3.spz": {
     "reason": "spz_version",
+    "verdict": "reject"
+  },
+  "spz_v3_gzip.spz": {
+    "reason": "spz_legacy",
     "verdict": "reject"
   },
   "training.licht": {
