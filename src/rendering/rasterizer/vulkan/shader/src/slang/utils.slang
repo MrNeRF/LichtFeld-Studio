@@ -1183,6 +1183,10 @@ struct Uniforms {
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1), and
 // full-frame binning for banded exports (bit 2).
+#ifndef LFS_BANDED_EXPORT_RENDER
+#define LFS_BANDED_EXPORT_RENDER 0
+#endif
+
 bool full_frame_binning(Uniforms uniforms) {
 #if LFS_BANDED_EXPORT_RENDER
     return (uniforms.mip_filter & 4u) != 0u;
