@@ -261,6 +261,7 @@ def test_cancel_after_native_open_does_not_register_or_link(open_case):
     panel._finish_import()
     assert panel._import_pending is None
     assert actions == ["opened"]
+    assert panel._message == import_module("lfs_plugins.gallery_sync_steps").tr("info.canceled")
     assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
     assert journal["linkOperation"]["state"] == "ready"
 

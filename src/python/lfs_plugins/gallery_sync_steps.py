@@ -301,9 +301,11 @@ class DownloadOpenSteps:
             ui._import_detached = True
         if job.get("_native_project"):
             expected = job["_native_project"]
-            if ui._import_detached or job.get("_opening", {}).get("canceled"):
+            canceled = job.get("_opening", {}).get("canceled")
+            if ui._import_detached or canceled:
                 ui._import_pending = None
-                ui._message = "Account changed. The downloaded project is kept locally."
+                ui._message = (tr("info.canceled") if canceled and not ui._import_detached
+                    else "Account changed. The downloaded project is kept locally.")
                 return
             current_path = lf.project_poll_write().get("path")
             if (not current_path or Path(current_path).resolve() != Path(expected["path"]).resolve()
