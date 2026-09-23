@@ -554,7 +554,7 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
         ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
         ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
-        ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
+        ".asset-refresh-button img,\n.asset-toolbar-view img,\n.asset-folder-menu img,\n.asset-card-menu img": (
             "@{alpha(text,0.90)}",
         ),
         ".asset-quick-look": ("@{modal.backdrop}",),
@@ -572,7 +572,7 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
     }
     for selector, expected_tokens in required_theme_rules.items():
-        body = theme_rcss.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        body = re.split(r";\s*}", theme_rcss.split(f"{selector} {{", 1)[1], 1)[0]
         for token in expected_tokens:
             assert token in body
 
@@ -623,7 +623,7 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     assert "menu_blocks_underlay_pointer = menu_owns_pointer ||" in gui_manager_cpp
     assert "menu_pointer_capture_active_;" in gui_manager_cpp
     assert (
-        "else if (menu_blocks_underlay_pointer)\n"
+        "else if (startup_overlay_blocks_pointer || menu_blocks_underlay_pointer)\n"
         "                frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
         in gui_manager_cpp
     )
