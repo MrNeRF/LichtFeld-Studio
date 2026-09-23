@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Portable native projects: a fresh .licht container with embedded splat and HDR assets.
 
-Mirrored in the portal. Only the bounded, stored, single-generation publishing
-subset is admitted here; this is deliberately not a general project importer.
+Only the bounded, stored, single-generation gallery publishing subset is
+admitted here; this is deliberately not a general project importer.
 """
 import hashlib
 import json
@@ -263,7 +263,7 @@ class ProjectFile:
             self._nodes.append(asset)
             manifest_nodes.append({'file': f'nodes/{i:06d}.{extension}', 'count': count, 'shDegree': degree,
                                    'transform': matrix, 'sha256': '', 'bytes': asset['size']})
-        self.manifest = {'version': 1, 'nodes': manifest_nodes}
+        self.manifest = {'format': 'lichtfeld-gallery', 'version': 1, 'nodes': manifest_nodes}
         settings = self.chapters[b'VIEW']['render_settings']
         references = self.chapters[b'REFS']['references']
         _check(isinstance(references, list) and len(references) <= 1)
