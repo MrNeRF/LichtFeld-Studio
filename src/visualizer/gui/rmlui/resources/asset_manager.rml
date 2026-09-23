@@ -221,7 +221,7 @@
                         <div class="asset-card-meta">
                           <span data-if="asset.gallery_has_bytes" data-attr-title="asset.gallery_bytes">{{asset.gallery_bytes}}</span>
                           <span data-if="!asset.gallery_has_bytes" data-attr-title="asset.size_label">{{asset.size_label}}</span>
-                          <span class="gallery-card-state" data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip"><img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/><span>{{asset.gallery_label}}</span></span>
+                          <span class="gallery-card-state" data-if="!asset.has_problem" data-attr-title="asset.gallery_tooltip"><img class="gallery-list-icon" data-if="asset.gallery_has_badge" data-attr-src="asset.gallery_icon" data-attr-class="'gallery-list-icon ' + asset.gallery_tone" data-attr-title="asset.gallery_tooltip"/></span>
                           <span data-if="asset.has_problem" data-attr-title="asset.health_label">{{asset.health_label}}</span>
                         </div>
                         <div class="gallery-card-transfer" data-if="asset.gallery_active" data-attr-title="asset.gallery_tooltip">
@@ -255,20 +255,19 @@
                       </div>
                       <span class="asset-col asset-col-name">
                         <span class="asset-list-primary" data-attr-title="asset.display_name">{{asset.display_name}}</span>
-                        <span class="asset-list-secondary text-muted" data-attr-title="asset.gallery_tooltip">{{asset.gallery_label}}</span>
                       </span>
                       <span class="asset-col asset-col-size" data-class-hidden="!asset_list_show_size" data-style-width="asset_list_size_width" data-attr-title="asset.size_label">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified" data-class-hidden="!asset_list_wide" data-style-width="asset_list_modified_width" data-attr-title="asset.saved_label">{{asset.saved_label}}</span>
                       <span class="asset-col asset-col-folder" data-class-hidden="!asset_list_show_folder" data-style-width="asset_list_folder_width" data-attr-title="asset.folder_name">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-gallery" data-style-width="asset_list_gallery_width" data-attr-title="asset.gallery_tooltip">
-                        <img class="gallery-list-icon" data-attr-src="asset.gallery_icon"
+                        <img class="gallery-list-icon" data-attr-src="asset.gallery_icon" data-attr-title="asset.gallery_tooltip"
                              data-attr-class="'gallery-list-icon ' + asset.gallery_tone"/>
                       </span>
                       <button class="asset-button asset-button--small-icon asset-list-menu" data-attr-data-asset-id="asset.id"
                               data-asset-action="menu" data-tooltip="common.more" aria-label="{{view_menu_label}}">
                         <img src="../icon/more-vertical.png"/>
                       </button>
-                      <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active">
+                      <div class="gallery-list-progress gallery-progress" data-if="asset.gallery_active" data-attr-title="asset.gallery_tooltip">
                         <div class="gallery-progress-fill" data-class-is-indeterminate="asset.gallery_indeterminate" data-style-width="asset.gallery_progress_width"></div>
                       </div>
                     </div>

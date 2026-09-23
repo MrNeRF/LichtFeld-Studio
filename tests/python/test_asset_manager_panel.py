@@ -1963,6 +1963,40 @@ def test_list_gallery_column_stays_a_compact_status_icon(panel_module, monkeypat
     header_columns = [child.get("class") for child in header]
     assert header_columns.index("asset-col asset-col-gallery") == header_columns.index("asset-list-menu-spacer") - 1
 
+def test_gallery_status_is_available_on_icons_without_label_text(panel_module):
+    import xml.etree.ElementTree as ET
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    root = ET.fromstring((resources / "asset_manager.rml").read_text())
+    rcss = (resources / "asset_manager.rcss").read_text()
+
+    card = root.find('.//div[@class="asset-card"]')
+    card_state = card.find('.//span[@class="gallery-card-state"]')
+    card_icon = card_state.find('img[@class="gallery-list-icon"]')
+    assert card_icon is not None
+    assert card_icon.get("data-attr-title") == "asset.gallery_tooltip"
+    assert list(card_state) == [card_icon]
+    assert "{{asset.gallery_label}}" not in ET.tostring(card, encoding="unicode")
+
+    row = root.find('.//div[@class="asset-list-row"]')
+    name = row.find('./span[@class="asset-col asset-col-name"]')
+    gallery = row.find('./span[@class="asset-col asset-col-gallery"]')
+    assert name.find('.//span[@class="asset-list-secondary text-muted"]') is None
+    assert gallery.find("img").get("data-attr-title") == "asset.gallery_tooltip"
+    assert "{{asset.gallery_label}}" not in ET.tostring(row, encoding="unicode")
+    assert row.find('.//span[@class="asset-health-badge"]').get("data-attr-title") == "asset.health_label"
+    assert card.find('.//span[@class="asset-health-badge"]').get("data-attr-title") == "asset.health_label"
+    assert row.find('.//span[@class="gallery-activity"]').get("data-attr-title") == "asset.gallery_tooltip"
+    assert card.find('.//span[@class="gallery-activity"]').get("data-attr-title") == "asset.gallery_tooltip"
+    assert row.find('./div[@class="gallery-list-progress gallery-progress"]').get("data-attr-title") == "asset.gallery_tooltip"
+    assert card.find('.//div[@class="gallery-card-transfer"]').get("data-attr-title") == "asset.gallery_tooltip"
+    assert card.find('.//span[@data-if="asset.has_problem"]').text == "{{asset.health_label}}"
+    assert ".asset-scroll-shell-list.gallery-compact .asset-list-row { height: 48dp" not in rcss
+    assert ".asset-list-secondary" not in rcss
+    panel = panel_module.AssetManagerPanel()
+    panel._layout_class = "compact"
+    assert panel._asset_window_viewport_signature(0.0, 100.0, 320.0)[1] == 40.0
+
 def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index()

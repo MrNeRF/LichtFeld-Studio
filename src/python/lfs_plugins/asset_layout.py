@@ -74,11 +74,6 @@ def card_geometry(card_width):
     }
 
 
-def list_row_height(*, gallery_column_visible=True):
-    """Return the list row height for the visible column arrangement."""
-    return 40.0 if gallery_column_visible else 48.0
-
-
 def breakpoint_metrics(width):
     """Return the exact region defaults and limits for a breakpoint."""
     name = breakpoint_for_width(width)

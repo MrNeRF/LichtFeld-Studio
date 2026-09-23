@@ -857,7 +857,6 @@
 @keyframes gallery-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }
 .gallery-progress-fill.is-indeterminate { animation: gallery-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 .asset-col-name { flex-direction: column; justify-content: center; }
-.asset-list-secondary { font-size: 10dp; overflow: hidden; text-overflow: ellipsis; }
 
 .asset-sidebar-title { margin-bottom: 6dp; }
 
@@ -1108,11 +1107,8 @@
 .asset-scroll-shell-list.is-wide .asset-col-modified { display: block; }
 .asset-list-header.gallery-compact .asset-col-gallery,
 .asset-scroll-shell-list.gallery-compact .asset-col-gallery { min-width: 24dp; }
-.asset-list-primary, .asset-list-secondary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.asset-list-secondary { display: none; height: 16dp; line-height: 16dp; font-size: 10dp; }
+.asset-list-primary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gallery-list-icon { width: 16dp; height: 16dp; flex: 0 0 16dp; margin: 0; }
-.asset-list-row .asset-col-gallery { gap: 8dp; }
-.asset-list-row .asset-col-gallery > span { display: block; flex: 1 1 0dp; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .gallery-list-progress { position: absolute; left: 0; right: 0; bottom: 0; }
 
 .asset-inspector { position: absolute; display: none; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; border-left-width: 1dp; z-index: 10; }
@@ -1253,12 +1249,8 @@
 .asset-list-header-gallery-icon { display: none; }
 .asset-list-header.gallery-compact .asset-col-gallery .asset-list-header-label { display: none; }
 .asset-list-header.gallery-compact .asset-list-header-gallery-icon { display: block; width: 16dp; height: 16dp; margin: 4dp; }
-.asset-scroll-shell-list.gallery-compact .asset-col-gallery > span { display: none; }
 .asset-scroll-shell-list.gallery-compact .asset-col-gallery { justify-content: center; gap: 0; }
 .asset-list-header.gallery-compact .asset-col-gallery .asset-list-column-handle { display: none; }
-.asset-scroll-shell-list.gallery-compact .asset-list-row { height: 48dp; min-height: 48dp; }
-.asset-scroll-shell-list.gallery-compact .asset-col-name { height: 32dp; line-height: 16dp; }
-.asset-scroll-shell-list.gallery-compact .asset-list-primary, .asset-scroll-shell-list.gallery-compact .asset-list-secondary { display: block; height: 16dp; line-height: 16dp; }
 
 /* Runtime font measurements include cell padding. Rows keep their own inset. */
 #asset-text-measure { position: absolute; visibility: hidden; pointer-events: none; width: 0; height: 0; }
@@ -1279,9 +1271,7 @@
 #asset-info-thumbnail .asset-thumbnail-placeholder > img { width: 32dp; height: 32dp; }
 
 /* Relationship glyphs sit beside words; activity and file health are independent. */
-.gallery-card-state { display: flex; align-items: center; gap: 4dp; min-width: 0; }
-.gallery-card-state > span { min-width: 0; flex: 1 1 0dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.gallery-card-state .gallery-list-icon { flex: 0 0 16dp; }
+.asset-card-meta .gallery-card-state { display: flex; align-items: center; flex: 0 0 16dp; min-width: 0; }
 .gallery-activity { position: absolute; top: 6dp; right: 6dp; width: 16dp; height: 16dp; }
 .gallery-activity > img, .gallery-activity > progress { position: absolute; left: 0; top: 0; width: 16dp; height: 16dp; }
 .gallery-activity > progress { fill-image: ../icon/gallery-progress-ring.png; }

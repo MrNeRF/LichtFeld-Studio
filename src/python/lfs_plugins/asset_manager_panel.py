@@ -32,7 +32,6 @@ from .asset_layout import (
     gallery_slot_width,
     grid_columns,
     grid_slot_width,
-    list_row_height,
     native_to_dp,
     panel_layout,
     list_columns,
@@ -72,7 +71,7 @@ from .ui import RuntimeState
 _log = logging.getLogger(__name__)
 
 PRECISE_SCROLL_STEP = 32.0
-ASSET_LIST_ROW_HEIGHT_DP = 48.0
+ASSET_LIST_ROW_HEIGHT_DP = 40.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
 ASSET_WINDOW_OVERSCAN_ROWS = 2
@@ -1942,7 +1941,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._view_mode == "gallery":
             start, end = self._update_gallery_window_geometry(total)
         else:
-            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = ASSET_LIST_ROW_HEIGHT_DP
             first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
             start = first // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
             visible = (
@@ -3999,11 +3998,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 else ASSET_GALLERY_FALLBACK_ROWS
             ) + ASSET_WINDOW_OVERSCAN_ROWS * 2 + ASSET_WINDOW_BATCH_ROWS - 1
             return "gallery", columns, start, visible
-        gallery_visible = list_columns(
-            self._effective_list_layout_width(client_width),
-            self._text_column_metrics, self._list_column_overrides
-        )["gallery"] != 32
-        row_height = list_row_height(gallery_column_visible=gallery_visible)
+        row_height = ASSET_LIST_ROW_HEIGHT_DP
         first = max(0, int(scroll_top // row_height) - ASSET_WINDOW_OVERSCAN_ROWS)
         start = first // ASSET_WINDOW_BATCH_ROWS * ASSET_WINDOW_BATCH_ROWS
         visible = (
@@ -4283,7 +4278,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             start = row * row_height
             end = start + row_height
         else:
-            row_height = list_row_height(gallery_column_visible=self._list_columns()["gallery"] != 32) if self._layout_class else ASSET_LIST_ROW_HEIGHT_DP
+            row_height = ASSET_LIST_ROW_HEIGHT_DP
             start = index * row_height
             end = start + row_height
         top = self._asset_window_scroll_top
