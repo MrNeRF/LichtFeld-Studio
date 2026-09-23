@@ -378,6 +378,7 @@ def test_restore_same_path_preserves_identity_and_history(native_io, tmp_path, m
     assert (home / 'data/backups/contents' / str(old.project_uuid)).is_dir()
 
 
+@pytest.mark.integration
 def test_removing_bound_checkpoint_preserves_visible_model(native_io, tmp_path):
     import json
 
@@ -408,6 +409,7 @@ def test_removing_bound_checkpoint_preserves_visible_model(native_io, tmp_path):
     assert native_io.verify_project_file(path).status is native_io.ProjectVerificationStatus.VERIFIED
 
 
+@pytest.mark.integration
 def test_rebinding_repeatedly_keeps_recovery_copies_out_of_catalog(native_io, tmp_path):
     configured = os.environ.get("LFS_PROJECT_CHECKPOINT_FIXTURE")
     source = Path(configured) if configured else _fixture().parent / "mrnf/stump/project.licht"

@@ -127,6 +127,7 @@ class TestDLPackRoundtrip:
         assert tuple(t_torch2.shape) == tuple(t_torch1.shape)
         np.testing.assert_allclose(t_torch2.cpu().numpy(), np_data, rtol=1e-6)
 
+    @pytest.mark.integration
     @pytest.mark.parametrize("shape", SHAPES_2D)
     def test_cpu_float32(self, lf, torch, shape):
         """CPU tensor DLPack roundtrip."""

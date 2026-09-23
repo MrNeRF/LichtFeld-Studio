@@ -266,6 +266,7 @@ def test_python_undo_surface_has_single_entry_point(lf):
     assert not hasattr(lf.pipeline, "undo")
 
 
+@pytest.mark.integration
 def test_floating_panels_accept_typed_space_enums(lf):
     if not hasattr(lf, "ui") or not hasattr(lf.ui, "Panel"):
         pytest.skip("panel API not available")
