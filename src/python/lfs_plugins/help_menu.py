@@ -49,11 +49,11 @@ class AboutOperator(Operator):
 
 class GalleryTransfersOperator(Operator):
     label = "gallery.transfer.action.details"
-    description = "Open the Projects panel"
+    description = "Show gallery transfers"
 
     def execute(self, context) -> set:
-        from .gallery_transfer_ui import open_projects_panel
-        open_projects_panel()
+        from .overlays import show_gallery_transfers
+        show_gallery_transfers()
         return {"FINISHED"}
 
 

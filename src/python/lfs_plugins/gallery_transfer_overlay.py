@@ -6,7 +6,7 @@ from __future__ import annotations
 import lichtfeld as lf
 
 from .gallery_logging import failure as log_failure
-from .gallery_transfer_ui import open_projects_panel, tr
+from .gallery_transfer_ui import tr
 from .gallery_messages import localize_message
 from .ui import RuntimeState
 
@@ -19,7 +19,6 @@ class GalleryTransferOverlay:
         self._collapsed = False
         self._last_signature = None
         self._message = ""
-        self._projects_open = False
         self._unsubscribers = []
 
     def reset(self):
@@ -32,7 +31,7 @@ class GalleryTransferOverlay:
     def bind_model(self, model):
         model.bind_record_list("gallery_transfer_rows")
         bindings = {
-            "visible": lambda: self._visible and not self._projects_open,
+            "visible": lambda: self._visible,
             "expanded": lambda: not self._collapsed,
             "empty": lambda: not self._state.get("rows"),
             "header": self._header,
@@ -44,14 +43,13 @@ class GalleryTransferOverlay:
         }
         for name, getter in bindings.items():
             model.bind_func("gallery_transfer_" + name, getter)
-        for action in ("pause", "resume", "cancel", "details", "clear_finished", "empty"):
+        for action in ("pause", "resume", "cancel", "clear_finished", "empty"):
             model.bind_func("gallery_transfer_" + action + "_label", lambda a=action: tr("action." + a))
         model.bind_event("gallery_transfer_action", self._action)
         self._handle = model.get_handle()
         self._last_signature = None
         if not self._unsubscribers:
-            self._unsubscribers = [signal.subscribe(self._changed) for signal in
-                                  (RuntimeState.gallery_transfers, RuntimeState.projects_panel_visible)]
+            self._unsubscribers = [RuntimeState.gallery_transfers.subscribe(self._changed)]
 
     def _changed(self, _state):
         # A queued transfer can change while the viewport reuses its idle frame.
@@ -70,8 +68,7 @@ class GalleryTransferOverlay:
 
     def update(self):
         state = RuntimeState.gallery_transfers.value
-        projects_open = lf.ui.is_panel_enabled("lfs.asset_manager")
-        signature = (state, RuntimeState.language_generation.value, projects_open)
+        signature = (state, RuntimeState.language_generation.value)
         if not self._handle or signature == self._last_signature:
             return False
         if state.get("identity") != self._state.get("identity"):
@@ -83,16 +80,12 @@ class GalleryTransferOverlay:
             self._visible = True
             self._collapsed = False
         self._state = state
-        self._projects_open = projects_open
         self._last_signature = signature
         rows = state.get("rows", [])
         self._handle.update_record_list("gallery_transfer_rows", rows)
         return True
 
     def show(self):
-        if lf.ui.is_panel_enabled("lfs.asset_manager"):
-            open_projects_panel()
-            return
         self._visible = True
         self._collapsed = False
         if self._handle:
@@ -107,8 +100,6 @@ class GalleryTransferOverlay:
             self._collapsed = not self._collapsed
         elif action == "close":
             self._visible = False
-        elif action == "details":
-            open_projects_panel()
         else:
             from .gallery_controller import get_gallery_controller
             identifier = str(args[1]) if len(args) > 1 else None

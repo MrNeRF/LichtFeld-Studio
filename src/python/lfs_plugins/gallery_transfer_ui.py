@@ -14,11 +14,6 @@ from .gallery_messages import localize_message, tr as gallery_tr
 tr = partial(gallery_tr, prefix="gallery.transfer.")
 
 
-def open_projects_panel():
-    import lichtfeld as lf
-    lf.ui.set_panel_enabled("lfs.asset_manager", True)
-
-
 def transfer_phase(job):
     status = job.get("status", "queued")
     if job.get("localUpdate", {}).get("state") == "failed":

@@ -1251,7 +1251,6 @@
             </div>
         </div>
         <div class="viewport-transfer-footer" data-class-hidden="!gallery_transfer_expanded">
-            <button class="btn btn--secondary" data-event-click="gallery_transfer_action('details')">{{gallery_transfer_details_label}}</button>
             <button class="btn btn--secondary" data-event-click="gallery_transfer_action('clear_finished')">{{gallery_transfer_clear_finished_label}}</button>
         </div>
         <span class="viewport-transfer-detail" data-class-status-error="gallery_transfer_message_error" data-if="gallery_transfer_message != ''">{{gallery_transfer_message}}</span>

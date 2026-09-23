@@ -994,15 +994,19 @@ def test_splat_picker_imports_ssog_as_splat(monkeypatch):
     assert file_menu.lf.load_file_calls == [((selected,), {"is_dataset": False})]
 
 
-def test_menu_bar_transfer_operator_opens_projects_panel(monkeypatch):
+def test_menu_bar_transfer_operator_shows_overlay(monkeypatch):
     import ast
     file_menu = _load_file_menu(monkeypatch)
     calls = []
+    overlays = ModuleType('lfs_plugins.overlays')
+    overlays.show_gallery_transfers = lambda: calls.append('overlay')
+    monkeypatch.setitem(sys.modules, 'lfs_plugins.overlays', overlays)
     monkeypatch.setattr(file_menu.lf.ui, 'set_panel_enabled', lambda panel_id, enabled: calls.append((panel_id, enabled)), raising=False)
     path = PROJECT_ROOT / 'src/python/lfs_plugins/help_menu.py'
     tree = ast.parse(path.read_text())
     node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'GalleryTransfersOperator')
     scope = {'Operator': object, '__package__': 'lfs_plugins', '__name__': 'lfs_plugins.help_menu'}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), scope)
+    assert scope['GalleryTransfersOperator'].description == 'Show gallery transfers'
     assert scope['GalleryTransfersOperator']().execute(None) == {'FINISHED'}
-    assert calls == [('lfs.asset_manager', True)]
+    assert calls == ['overlay']

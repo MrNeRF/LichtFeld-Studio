@@ -723,12 +723,61 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     ]
     assert panel.get_selected_asset_id() == asset["id"]
 
-def test_gallery_overlay_details_opens_projects(panel_module, monkeypatch):
+def test_gallery_overlay_has_no_projects_details_button(panel_module):
     from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
-    monkeypatch.setattr(panel_module.lf.ui, 'request_redraw', lambda: None, raising=False)
     overlay = GalleryTransferOverlay()
-    overlay._action(None, None, ['details'])
-    assert panel_module.lf._test_state.enabled == [('lfs.asset_manager', True)]
+    model = _BindingModel()
+    overlay.bind_model(model)
+    try:
+        rml = (Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources/viewport_overlay.rml').read_text()
+        assert "gallery_transfer_action('details')" not in rml
+        assert 'gallery_transfer_details_label' not in model.func_bindings
+    finally:
+        overlay.reset()
+
+
+def test_gallery_overlay_stays_visible_when_projects_opens(panel_module, monkeypatch):
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+    from lfs_plugins.ui import RuntimeState
+
+    monkeypatch.setattr(panel_module.lf.ui, 'is_panel_enabled', lambda _name: True, raising=False)
+    monkeypatch.setattr(RuntimeState.gallery_transfers, 'value', {
+        'identity': 'account', 'rows': [{'id': 'transfer', 'status': 'running'}]
+    })
+    overlay = GalleryTransferOverlay()
+    model = _BindingModel()
+    overlay.bind_model(model)
+    try:
+        assert overlay.update()
+        assert model.func_bindings['gallery_transfer_visible']()
+        assert model.handle.records['gallery_transfer_rows'][0]['id'] == 'transfer'
+    finally:
+        overlay.reset()
+
+
+def test_gallery_overlay_show_with_projects_open(panel_module, monkeypatch):
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+
+    monkeypatch.setattr(panel_module.lf.ui, 'is_panel_enabled', lambda _name: True, raising=False)
+    redraws = []
+    monkeypatch.setattr(panel_module.lf.ui, 'request_redraw', lambda: redraws.append(True), raising=False)
+    overlay = GalleryTransferOverlay()
+    overlay._handle = _Handle()
+    overlay._collapsed = True
+
+    overlay.show()
+
+    assert overlay._visible and not overlay._collapsed
+    assert overlay._handle.dirty_fields == ['__all__']
+    assert redraws == [True]
+    assert panel_module.lf._test_state.enabled == []
+
+    overlay._action(None, None, ['toggle'])
+    assert overlay._collapsed and overlay._visible
+    overlay._action(None, None, ['close'])
+    assert not overlay._visible
+    overlay.show()
+    assert overlay._visible and not overlay._collapsed
 
 
 def test_gallery_journal_recovery_event_opens_recovery_folder(panel_module, monkeypatch):
