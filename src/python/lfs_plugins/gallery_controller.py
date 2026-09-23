@@ -241,7 +241,8 @@ class GalleryController:
                 self.resolve_asset(asset, details)
                 return
         self.upload_format = upload_format
-        self._review_publish(scene, details, upload_format, publish_as_new, update=update)
+        self._review_publish(scene, details, upload_format, publish_as_new, update=update,
+                             expected_commit=str(asset.get("commit_uuid") or getattr(lf.io.inspect_project(path), "commit_uuid", "")))
         self._schedule_poll()
 
     def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
@@ -1222,7 +1223,7 @@ class GalleryController:
             raise ValueError("The project changed while saving. Your gallery operation was stopped; review your work and try again.")
         pending["continuation"]()
 
-    def _review_publish(self, scene, details, upload_format, publish_as_new, *, update=False):
+    def _review_publish(self, scene, details, upload_format, publish_as_new, *, update=False, expected_commit=None):
         project = self._project_identity()
         metadata = self._details(details)
         if publish_as_new:
@@ -1234,9 +1235,11 @@ class GalleryController:
         if scene:
             metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
         self._publish(metadata, expected_project=project, environment_source=environment_source,
-                      upload_format=upload_format, update=update)
+                      upload_format=upload_format, update=update,
+                      save_project=bool(details.get("saveProject", True)), expected_commit=expected_commit)
 
-    def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio", update=False):
+    def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio", update=False,
+                 save_project=True, expected_commit=None):
         identity = self.service.identity()
         project_id, path = self._project_identity()
         if expected_project is not None and (project_id, path) != expected_project:
@@ -1259,10 +1262,16 @@ class GalleryController:
         log_stage("publish_requested", project_id=project_id, path=path, size=size,
                   format=upload_format, account_origin=safe_url(getattr(account, "base_url", "")),
                   update=update)
-        self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
-                                                             environment_source, upload_format, update=update))
+        if save_project:
+            self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
+                                                                 environment_source, upload_format, update=update))
+        else:
+            if lf.project_poll_write().get("running"):
+                raise ValueError("Wait for the current project save before continuing.")
+            self._publish_saved(metadata, project_id, path, identity, environment_source, upload_format,
+                                update=update, expected_commit=expected_commit or str(lf.io.inspect_project(path).commit_uuid))
 
-    def _patch_saved_update(self, metadata, project_id, path, *, update):
+    def _patch_saved_update(self, metadata, project_id, path, *, update, expected_commit=None):
         from .gallery_project_facts import saved_content_stamp
         content_stamp = saved_content_stamp(path)
         metadata["_contentStamp"] = content_stamp
@@ -1277,15 +1286,35 @@ class GalleryController:
                 and comparable(content_stamp) == comparable(baseline)
                 and metadata.get("replaceSceneId") == linked.get("sceneId")):
             details = {k: v for k, v in metadata.items() if k in ("title", "description", "viewerSettings")}
+            commit = str(lf.io.inspect_project(path).commit_uuid)
+            if expected_commit is not None and commit != expected_commit:
+                raise ValueError(tr("error.project_changed"))
             self.service.edit(linked["sceneId"], {name + "Revision": token for name, token in metadata["baseRevisions"].items()}, details,
-                commit_uuid=str(lf.io.inspect_project(path).commit_uuid), content_stamp=content_stamp, project_id=project_id)
+                commit_uuid=commit, content_stamp=content_stamp, project_id=project_id)
             return True
         return False
 
-    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio", *, update=False):
+    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio", *, update=False,
+                       expected_commit=None):
         if self.service.identity() != identity or self._project_identity() != (project_id, path):
             raise ValueError("The account or current project changed while saving. Review it before uploading.")
-        if self._patch_saved_update(metadata, project_id, path, update=update):
+        inspection = lf.io.inspect_project(path)
+        if expected_commit is not None and str(inspection.commit_uuid) != expected_commit:
+            raise ValueError(tr("error.project_changed"))
+        if expected_commit is not None:
+            references = lf.io.inspect_project_details(path).references
+            saved_environment = next((Path(ref.path).resolve() for ref in references if ref.kind == "environment_map"), None)
+            live_environment = Path(environment_source).resolve() if metadata.get("viewerSettings", {}).get("environment") and environment_source else None
+            if saved_environment != live_environment:
+                raise ValueError(tr("error.save_hdr_first"))
+        environment = metadata.get("viewerSettings", {}).get("environment")
+        if environment:
+            settings = lf.get_render_settings()
+            if (settings.environment_mode != "EQUIRECTANGULAR" or str(settings.environment_map_path) != environment_source
+                    or float(settings.environment_exposure) != environment["exposure"]
+                    or float(settings.environment_rotation_degrees) != environment["rotation"]):
+                raise ValueError("The HDR background changed. Review the current view and try uploading again.")
+        if self._patch_saved_update(metadata, project_id, path, update=update, expected_commit=expected_commit):
             return
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
@@ -1294,17 +1323,10 @@ class GalleryController:
             raise ValueError("Choose a supported upload format.")
         if "licht" not in self.service.snapshot().get("source_formats", []):
             raise ValueError(UNSUPPORTED_PORTAL)
-        environment = metadata.get("viewerSettings", {}).get("environment")
-        if environment:
-            settings = lf.get_render_settings()
-            if (settings.environment_mode != "EQUIRECTANGULAR" or str(settings.environment_map_path) != environment_source
-                    or float(settings.environment_exposure) != environment["exposure"]
-                    or float(settings.environment_rotation_degrees) != environment["rotation"]):
-                raise ValueError("The HDR background changed. Review the current view and try uploading again.")
         export = self.service.root / (str(uuid.uuid4()) + ".scene")
         metadata = dict(metadata)
-        metadata["_commitUuid"] = str(getattr(lf.io.inspect_project(path), "commit_uuid", ""))
-        file_uuid = str(getattr(lf.io.inspect_project(path), "file_uuid", ""))
+        metadata["_commitUuid"] = str(getattr(inspection, "commit_uuid", ""))
+        file_uuid = str(getattr(inspection, "file_uuid", ""))
         if file_uuid:
             metadata["originFileUuid"] = file_uuid
         metadata["_uploadFormat"] = upload_format

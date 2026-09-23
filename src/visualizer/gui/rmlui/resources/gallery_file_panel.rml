@@ -13,6 +13,8 @@
         <span class="text-muted">{{format_hint}}</span>
         <span class="text-muted" data-attr-title="estimate">{{estimate}}</span>
         <label class="gallery-cover-option"><input type="checkbox" data-checked="use_cover" data-attrif-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
+        <label class="gallery-cover-option" data-if="show_save_project"><input type="checkbox" data-checked="save_project"/><span>@tr:projects.gallery.review.save_project</span></label>
+        <span class="text-muted" data-if="show_unsaved_hint">@tr:projects.gallery.review.unsaved_hint</span>
         <span class="text-muted">{{includes}}</span>
         <span class="text-muted">{{eligibility_reason}}</span>
       </div>

@@ -83,8 +83,13 @@ class GalleryFilePanel(Panel):
                             open_after=open_after, on_done=on_done, mode=mode,
                             groups=deepcopy(list(groups)), on_submit=on_submit, apply_only=apply_only,
                             expected_project_path=expected_project_path)
+        current_path = lf.project_poll_write().get("path") if mode == "publish" and action in ("publish", "update") else None
+        open_project = bool(current_path and Path(current_path).resolve() == Path(asset["path"]).resolve())
+        self._review["open_project"] = bool(open_project)
         self._fields = dict(fields)
         self._fields.setdefault("use_cover", False)
+        if open_project:
+            self._fields.setdefault("save_project", bool(lf.project_is_dirty()))
         self._error = ""
         if self._unsubscribe:
             self._unsubscribe()
@@ -118,7 +123,7 @@ class GalleryFilePanel(Panel):
         lf.ui.request_redraw()
 
     def _set(self, name, value):
-        if name == "use_cover":
+        if name in ("use_cover", "save_project"):
             self._fields[name] = value is True or str(value).lower() in ("true", "1")
             self._dirty()
             return
@@ -193,8 +198,8 @@ class GalleryFilePanel(Panel):
         model = ctx.create_data_model("gallery_file")
         if model is None:
             return
-        for name in ("title", "description", "upload_format", "pull_folder", "pull_name", "use_cover"):
-            model.bind(name, lambda n=name: self._fields.get(n, False if n == "use_cover" else ""), lambda v, n=name: self._set(n, v))
+        for name in ("title", "description", "upload_format", "pull_folder", "pull_name", "use_cover", "save_project"):
+            model.bind(name, lambda n=name: self._fields.get(n, False if n in ("use_cover", "save_project") else ""), lambda v, n=name: self._set(n, v))
         values = {
             "panel_label": self._panel_label,
             "file_name": lambda: (self._review or {}).get("asset", {}).get("name", ""),
@@ -211,6 +216,8 @@ class GalleryFilePanel(Panel):
             "replacement_warning": lambda: tr("replacement.warning", path=(self._review or {}).get("asset", {}).get("path", ""), title=((self._review or {}).get("scene") or {}).get("title", "")),
             "can_submit": self._can_submit,
             "can_cover": lambda: bool((self._review or {}).get("asset", {}).get("has_preview")),
+            "show_save_project": lambda: bool((self._review or {}).get("open_project")),
+            "show_unsaved_hint": lambda: bool((self._review or {}).get("open_project") and not self._fields.get("save_project") and lf.project_is_dirty()),
             "submit_label": self._submit_label,
             "format_hint": lambda: tr("format." + self._fields.get("upload_format", "sog") + "_hint"),
             "includes": lambda: (self._review or {}).get("includes", ""),
@@ -275,6 +282,8 @@ class GalleryFilePanel(Panel):
             else:
                 details = {k: self._fields[k].strip() for k in ("title", "description")}
                 details["useEmbeddedPreview"] = bool(self._fields.get("use_cover", False))
+                if review["open_project"]:
+                    details["saveProject"] = bool(self._fields["save_project"])
                 controller.upload_format = self._fields["upload_format"]
                 controller.publish_asset(review["asset"], details, self._fields["upload_format"],
                                          update=review["action"] == "update", publish_as_new=review["publish_new"])
