@@ -781,6 +781,10 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
+        m.def("project_content_stamp", [](const std::filesystem::path& path) {
+            nb::gil_scoped_release release;
+            return project::project_content_stamp(path); }, nb::arg("path"));
+
         m.def("inspect_project_details", [](const std::filesystem::path& path, const std::uint64_t checkpoint_byte_budget) {
             std::optional<lfs::Result<project::ProjectInspectorDetails>> result;
             {

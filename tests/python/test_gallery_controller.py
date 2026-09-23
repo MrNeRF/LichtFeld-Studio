@@ -31,7 +31,10 @@ def gallery(monkeypatch, panel_module):
     monkeypatch.setattr(module.lf.ui, "cancel_export", lambda: actions.append("cancel-export"), raising=False)
     monkeypatch.setattr(module.lf.ui, "dismiss_import", lambda: actions.append("dismiss-import"), raising=False)
     monkeypatch.setattr(module.lf.ui, "get_import_state", lambda: {"active": False}, raising=False)
-    monkeypatch.setattr(module.lf, "io", SimpleNamespace(inspect_project=lambda path: SimpleNamespace(project_uuid="project", commit_uuid="")), raising=False)
+    native_io = import_module('lichtfeld.io')
+    monkeypatch.setattr(module.lf, "io", SimpleNamespace(
+        inspect_project=lambda path: SimpleNamespace(project_uuid="project", commit_uuid=""),
+        project_content_stamp=native_io.project_content_stamp), raising=False)
     panel = module.GalleryController()
     yield panel, state, actions
     _stop_gallery_controller(panel)
@@ -895,6 +898,41 @@ def test_saved_content_stamp_separates_view_and_content_evidence(tmp_path, galle
     path.write_bytes(changed)
     assert saved_content_stamp(path)!=original
 
+def test_saved_content_stamp_accepts_native_zstd_index(tmp_path, gallery, monkeypatch):
+    from lfs_plugins.gallery_project_facts import saved_content_stamp
+    from test_portable_project import FIXTURES
+
+    io = import_module('lichtfeld.io')
+    path = tmp_path / 'project-a.licht'
+    path.write_bytes((FIXTURES / 'portable-sog.licht').read_bytes())
+    original = saved_content_stamp(path)
+    assert original == ('3bdebba4495568ec033d6adce1f076454bc351a02d8c01586478e158f1bf6eda:'
+                        '26eae58de1db830a1eb2bd4b386752945321cb26e0cb8af2873fd54edee2cbe5')
+    io.set_project_title(path, 'Updated')
+    data = path.read_bytes()
+    head = max((offset for offset in (4096, 8192) if data[offset:offset+8] == b'LFSHEAD\0'),
+               key=lambda offset: struct.unpack_from('<Q', data, offset+16)[0])
+    commit = struct.unpack_from('<Q', data, head + 80)[0]
+    assert struct.unpack_from('<I', data, commit + 168)[0] == 1
+    assert saved_content_stamp(path) == original
+
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', str(path)))
+    monkeypatch.setattr(module.lf.io, 'inspect_project', io.inspect_project)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project',
+                        lambda *_: pytest.fail('Metadata update must not export the project'), raising=False)
+    panel.service.edit = lambda *args, **kwargs: actions.append((args, kwargs))
+    state['links'] = {'project': {'sceneId': 'scene', 'contentStamp': original}}
+    panel._publish_saved({'title': 'Updated', 'replaceSceneId': 'scene',
+                          'baseRevisions': {'content': 'r1', 'metadata': 'r1'}},
+                         'project', str(path), state['identity'], update=True)
+    assert actions == [(("scene", {'contentRevision': 'r1', 'metadataRevision': 'r1'},
+                         {'title': 'Updated'}),
+                        {'commit_uuid': str(io.inspect_project(path).commit_uuid),
+                         'content_stamp': original, 'project_id': 'project'})]
+
+
 def test_metadata_only_update_skips_native_export(gallery, monkeypatch):
     panel,state,actions=gallery
     module=import_module('lfs_plugins.gallery_controller')
@@ -1157,8 +1195,7 @@ def test_closed_project_update_keeps_reviewed_replacement_guard(gallery, monkeyp
     assert actions[0][0] == '/saved.licht'
 
 @pytest.mark.parametrize('kind', [b'SPLT', b'CKPT'])
-def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path, gallery, kind):
-    """Index evidence must change for payload-only saves, before later native validation."""
+def test_saved_content_stamp_rejects_forged_index_rows(tmp_path, gallery, kind):
     from lfs_plugins.gallery_project_facts import saved_content_stamp
     from lfs_plugins.portable_project import _crc
     from test_portable_project import FIXTURES
@@ -1171,21 +1208,14 @@ def test_saved_content_stamp_tracks_native_geometry_and_checkpoint_rows(tmp_path
     original[row:row+4] = kind
     path = tmp_path / 'index-evidence.licht'
 
-    def stamp(data):
-        crc = _crc(data[index:index+size])
-        struct.pack_into('<II', data, commit+160, crc, crc)
-        crc = _crc(data[commit:commit+252])
-        struct.pack_into('<I', data, commit+252, crc)
-        struct.pack_into('<I', data, head+104, crc)
-        struct.pack_into('<I', data, head+4092, _crc(data[head:head+4092]))
-        path.write_bytes(data)
-        return saved_content_stamp(path)
-
-    before = stamp(original)
-    assert before
-    changed = bytearray(original)
-    changed[row+72] ^= 1  # A new payload checksum, with unchanged SCNG and VIEW.
-    assert stamp(changed) != before
+    crc = _crc(original[index:index+size])
+    struct.pack_into('<II', original, commit+160, crc, crc)
+    crc = _crc(original[commit:commit+252])
+    struct.pack_into('<I', original, commit+252, crc)
+    struct.pack_into('<I', original, head+104, crc)
+    struct.pack_into('<I', original, head+4092, _crc(original[head:head+4092]))
+    path.write_bytes(original)
+    assert saved_content_stamp(path) == ''
 
 
 def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery):

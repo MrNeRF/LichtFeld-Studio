@@ -409,6 +409,7 @@ target_link_libraries(lfs_io
         ZLIB::ZLIB             # gzip/msgpack payloads inside NuRec USDZ
         $<IF:$<TARGET_EXISTS:libdeflate::libdeflate_shared>,libdeflate::libdeflate_shared,libdeflate::libdeflate_static> # fast DEFLATE for RAD
         zstd::libzstd          # .licht project container chunk compression
+        OpenSSL::Crypto
         xxHash::xxhash         # REFS fingerprints and embedded-payload provenance
         CUDA::cudart           # CUDA runtime for nvImageCodec
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)

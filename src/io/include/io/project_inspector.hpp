@@ -141,6 +141,9 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorCard>
     inspect_project_card(const std::filesystem::path& path);
 
+    [[nodiscard]] LFS_IO_API std::string
+    project_content_stamp(const std::filesystem::path& path);
+
     [[nodiscard]] LFS_IO_API lfs::Result<ProjectInspectorDetails>
     inspect_project_details(const std::filesystem::path& path,
                             std::uint64_t checkpoint_byte_budget = 8ull * 1024 * 1024);

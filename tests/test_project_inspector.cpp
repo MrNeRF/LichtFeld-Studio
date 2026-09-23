@@ -286,4 +286,86 @@ namespace {
         EXPECT_FALSE(inspect_project_filter_facts(plain).has_dataset);
     }
 
+    TEST(ProjectInspector, ContentStampTracksSavedSplatAndViewAcrossIndexEncodings) {
+        TemporaryDirectory temporary;
+        const auto splat = fixed_key("SPLT", 1202);
+        const auto view = fixed_key("VIEW", 1203);
+        const auto initial_splat = byte_vector("splat-a");
+        const auto initial_view = byte_vector("view-a");
+        const auto create = [&](const fs::path& path,
+                                const IndexCompression compression) {
+            auto options = create_options(1001);
+            options.index_compression = compression;
+            ProjectWriter writer =
+                require_result(ProjectWriter::create(path, options));
+            require_status(writer.plan_commit(commit_options(1101, 1)));
+            require_status(writer.preflight(32));
+            require_status(writer.write_chunk(fixed_key("SCNG", 1201),
+                                              byte_vector("graph")));
+            require_status(writer.write_chunk(splat, initial_splat));
+            require_status(writer.write_chunk(view, initial_view));
+            require_status(writer.commit());
+        };
+
+        const auto stored = temporary.path / "project-a.licht";
+        const auto compressed = temporary.path / "project-b.licht";
+        create(stored, IndexCompression::StoredForDeterministicTests);
+        create(compressed, IndexCompression::Zstd);
+        EXPECT_EQ(require_result(ProjectReader::open(stored)).commit().index_compression,
+                  Compression::Stored);
+        EXPECT_EQ(require_result(ProjectReader::open(compressed)).commit().index_compression,
+                  Compression::ZstdFramed);
+        const auto original = project_content_stamp(compressed);
+        ASSERT_FALSE(original.empty());
+        EXPECT_EQ(project_content_stamp(stored), original);
+
+        const auto append = [&](const std::uint64_t tag,
+                                const std::uint64_t generation,
+                                const ChunkKey* changed,
+                                const std::vector<std::byte>& payload) {
+            ProjectReader prior = require_result(ProjectReader::open(compressed));
+            ProjectWriter writer = require_result(ProjectWriter::append(compressed));
+            require_status(writer.plan_commit(commit_options(tag, generation)));
+            require_status(writer.preflight(payload.size()));
+            for (const auto& row : prior.chunks()) {
+                if (row.is_live() && (!changed || row.key != *changed)) {
+                    const auto proof =
+                        require_result(prior.make_clean_proof(row, generation));
+                    require_status(writer.reuse_if_clean(proof, generation));
+                }
+            }
+            if (changed) {
+                require_status(writer.write_chunk(*changed, payload));
+            }
+            require_status(writer.commit());
+        };
+        append(1102, 2, nullptr, {});
+        EXPECT_EQ(project_content_stamp(compressed), original);
+
+        append(1103, 3, &splat, byte_vector("splat-b"));
+        const auto splat_changed = project_content_stamp(compressed);
+        ASSERT_FALSE(splat_changed.empty());
+        EXPECT_NE(splat_changed.substr(0, 64), original.substr(0, 64));
+        EXPECT_EQ(splat_changed.substr(65), original.substr(65));
+
+        append(1104, 4, &view, byte_vector("view-b"));
+        const auto view_changed = project_content_stamp(compressed);
+        ASSERT_FALSE(view_changed.empty());
+        EXPECT_EQ(view_changed.substr(0, 64), splat_changed.substr(0, 64));
+        EXPECT_NE(view_changed.substr(65), splat_changed.substr(65));
+
+        const auto checkpoint = fixed_key("CKPT", 1204);
+        append(1105, 5, &checkpoint, byte_vector("checkpoint"));
+        const auto checkpoint_changed = project_content_stamp(compressed);
+        EXPECT_NE(checkpoint_changed.substr(0, 64), view_changed.substr(0, 64));
+        EXPECT_EQ(checkpoint_changed.substr(65), view_changed.substr(65));
+
+        const auto no_view = temporary.path / "project-c.licht";
+        ProjectWriter writer = require_result(
+            ProjectWriter::create(no_view, create_options(1001)));
+        write_generation(writer, commit_options(1101, 1),
+                         fixed_key("SCNG", 1201), byte_vector("graph"));
+        EXPECT_EQ(project_content_stamp(no_view).size(), 129u);
+    }
+
 } // namespace

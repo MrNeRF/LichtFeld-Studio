@@ -9,6 +9,8 @@
 #include "project_container_internal.hpp"
 #include "span_streambuf.hpp"
 
+#include <openssl/evp.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -24,6 +26,82 @@
 #include <utility>
 
 namespace lfs::io::project {
+
+    std::string project_content_stamp(const std::filesystem::path& path) {
+        auto opened = ProjectReader::open(path);
+        if (!opened || opened->open_state() != OpenState::Open) {
+            return {};
+        }
+
+        using Evidence = std::array<std::byte, 56>;
+        std::vector<Evidence> content;
+        std::vector<Evidence> view;
+        bool has_scene = false;
+        for (const auto& row : opened->chunks()) {
+            const auto kind = row.key.fourcc;
+            const bool is_content = kind == FOURCC_SCNG || kind == FOURCC_REFS ||
+                                    kind == FOURCC_DSRC || kind == FOURCC_SPLT ||
+                                    kind == FOURCC_CKPT || kind == FOURCC_SELM;
+            if (!is_content && kind != FOURCC_VIEW && kind != FOURCC_SEQR) {
+                continue;
+            }
+            Evidence bytes{};
+            const auto put = [&bytes](const std::uint64_t value,
+                                      const std::size_t offset,
+                                      const std::size_t width) {
+                for (std::size_t index = 0; index < width; ++index) {
+                    bytes[offset + index] =
+                        std::byte((value >> (index * 8)) & 0xff);
+                }
+            };
+            for (std::size_t index = 0; index < 4; ++index) {
+                bytes[index] = std::byte(kind.bytes[index]);
+            }
+            put(row.chunk_version, 4, 2);
+            put(static_cast<std::uint8_t>(row.row_kind), 6, 1);
+            put(static_cast<std::uint8_t>(row.compression), 7, 1);
+            put(row.flags, 8, 4);
+            for (std::size_t index = 0; index < row.key.instance_uuid.bytes.size(); ++index) {
+                bytes[16 + index] = std::byte(row.key.instance_uuid.bytes[index]);
+            }
+            put(row.stored_bytes, 32, 8);
+            put(row.uncompressed_bytes, 40, 8);
+            put(row.payload_crc32c, 48, 4);
+            put(row.header_crc32c, 52, 4);
+            (is_content ? content : view).push_back(bytes);
+            has_scene |= kind == FOURCC_SCNG && row.is_live();
+        }
+        if (!has_scene) {
+            return {};
+        }
+
+        const auto digest = [](std::vector<Evidence>& rows) -> std::string {
+            std::ranges::sort(rows);
+            std::array<unsigned char, EVP_MAX_MD_SIZE> hash{};
+            unsigned int size = 0;
+            const void* data = rows.empty()
+                                   ? static_cast<const void*>("")
+                                   : static_cast<const void*>(rows.data());
+            if (EVP_Digest(data, rows.size() * sizeof(Evidence), hash.data(), &size,
+                           EVP_sha256(), nullptr) != 1 ||
+                size != 32) {
+                return {};
+            }
+            constexpr char hex[] = "0123456789abcdef";
+            std::string result;
+            result.reserve(size * 2);
+            for (unsigned int index = 0; index < size; ++index) {
+                result += hex[hash[index] >> 4];
+                result += hex[hash[index] & 15];
+            }
+            return result;
+        };
+        const auto content_digest = digest(content);
+        const auto view_digest = digest(view);
+        return content_digest.empty() || view_digest.empty()
+                   ? std::string{}
+                   : content_digest + ':' + view_digest;
+    }
 
     namespace {
 
