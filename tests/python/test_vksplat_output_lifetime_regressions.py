@@ -21,7 +21,7 @@ def test_live_training_reserves_shared_scratch_before_render_frame():
     # guard first makes the renderer itself an active frame and starves that
     # reservation. Keep scratch setup ahead of the guard acquisition.
     ensure_pos = render_body.index("ensureSharedScratchArena(context, required_shared_scratch)")
-    guard_pos = render_body.index("shared_arena_guard.emplace()")
+    guard_pos = render_body.index("shared_arena_guard.emplace(")
     assert ensure_pos < guard_pos
 
 
