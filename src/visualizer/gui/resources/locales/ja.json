@@ -2575,6 +2575,8 @@
   "projects.gallery.state.applying": "ギャラリーの変更を適用中",
   "projects.gallery.state.with_reason": "{state}：{reason}",
   "projects.gallery.action.publish": "公開…",
+  "menu.file.update_thumbnail_from_view": "現在のビューからサムネイルを更新",
+  "menu.file.thumbnail_updated": "プロジェクトのサムネイルを更新しました。",
   "menu.file.publish_to_gallery": "ギャラリーに公開…",
   "projects.gallery.action.update": "変更を公開",
   "projects.gallery.action.pull": "新しいプロジェクトとしてダウンロード",

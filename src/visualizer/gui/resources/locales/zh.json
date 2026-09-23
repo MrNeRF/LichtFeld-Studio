@@ -2575,6 +2575,8 @@
   "projects.gallery.state.applying": "正在应用图库更改",
   "projects.gallery.state.with_reason": "{state}：{reason}",
   "projects.gallery.action.publish": "发布…",
+  "menu.file.update_thumbnail_from_view": "从当前视图更新缩略图",
+  "menu.file.thumbnail_updated": "项目缩略图已更新。",
   "menu.file.publish_to_gallery": "发布到图库…",
   "projects.gallery.action.update": "发布更改",
   "projects.gallery.action.pull": "下载为新项目",

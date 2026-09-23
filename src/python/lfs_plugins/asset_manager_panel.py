@@ -51,6 +51,7 @@ from .project_inspector import (
     thumbnail_source_options,
 )
 from .project_dialog import form_content
+from .project_thumbnail import active_project_path, has_renderable_project_viewport, is_active_project_path
 from .project_manager_preferences import (
     read_preferences as read_project_manager_preferences,
     read_state as read_project_manager_state,
@@ -1264,15 +1265,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     @staticmethod
     def _active_project_path() -> str:
-        poll = getattr(lf, "project_poll_write", None)
-        if not callable(poll):
-            return ""
-        try:
-            state = poll()
-            return str(state.get("path") or "") if isinstance(state, dict) else ""
-        except Exception:
-            _log.debug("Could not read the active project path for thumbnail source validation", exc_info=True)
-            return ""
+        return active_project_path()
 
     @staticmethod
     def _thumbnail_source_availability(path: str) -> tuple[bool, bool]:
@@ -1291,27 +1284,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     @staticmethod
     def _is_active_project_path(path: str) -> bool:
-        active_path = AssetManagerPanel._active_project_path()
-        if not path or not active_path:
-            return False
-        try:
-            return Path(path).resolve() == Path(active_path).resolve()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return False
+        return is_active_project_path(path)
 
     @staticmethod
     def _has_renderable_project_viewport(path: str) -> bool:
-        if not AssetManagerPanel._is_active_project_path(path):
-            return False
-        try:
-            scene_getter = getattr(lf, "get_render_scene", None)
-            exporter = getattr(lf, "export_viewport_image", None)
-            if not callable(scene_getter) or not callable(exporter):
-                return False
-            scene = scene_getter()
-            return scene is not None and int(getattr(scene, "total_gaussian_count", 0) or 0) > 0
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return False
+        return has_renderable_project_viewport(path)
 
     def _ensure_inspection_pipeline(self) -> InspectionFactsPipeline:
         if self._inspection_pipeline is None:
@@ -4845,6 +4822,25 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if self._handle:
             self._handle.dirty_all()
         return True
+
+    def refresh_after_thumbnail_write(self, path: str) -> None:
+        if not self._panel_mounted or not self._asset_index:
+            return
+        key = self._project_path_key(path)
+        assets = list(self._asset_index_assets().values()) + list(self._recent_only_assets().values())
+        for asset in assets:
+            if self._project_path_key(asset.get("path")) != key:
+                continue
+            asset_id = str(asset["id"])
+            if not asset.get("recent_only"):
+                self._library_command("verify_asset", asset_id)
+            if self._inspection_pipeline is not None:
+                self._inspection_pipeline.invalidate(asset_id)
+            self._inspection_by_asset.pop(asset_id, None)
+        self._invalidate_recent_scope_cache()
+        self._refresh_records(assets=True)
+        self._dirty_selection()
+        self._start_inspection_refresh()
 
     def on_mount(self, doc):
         super().on_mount(doc)

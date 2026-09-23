@@ -2879,6 +2879,29 @@ def test_viewport_thumbnail_capture_applies_preview_to_active_project(panel_modu
     assert native_calls == []
 
 
+def test_external_thumbnail_write_refreshes_recent_card_and_inspector(panel_module, tmp_path):
+    project_path = tmp_path / "project-a.licht"
+    project_path.write_bytes(b"saved")
+    panel_module.lf.project_recent_files = lambda: [str(project_path)]
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    panel._panel_mounted = True
+    asset_id = next(iter(panel._recent_only_assets()))
+    panel._inspection_by_asset[asset_id] = {"card": object(), "details": object()}
+    invalidated = []
+    refreshed = []
+    panel._inspection_pipeline = SimpleNamespace(invalidate=invalidated.append)
+    panel._refresh_records = lambda **kwargs: refreshed.append(kwargs)
+    panel._dirty_selection = lambda: None
+    panel._start_inspection_refresh = lambda: refreshed.append("inspection")
+
+    panel.refresh_after_thumbnail_write(str(project_path))
+
+    assert invalidated == [asset_id]
+    assert asset_id not in panel._inspection_by_asset
+    assert refreshed == [{"assets": True}, "inspection"]
+
+
 def test_viewport_thumbnail_capture_refuses_project_switch_after_capture(
     panel_module, tmp_path
 ):

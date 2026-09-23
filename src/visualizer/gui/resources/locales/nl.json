@@ -2575,6 +2575,8 @@
   "projects.gallery.state.applying": "Galerijwijzigingen toepassen",
   "projects.gallery.state.with_reason": "{state}: {reason}",
   "projects.gallery.action.publish": "Publiceren…",
+  "menu.file.update_thumbnail_from_view": "Miniatuur bijwerken vanuit huidige weergave",
+  "menu.file.thumbnail_updated": "De projectminiatuur is bijgewerkt.",
   "menu.file.publish_to_gallery": "Publiceren naar Gallery…",
   "projects.gallery.action.update": "Wijzigingen publiceren",
   "projects.gallery.action.pull": "Downloaden als nieuw project",

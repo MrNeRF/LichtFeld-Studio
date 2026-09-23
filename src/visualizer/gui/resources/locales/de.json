@@ -2575,6 +2575,8 @@
   "projects.gallery.state.applying": "Galerieänderungen anwenden",
   "projects.gallery.state.with_reason": "{state}: {reason}",
   "projects.gallery.action.publish": "Veröffentlichen…",
+  "menu.file.update_thumbnail_from_view": "Vorschaubild aus aktueller Ansicht aktualisieren",
+  "menu.file.thumbnail_updated": "Projektvorschaubild wurde aktualisiert.",
   "menu.file.publish_to_gallery": "In der Galerie veröffentlichen…",
   "projects.gallery.action.update": "Änderungen veröffentlichen",
   "projects.gallery.action.pull": "Als neues Projekt herunterladen",

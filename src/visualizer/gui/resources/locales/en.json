@@ -2574,6 +2574,8 @@
   "projects.gallery.state.applying": "Applying Gallery changes",
   "projects.gallery.state.with_reason": "{state}: {reason}",
   "projects.gallery.action.publish": "Publish…",
+  "menu.file.update_thumbnail_from_view": "Update Thumbnail from Current View",
+  "menu.file.thumbnail_updated": "Project thumbnail updated.",
   "menu.file.publish_to_gallery": "Publish to Gallery…",
   "projects.gallery.action.update": "Publish changes",
   "projects.gallery.action.pull": "Download as new project",

@@ -2575,6 +2575,8 @@
   "projects.gallery.state.applying": "Stosowanie zmian z Galerii",
   "projects.gallery.state.with_reason": "{state}: {reason}",
   "projects.gallery.action.publish": "Opublikuj…",
+  "menu.file.update_thumbnail_from_view": "Zaktualizuj miniaturę z bieżącego widoku",
+  "menu.file.thumbnail_updated": "Miniatura projektu została zaktualizowana.",
   "menu.file.publish_to_gallery": "Opublikuj w galerii…",
   "projects.gallery.action.update": "Opublikuj zmiany",
   "projects.gallery.action.pull": "Pobierz jako nowy projekt",

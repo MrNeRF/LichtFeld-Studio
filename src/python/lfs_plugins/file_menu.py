@@ -3,6 +3,7 @@
 """File menu implementation using Blender-style operators."""
 
 from pathlib import Path, PureWindowsPath
+import threading
 
 import lichtfeld as lf
 from .asset_index import display_name
@@ -16,6 +17,7 @@ from .layouts.menus import (
     register_menu,
 )
 from .training_confirm import _project_has_path, confirm_discard_work_then
+from .project_thumbnail import active_project_path, has_renderable_project_viewport
 
 __lfs_menu_classes__ = ["FileMenu"]
 
@@ -560,6 +562,47 @@ def _can_compact_project() -> bool:
     return _project_has_path()
 
 
+def _can_update_thumbnail_from_view() -> bool:
+    if not _project_has_path():
+        return False
+    path = active_project_path()
+    return bool(path and Path(path).is_file()
+                and has_renderable_project_viewport(path))
+
+
+def _update_thumbnail_from_view() -> None:
+    from .asset_manager_panel import AssetManagerPanel
+
+    title = lf.ui.tr("menu.file.update_thumbnail_from_view")
+    if not _can_update_thumbnail_from_view():
+        return
+    path = active_project_path()
+
+    def worker():
+        try:
+            card = lf.io.inspect_project_card(path)
+            project_id = str(card.project_uuid)
+            if not project_id:
+                raise RuntimeError("The saved project has no identity")
+            AssetManagerPanel._capture_viewport_preview(path, project_id)
+            error = None
+        except Exception as exc:
+            error = AssetManagerPanel._thumbnail_error_message(exc)
+
+        def complete():
+            if error:
+                lf.ui.message_dialog(title, error, "error")
+            else:
+                panel = lf.ui.get_panel_object("lfs.asset_manager")
+                if panel is not None:
+                    panel.refresh_after_thumbnail_write(path)
+                lf.ui.message_dialog(title, lf.ui.tr("menu.file.thumbnail_updated"))
+
+        lf.ui.schedule_on_ui_thread(complete)
+
+    threading.Thread(target=worker, daemon=True, name="ProjectThumbnail").start()
+
+
 def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
     """Open the shared Gallery review for the active saved project."""
     from .gallery_messages import tr as gallery_tr
@@ -745,6 +788,11 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
+            menu_action(
+                lf.ui.tr("menu.file.update_thumbnail_from_view"),
+                _update_thumbnail_from_view,
+                enabled=_can_update_thumbnail_from_view(),
+            ),
             menu_action(
                 lf.ui.tr("menu.file.publish_to_gallery"),
                 _publish_current_project_to_gallery,
