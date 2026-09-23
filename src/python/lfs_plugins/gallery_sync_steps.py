@@ -246,3 +246,129 @@ class LocalUpdateSteps:
             raise ValueError("The project identity or path changed before saving. Your recovery copy was kept.")
         if not lf.project_save(wait=False):
             raise ValueError("The updated project could not be saved. Your recovery copy is available in the recovery folder.")
+
+
+class DownloadOpenSteps:
+    """Stage and open a saved download, register it, then persist its link.
+
+    Cancellation before native open leaves the download alone. Once opening
+    starts, cancellation keeps the new local file but skips registration and
+    linking. After link submission, the link result must be checked before the
+    UI can report completion.
+    """
+
+    def __init__(self, ui):
+        self.ui = ui
+
+    def cancel(self):
+        ui = self.ui
+        if ui._import_pending and ui._import_pending.get("_opening"):
+            opening = ui._import_pending["_opening"]
+            opening["canceled"] = True
+            if opening["phase"] == "importing":
+                lf.ui.cancel_gallery_import()
+
+    def start(self, job, identity):
+        ui = self.ui
+        if ui.service.identity() != identity:
+            raise ValueError("The account changed while saving. Review your gallery before opening the download.")
+        if lf.is_training_active() or lf.ui.get_import_state().get("active"):
+            raise ValueError("Finish training or the current import before opening the download.")
+        ui._acquire_native_use(job["id"])
+        stage_id = ui.service.stage_download(job["id"])
+        ui._import_pending = dict(job, _accountIdentity=identity,
+            _opening={"phase": "staging", "stage_id": stage_id, "scene": lf.get_scene()})
+        ui._import_detached = False
+        ui._import_started = time.monotonic()
+        ui._message = "Checking downloaded scene…"
+        ui._schedule_poll()
+        return
+
+    def advance(self):
+        ui = self.ui
+        job = ui._import_pending
+        if job.get("_register"):
+            ui._finish_register_download(job)
+            return
+        if job.get("_accountIdentity") is not None and ui.service.identity() != job["_accountIdentity"]:
+            ui._import_detached = True
+        if job.get("_native_project"):
+            expected = job["_native_project"]
+            if ui._import_detached or job.get("_opening", {}).get("canceled"):
+                ui._import_pending = None
+                ui._message = "Account changed. The downloaded project is kept locally."
+                return
+            current_path = lf.project_poll_write().get("path")
+            if (not current_path or Path(current_path).resolve() != Path(expected["path"]).resolve()
+                    or lf.get_scene().total_gaussian_count != expected["count"]):
+                if time.monotonic() - ui._import_started > 180:
+                    ui._import_pending = None
+                    ui._message = "Project loading did not finish. The downloaded .licht file is kept."
+                return
+            from .asset_index import AssetIndex
+            index = AssetIndex()
+            if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
+            if file_stamp(expected["path"]) != expected["projectStamp"]:
+                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
+            inspection = lf.io.inspect_project(expected["path"])
+            if str(inspection.project_uuid) != expected["projectId"]:
+                raise ValueError("The downloaded project identity changed. Prepare the download again.")
+            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"], inspection=inspection)
+            if project is None:
+                raise ValueError(index.last_error or "The project opened but could not be added to Asset Manager.")
+            ui._mark_viewing_copy(index, project)
+            restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=ui.service.environment_path(job))
+            operation = ui._link_saved_download(job["id"], expected["path"], expected["projectId"])
+            job.pop("_native_project")
+            job["_link"] = operation
+            job["_registered_project"] = {"id": str(project.project_uuid), "path": expected["path"], "jobId": job["id"]}
+            ui._message = "Project opened. Saving its gallery link…"
+            return
+        if job.get("_update"):
+            ui._finish_local_update(job)
+            return
+        opening = job.get("_opening")
+        if opening and opening["phase"] == "staging":
+            if ui.service.busy:
+                return
+            if ui._import_detached or opening.get("canceled") or not opening["scene"].is_valid() or lf.project_is_dirty():
+                ui._import_pending = None
+                ui._message = "Account or project changed. Your download is kept; open it again when ready."
+                return
+            if lf.is_training_active() or lf.ui.get_import_state().get("active"):
+                raise ValueError("Finish training or the current import before opening this download. Your download is kept.")
+            current = next(j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"])
+            stage = current.get("stagedImport", {})
+            if stage.get("id") != opening["stage_id"] or stage.get("state") != "ready":
+                raise ValueError(stage.get("message") or "The downloaded scene could not be prepared.")
+            from .portable_project import ProjectFile
+            # The downloaded subset has the validated portable index. The
+            # fresh local identity may use native index compression.
+            with open(job["path"], "rb") as source:
+                prepared = ProjectFile(source)
+                count = sum(node["count"] for node in prepared.manifest["nodes"])
+            lf.project_open(stage["projectPath"], keep_asset_manager_open=True)
+            job["_native_project"] = {"path": stage["projectPath"], "count": count,
+                "projectId": stage["projectId"], "projectStamp": stage["projectStamp"]}
+            opening["phase"] = "opened"
+            ui._import_started = time.monotonic()
+            ui._message = "Opening .licht project…"
+            return
+        if job.get("_link"):
+            if ui._import_detached:
+                ui._import_pending = None
+                ui._message = "The download is saved in Asset Manager. Account changed; refresh your gallery to check its link."
+                ui._refresh_model()
+                return
+            if ui.service.busy:
+                return
+            current = next((j for j in ui.service.snapshot()["jobs"] if j["id"] == job["id"]), {})
+            operation = current.get("linkOperation", {})
+            ui._import_pending = None
+            if operation.get("id") == job["_link"] and operation.get("state") == "ready":
+                ui._message = "Downloaded scene saved and linked in Asset Manager."
+                ui._pulled_project = job.get("_registered_project")
+            else:
+                ui._message = "The download is saved in Asset Manager, but its gallery link could not be saved. Refresh your gallery before continuing."
+            ui._refresh_model()
+            return

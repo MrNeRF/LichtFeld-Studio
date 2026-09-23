@@ -186,7 +186,7 @@ def open_case(gallery, monkeypatch, tmp_path):
     monkeypatch.setattr(module.lf, "project_open", lambda *args, **kwargs: actions.append("opened"), raising=False)
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(opened)}, raising=False)
     monkeypatch.setattr(module.lf.io, "inspect_project", lambda path: SimpleNamespace(project_uuid="new-project"))
-    monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: actions.append("view"))
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "restore_view", lambda *args, **kwargs: actions.append("view"))
     monkeypatch.setattr(panel, "_mark_viewing_copy", lambda *args: actions.append("viewing copy"))
     monkeypatch.setattr(panel, "_link_saved_download", lambda *args: actions.append("link requested") or "link")
     monkeypatch.setattr(panel, "_refresh_model", lambda: None)
@@ -310,4 +310,41 @@ def test_publish_preparation_characterization(gallery, monkeypatch, tmp_path, ou
     assert (panel._export_pending is not None) is (outcome == "active")
     assert panel.snapshot()["phase"] == ("preparing" if outcome == "active" else "idle")
     assert panel.snapshot()["message"] == ("" if queued else panel._message)
+    assert state["jobs"] == []
+
+
+@pytest.mark.parametrize("outcome", ["saved", "canceled", "failed", "changed"])
+def test_publish_save_step_characterization(gallery, monkeypatch, tmp_path, outcome):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    project_path = tmp_path / "project.licht"
+    project_path.write_bytes(b"saved project")
+    project = ("project", str(project_path))
+    poll = {"path": str(project_path), "generation": 3, "running": False, "error": ""}
+    monkeypatch.setattr(panel, "_project_identity", lambda: project)
+    monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(name="visible")])
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: poll.copy(), raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **kwargs: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(panel, "_publish_saved", lambda *args, **kwargs: actions.append("export start"))
+    panel._publish({"title": "Gallery"})
+    assert panel.snapshot()["phase"] == "preparing"
+    assert panel.snapshot()["message"] == "Saving your current project…"
+    assert project_path.read_bytes() == b"saved project" and state["jobs"] == []
+    if outcome == "canceled":
+        panel._action_pause()
+    elif outcome == "failed":
+        poll["error"] = "disk full"
+    elif outcome == "changed":
+        poll["generation"] = 5
+    else:
+        poll["generation"] = 4
+    if outcome in ("failed", "changed"):
+        with pytest.raises(ValueError):
+            panel._finish_current_project_save()
+    else:
+        panel._finish_current_project_save()
+    assert actions == (["export start"] if outcome == "saved" else [])
+    assert panel._save_pending is None and project_path.read_bytes() == b"saved project"
     assert state["jobs"] == []

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Manual entrypoints, finite status polling, and domain-protocol requirements."""
 import json
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -213,7 +214,7 @@ def test_pull_and_open_finishes_and_releases_idle_poll(gallery, monkeypatch, tmp
         opened.append(value)
         poll['path'] = value
     monkeypatch.setattr(module.lf, 'project_open', open_project, raising=False)
-    monkeypatch.setattr(module, 'restore_view', lambda *a, **kw: None)
+    monkeypatch.setattr(import_module('lfs_plugins.gallery_sync_steps'), 'restore_view', lambda *a, **kw: None)
     project = SimpleNamespace(id='project', project_uuid='project')
     monkeypatch.setattr(asset_index, 'AssetIndex', lambda: SimpleNamespace(load=lambda: True,
         update_asset=lambda *a, **kw: project,
