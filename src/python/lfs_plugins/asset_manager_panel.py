@@ -2644,12 +2644,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         self._dialog_asset_id = asset_id
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
-        if action == "contents":
-            self._inspector_expanded = True
-            self._operations_expanded = True
-            self._dirty_selection()
-            self._dirty_inspector_layout()
-            return
         if action == "update_thumbnail":
             dataset_available, embedded_available = self._thumbnail_source_availability(
                 str(asset.get("path") or "")
@@ -3119,7 +3113,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
             if details is not None:
                 labels = {
-                    "contents": "projects.contents.title",
+                    "inspector": "projects.inspector.title",
                     "export_as": "projects.action.export_as",
                     "update_thumbnail": "projects.action.update_thumbnail",
                     "rename": "projects.action.rename",
@@ -3129,8 +3123,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     if action in labels:
                         items.append({
                             "label": tr(labels[action]),
-                            "action": "project:" + action,
-                            "separator_before": action == "contents",
+                            "action": action if action == "inspector" else "project:" + action,
+                            "separator_before": action == "inspector",
                         })
             return items
         items: List[Dict[str, Any]] = []
@@ -3169,7 +3163,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if details is not None or asset.get("status") == "REPAIR_ONLY":
             labels = {
                 "repair": "projects.action.repair",
-                "contents": "projects.contents.title",
                 "embed_dataset": "projects.action.embed_dataset",
                 "locate_dataset": "projects.action.locate_dataset",
                 "export_as": "projects.action.export_as",
@@ -3177,12 +3170,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             }
             for operation in operation_actions(asset):
                 action = str(operation.get("action") or "")
-                if action == "rename" or action not in labels:
+                if action in ("rename", "inspector") or action not in labels:
                     continue
                 items.append({
                     "label": tr(labels[action]),
                     "action": "project:" + action,
-                    "separator_before": action == "contents",
+                    "separator_before": action == "export_as",
                 })
         return items
 
@@ -3196,6 +3189,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         elif action == "inspector":
             if self._select_asset_id(asset_id):
                 self._inspector_expanded = True
+                self._operations_expanded = True
                 self._dirty_inspector_layout()
         elif action == "use_found_location":
             self.on_use_found_location(None, None, [asset_id])

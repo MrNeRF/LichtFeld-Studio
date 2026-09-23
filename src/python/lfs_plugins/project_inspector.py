@@ -318,7 +318,7 @@ def operation_actions(entry: Any) -> list[dict[str, Any]]:
     if status == "REPAIR_ONLY":
         return [{"action": "repair", "label": "projects.action.repair"}]
     return [
-        {"action": "contents", "label": "projects.contents.title"},
+        {"action": "inspector", "label": "projects.inspector.title"},
         {"action": "export_as", "label": "projects.action.export_as"},
         {"action": "update_thumbnail", "label": "projects.action.update_thumbnail"},
         {"action": "rename", "label": "projects.action.rename"},

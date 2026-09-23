@@ -128,9 +128,9 @@ def test_details_model_hides_metrics_without_samples_and_formats_embedded_datase
     assert model["title"] == "Bicycle"
 
 
-def test_context_actions_open_contents_and_file_operations():
+def test_context_actions_open_inspector_and_file_operations():
     actions = {row["action"] for row in operation_actions(_entry())}
-    assert actions == {"contents", "export_as", "update_thumbnail", "rename"}
+    assert actions == {"inspector", "export_as", "update_thumbnail", "rename"}
 
 
 def test_thumbnail_source_options_only_offer_sources_available_for_target(tmp_path):

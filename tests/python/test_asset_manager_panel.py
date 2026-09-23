@@ -594,6 +594,7 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
         panel._inspection_by_asset[asset["id"]] = {"details": object()}
     panel._select_asset_id("other")
     panel._inspector_expanded = True
+    panel._operations_expanded = False
     panel.open_project_operation = lambda *_args: pytest.fail("Inspector must not open a project operation")
 
     assert panel._show_asset_context_menu(asset["id"]) is True
@@ -601,6 +602,8 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     item = next(item for item in menu["items"] if item["action"] == "inspector")
     assert item["label"] == "projects.inspector.title"
     actions = [entry["action"] for entry in menu["items"]]
+    assert "project:contents" not in actions
+    assert actions.count("inspector") == 1
     expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
     assert actions[:len(expected_prefix)] == expected_prefix
     assert ("project:rename" in actions) == (status == "AVAILABLE")
@@ -615,6 +618,7 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     assert panel._selection_type == "asset"
     assert panel.get_selected_asset_id() == asset["id"]
     assert panel._inspector_expanded is True
+    assert panel._operations_expanded is True
     assert "inspector_expanded" in panel._handle.dirty_fields
     menu["on_action"](item["action"])
     assert panel._inspector_expanded is True
@@ -1097,14 +1101,24 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
     assert formatted["has_preview"] is True
     assert formatted["commit_uuid"] == "inspected-commit"
     assert panel._asset_index.assets == {}
-    assert [item["action"] for item in panel._asset_context_menu_items(recent)] == [
+    assert panel._show_asset_context_menu(recent["id"]) is True
+    menu = panel_module.lf._test_state.context_menus[-1]
+    assert [item["action"] for item in menu["items"]] == [
         "load",
         "show_in_folder",
-        "project:contents",
+        "inspector",
         "project:export_as",
         "project:update_thumbnail",
         "project:rename",
     ]
+    assert [item["label"] for item in menu["items"] if item["action"] == "inspector"] == [
+        "projects.inspector.title"
+    ]
+    panel._operations_expanded = False
+    menu["on_action"]("inspector")
+    assert panel.get_selected_asset_id() == recent["id"]
+    assert panel._inspector_expanded is True
+    assert panel._operations_expanded is True
 
 
 def test_recent_only_project_cache_identity_tracks_external_file_changes(
@@ -3485,7 +3499,7 @@ def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cl
     assert panel._select_folder_id(panel_module.SCOPE_ALL) is True
     assert panel._inspector_expanded is False
     assert panel._select_asset_id("first") is True
-    panel.open_project_operation(args=["contents"])
+    panel._handle_asset_context_action("inspector", "first")
     assert panel._inspector_expanded is True
 
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
@@ -4343,7 +4357,7 @@ def test_asset_menu_button_is_left_to_native_keyboard_activation(panel_module, k
     assert event.stopped is False
 
 
-@pytest.mark.parametrize("action", ["gallery:publish", "project:contents"])
+@pytest.mark.parametrize("action", ["gallery:publish", "project:export_as"])
 def test_removed_asset_context_action_does_not_reuse_previous_selection(
     panel_module, action
 ):
