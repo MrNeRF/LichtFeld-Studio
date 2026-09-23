@@ -72,7 +72,7 @@ def test_gallery_apply_rechecks_project_after_scene_changes(gallery, monkeypatch
             alias.symlink_to(other)
 
     if operation == "contents":
-        monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: None)
+        monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "restore_view", lambda *args, **kwargs: None)
         panel.service.environment_path = lambda job: None
         scene_tree = SimpleNamespace(get_node=lambda name: None, rename_node=swap_project)
         incoming = SimpleNamespace(name="incoming", uuid="incoming-id")
@@ -744,7 +744,7 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
     monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(get_node_by_uuid=lambda _: object()), raising=False)
     monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False)
     monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"generation": 3}, raising=False)
-    monkeypatch.setattr(module, "file_stamp", lambda _: [1, 2])
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "file_stamp", lambda _: [1, 2])
     monkeypatch.setattr(panel, "_apply_local_update", lambda *args: (_ for _ in ()).throw(OSError("save failed")))
     with pytest.raises(ValueError, match="saved local project is being reopened"):
         panel._finish_local_update(job)
@@ -1846,7 +1846,7 @@ def test_gallery_content_uses_chosen_local_environment_and_title(gallery, monkey
     project = ("project", str(path))
     controller._project_identity = lambda: project
     controller.service.environment_path = lambda _: "gallery.hdr"
-    monkeypatch.setattr(module, "restore_view", lambda *a, **kw: actions.append(kw["environment_path"]))
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "restore_view", lambda *a, **kw: actions.append(kw["environment_path"]))
     monkeypatch.setattr(module.lf, "set_node_visibility", lambda *_: None, raising=False)
     monkeypatch.setattr(module.lf, "project_save", lambda **_: True, raising=False)
     tree = SimpleNamespace(get_node=lambda _: None, rename_node=lambda *args: actions.append(args))

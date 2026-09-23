@@ -142,3 +142,30 @@ def test_update_failure_characterization(update_case, monkeypatch, phase):
     assert preview_path.exists() and backup_path.read_bytes() == b"saved local project"
     assert ("preview" in nodes) is (phase not in ("importing", "save_before_backup", "backup"))
     assert "linked" not in actions
+
+
+def test_update_waits_for_ready_backup_before_replacing_local_content(update_case, monkeypatch):
+    panel, state, actions, nodes, update, poll, project_path, preview_path, backup_path, journal = update_case
+    module = import_module("lfs_plugins.gallery_sync_steps")
+    nodes["local"] = SimpleNamespace(name="local", uuid="local")
+    update["phase"] = "backup"
+    journal["localUpdate"]["state"] = "preparing"
+    panel.service.busy = True
+    monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: pytest.fail("Changed the view before backup"))
+    monkeypatch.setattr(module.lf, "project_save", lambda **kwargs: pytest.fail("Saved a replacement before backup"), raising=False)
+    panel._finish_local_update(panel._import_pending)
+    assert set(nodes) == {"local", "preview"} and actions == []
+    assert project_path.read_bytes() == backup_path.read_bytes()
+    assert journal["localUpdate"]["state"] == "preparing"
+
+
+def test_update_cancel_after_import_removes_only_its_preview(update_case):
+    panel, state, actions, nodes, update, poll, project_path, preview_path, backup_path, journal = update_case
+    nodes["local"] = SimpleNamespace(name="local", uuid="local")
+    update["phase"] = "importing"
+    panel._action_pause()
+    panel._finish_local_update(panel._import_pending)
+    assert set(nodes) == {"local"}
+    assert actions == ["cancel import", "hide preview", "remove preview"]
+    assert project_path.read_bytes() == backup_path.read_bytes()
+    assert journal["localUpdate"]["state"] == "ready"

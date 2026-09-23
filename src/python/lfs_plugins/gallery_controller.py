@@ -15,6 +15,7 @@ from .gallery_actions import gallery_actions
 from .gallery_transfer_ui import TransferEstimate, transfer_metrics, transfer_phase, transfer_rows
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
+from .gallery_sync_steps import LocalUpdateSteps
 from .gallery_view import capture_view, restore_view
 from .portal_gallery import domain_tokens, UNSUPPORTED_PORTAL
 from . import gallery_preparation
@@ -68,6 +69,7 @@ class GalleryController:
         self._batch_retries = {}
         self._batch_current = None
         self._preparation_failure = None
+        self._local_update_steps = LocalUpdateSteps(self)
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
@@ -1153,19 +1155,7 @@ class GalleryController:
             self._release_native_use()
 
     def _discard_update_preview(self):
-        update = (self._import_pending or {}).get("_update", {})
-        if update.get("phase") not in ("save_before_backup", "backup") or not update.get("incoming"):
-            return
-        try:
-            if self._project_identity() != update["project"] or lf.ui.get_import_state().get("active"):
-                return
-            scene = lf.get_scene()
-            incoming = scene.get_node_by_uuid(update["incoming"])
-            if incoming is not None:
-                scene.remove_node(incoming.name)
-        except Exception as exc:
-            # Never hide the original failure or touch another project's nodes.
-            log_failure("discard_update_preview", exc)
+        return self._local_update_steps.discard_preview()
 
     def _action_show_recovery_folder(self):
         lf.ui.reveal_in_file_manager(str(self.service.root))
@@ -1478,11 +1468,7 @@ class GalleryController:
             self._cancel_own_export()
             self._export_cancelled = True
             self._message = "Canceling scene preparation…"
-        if self._import_pending and self._import_pending.get("_update"):
-            update = self._import_pending["_update"]
-            update["canceled"] = True
-            if update["phase"] == "importing" and Path(update.get("path", "")).suffix == ".scene":
-                lf.ui.cancel_gallery_import()
+        self._local_update_steps.cancel()
         if self._import_pending and self._import_pending.get("_opening"):
             opening = self._import_pending["_opening"]
             opening["canceled"] = True
@@ -1700,195 +1686,22 @@ class GalleryController:
             if node.type == lf.scene.NodeType.SPLAT and scene.is_node_effectively_visible(node.id)]
 
     def _begin_local_update(self, job, project):
-        if self._pull_overrides and self._pull_overrides[0] == job.get("result", {}).get("id"):
-            job = copy.deepcopy(job)
-            job["_local_fields"] = copy.deepcopy(self._pull_overrides[1])
-            if self._pull_overrides[4] is not None:
-                job["_local_environment_path"] = self._pull_overrides[4]
-        if self._project_identity() != project:
-            raise ValueError("The current project changed. Review it before updating.")
-        if lf.is_training_active() or lf.ui.get_import_state().get("active"):
-            raise ValueError("Finish training or the current import before updating this project.")
-        if any(n.locked for n in self._visible_splats()):
-            raise ValueError("Unlock the visible splats before updating this project.")
-        if job.get("kind") != "download" or job["status"] != "completed":
-            raise ValueError("Finish downloading this scene first.")
-        self._acquire_native_use(job["id"])
-        stage_id = self.service.stage_download(job["id"])
-        self._import_pending = dict(job, _accountIdentity=self._identity,
-            _update={"project": project, "phase": "staging", "stage_id": stage_id})
-        self._import_detached = False
-        self._import_started = time.monotonic()
-        self._message = "Preparing the gallery update…"
-        self._schedule_poll()
+        return self._local_update_steps.begin(job, project)
 
     def _finish_local_update(self, job):
-        update = job["_update"]
-        project = update["project"]
-        if self._save_pending:
-            return
-        if self._project_identity() != project:
-            self._import_pending = None
-            self._message = ("Project changed after the gallery update. Its recovery copy was kept; review the saved project before linking it."
-                if update["phase"] in ("save_updated", "linking") else "Project changed. The gallery update was not applied.")
-            return
-        if update["phase"] == "save_updated":
-            self._finish_update_save(job)
-            return
-        # Wait for an owned native import to finish before hiding its preview.
-        if update["phase"] == "importing" and lf.ui.get_import_state().get("active"):
-            return
-        scene = lf.get_scene()
-        incoming = scene.get_node(Path(update["path"]).stem) if update.get("path") else None
-        if incoming is not None and update["phase"] == "importing":
-            lf.set_node_visibility(incoming.name, False)
-        if self._import_detached or update.get("canceled"):
-            if incoming is not None and Path(update.get("path", "")).suffix == ".scene" and update["phase"] in ("importing", "save_before_backup", "backup"):
-                scene.remove_node(incoming.name)
-            self._import_pending = None
-            self._message = ("The project was updated; its recovery copy was kept. Refresh the gallery to check its link."
-                if update["phase"] == "linking" else "Update canceled. Your existing local splats remain.")
-            return
-        if self.service.busy:
-            return
-        current_job = next(j for j in self.service.snapshot()["jobs"] if j["id"] == job["id"])
-        if update["phase"] == "linking":
-            linked = current_job.get("linkOperation", {})
-            if linked.get("id") != update["link_operation"] or linked.get("state") != "ready":
-                raise ValueError("The project was updated, but its gallery link could not be saved. Your recovery copy is available; refresh the gallery before continuing.")
-            self._import_pending = None
-            if current_job.get("localUpdate", {}).get("backupPath"):
-                self._undo_pull = {"path": project[1], "backup": current_job["localUpdate"]["backupPath"],
-                    "stamp": file_stamp(project[1]), "identity": self._identity}
-            if self._pull_overrides:
-                scene_id, metadata, identity, publish = self._pull_overrides[:4]
-                self._pull_overrides = None
-                if identity == self._identity and publish:
-                    self.service.edit(scene_id, domain_tokens(current_job["result"]), metadata, project_id=project[0])
-            self._message = "Linked project updated. Your previous local work is kept in its recovery copy."
-            self._refresh_model()
-            return
-        if update["phase"] == "staging":
-            stage = current_job.get("stagedImport", {})
-            if stage.get("id") != update["stage_id"] or stage.get("state") != "ready":
-                raise ValueError(stage.get("message") or self.service.message)
-            update["path"] = stage["path"]
-            if scene.get_node(Path(stage["path"]).stem):
-                raise ValueError("The update preview already exists. Download the gallery item again.")
-            if Path(stage["path"]).suffix == ".scene":
-                lf.load_gallery_scene(self._staged_nodes(stage["path"]), Path(stage["path"]).stem,
-                    hidden=True)
-            elif Path(stage["path"]).suffix == ".licht":
-                lf.load_file(stage["path"])
-            else:
-                raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
-            update["phase"] = "importing"
-            self._import_started = time.monotonic()
-            return
-        if update["phase"] == "importing":
-            if incoming is None:
-                if lf.ui.get_import_state().get("error") or time.monotonic() - self._import_started > 60:
-                    raise ValueError("LichtFeld Studio could not open the gallery update. Your local splats remain.")
-                return
-            lf.ui.dismiss_import()
-            update["incoming"] = incoming.uuid
-            update["old_nodes"] = [n.uuid for n in self._visible_splats() if n.uuid != incoming.uuid]
-            update["phase"] = "save_before_backup"
-            self._save_current_project(lambda: self._prepare_update_backup(job), expected_project=project)
-            return
-        backup = current_job.get("localUpdate", {})
-        if backup.get("id") != update["backup_id"] or backup.get("state") != "ready":
-            raise ValueError(backup.get("message") or self.service.message)
-        if (lf.project_is_dirty() or lf.project_poll_write()["generation"] != update["generation"] or
-                file_stamp(project[1]) != update["stamp"]):
-            raise ValueError("Your local project changed during preparation. Its splats were kept. Review it and try the update again.")
-        incoming = scene.get_node_by_uuid(update["incoming"])
-        if incoming is None:
-            raise ValueError("The downloaded preview changed. Your local splats were kept.")
-        update["phase"] = "applying"
-        try:
-            self._apply_local_update(scene, incoming, job, update)
-        except Exception as exc:
-            self._recover_failed_update(update, exc)
-        update["phase"] = "save_updated"
-        self._message = "Saving the updated project…"
+        return self._local_update_steps.advance(job)
 
     def _prepare_update_backup(self, job):
-        update = job["_update"]
-        project = update["project"]
-        update["generation"] = lf.project_poll_write()["generation"]
-        update["stamp"] = file_stamp(project[1])
-        update["backup_id"] = self.service.prepare_local_update(job["id"], project[0], project[1], update["stamp"])
-        update["phase"] = "backup"
-        self._message = "Keeping a recovery copy before replacing local splats…"
+        return self._local_update_steps.prepare_backup(job)
 
     def _recover_failed_update(self, update, exc):
-        recovery = "Your recovery copy is available in the recovery folder."
-        try:
-            project = update["project"]
-            # Reopen only the unchanged generation that preceded the update.
-            if self._project_identity() == project and file_stamp(project[1]) == update["stamp"]:
-                lf.project_open(project[1], discard_changes=True, keep_asset_manager_open=True)
-                recovery = "Your saved local project is being reopened. Its recovery copy is also available."
-        except Exception as exc:
-            log_failure("recover_failed_update", exc, project_id=update.get("project", ("", ""))[0])
-            pass
-        raise ValueError("The gallery update could not be completed. " + recovery) from exc
+        return self._local_update_steps.recover_failure(update, exc)
 
     def _finish_update_save(self, job):
-        update = job["_update"]
-        poll = lf.project_poll_write()
-        if poll.get("running"):
-            return
-        if poll.get("error"):
-            self._recover_failed_update(update, ValueError(poll["error"]))
-        if (poll.get("generation") != update["generation"] + 1 or
-                self._project_identity() != update["project"] or lf.project_is_dirty()):
-            raise ValueError("The saved project changed during the gallery update. Your recovery copy was kept; review the current project before linking it.")
-        if self._import_detached or update.get("canceled"):
-            self._import_pending = None
-            self._message = "The project was updated and its recovery copy was kept. Account changed; it has not been linked to this account."
-            return
-        update["phase"] = "linking"
-        try:
-            update["link_operation"] = self._link_saved_download(job["id"], update["project"][1], update["project"][0],
-                **({"local_fields": job["_local_fields"]} if "_local_fields" in job else {}))
-        except Exception as exc:
-            log_failure("link_saved_download", exc, job_id=job["id"])
-            raise ValueError("The project was updated and its recovery copy was kept, but the gallery link could not be saved. Refresh your gallery before continuing.") from exc
-        self._message = "Project updated. Saving its gallery link…"
+        return self._local_update_steps.finish_save(job)
 
     def _apply_local_update(self, scene, incoming, job, update):
-        # A saved recovery copy exists, and no edits have occurred since it was made.
-        environment_path = (job["_local_environment_path"] if "_local_environment_path" in job
-                            else self.service.environment_path(job))
-        metadata = job.get("_local_fields", job["result"])
-        restore_view(lf, metadata.get("viewerSettings", {}), environment_path=environment_path)
-        # Native remove_node(keep_children=True) keeps child-local transforms.
-        # Reparent retained children explicitly first to preserve their world pose.
-        removed_ids = set(update["old_nodes"])
-        for node_id in update["old_nodes"]:
-            node = scene.get_node_by_uuid(node_id)
-            if node is not None:
-                for child_id in list(node.children):
-                    child = scene.get_node_by_id(child_id)
-                    if child is not None and child.uuid not in removed_ids:
-                        if not scene.reparent(child_id, node.parent_id):
-                            raise ValueError("A child of a replaced splat could not be preserved. Unlock it before retrying; your recovery copy is available.")
-        for node_id in update["old_nodes"]:
-            node = scene.get_node_by_uuid(node_id)
-            if node is not None:
-                scene.remove_node(node.name, keep_children=True)
-        lf.set_node_visibility(incoming.name, True)
-        title = metadata["title"]
-        if scene.get_node(title) is not None:
-            title += " (gallery " + incoming.uuid[:8] + ")"
-        scene.rename_node(incoming.name, title)
-        if self._project_identity() != update["project"] or file_stamp(update["project"][1]) != update["stamp"]:
-            raise ValueError("The project identity or path changed before saving. Your recovery copy was kept.")
-        if not lf.project_save(wait=False):
-            raise ValueError("The updated project could not be saved. Your recovery copy is available in the recovery folder.")
-
+        return self._local_update_steps.apply(scene, incoming, job, update)
 
 _controller = None
 
