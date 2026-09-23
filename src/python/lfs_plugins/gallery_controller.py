@@ -23,6 +23,19 @@ from .portal_security import redact, safe_filename, checked_portal_url
 from .gallery_logging import failure as log_failure, safe_url, stage as log_stage
 
 class GalleryController:
+    @property
+    def service(self):
+        return self._service
+
+    @service.setter
+    def service(self, value):
+        self._service = value
+        for machine in (getattr(self, "_local_update_steps", None),
+                        getattr(self, "_download_open_steps", None),
+                        getattr(self, "_publish_steps", None)):
+            if machine is not None:
+                machine.service = value
+
     def __init__(self):
         self.service = get_gallery_sync()
         self._state = self.service.snapshot()
@@ -32,12 +45,6 @@ class GalleryController:
         self._message_source = None
         self._failure_notice = ""
         self._save_pending = None
-        self._export_pending = None
-        self._prepared_commit = None
-        self._export_cancelled = False
-        self._export_identity = None
-        self._export_progress = 0
-        self._import_progress = 0
         self._native_use = None
         self._subscribers = {}
         self._timer = None
@@ -58,14 +65,12 @@ class GalleryController:
         self._open_continuation = None
         self._undo_pull = None
         self._settings_pending = None
-        self._reupload_reason = None
         self._decision_pending = False
         self._last_canceled = False
         self._update_queue = []
         self._batch_rows = []
         self._batch_retries = {}
         self._batch_current = None
-        self._preparation_failure = None
         self._local_update_steps = LocalUpdateSteps(
             self.service, lf, time.monotonic,
             project_identity=lambda: self._project_identity(),
@@ -91,7 +96,24 @@ class GalleryController:
             refresh_model=lambda: self._refresh_model(),
             schedule_poll=lambda: self._schedule_poll(),
             message_changed=self._select_step_message)
-        self._publish_steps = PublishSteps(self, lambda *args: asset_sync_state(*args))
+        self._publish_steps = PublishSteps(
+            self.service, lf, time.monotonic, lambda *args: asset_sync_state(*args),
+            model_state=lambda: self._state,
+            project_identity=lambda: self._project_identity(),
+            visible_splats=lambda: self._visible_splats(),
+            details=lambda value: self._details(value),
+            save_project=lambda continuation: self._save_current_project(continuation),
+            start_saved=lambda *args, **kwargs: self._publish_saved(*args, **kwargs),
+            patch_saved_update=lambda *args, **kwargs: self._patch_saved_update(*args, **kwargs),
+            pin_publish_preview=lambda *args: self._pin_publish_preview(*args),
+            cleanup_preparation=lambda export: self._remove_preparation(export),
+            refresh_model=lambda: self._refresh_model(),
+            schedule_poll=lambda: self._schedule_poll(),
+            set_operation=lambda project, title: self._set_publish_operation(project, title),
+            operation_title=lambda: self._operation_title,
+            set_last_canceled=lambda value: setattr(self, "_last_canceled", value),
+            set_upload_format=lambda value: setattr(self, "upload_format", value),
+            message_changed=self._select_step_message)
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
@@ -107,6 +129,75 @@ class GalleryController:
     def _message(self, value):
         self._ui_message = value
         self._message_source = None
+
+    def _set_publish_operation(self, project, title):
+        self._operation_project = project
+        self._operation_title = title
+
+    @property
+    def _export_pending(self):
+        return self._publish_steps.pending
+
+    @_export_pending.setter
+    def _export_pending(self, value):
+        self._publish_steps.pending = value
+
+    @property
+    def _prepared_commit(self):
+        return self._publish_steps.prepared_commit
+
+    @_prepared_commit.setter
+    def _prepared_commit(self, value):
+        self._publish_steps.prepared_commit = value
+
+    @property
+    def _export_cancelled(self):
+        return self._publish_steps.cancelled
+
+    @_export_cancelled.setter
+    def _export_cancelled(self, value):
+        self._publish_steps.cancelled = value
+
+    @property
+    def _export_identity(self):
+        return self._publish_steps.identity
+
+    @_export_identity.setter
+    def _export_identity(self, value):
+        self._publish_steps.identity = value
+
+    @property
+    def _export_progress(self):
+        if self._local_update_steps.pending:
+            return self._local_update_steps.progress
+        if self._download_open_steps.pending:
+            return self._download_open_steps.progress
+        return self._publish_steps.progress
+
+    @_export_progress.setter
+    def _export_progress(self, value):
+        if self._local_update_steps.pending:
+            self._local_update_steps.progress = value
+        elif self._download_open_steps.pending:
+            self._download_open_steps.progress = value
+        else:
+            self._publish_steps.progress = value
+
+    @property
+    def _preparation_failure(self):
+        return self._publish_steps.preparation_failure
+
+    @_preparation_failure.setter
+    def _preparation_failure(self, value):
+        self._publish_steps.preparation_failure = value
+
+    @property
+    def _reupload_reason(self):
+        return self._publish_steps.reupload_reason
+
+    @_reupload_reason.setter
+    def _reupload_reason(self, value):
+        self._publish_steps.reupload_reason = value
 
     @property
     def _import_pending(self):
