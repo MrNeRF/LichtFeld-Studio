@@ -8,12 +8,15 @@
 // With a wait-forever metrics begin_frame this cycles; bounded, the metrics
 // acquisition bails and the cycle breaks.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <future>
 #include <gtest/gtest.h>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -51,6 +54,79 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
+
+    // Counts arena tenants (CPU side and the GPU tail of training frames) and
+    // remembers the most that were ever inside at once.
+    struct TenantCounter {
+        std::atomic<int> inside{0};
+        std::atomic<int> most{0};
+
+        void enter() {
+            const int now = inside.fetch_add(1, std::memory_order_acq_rel) + 1;
+            int seen = most.load(std::memory_order_relaxed);
+            while (now > seen && !most.compare_exchange_weak(seen, now, std::memory_order_relaxed)) {
+            }
+        }
+        void leave() { inside.fetch_sub(1, std::memory_order_acq_rel); }
+    };
+
+    // Stand in for a training step's kernels: the step enters the arena when its
+    // GPU work starts and leaves 2 ms later, after the CPU released the frame.
+    void CUDART_CB start_training_step_on_gpu(void* tenants) {
+        static_cast<TenantCounter*>(tenants)->enter();
+    }
+
+    void CUDART_CB finish_training_step_on_gpu(void* tenants) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        static_cast<TenantCounter*>(tenants)->leave();
+    }
+
+    // Training loop as the trainer runs it: a blocking begin per step, GPU work
+    // queued on its stream, the frame released before that work finishes.
+    class TrainingLoop {
+    public:
+        TrainingLoop(RasterizerMemoryArena& arena, TenantCounter& tenants)
+            : arena_(arena),
+              tenants_(tenants),
+              thread_([this] { run(); }) {}
+
+        ~TrainingLoop() { stop(); }
+
+        void stop() {
+            stop_.store(true, std::memory_order_release);
+            if (thread_.joinable()) {
+                thread_.join();
+            }
+        }
+
+        [[nodiscard]] std::uint64_t steps() const { return steps_.load(std::memory_order_acquire); }
+
+    private:
+        void run() {
+            EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+            cudaStream_t stream = nullptr;
+            ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+            while (!stop_.load(std::memory_order_acquire)) {
+                const auto frame = arena_.begin_frame(stream, false);
+                const auto step = steps_.fetch_add(1, std::memory_order_acq_rel) + 1;
+                EXPECT_EQ(cudaLaunchHostFunc(stream, start_training_step_on_gpu, &tenants_), cudaSuccess);
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+                EXPECT_EQ(cudaLaunchHostFunc(stream, finish_training_step_on_gpu, &tenants_), cudaSuccess);
+                arena_.end_frame(frame, stream, false);
+                if (step % 4 == 0) {
+                    EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+                }
+            }
+            EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+            EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+        }
+
+        RasterizerMemoryArena& arena_;
+        TenantCounter& tenants_;
+        std::atomic<bool> stop_{false};
+        std::atomic<std::uint64_t> steps_{0};
+        std::thread thread_;
+    };
 } // namespace
 
 class ArenaMetricsContentionTest : public ::testing::Test {
@@ -217,6 +293,26 @@ TEST_F(ArenaMetricsContentionTest, RenderBeginDoesNotWaitForTrainingWorkStillOnT
     ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
 }
 
+// Catches a render begin that drops the frame although the training step
+// holding the arena finishes on the GPU within the render's wait budget.
+TEST_F(ArenaMetricsContentionTest, RenderBeginWaitsForATrainingStepAboutToFinish) {
+    RasterizerMemoryArena arena;
+    cudaStream_t training_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&training_stream, cudaStreamNonBlocking), cudaSuccess);
+    TenantCounter tenants;
+    const auto training = arena.begin_frame(training_stream, false);
+    ASSERT_EQ(cudaLaunchHostFunc(training_stream, start_training_step_on_gpu, &tenants), cudaSuccess);
+    ASSERT_EQ(cudaLaunchHostFunc(training_stream, finish_training_step_on_gpu, &tenants), cudaSuccess);
+    arena.end_frame(training, training_stream, false);
+
+    const auto frame = arena.try_begin_render_frame_for(50);
+    ASSERT_TRUE(frame.has_value()) << "render declined a training step that finished within its budget";
+    EXPECT_EQ(tenants.inside.load(), 0) << "render began while the training step still ran on the GPU";
+    arena.end_frame(*frame, nullptr, true);
+    ASSERT_EQ(cudaStreamSynchronize(training_stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
+}
+
 // Catches a render begin that drains the whole device (for example an optimizer
 // step queued after the rasterizer frame) instead of only the arena's last frame.
 TEST_F(ArenaMetricsContentionTest, RenderBeginWaitsOnlyForTheArenaFrame) {
@@ -267,6 +363,208 @@ TEST_F(ArenaMetricsContentionTest, RenderFrameReadyOnlyWhenRenderCanBeginWithout
     arena.cancel_render_handoff(token);
     EXPECT_TRUE(arena.render_frame_ready());
     ASSERT_EQ(cudaStreamDestroy(training_stream), cudaSuccess);
+}
+
+// Catches a reservation that ignores the training frames it was given (training
+// stops while the camera moves), hands out more than that, or refills them on
+// renewal so the viewer never gets its turn.
+TEST_F(ArenaMetricsContentionTest, ReservationLetsExactlyItsTrainingFramesBeginFirst) {
+    RasterizerMemoryArena arena;
+    const auto token = arena.request_render_handoff(0, 1);
+    ASSERT_NE(token, 0u);
+    const auto step = arena.try_begin_frame(nullptr, false);
+    ASSERT_TRUE(step.has_value()) << "the reservation kept out the training step it granted";
+    arena.end_frame(*step, nullptr, false);
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "training got a second step before the viewer's turn";
+    EXPECT_EQ(arena.request_render_handoff(token, 1), token);
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "renewing the reservation granted training another step";
+
+    const auto render = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(render.has_value());
+    arena.end_frame(*render, nullptr, true);
+    const auto next = arena.try_begin_frame(nullptr, false);
+    ASSERT_TRUE(next.has_value()) << "training stayed blocked after the viewer took its turn";
+    arena.end_frame(*next, nullptr, false);
+}
+
+// Catches a navigation release that starves training, lets it run past its one
+// step, or a kept window that still lets training in.
+TEST_F(ArenaMetricsContentionTest, NavigationReleaseGivesTrainingOneStepThenTheViewer) {
+    RasterizerMemoryArena arena;
+    RasterizerMemoryArena::RenderHandoffToken token = 0;
+    auto frame = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(frame.has_value());
+    lfs::vis::releaseViewerArenaFrame(arena, *frame, &token, std::optional<std::uint32_t>(1));
+    ASSERT_NE(token, 0u);
+    const auto step = arena.try_begin_frame(nullptr, false);
+    ASSERT_TRUE(step.has_value()) << "training got no step between two navigation frames";
+    arena.end_frame(*step, nullptr, false);
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "training ran past its single step";
+
+    frame = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(frame.has_value());
+    token = 0;
+    lfs::vis::releaseViewerArenaFrame(arena, *frame, &token, std::optional<std::uint32_t>(0));
+    EXPECT_FALSE(arena.try_begin_frame(nullptr, false)) << "a kept window let a training step in";
+
+    frame = arena.try_begin_render_frame_for(1, token);
+    ASSERT_TRUE(frame.has_value());
+    token = 0;
+    lfs::vis::releaseViewerArenaFrame(arena, *frame, &token, std::nullopt);
+    const auto free_step = arena.try_begin_frame(nullptr, false);
+    ASSERT_TRUE(free_step.has_value()) << "an ordinary release kept training out";
+    arena.end_frame(*free_step, nullptr, false);
+}
+
+// Races a training loop against a navigating viewer on one arena. Catches
+// overlapping tenants (including a render that starts while the last training
+// step still runs on the GPU), a starved trainer or viewer, more than one
+// training step between two viewer frames, a deadlock, and training that stays
+// blocked after navigation stops.
+TEST_F(ArenaMetricsContentionTest, NavigationTurnTakingUnderLoad) {
+    using Clock = std::chrono::steady_clock;
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    TenantCounter tenants;
+    std::uint64_t viewer_frames = 0;
+    std::uint64_t most_steps_between_frames = 0;
+    std::uint64_t steps_while_navigating = 0;
+    std::uint64_t steps_after_navigation = 0;
+
+    const bool finished = completes_within(20s, [&] {
+        TrainingLoop training(arena, tenants);
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        lfs::vis::NavigationArenaShare share;
+        RasterizerMemoryArena::RenderHandoffToken token = 0;
+        std::uint64_t steps_at_last_frame = training.steps();
+        auto last_release = Clock::now();
+        const auto first_steps = training.steps();
+        const auto navigation_end = Clock::now() + 1500ms;
+        while (Clock::now() < navigation_end) {
+            arena.set_rendering_active(true);
+            const auto frame = arena.try_begin_render_frame_for(lfs::vis::NavigationArenaShare::kRenderWaitMs, token);
+            arena.set_rendering_active(false);
+            if (!frame) {
+                token = arena.request_render_handoff(token);
+                share.noteDeclined(Clock::now());
+            } else {
+                share.noteBegan(Clock::now());
+                token = 0;
+                tenants.enter();
+                const std::uint64_t steps = training.steps();
+                // A viewer paused past the lease legitimately lets training run on.
+                if (Clock::now() - last_release < 50ms) {
+                    most_steps_between_frames = std::max(most_steps_between_frames, steps - steps_at_last_frame);
+                }
+                steps_at_last_frame = steps;
+                ++viewer_frames;
+                std::this_thread::sleep_for(1ms);
+                tenants.leave();
+                lfs::vis::releaseViewerArenaFrame(arena, *frame, &token,
+                                                  std::optional(share.trainingFramesBeforeNextRender(Clock::now())));
+                last_release = Clock::now();
+            }
+            std::this_thread::sleep_for(3ms);
+        }
+        steps_while_navigating = training.steps() - first_steps;
+        const auto steps_at_stop = training.steps();
+        std::this_thread::sleep_for(RasterizerMemoryArena::kRenderHandoffLeaseMs * 1ms + 150ms);
+        steps_after_navigation = training.steps() - steps_at_stop;
+        training.stop();
+    });
+
+    ASSERT_TRUE(finished) << "viewer and training deadlocked on the arena";
+    EXPECT_EQ(tenants.most.load(), 1) << "viewer and training used the arena at the same time";
+    EXPECT_GE(viewer_frames, 60u) << "the viewer was starved while navigating";
+    EXPECT_GE(steps_while_navigating, 60u) << "training was starved while the camera moved";
+    EXPECT_LE(most_steps_between_frames, 1u) << "training ran more than one step between two viewer frames";
+    EXPECT_GE(steps_after_navigation, 10u) << "training stayed blocked after navigation stopped";
+}
+
+// Races a training loop against a parked idle refresh that polls readiness.
+// Catches a readiness report after which the render still declines, which would
+// let the idle preview spin on retries while training keeps the arena.
+TEST_F(ArenaMetricsContentionTest, ReadyParkedRefreshAlwaysBeginsUnderLoad) {
+    using Clock = std::chrono::steady_clock;
+    using namespace std::chrono_literals;
+    RasterizerMemoryArena arena;
+    TenantCounter tenants;
+    std::uint64_t renders = 0;
+    std::uint64_t declined_after_ready = 0;
+
+    const bool finished = completes_within(20s, [&] {
+        TrainingLoop training(arena, tenants);
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        const auto end = Clock::now() + 1s;
+        while (Clock::now() < end) {
+            auto token = arena.request_render_handoff(0);
+            while (token != 0 && !arena.render_frame_ready(token)) {
+                std::this_thread::sleep_for(1ms);
+                token = arena.request_render_handoff(token);
+            }
+            if (token == 0) {
+                continue;
+            }
+            arena.set_rendering_active(true);
+            const auto frame = arena.try_begin_render_frame_for(1, token);
+            arena.set_rendering_active(false);
+            if (!frame) {
+                ++declined_after_ready;
+                arena.cancel_render_handoff(token);
+                continue;
+            }
+            tenants.enter();
+            ++renders;
+            std::this_thread::sleep_for(1ms);
+            tenants.leave();
+            arena.end_frame(*frame, nullptr, true);
+            std::this_thread::sleep_for(20ms);
+        }
+        training.stop();
+    });
+
+    ASSERT_TRUE(finished) << "parked refresh and training deadlocked on the arena";
+    EXPECT_EQ(tenants.most.load(), 1) << "refresh and training used the arena at the same time";
+    EXPECT_EQ(declined_after_ready, 0u) << "a render declined right after the arena reported it ready";
+    EXPECT_GE(renders, 20u) << "the idle refresh was starved";
+}
+
+// Catches turn-taking that starves training when the viewer never waited, keeps
+// the scratch longer than the viewer waited, or lets a later frame that did not
+// wait shrink the viewer's window.
+TEST(NavigationArenaShareTest, ViewerKeepsTheScratchForAsLongAsTrainingMadeItWait) {
+    using std::chrono::milliseconds;
+    lfs::vis::NavigationArenaShare share;
+    const auto t0 = lfs::vis::NavigationArenaShare::Clock::time_point{} + std::chrono::seconds(10);
+    share.noteBegan(t0);
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(1)), 1u);
+
+    share.noteDeclined(t0 + milliseconds(17));
+    share.noteDeclined(t0 + milliseconds(33));
+    share.noteBegan(t0 + milliseconds(67));
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(68)), 0u);
+    share.noteBegan(t0 + milliseconds(84));
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(116)), 0u);
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(117)), 1u);
+}
+
+// Catches an uncapped keep window: one long training step (a refinement) must
+// not make the viewer hold the scratch for just as long afterwards.
+TEST(NavigationArenaShareTest, LongTrainingStepsLeaveTheViewerOnlyACappedWindow) {
+    lfs::vis::NavigationArenaShare share;
+    const auto t0 = lfs::vis::NavigationArenaShare::Clock::time_point{} + std::chrono::seconds(10);
+    const auto began = t0 + std::chrono::milliseconds(400);
+    share.noteDeclined(t0);
+    share.noteBegan(began);
+    const auto keep = lfs::vis::NavigationArenaShare::kMaxViewerKeep;
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep - std::chrono::milliseconds(1)), 0u);
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep), 1u);
+
+    share.noteDeclined(began + keep);
+    share.reset();
+    share.noteBegan(began + keep + std::chrono::milliseconds(30));
+    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep + std::chrono::milliseconds(31)), 1u)
+        << "a wait from before the reset still counted";
 }
 
 TEST_F(ArenaMetricsContentionTest, ArenaContentionNeverDropsValidCachedFrame) {

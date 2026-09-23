@@ -194,6 +194,7 @@ namespace lfs::core {
         uint64_t render_handoff_token_ = 0;
         uint64_t next_render_handoff_token_ = 1;
         std::chrono::steady_clock::time_point render_handoff_deadline_{};
+        uint32_t render_handoff_training_frames_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -258,13 +259,16 @@ namespace lfs::core {
         // locks, but expires on its own if the viewport is minimized, paused, or
         // otherwise abandons the retry. Supplying the current token renews only
         // that request; an old token can never replace or cancel a newer owner.
+        // A new reservation lets `training_frames_first` training frames begin
+        // before it holds training back; renewing keeps what is left of them.
         [[nodiscard]] RenderHandoffToken request_render_handoff(
-            RenderHandoffToken current_token = 0);
+            RenderHandoffToken current_token = 0, uint32_t training_frames_first = 0);
         void cancel_render_handoff(RenderHandoffToken token);
         [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
-        // Never host-waits for GPU work: while the previous CUDA frame is still
-        // running on the GPU this declines like a busy arena, and the caller's
-        // reservation keeps the next training frame out until it retries.
+        // Host-waits for GPU work only within timeout_ms: while the previous
+        // CUDA frame is still running on the GPU it polls that frame, then
+        // declines like a busy arena, and the caller's reservation keeps the
+        // next training frame out until it retries.
         std::optional<uint64_t> try_begin_render_frame_for(
             uint32_t timeout_ms, RenderHandoffToken token = 0);
         // True when a render holding this reservation could begin now without

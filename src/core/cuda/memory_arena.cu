@@ -95,6 +95,7 @@ namespace lfs::core {
         render_handoff_token_ = other.render_handoff_token_;
         next_render_handoff_token_ = other.next_render_handoff_token_;
         render_handoff_deadline_ = other.render_handoff_deadline_;
+        render_handoff_training_frames_ = other.render_handoff_training_frames_;
         other.render_handoff_token_ = 0;
         last_frame_event_ = other.last_frame_event_;
         last_frame_event_valid_ = other.last_frame_event_valid_;
@@ -136,6 +137,7 @@ namespace lfs::core {
             render_handoff_token_ = other.render_handoff_token_;
             next_render_handoff_token_ = other.next_render_handoff_token_;
             render_handoff_deadline_ = other.render_handoff_deadline_;
+            render_handoff_training_frames_ = other.render_handoff_training_frames_;
             other.render_handoff_token_ = 0;
             if (last_frame_event_) {
                 const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
@@ -250,7 +252,8 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::RenderHandoffToken
-    RasterizerMemoryArena::request_render_handoff(const RenderHandoffToken current_token) {
+    RasterizerMemoryArena::request_render_handoff(const RenderHandoffToken current_token,
+                                                  const uint32_t training_frames_first) {
         std::lock_guard<std::mutex> lock(sync_mutex_);
         const auto now = std::chrono::steady_clock::now();
         if (render_handoff_token_ != 0 && render_handoff_deadline_ <= now) {
@@ -270,6 +273,7 @@ namespace lfs::core {
         }
         render_handoff_token_ = token;
         render_handoff_deadline_ = now + std::chrono::milliseconds(kRenderHandoffLeaseMs);
+        render_handoff_training_frames_ = training_frames_first;
         sync_cv_.notify_all();
         return token;
     }
@@ -489,13 +493,17 @@ namespace lfs::core {
                     return false;
                 }
                 if (!from_rendering) {
-                    return pending_render_frames_ == 0 && !handoff_active();
+                    return pending_render_frames_ == 0 &&
+                           (!handoff_active() || render_handoff_training_frames_ != 0);
                 }
                 return !handoff_active() || render_handoff_token_ == render_handoff_token;
             };
+            const auto previous_frame_blocks = [this, decline_while_previous_frame_runs]() {
+                return decline_while_previous_frame_runs && previous_frame_still_running();
+            };
             if (!wait_timeout_ms.has_value()) {
                 expire_handoff();
-                if (!can_begin()) {
+                if (!can_begin() || previous_frame_blocks()) {
                     return std::nullopt;
                 }
             } else {
@@ -506,7 +514,8 @@ namespace lfs::core {
                               std::chrono::milliseconds(*wait_timeout_ms);
                 while (true) {
                     expire_handoff();
-                    if (can_begin()) {
+                    const bool arena_free = can_begin();
+                    if (arena_free && !previous_frame_blocks()) {
                         break;
                     }
                     const auto now = std::chrono::steady_clock::now();
@@ -514,7 +523,11 @@ namespace lfs::core {
                         return std::nullopt;
                     }
                     auto wake_deadline = acquire_deadline;
-                    if (handoff_active()) {
+                    if (arena_free) {
+                        // Only the previous frame's GPU work is left; nothing
+                        // signals its completion, so poll the event.
+                        wake_deadline = std::min(wake_deadline, now + std::chrono::microseconds(200));
+                    } else if (handoff_active()) {
                         wake_deadline = std::min(wake_deadline, render_handoff_deadline_);
                     }
                     if (wake_deadline == std::chrono::steady_clock::time_point::max()) {
@@ -524,12 +537,12 @@ namespace lfs::core {
                     }
                 }
             }
-            if (decline_while_previous_frame_runs && previous_frame_still_running()) {
-                return std::nullopt;
-            }
             ++active_frames_;
             if (!from_rendering) {
                 ++active_training_frames_;
+                if (handoff_active()) {
+                    --render_handoff_training_frames_;
+                }
             }
             if (from_rendering && render_handoff_token != 0 &&
                 render_handoff_token_ == render_handoff_token) {

@@ -2418,6 +2418,25 @@ namespace lfs::vis {
         EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
     }
 
+    // Catches a preview timer that never reports the next refresh (the idle loop
+    // then refreshes only on unrelated redraws), reports it as due right away
+    // (the loop spins), or leaves the last training state unshown after a pause.
+    TEST(ViewportFrameLifecycleServiceTest, TrainingRefreshRunsOnItsOwnIntervalAndOnceAfterStopping) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        const double wait = service.secondsUntilTrainingRefresh(interval);
+        EXPECT_GT(wait, 0.0);
+        EXPECT_LE(wait, static_cast<double>(interval));
+        std::this_thread::sleep_for(std::chrono::duration<double>(wait + 0.005));
+        EXPECT_EQ(service.secondsUntilTrainingRefresh(interval), 0.0);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 

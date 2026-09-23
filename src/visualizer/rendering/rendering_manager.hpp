@@ -252,6 +252,10 @@ namespace lfs::vis {
         void markCameraPoseChanged();
 
         [[nodiscard]] bool pollDirtyState();
+        // The training preview refreshes on its own cadence, not only when an
+        // unrelated redraw happens to notice it is due.
+        void pollTrainingRefresh(bool is_training);
+        [[nodiscard]] double secondsUntilTrainingRefresh() const;
         // Re-arms a parked passive training refresh once its render can claim the arena.
         void pollParkedArenaRetry();
         [[nodiscard]] bool hasParkedArenaRetry() const { return parked_arena_retry_ != 0; }

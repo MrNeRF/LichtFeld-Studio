@@ -2446,6 +2446,10 @@ namespace lfs::vis {
         }
         if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
             consider_timeout(kArenaRetryPollSeconds, "arena_retry");
+        if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning())
+            consider_timeout(std::max(kScheduledRedrawMinWaitSeconds,
+                                      rendering_manager_->secondsUntilTrainingRefresh()),
+                             "training_refresh");
 
         // Wake exactly when a pending tooltip is due so the reveal costs a single
         // frame instead of rendering continuously through the hover delay.
@@ -2611,8 +2615,10 @@ namespace lfs::vis {
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
-        if (rendering_manager_)
+        if (rendering_manager_) {
+            rendering_manager_->pollTrainingRefresh(trainer_manager_ && trainer_manager_->isRunning());
             rendering_manager_->pollParkedArenaRetry();
+        }
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",

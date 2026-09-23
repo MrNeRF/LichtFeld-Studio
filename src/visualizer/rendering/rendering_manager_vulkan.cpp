@@ -1637,6 +1637,19 @@ namespace lfs::vis {
         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
     }
 
+    void RenderingManager::pollTrainingRefresh(const bool is_training) {
+        if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
+                is_training, framerate_controller_.getSettings().training_frame_refresh_time_sec);
+            training_dirty) {
+            markDirty(training_dirty);
+        }
+    }
+
+    double RenderingManager::secondsUntilTrainingRefresh() const {
+        return frame_lifecycle_service_.secondsUntilTrainingRefresh(
+            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+    }
+
     void RenderingManager::pollParkedArenaRetry() {
         if (parked_arena_retry_ == 0 ||
             (vksplat_viewport_renderer_ && !vksplat_viewport_renderer_->pollArenaHandoff())) {
@@ -2070,12 +2083,6 @@ namespace lfs::vis {
         } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
-        if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-                is_training,
-                framerate_controller_.getSettings().training_frame_refresh_time_sec);
-            training_dirty) {
-            markDirty(training_dirty);
-        }
 
         const bool has_cached_gpu_only_frame = [&]() {
             if (vulkan_viewport_image_size_.x <= 0 || vulkan_viewport_image_size_.y <= 0) {
@@ -2110,6 +2117,10 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->setCameraNavigating(
+                is_training && (frame_dirty & DirtyFlag::CAMERA) != 0);
+        }
         if (lod_controller_ && lod_controller_->hasReadyResults()) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
