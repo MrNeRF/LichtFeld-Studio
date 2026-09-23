@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Keep both",
   "projects.gallery.replacement.find": "Find the original file",
   "projects.gallery.replacement.find_hint": "If it was moved rather than overwritten",
-  "projects.gallery.info.applied": "Gallery changes applied. Undo is in Transfers.",
+  "projects.gallery.info.applied": "Gallery changes applied.",
   "projects.gallery.share.expiry": "Link copied. Expires: {expiry}",
   "projects.gallery.share.never": "never",
   "projects.gallery.cover.use": "Use as gallery cover",

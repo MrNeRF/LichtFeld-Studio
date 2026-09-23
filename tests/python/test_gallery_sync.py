@@ -1768,6 +1768,93 @@ def test_local_only_resolution_keeps_unpublished_content_after_restart(tmp_path,
     assert path.read_bytes() == b"locally edited geometry with checkpoint"
 
 
+@pytest.mark.parametrize("local_view", [None, {"camera": {"position": [1, 2, 3]}}])
+def test_text_apply_updates_only_the_link(tmp_path, monkeypatch, local_view):
+    from lfs_plugins.gallery_controller import asset_sync_state
+
+    service = connected(tmp_path, monkeypatch)
+    base = dict(id="remote", title="Scene", description="Before", viewerSettings={"camera": {"position": [0, 2, 3]}},
+                contentRevision="c1", metadataRevision="m1")
+    remote = dict(base, description="Changed in portal", metadataRevision="m2")
+    monkeypatch.setattr(Client, "scene", lambda *args: remote)
+    path = tmp_path / "project.licht"
+    path.write_bytes(b"saved project")
+    link = gallery_sync.exchange_link(base, "saved")
+    link["contentStamp"] = "unchanged"
+    link["localFields"] = gallery_sync.shared_fields(base)
+    if local_view is not None:
+        link["localFields"]["viewerSettings"] = local_view
+    service._bucket()["links"]["project"] = link
+    service._save()
+    before = path.read_bytes()
+    stamp = gallery_sync.file_stamp(path)
+
+    service.acknowledge_gallery_text(remote, "project", str(path), stamp, link)
+    finish(service)
+
+    applied = service.snapshot()["links"]["project"]
+    assert service.message == "projects.gallery.info.applied"
+    assert path.read_bytes() == before and gallery_sync.file_stamp(path) == stamp
+    assert applied["commitUuid"] == "saved" and applied["contentRevision"] == "c1"
+    assert applied["contentStamp"] == "unchanged"
+    assert applied["metadataRevision"] == "m2" and applied["metadata"] == remote
+    assert applied["sharedFields"] == gallery_sync.shared_fields(remote)
+    if local_view is None:
+        assert "localFields" not in applied
+        assert asset_sync_state({"id": "project", "commit_uuid": "saved"}, applied, remote)["freshness"] == "equal"
+    else:
+        assert applied["localFields"] == {"viewerSettings": local_view}
+    assert not service.snapshot()["jobs"]
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    durable = restarted.snapshot()["links"]["project"]
+    assert {key: value for key, value in durable.items() if key != "checkedAt"} == {
+        key: value for key, value in applied.items() if key != "checkedAt"}
+
+
+@pytest.mark.parametrize("change", ["revision", "file", "link", "account", "transfer", "journal"])
+def test_text_apply_keeps_link_when_guard_fails(tmp_path, monkeypatch, change):
+    service = connected(tmp_path, monkeypatch)
+    base = dict(id="remote", title="Scene", description="Before", viewerSettings={},
+                contentRevision="c1", metadataRevision="m1")
+    remote = dict(base, description="Changed in portal", metadataRevision="m2")
+    latest = dict(remote)
+    monkeypatch.setattr(Client, "scene", lambda *args: latest)
+    path = tmp_path / "project.licht"
+    path.write_bytes(b"saved project")
+    link = gallery_sync.exchange_link(base, "saved")
+    service._bucket()["links"]["project"] = link
+    service._save()
+    reviewed_link = gallery_sync.copy.deepcopy(link)
+    stamp = gallery_sync.file_stamp(path)
+    if change == "revision":
+        latest = dict(remote, metadataRevision="m3")
+    elif change == "file":
+        path.write_bytes(b"changed project")
+    elif change == "link":
+        link["metadataRevision"] = "other-update"
+    elif change == "account":
+        def scene_after_sign_out(*args):
+            service.account.email = "other@example.com"
+            return latest
+        monkeypatch.setattr(Client, "scene", scene_after_sign_out)
+    elif change == "transfer":
+        service._bucket()["jobs"].append(dict(id="pending", project="project", sceneId="remote",
+            path=str(path), message="", kind="upload", status="queued"))
+    else:
+        monkeypatch.setattr(service, "_save", lambda **kwargs: (_ for _ in ()).throw(OSError("journal failed")))
+
+    before_link = gallery_sync.copy.deepcopy(link)
+    service.acknowledge_gallery_text(remote, "project", str(path), stamp, reviewed_link)
+    finish(service)
+    if change == "account":
+        service.account.email = "one@example.com"
+
+    assert service.snapshot()["links"]["project"] == before_link
+    assert service.snapshot()["actionFailure"] is not None
+
+
 def test_gallery_content_keeps_chosen_local_settings_pending(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     job = downloaded_job(service)

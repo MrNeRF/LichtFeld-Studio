@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "保留两者",
   "projects.gallery.replacement.find": "查找原始文件",
   "projects.gallery.replacement.find_hint": "如果原始文件被移动而非覆盖",
-  "projects.gallery.info.applied": "已应用图库更改。可在传输中撤销。",
+  "projects.gallery.info.applied": "已应用图库更改。",
   "projects.gallery.share.expiry": "链接已复制。到期时间：{expiry}",
   "projects.gallery.share.never": "永不",
   "projects.gallery.cover.use": "用作图库封面",

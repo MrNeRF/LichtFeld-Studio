@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Mantieni entrambi",
   "projects.gallery.replacement.find": "Trova il file originale",
   "projects.gallery.replacement.find_hint": "Se è stato spostato anziché sovrascritto",
-  "projects.gallery.info.applied": "Modifiche della galleria applicate. Annulla è in Trasferimenti.",
+  "projects.gallery.info.applied": "Modifiche della galleria applicate.",
   "projects.gallery.share.expiry": "Link copiato. Scadenza: {expiry}",
   "projects.gallery.share.never": "mai",
   "projects.gallery.cover.use": "Usa come copertina della galleria",

@@ -1695,10 +1695,10 @@ def test_applying_inspected_gallery_changes_opens_the_project(gallery, monkeypat
     other = tmp_path / "other.licht"
     path.write_bytes(b"published project")
     other.write_bytes(b"another project")
-    remote = scene(viewerSettings={})
-    remote.update(title="Portal title", metadataRevision="title-edit")
+    remote = scene(viewerSettings={"exposure": 2})
+    remote.update(metadataRevision="view-edit")
     state.update(scenes=[remote], links={"project": dict(
-        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene()),
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene(viewerSettings={"exposure": 1})),
         contentRevision=remote["contentRevision"], metadataRevision="original")})
     controller._state = state
     controller._refresh_model = lambda: None
@@ -1721,7 +1721,54 @@ def test_applying_inspected_gallery_changes_opens_the_project(gallery, monkeypat
     assert controller._open_continuation[0] == str(path)
 
 
-def _closed_title_review(gallery, monkeypatch, tmp_path):
+@pytest.mark.parametrize("same_project", [False, True])
+def test_applying_closed_description_change_keeps_current_project_open(gallery, monkeypatch, tmp_path, same_project):
+    from lfs_plugins.gallery_sync import shared_fields
+    from test_gallery_product_regressions import _capture_review
+
+    controller, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "published.licht"
+    other = tmp_path / "current.licht"
+    path.write_bytes(b"published project")
+    other.write_bytes(b"current project")
+    base = scene(viewerSettings={})
+    remote = dict(base, description="Changed in portal", metadataRevision="description-edit")
+    state.update(scenes=[remote], links={"project": dict(
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(base),
+        contentRevision=remote["contentRevision"], metadataRevision=base["metadataRevision"])})
+    controller._state = state
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(path if same_project else other)}, raising=False)
+    dirty = [False]
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: dirty[0], raising=False)
+    controller._project_identity = lambda: ("project", str(path.resolve()))
+    monkeypatch.setattr(module.lf, "project_open", lambda *args, **kwargs: pytest.fail("Opened the project"), raising=False)
+    view = [{}]
+    views = []
+    monkeypatch.setattr(module, "capture_view", lambda _lf: views.append(True) or copy.deepcopy(view[0]))
+    monkeypatch.setattr(module, "restore_view", lambda *_args, **_kwargs: pytest.fail("Changed the live view"))
+    monkeypatch.setattr(import_module("lfs_plugins.training_confirm"), "confirm_discard_work_then",
+                        lambda title, callback: pytest.fail("Asked to switch projects"))
+    calls = []
+    controller.service.acknowledge_gallery_text = lambda *args: calls.append(args)
+    reviews = _capture_review(monkeypatch)
+    controller.resolve_asset({"id": "project", "path": str(path), "commit_uuid": "saved"},
+                             {"title": base["title"], "description": base["description"]}, apply_only=True)
+    before = path.read_bytes()
+    if same_project:
+        dirty[0] = True
+        view[0] = {"exposure": 2}
+
+    reviews[0]["on_submit"]({"text": "gallery"})
+
+    assert calls == [(remote, "project", str(path), module.file_stamp(path), state["links"]["project"])]
+    assert path.read_bytes() == before
+    assert views == ([True] if same_project else [])
+
+
+def _closed_title_review(gallery, monkeypatch, tmp_path, *, view_change=False):
     from lfs_plugins.gallery_sync import shared_fields
     from test_gallery_product_regressions import _capture_review
 
@@ -1731,10 +1778,11 @@ def _closed_title_review(gallery, monkeypatch, tmp_path):
     other = tmp_path / "other.licht"
     path.write_bytes(b"published project")
     other.write_bytes(b"another project")
-    remote = scene(viewerSettings={})
+    remote = scene(viewerSettings={"exposure": 2} if view_change else {})
     remote.update(title="Portal title", metadataRevision="title-edit")
     state.update(scenes=[remote], links={"project": dict(
-        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene()),
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(
+            scene(viewerSettings={"exposure": 1} if view_change else {})),
         contentRevision=remote["contentRevision"], metadataRevision="original")})
     controller._state = state
     controller._refresh_model = lambda: None
@@ -1772,7 +1820,7 @@ def test_canceling_gallery_review_does_not_open_or_change_the_project(gallery, m
 
 def test_delayed_apply_rejects_a_changed_file_stamp(gallery, monkeypatch, tmp_path):
     controller, _, path, other, opened, current, reviews, actions, _ = _closed_title_review(
-        gallery, monkeypatch, tmp_path)
+        gallery, monkeypatch, tmp_path, view_change=True)
     path.write_bytes(b"changed on disk during review")
 
     with pytest.raises(ValueError, match="changed"):
@@ -1786,7 +1834,7 @@ def test_delayed_apply_rejects_a_changed_file_stamp(gallery, monkeypatch, tmp_pa
 
 def test_delayed_apply_rejects_account_change_before_open(gallery, monkeypatch, tmp_path):
     controller, _, _, other, opened, current, reviews, actions, _ = _closed_title_review(
-        gallery, monkeypatch, tmp_path)
+        gallery, monkeypatch, tmp_path, view_change=True)
     controller._state["identity"] = ("https://portal.example", "other@example.com", "second", True)
 
     with pytest.raises(ValueError, match="changed"):
@@ -1800,7 +1848,7 @@ def test_delayed_apply_rejects_account_change_before_open(gallery, monkeypatch, 
 
 def test_delayed_apply_rejects_an_identity_mismatch_after_open(gallery, monkeypatch, tmp_path):
     controller, _, path, _, opened, _, reviews, actions, _ = _closed_title_review(
-        gallery, monkeypatch, tmp_path)
+        gallery, monkeypatch, tmp_path, view_change=True)
     controller._project_identity = lambda: ("other-project", str(path.resolve()))
 
     reviews[0]["on_submit"]({row["id"]: "gallery" for row in reviews[0]["groups"]})
@@ -1821,10 +1869,10 @@ def test_open_project_review_rejects_a_switched_project(gallery, monkeypatch, tm
     other = tmp_path / "other.licht"
     path.write_bytes(b"published project")
     other.write_bytes(b"another project")
-    remote = scene(viewerSettings={})
+    remote = scene(viewerSettings={"exposure": 2})
     remote.update(title="Portal title", metadataRevision="title-edit")
     state.update(scenes=[remote], links={"project": dict(
-        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene()),
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene(viewerSettings={"exposure": 1})),
         contentRevision=remote["contentRevision"], metadataRevision="original")})
     controller._state = state
     controller._refresh_model = lambda: None
@@ -1864,10 +1912,10 @@ def test_open_project_review_still_guards_dirty_and_view(gallery, monkeypatch, t
     module = import_module("lfs_plugins.gallery_controller")
     path = tmp_path / "published.licht"
     path.write_bytes(b"published project")
-    remote = scene(viewerSettings={})
+    remote = scene(viewerSettings={"exposure": 2})
     remote.update(title="Portal title", metadataRevision="title-edit")
     state.update(scenes=[remote], links={"project": dict(
-        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene()),
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(scene(viewerSettings={"exposure": 1})),
         contentRevision=remote["contentRevision"], metadataRevision="original")})
     controller._state = state
     controller._refresh_model = lambda: None

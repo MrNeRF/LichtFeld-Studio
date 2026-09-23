@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "両方を保持",
   "projects.gallery.replacement.find": "元のファイルを探す",
   "projects.gallery.replacement.find_hint": "上書きではなく移動された場合",
-  "projects.gallery.info.applied": "ギャラリーの変更を適用しました。転送から元に戻せます。",
+  "projects.gallery.info.applied": "ギャラリーの変更を適用しました。",
   "projects.gallery.share.expiry": "リンクをコピーしました。有効期限: {expiry}",
   "projects.gallery.share.never": "無期限",
   "projects.gallery.cover.use": "ギャラリーのカバーに使用",

@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Zachowaj oba",
   "projects.gallery.replacement.find": "Znajdź oryginalny plik",
   "projects.gallery.replacement.find_hint": "Jeśli został przeniesiony, a nie nadpisany",
-  "projects.gallery.info.applied": "Zastosowano zmiany z galerii. Cofnij jest w Transferach.",
+  "projects.gallery.info.applied": "Zastosowano zmiany z galerii.",
   "projects.gallery.share.expiry": "Skopiowano link. Wygasa: {expiry}",
   "projects.gallery.share.never": "nigdy",
   "projects.gallery.cover.use": "Użyj jako okładki galerii",

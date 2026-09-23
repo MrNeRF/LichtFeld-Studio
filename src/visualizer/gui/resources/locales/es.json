@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Conservar ambos",
   "projects.gallery.replacement.find": "Buscar el archivo original",
   "projects.gallery.replacement.find_hint": "Si se movió en lugar de sobrescribirse",
-  "projects.gallery.info.applied": "Cambios de la galería aplicados. Deshacer está en Transferencias.",
+  "projects.gallery.info.applied": "Cambios de la galería aplicados.",
   "projects.gallery.share.expiry": "Enlace copiado. Caduca: {expiry}",
   "projects.gallery.share.never": "nunca",
   "projects.gallery.cover.use": "Usar como portada de la galería",

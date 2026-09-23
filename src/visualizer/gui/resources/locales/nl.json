@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Beide behouden",
   "projects.gallery.replacement.find": "Oorspronkelijk bestand zoeken",
   "projects.gallery.replacement.find_hint": "Als het is verplaatst in plaats van overschreven",
-  "projects.gallery.info.applied": "Galerijwijzigingen toegepast. Ongedaan maken staat bij Overdrachten.",
+  "projects.gallery.info.applied": "Galerijwijzigingen toegepast.",
   "projects.gallery.share.expiry": "Link gekopieerd. Verloopt: {expiry}",
   "projects.gallery.share.never": "nooit",
   "projects.gallery.cover.use": "Als galerieomslag gebruiken",

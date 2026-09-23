@@ -357,11 +357,23 @@ class GalleryController:
             self._message = tr("state.equal")
             return
         identity = self._identity
+        reviewed_link = copy.deepcopy(link)
         local_view, remote_view = local.get("viewerSettings") or {}, remote.get("viewerSettings", {})
         reviewed_stamp = file_stamp(asset["path"]) if Path(asset["path"]).is_file() else None
 
         def apply(decisions, *, local_only=False):
             publish = not (apply_only or local_only)
+
+            text_only = (apply_only and decisions.get("text") == "gallery"
+                and asset.get("commit_uuid") == link.get("commitUuid")
+                and scene.get("contentRevision") == link.get("contentRevision")
+                and not any(choice in ("gallery", "both") for key, choice in decisions.items() if key != "text"))
+            if text_only:
+                if any(entry["asset"]["id"] == asset["id"] for entry in self._update_queue):
+                    raise ValueError(tr("error.project_changed"))
+                self.service.acknowledge_gallery_text(remote, asset["id"], asset["path"], reviewed_stamp, reviewed_link)
+                self._schedule_poll()
+                return
 
             def run():
                 if self.service.identity() != identity or self._project_identity() != project:

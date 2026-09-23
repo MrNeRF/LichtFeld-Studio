@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Conserver les deux",
   "projects.gallery.replacement.find": "Retrouver le fichier d’origine",
   "projects.gallery.replacement.find_hint": "S’il a été déplacé au lieu d’être écrasé",
-  "projects.gallery.info.applied": "Modifications de la galerie appliquées. Annuler est dans Transferts.",
+  "projects.gallery.info.applied": "Modifications de la galerie appliquées.",
   "projects.gallery.share.expiry": "Lien copié. Expiration : {expiry}",
   "projects.gallery.share.never": "jamais",
   "projects.gallery.cover.use": "Utiliser comme couverture de galerie",

@@ -2794,7 +2794,7 @@
   "projects.gallery.replacement.keep_button": "Beide behalten",
   "projects.gallery.replacement.find": "Ursprüngliche Datei suchen",
   "projects.gallery.replacement.find_hint": "Falls sie verschoben und nicht überschrieben wurde",
-  "projects.gallery.info.applied": "Galerieänderungen übernommen. Rückgängig ist unter Übertragungen verfügbar.",
+  "projects.gallery.info.applied": "Galerieänderungen übernommen.",
   "projects.gallery.share.expiry": "Link kopiert. Gültig bis: {expiry}",
   "projects.gallery.share.never": "nie",
   "projects.gallery.cover.use": "Als Galerietitelbild verwenden",

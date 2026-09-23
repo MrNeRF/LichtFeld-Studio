@@ -315,10 +315,13 @@ class GallerySync:
                 previous = self._journal_bytes()
                 if previous is not None:
                     FileBackend(self._journal.with_suffix(".json.bak")).write(previous)
-                for path_identity, project_id in project_checks:
+                for check in project_checks:
+                    path_identity, project_id = check[:2]
                     path_identity.validate()
                     _require_project(path_identity.path, project_id)
                     path_identity.validate()
+                    if len(check) > 2 and file_stamp(path_identity.path) != check[2]:
+                        raise ValueError("The local project changed. Review it before updating.")
                 os.replace(temporary, self._journal)
                 self._journal_seen = True
                 self._disk_digest = hashlib.sha256(encoded.encode()).hexdigest()
@@ -1876,6 +1879,56 @@ class GallerySync:
                 update.clear()
                 update.update(before_update)
                 raise
+        self._launch_metadata(action)
+
+
+    def acknowledge_gallery_text(self, scene, project_id, path, stamp, reviewed_link):
+        scene = copy.deepcopy(scene)
+        reviewed_link = copy.deepcopy(reviewed_link)
+        identity = self.identity()
+        def action():
+            bucket = self._bucket()
+            link = bucket["links"].get(project_id)
+            if (not link or any(link.get(key) != reviewed_link.get(key) for key in
+                    ("sceneId", "contentRevision", "metadataRevision", "commitUuid", "sharedFields", "localFields"))
+                    or link["sceneId"] != scene["id"]):
+                raise ValueError("The previous gallery link changed. Review it again.")
+            if any(not job.get("retired") and (job.get("status") not in ("completed", "canceled")
+                    or job.get("localUpdate", {}).get("state") in ("preparing", "ready", "failed")
+                    or job.get("localUpdate", {}).get("interrupted"))
+                    and (job.get("project") == project_id or job.get("sceneId") == scene["id"])
+                    for job in bucket["jobs"]):
+                raise ValueError("This project already has a transfer. Resume or discard it first.")
+            if any(project_id in (intent["oldProject"], intent["newProject"])
+                    for intent in bucket.get("handoffIntents", {}).values()):
+                raise ValueError("This project already has a transfer. Resume or discard it first.")
+            if file_stamp(path) != stamp:
+                raise ValueError("The local project changed. Review it before updating.")
+            path_identity = ProjectPathIdentity.capture(path)
+            _require_project(path, project_id)
+            remote = self._client().scene(scene["id"])
+            if self.identity() != identity:
+                raise ValueError("The account changed. Refresh the gallery before continuing.")
+            if domain_tokens(remote) != domain_tokens(scene):
+                raise ValueError("The previous gallery link changed. Review it again.")
+            if file_stamp(path) != stamp:
+                raise ValueError("The local project changed. Review it before updating.")
+            before_link = copy.deepcopy(link)
+            local_fields = {key: value for key, value in link.get("localFields", {}).items()
+                            if key not in ("title", "description") and value != link.get("sharedFields", {}).get(key)}
+            link.update(metadataRevision=scene["metadataRevision"], sharedFields=shared_fields(remote),
+                        metadata=copy.deepcopy(remote), exchangedAt=time.time(), checkedAt=time.time())
+            if local_fields:
+                link["localFields"] = local_fields
+            else:
+                link.pop("localFields", None)
+            try:
+                self._save(project_checks=((path_identity, project_id, stamp),))
+            except Exception:
+                link.clear()
+                link.update(before_link)
+                raise
+            self.message = "projects.gallery.info.applied"
         self._launch_metadata(action)
 
 
