@@ -393,12 +393,16 @@ class GalleryController:
                     for key in ("title", "description"):
                         metadata[key] = remote.get(key, "")
                 view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else apply_local_view)
-                track = copy.deepcopy(remote_view.get("cameraPath") if decisions.get("track") == "gallery" else apply_local_view.get("cameraPath"))
+                track_source = remote_view if decisions.get("track") == "gallery" else apply_local_view
+                if (decisions.get("track") is None and decisions.get("view") == "gallery"
+                        and "cameraPath" not in track_source and remote_view.get("cameraPath") is None):
+                    track_source = remote_view
+                track = copy.deepcopy(track_source.get("cameraPath"))
                 if decisions.get("track") == "both":
                     if not apply_local_view.get("cameraPath"):
                         raise ValueError(tr("error.project_changed"))
                     track = combine_camera_tracks(apply_local_view["cameraPath"], remote_view["cameraPath"])
-                if track is not None:
+                if track is not None or "cameraPath" in track_source:
                     view["cameraPath"] = track
                 else:
                     view.pop("cameraPath", None)
@@ -1958,9 +1962,17 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     freshness = "unknown"
     if link and link.get("commitUuid") and project.get("commit_uuid") and scene and all(link.get(key) and scene.get(key) for key in ("contentRevision", "metadataRevision")):
         # Links written by older builds still include visibility in their saved fields.
+        # Older applies could omit an explicit null camera track from local fields.
+        local_fields = {k: v for k, v in link.get("localFields", {}).items() if k != "visibility"}
+        gallery_fields = {k: v for k, v in link.get("sharedFields", {}).items() if k != "visibility"}
+        local_view = local_fields.get("viewerSettings")
+        gallery_view = gallery_fields.get("viewerSettings")
+        if (isinstance(local_view, dict) and isinstance(gallery_view, dict)
+                and "cameraPath" not in local_view and "cameraPath" in gallery_view
+                and gallery_view["cameraPath"] is None):
+            local_fields = dict(local_fields, viewerSettings=dict(local_view, cameraPath=None))
         local = (project["commit_uuid"] != link["commitUuid"] or
-                 "localFields" in link and {k: v for k, v in link["localFields"].items() if k != "visibility"} !=
-                 {k: v for k, v in link.get("sharedFields", {}).items() if k != "visibility"})
+                 "localFields" in link and local_fields != gallery_fields)
         remote = any(scene[key] != link[key] for key in ("contentRevision", "metadataRevision"))
         freshness = "diverged" if local and remote else "local" if local else "remote" if remote else "equal"
     scene_id = (link or scene or {}).get("sceneId", (scene or {}).get("id"))

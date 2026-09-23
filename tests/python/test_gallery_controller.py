@@ -1366,6 +1366,31 @@ def test_saved_legacy_visibility_does_not_mark_local_changes(gallery):
     assert asset_sync_state({"id": "project", "commit_uuid": "saved"}, link, remote)["freshness"] == "equal"
 
 
+@pytest.mark.parametrize("applied_camera", [
+    pytest.param({"camera": {"position": [-5.0, 2.0, -6.0], "target": [0.0, 0.0, 0.0],
+                            "up": [0.0, 1.0, 0.0], "fov": 55.0}}, id="portal-start-view"),
+])
+def test_applied_gallery_fields_do_not_create_a_local_change(gallery, applied_camera):
+    from lfs_plugins.gallery_controller import asset_sync_state
+    from lfs_plugins.gallery_sync import shared_fields
+
+    remote = scene(viewerSettings={"camera": {"position": [-5.0, 2.0, -6.0],
+        "target": [0.0, 0.0, 0.0], "up": [0.0, 1.0, 0.0], "fov": 55.0},
+        "cameraPath": None})
+    remote["description"] = "Changed in portal"
+    fields = shared_fields(remote)
+    fields["viewerSettings"].pop("cameraPath")
+    fields["viewerSettings"]["camera"] = applied_camera["camera"]
+    old_link = dict(sceneId=remote["id"], commitUuid="applied-save", sharedFields=shared_fields(remote),
+                    localFields=fields, contentRevision=remote["contentRevision"],
+                    metadataRevision=remote["metadataRevision"])
+    project = {"id": "project", "commit_uuid": "applied-save", "exists": True}
+
+    assert asset_sync_state(project, old_link, remote)["freshness"] == "equal"
+    later = dict(remote, metadataRevision="later-portal-edit", description="Later edit")
+    assert asset_sync_state(project, old_link, later)["freshness"] == "remote"
+
+
 @pytest.mark.parametrize("has_review", [False, True])
 def test_project_layout_restore_preserves_gallery_review_visibility(gallery, monkeypatch, tmp_path, has_review):
     from lfs_plugins.gallery_file_panel import GalleryFilePanel
@@ -1766,6 +1791,41 @@ def test_applying_closed_description_change_keeps_current_project_open(gallery, 
     assert calls == [(remote, "project", str(path), module.file_stamp(path), state["links"]["project"])]
     assert path.read_bytes() == before
     assert views == ([True] if same_project else [])
+
+
+def test_applying_gallery_view_keeps_null_camera_track(gallery, monkeypatch, tmp_path):
+    from lfs_plugins.gallery_sync import shared_fields
+    from test_gallery_product_regressions import _capture_review
+
+    controller, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "published.licht"
+    path.write_bytes(b"published project")
+    base = scene(viewerSettings={"camera": {"position": [0, 2, -7],
+        "up": [0.15881019830703735, 0.9687422513961792, 0.19057223200798035],
+        "fov": 55.000003814697266}, "cameraPath": None})
+    remote = scene(viewerSettings={"camera": {"position": [-5, 2, -6],
+        "up": [0, 1, 0], "fov": 55.0}, "cameraPath": None})
+    remote["metadataRevision"] = "view-edit"
+    state.update(scenes=[remote], links={"project": dict(
+        sceneId=remote["id"], commitUuid="saved", sharedFields=shared_fields(base),
+        contentRevision=remote["contentRevision"], metadataRevision=base["metadataRevision"])})
+    controller._state = state
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    controller._resolve_pending_uploads = lambda project, scene, identity, callback: callback()
+    controller._begin_settings_apply = lambda asset, scene, metadata, **kwargs: actions.append(metadata)
+    monkeypatch.setattr(module.lf, "project_has_path", lambda: True, raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(path)}, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module, "capture_view", lambda _lf: base["viewerSettings"])
+    reviews = _capture_review(monkeypatch)
+    controller.resolve_asset({"id": "project", "path": str(path), "commit_uuid": "saved"},
+                             {"title": base["title"], "description": base["description"]}, apply_only=True)
+
+    reviews[0]["on_submit"]({"view": "gallery"})
+
+    assert actions[0]["viewerSettings"] == remote["viewerSettings"]
 
 
 def _closed_title_review(gallery, monkeypatch, tmp_path, *, view_change=False):
