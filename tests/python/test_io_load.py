@@ -28,9 +28,10 @@ class TestIOBasics:
 class TestDatasetDetection:
     """Tests for dataset path detection."""
 
-    def test_is_dataset_path_colmap(self, lf, bicycle_dataset):
+    def test_is_dataset_path_colmap(self, lf, tmp_path):
         """Test COLMAP dataset detection."""
-        assert lf.io.is_dataset_path(str(bicycle_dataset))
+        (tmp_path / "cameras.txt").touch()
+        assert lf.io.is_dataset_path(str(tmp_path))
 
     def test_is_dataset_path_false_for_file(self, lf, tmp_output):
         """Test that regular file is not detected as dataset."""
@@ -182,6 +183,7 @@ _ONE_PIXEL_PNG = bytes(
 class TestMissingDatasetImages:
     """Python-visible load warnings for missing dataset images."""
 
+    @pytest.mark.gpu
     def test_transforms_load_warns_and_keeps_missing_camera(self, lf, tmp_path):
         dataset = tmp_path / "missing_images"
         dataset.mkdir()
