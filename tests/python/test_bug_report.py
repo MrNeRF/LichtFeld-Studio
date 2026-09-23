@@ -449,7 +449,7 @@ def test_published_bug_report_state_does_not_alias_defaults(fake_runtime):
     assert fresh["completeness_problems"] == []
 
 
-def test_submit_uses_authenticated_service_and_refreshes_exactly_once(
+def test_submit_requires_explicit_retry_after_token_refresh(
     tmp_path,
     monkeypatch,
     fake_runtime,
@@ -467,8 +467,10 @@ def test_submit_uses_authenticated_service_and_refreshes_exactly_once(
     monkeypatch.setattr(bug_report, "get_portal_account_service", lambda: service)
 
     payload = bug_report.build_payload(valid_form(), consent_to_logs=False)
+    first = bug_report.submit_report(payload, service=service)
+    assert first["success"] is False
+    assert len(stub.requests) == 2
     state = bug_report.submit_report(payload, service=service)
-
     assert state["success"] is True
     paths = [urllib.parse.urlsplit(request.full_url).path for request in stub.requests]
     assert paths == [
