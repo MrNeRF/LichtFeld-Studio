@@ -3091,6 +3091,24 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
 
 
+def test_explicit_unlink_hides_catalog_and_origin_associations(panel_module):
+    panel, local, remote = _gallery_fixture(panel_module)
+    remote["originProjectUuid"] = local["id"]
+    local.update(scene_id=remote["id"], gallery={"state": "equal"}, previous_project_uuid="old-project")
+    panel._gallery_state["links"]["old-project"] = panel._gallery_state["links"].pop(local["id"])
+    panel._gallery_state["unlinkedProjects"] = [local["id"]]
+
+    facts = panel._gallery_facts(local)
+    badge = panel._gallery_badge(local)
+    assert (facts["relationship"], facts["state"], facts.get("originMatch")) == ("unlinked", "unlinked", None)
+    assert badge["gallery_label"] == "projects.gallery.state.unlinked"
+    assert badge["gallery_action"] == "publish"
+    assert panel._select_asset_id(local["id"])
+    assert panel._selected_gallery_action() == "publish"
+    assert panel._has_gallery_link() is False
+    assert panel._gallery_published_summary() == ""
+
+
 def test_thumbnail_dialog_only_updates_the_local_project(panel_module):
     panel, local, _ = _gallery_fixture(panel_module)
     panel._select_asset_id(local["id"])

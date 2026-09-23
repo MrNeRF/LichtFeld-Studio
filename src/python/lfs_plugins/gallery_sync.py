@@ -87,6 +87,8 @@ def _validate_journal(data):
     for bucket in data["accounts"].values():
         require(isinstance(bucket, dict) and isinstance(bucket.get("links"), dict)
             and isinstance(bucket.get("jobs"), list))
+        require(isinstance(bucket.get("unlinkedProjects", []), list)
+            and all(isinstance(project_id, str) and project_id for project_id in bucket.get("unlinkedProjects", [])))
         intents = bucket.get("handoffIntents", {})
         require(isinstance(intents, dict) and (not intents or data["version"] == 3))
         for identifier, handoff in intents.items():
@@ -622,8 +624,9 @@ class GallerySync:
                 self._checked_at = time.time()
                 if scenes is not None:
                     self.scenes = scenes
-                recovered = self._origin_publication_links(self.scenes, self._bucket()["links"])
-                for link in self._bucket()["links"].values():
+                bucket = self._bucket()
+                recovered = self._origin_publication_links(self.scenes, bucket["links"], bucket.get("unlinkedProjects", ()))
+                for link in bucket["links"].values():
                     link["checkedAt"] = self._checked_at
                 if recovered:
                     self._save()
@@ -722,7 +725,7 @@ class GallerySync:
                         Path(entry["path"]).unlink(missing_ok=True)
 
     @staticmethod
-    def _origin_publication_links(scenes, links):
+    def _origin_publication_links(scenes, links, unlinked_projects=()):
         """Recover unambiguous local-project links from an owner listing."""
         candidates = {}
         for scene in scenes:
@@ -733,7 +736,7 @@ class GallerySync:
 
         recovered = {}
         for project_id, matches in candidates.items():
-            if project_id in links or len(matches) != 1:
+            if project_id in links or project_id in unlinked_projects or len(matches) != 1:
                 continue
             scene = matches[0]
             if not all(isinstance(scene.get(key), str) and scene[key]
@@ -983,12 +986,15 @@ class GallerySync:
                     if job.get("handoff") and scene["id"] != job["handoff"]["sceneId"]:
                         raise ValueError("The Gallery returned a different replacement scene. The previous link was kept.")
                     previous_links = copy.deepcopy(bucket["links"])
+                    previous_unlinked = list(bucket.get("unlinkedProjects", ()))
                     previous_job = copy.deepcopy(job)
                     previous_scenes = copy.deepcopy(self.scenes)
                     previous_intents = copy.deepcopy(bucket.get("handoffIntents", {}))
                     previous_undo = []
                     self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
                     bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
+                    bucket["unlinkedProjects"] = [project_id for project_id in previous_unlinked
+                                                   if project_id != job["project"]]
                     bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
                     bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
                     for history in bucket["jobs"]:
@@ -1011,6 +1017,7 @@ class GallerySync:
                 except Exception:
                     with self._lock:
                         bucket["links"] = previous_links
+                        bucket["unlinkedProjects"] = previous_unlinked
                         self.scenes = previous_scenes
                         bucket["handoffIntents"] = previous_intents
                         for update, applied_link in previous_undo:
@@ -1201,12 +1208,15 @@ class GallerySync:
         path_identity = ProjectPathIdentity.capture(project_path)
         def action():
             previous, previous_project = copy.deepcopy(bucket["links"].get(project_id)), job["project"]
+            previous_unlinked = list(bucket.get("unlinkedProjects", ()))
             previous_update = copy.deepcopy(job.get("localUpdate"))
             try:
                 self._client()
                 with self._lock:
                     scene = job["result"]
                     bucket["links"][project_id] = exchange_link(scene, commit_uuid)
+                    bucket["unlinkedProjects"] = [identifier for identifier in previous_unlinked
+                                                   if identifier != project_id]
                     if local_fields is not None:
                         bucket["links"][project_id]["localFields"] = local_fields
                     if job.get("localUpdate", {}).get("backupPath"):
@@ -1226,6 +1236,7 @@ class GallerySync:
                         bucket["links"].pop(project_id, None)
                     else:
                         bucket["links"][project_id] = previous
+                    bucket["unlinkedProjects"] = previous_unlinked
                     job["project"] = previous_project
                     if previous_update is not None:
                         job["localUpdate"] = previous_update
@@ -1731,6 +1742,9 @@ class GallerySync:
                 bucket = self._bucket()
                 check_pending()
                 bucket["links"].pop(project_id, None)
+                unlinked = bucket.setdefault("unlinkedProjects", [])
+                if project_id not in unlinked:
+                    unlinked.append(project_id)
                 bucket["handoffIntents"] = {key: value for key, value in bucket.get("handoffIntents", {}).items()
                                            if project_id not in (value["oldProject"], value["newProject"])}
             self._save()
@@ -2003,7 +2017,7 @@ class GallerySync:
             scenes = [scene for scene in scenes if scene.get("originProjectUuid") == project_id
                       and scene.get("status") == "ready"]
             bucket = self._bucket()
-            recovered = self._origin_publication_links(scenes, bucket["links"])
+            recovered = self._origin_publication_links(scenes, bucket["links"], bucket.get("unlinkedProjects", ()))
             if recovered:
                 scene = next(iter(recovered.values()))["metadata"]
                 self.scenes = [item for item in self.scenes if item["id"] != scene["id"]] + [scene]

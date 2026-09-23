@@ -48,6 +48,77 @@ def connected(tmp_path, monkeypatch):
     return service
 
 
+def test_explicit_unlink_stays_unlinked_with_matching_origin_after_reload(tmp_path, monkeypatch):
+    from lfs_plugins.asset_gallery_ui import GalleryAssetMixin
+
+    service = connected(tmp_path, monkeypatch)
+    scene = dict(id="scene", originProjectUuid="project", originCommitUuid="saved",
+                 status="ready", contentRevision="r1", metadataRevision="r1",
+                 title="Published project", description="", viewerSettings={})
+    monkeypatch.setattr(Client, "list_scenes", lambda self, **kwargs: [scene])
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(scene, "saved")
+    service._save()
+    service.scenes = [scene]
+
+    def facts():
+        panel = GalleryAssetMixin()
+        panel._gallery_state = service.snapshot()
+        panel._gallery_controller = None
+        return panel._gallery_facts({"id": "project", "exists": True, "commit_uuid": "saved",
+                                     "scene_id": "scene", "gallery": {"state": "equal"}})
+
+    service.unlink("project")
+    finish(service)
+    assert (facts()["relationship"], facts()["state"], facts().get("originMatch")) == ("unlinked", "unlinked", None)
+    assert facts()["action"] == "publish"
+
+    service.find_publications("project")
+    finish(service)
+    service.refresh(force=True)
+    finish(service)
+    assert "project" not in service.snapshot()["links"]
+    assert facts()["state"] == "unlinked"
+
+    service = gallery_sync.GallerySync(service.account, tmp_path)
+    service.refresh()
+    finish(service)
+    assert "project" not in service.snapshot()["links"]
+    assert facts()["state"] == "unlinked"
+
+
+def test_origin_matching_recovers_link_without_explicit_unlink(tmp_path, monkeypatch):
+    from lfs_plugins.asset_gallery_ui import GalleryAssetMixin
+
+    service = connected(tmp_path, monkeypatch)
+    scene = dict(id="scene", originProjectUuid="project", originCommitUuid="saved",
+                 status="ready", contentRevision="r1", metadataRevision="r1",
+                 title="Published project", description="", viewerSettings={})
+    monkeypatch.setattr(Client, "list_scenes", lambda self, **kwargs: [scene])
+    panel = GalleryAssetMixin()
+    panel._gallery_state = dict(service.snapshot(), scenes=[scene])
+    panel._gallery_controller = None
+    assert panel._gallery_facts({"id": "project", "exists": True})["originMatch"] is True
+    service.refresh(force=True)
+    finish(service)
+    assert service.snapshot()["links"]["project"]["sceneId"] == "scene"
+
+
+def test_linking_again_clears_explicit_unlink(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    job = downloaded_job(service)
+    service._save()
+    service.unlink("project")
+    finish(service)
+    assert service.snapshot()["unlinkedProjects"] == ["project"]
+
+    project_path = tmp_path / "project.licht"
+    project_path.write_bytes(b"saved project")
+    service.link_download(job["id"], "project", project_path=project_path)
+    finish(service)
+    assert service.snapshot()["unlinkedProjects"] == []
+    assert service.snapshot()["links"]["project"]["sceneId"] == "scene"
+
+
 def test_relink_latches_automatic_refresh_but_manual_retry_is_allowed(tmp_path, monkeypatch):
     calls = []
     stages = []
@@ -955,6 +1026,8 @@ def test_failed_link_save_is_not_reported_as_a_completed_update(tmp_path, monkey
 
 def test_completed_upload_records_exact_prepared_commit(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
+    service._bucket()["unlinkedProjects"] = ["project"]
+    service._save()
     path = tmp_path/'scene.licht'
     path.write_bytes(b'ply-data')
     remote = dict(id='scene',revision='new',title='Example',description='',visibility='private',viewerSettings={}, contentRevision='new', metadataRevision='new')
@@ -966,6 +1039,7 @@ def test_completed_upload_records_exact_prepared_commit(tmp_path, monkeypatch):
     job = service.queue_upload(path,{'title':'Example','_commitUuid':'prepared-commit','_uploadFormat':'sog'},'project')
     finish(service)
     link=service.snapshot()['links']['project']
+    assert service.snapshot()["unlinkedProjects"] == []
     assert link['commitUuid']=='prepared-commit' and link['uploadFormat']=='sog'
     assert link['sharedFields']==gallery_sync.shared_fields(remote)
     assert link['exchangedAt'] > 0
