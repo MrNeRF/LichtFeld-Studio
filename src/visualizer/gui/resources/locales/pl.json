@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Lokalne: {mine} / Galeria: {gallery}",
   "projects.gallery.conflict.choose_parts": "Wybierz, co zachować dla każdej części.",
   "projects.gallery.conflict.local_content": "Zapisany projekt",
+  "projects.gallery.conflict.saved_view_changed": "Zmieniono w zapisanym projekcie",
   "projects.gallery.conflict.gallery_content": "Kopia do przeglądania bez historii treningu",
   "projects.gallery.conflict.checkpoint_loss": "Kopia w Galerii nie ma historii treningu. Wybór Galeria dla zawartości sceny zastępuje lokalne splaty i ich punkt kontrolny. Lokalne je zachowuje.",
   "projects.gallery.conflict.backup_first": "Przed zastosowaniem zmian zachowywana jest kopia do odzyskania.",

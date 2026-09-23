@@ -353,7 +353,11 @@ class GalleryController:
             local = stored_local_scene(link, details)
             project = (asset["id"], str(Path(asset["path"]).resolve()))
             reviewed_dirty = None
-        groups = conflict_groups(asset, link, local, remote, apply_only=apply_only)
+        from .gallery_project_facts import saved_content_stamp
+        saved_stamp = (saved_content_stamp(asset["path"])
+                       if link.get("contentStamp") and not reviewed_dirty and Path(asset["path"]).is_file() else "")
+        groups = conflict_groups(asset, link, local, remote, apply_only=apply_only,
+                                 saved_stamp=saved_stamp, closed=not current_open)
         if not groups:
             self._message = tr("state.equal")
             return
@@ -1922,9 +1926,15 @@ def _change_labels(groups):
     return list(dict.fromkeys(name for row in groups for name in row.get("fields") or [row["label"]] if name))
 
 
-def conflict_groups(asset, link, local, remote, *, apply_only=False):
+def conflict_groups(asset, link, local, remote, *, apply_only=False, saved_stamp="", closed=False):
     import json
     baseline = link.get("sharedFields", {})
+    baseline_stamp = link.get("contentStamp", "")
+    comparable_stamps = ":" in saved_stamp and ":" in baseline_stamp
+    saved_content, saved_view = saved_stamp.split(":", 1) if comparable_stamps else ("", "")
+    baseline_content, baseline_view = baseline_stamp.split(":", 1) if comparable_stamps else ("", "")
+    comparable_stamps = comparable_stamps and all((saved_content, saved_view, baseline_content, baseline_view))
+    saved_view_changed = closed and comparable_stamps and saved_view != baseline_view
     local_view, remote_view = local.get("viewerSettings", {}), remote.get("viewerSettings", {})
     parts = [
         ("text", {k: local.get(k, "") for k in ("title", "description")}, {k: remote.get(k, "") for k in ("title", "description")}, {k: baseline.get(k, "") for k in ("title", "description")}),
@@ -1937,7 +1947,8 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False):
     for identifier, mine, gallery, base in parts:
         if mine == gallery:
             continue
-        mine_value, gallery_value = text(mine), text(gallery)
+        mine_value = tr("conflict.saved_view_changed") if saved_view_changed and identifier in ("view", "track") else text(mine)
+        gallery_value = text(gallery)
         values = tr("conflict.values", mine=mine_value, gallery=gallery_value)
         difference = values
         fields = [tr({"text": "conflict.text", "view": "conflict.view", "track": "conflict.track"}[identifier])]
@@ -1956,13 +1967,17 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False):
         elif identifier == "track":
             difference = tr("conflict.track_counts", mine=len((mine or {}).get("keyframes", [])),
                             gallery=len((gallery or {}).get("keyframes", [])))
+        if saved_view_changed and identifier in ("view", "track"):
+            difference = values
+            fields = [tr("conflict.view" if identifier == "view" else "conflict.track")]
         rows.append(dict(id=identifier, label=tr({"text": "conflict.text", "view": "conflict.view", "track": "conflict.track"}[identifier]),
             mine_value=mine_value, gallery_value=gallery_value, fields=fields,
             difference=difference, values=values,
-            choice="gallery" if apply_only or mine == base else "mine",
+            choice="gallery" if apply_only or (mine == base and not (saved_view_changed and identifier in ("view", "track"))) else "mine",
             can_both=identifier == "track" and bool(mine and gallery)))
     content_changed = (link.get("contentRevision") != remote.get("contentRevision")
-        or not apply_only and (not link.get("commitUuid") or asset.get("commit_uuid") != link.get("commitUuid")))
+        or (not apply_only and (not link.get("commitUuid") or asset.get("commit_uuid") != link.get("commitUuid"))
+            and (not comparable_stamps or saved_content != baseline_content)))
     if content_changed:
         mine, gallery = tr("conflict.local_content"), tr("conflict.gallery_content")
         rows.append(dict(id="content", label=tr("conflict.content"), mine_value=mine, gallery_value=gallery,

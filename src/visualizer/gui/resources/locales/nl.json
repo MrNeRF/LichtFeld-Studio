@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Lokaal: {mine} / Galerie: {gallery}",
   "projects.gallery.conflict.choose_parts": "Kies voor elk onderdeel wat je wilt behouden.",
   "projects.gallery.conflict.local_content": "Opgeslagen project",
+  "projects.gallery.conflict.saved_view_changed": "Gewijzigd in het opgeslagen project",
   "projects.gallery.conflict.gallery_content": "Weergavekopie zonder trainingsgeschiedenis",
   "projects.gallery.conflict.checkpoint_loss": "De Galeriekopie heeft geen trainingsgeschiedenis. Galerie kiezen voor scène-inhoud vervangt lokale splats en hun trainingscheckpoint. Lokaal behoudt ze.",
   "projects.gallery.conflict.backup_first": "Voor het toepassen wordt een herstelkopie bewaard.",

@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Local: {mine} / Gallery: {gallery}",
   "projects.gallery.conflict.choose_parts": "Choose what to keep for each part.",
   "projects.gallery.conflict.local_content": "Saved project",
+  "projects.gallery.conflict.saved_view_changed": "Changed in the saved project",
   "projects.gallery.conflict.gallery_content": "Viewing copy without training history",
   "projects.gallery.conflict.checkpoint_loss": "The Gallery copy has no training history. Choosing Gallery for scene content replaces the local splats and their training checkpoint. Local keeps them.",
   "projects.gallery.conflict.backup_first": "A recovery copy is kept before applying changes.",

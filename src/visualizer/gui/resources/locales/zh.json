@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "本地：{mine} / 图库：{gallery}",
   "projects.gallery.conflict.choose_parts": "选择每个部分要保留的内容。",
   "projects.gallery.conflict.local_content": "已保存的项目",
+  "projects.gallery.conflict.saved_view_changed": "已在保存的项目中更改",
   "projects.gallery.conflict.gallery_content": "不含训练历史的查看副本",
   "projects.gallery.conflict.checkpoint_loss": "图库副本没有训练历史。为场景内容选择图库会替换本地高斯点及其训练检查点。选择本地可保留它们。",
   "projects.gallery.conflict.backup_first": "应用更改前会保留恢复副本。",

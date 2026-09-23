@@ -898,6 +898,82 @@ def test_saved_content_stamp_separates_view_and_content_evidence(tmp_path, galle
     path.write_bytes(changed)
     assert saved_content_stamp(path)!=original
 
+
+@pytest.mark.parametrize("saved_stamp,expected", [
+    ("same-content:saved-view", ["view"]),
+    ("new-content:saved-view", ["view", "content"]),
+    ("", ["view", "content"]),
+])
+def test_view_only_saved_commit_does_not_add_content_conflict(gallery, monkeypatch, tmp_path, saved_stamp, expected):
+    from lfs_plugins.gallery_sync import shared_fields
+    from test_gallery_product_regressions import _capture_review
+
+    controller, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    facts = import_module("lfs_plugins.gallery_project_facts")
+    path = tmp_path / "project-a.licht"
+    path.write_bytes(b"saved project")
+    base = scene(viewerSettings={"exposure": 1.0})
+    remote = scene(viewerSettings={"exposure": 2.0})
+    remote["metadataRevision"] = "portal-view-edit"
+    state.update(scenes=[remote], links={"project": {
+        "sceneId": remote["id"], "commitUuid": "published-save",
+        "contentRevision": base["contentRevision"], "metadataRevision": base["metadataRevision"],
+        "contentStamp": "same-content:old-view", "sharedFields": shared_fields(base),
+    }})
+    controller._state = state
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    monkeypatch.setattr(facts, "saved_content_stamp", lambda _: saved_stamp)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    reviews = _capture_review(monkeypatch)
+
+    controller.resolve_asset({"id": "project", "path": str(path), "commit_uuid": "view-only-save"},
+                             {"title": base["title"], "description": base["description"]})
+
+    assert [row["id"] for row in reviews[0]["groups"]] == expected
+
+
+@pytest.mark.parametrize("saved_stamp,expected", [
+    ("same-content:saved-view", "Changed in the saved project"),
+    ("same-content:old-view", '{"exposure": 1.0}'),
+])
+def test_closed_conflict_review_labels_changed_saved_view(gallery, monkeypatch, tmp_path, saved_stamp, expected):
+    from lfs_plugins.gallery_sync import shared_fields
+    from test_gallery_product_regressions import _capture_review
+
+    controller, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    facts = import_module("lfs_plugins.gallery_project_facts")
+    path = tmp_path / "project-a.licht"
+    path.write_bytes(b"saved project")
+    base = scene(viewerSettings={"exposure": 1.0})
+    remote = scene(viewerSettings={"exposure": 3.0})
+    remote["metadataRevision"] = "portal-view-edit"
+    state.update(scenes=[remote], links={"project": {
+        "sceneId": remote["id"], "commitUuid": "published-save",
+        "contentRevision": base["contentRevision"], "metadataRevision": base["metadataRevision"],
+        "contentStamp": "same-content:old-view", "sharedFields": shared_fields(base),
+        "localFields": shared_fields(base),
+    }})
+    controller._state = state
+    controller._refresh_model = lambda: None
+    controller._schedule_poll = lambda: None
+    stamps = []
+    monkeypatch.setattr(facts, "saved_content_stamp", lambda p: stamps.append(p) or saved_stamp)
+    original_tr = module.tr
+    monkeypatch.setattr(module, "tr", lambda key, **values: "Changed in the saved project"
+                        if key == "conflict.saved_view_changed" else original_tr(key, **values))
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    reviews = _capture_review(monkeypatch)
+
+    controller.resolve_asset({"id": "project", "path": str(path), "commit_uuid": "view-only-save"},
+                             {"title": base["title"], "description": base["description"]})
+
+    view_row = next(row for row in reviews[0]["groups"] if row["id"] == "view")
+    assert view_row["mine_value"] == expected
+    assert len(stamps) == 1
+
 def test_saved_content_stamp_accepts_native_zstd_index(tmp_path, gallery, monkeypatch):
     from lfs_plugins.gallery_project_facts import saved_content_stamp
     from test_portable_project import FIXTURES

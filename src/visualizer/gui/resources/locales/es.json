@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Local: {mine} / Galería: {gallery}",
   "projects.gallery.conflict.choose_parts": "Elige qué conservar en cada parte.",
   "projects.gallery.conflict.local_content": "Proyecto guardado",
+  "projects.gallery.conflict.saved_view_changed": "Cambiado en el proyecto guardado",
   "projects.gallery.conflict.gallery_content": "Copia de visualización sin historial de entrenamiento",
   "projects.gallery.conflict.checkpoint_loss": "La copia de la Galería no tiene historial de entrenamiento. Elegir Galería para el contenido reemplaza los splats locales y su punto de control. Local los conserva.",
   "projects.gallery.conflict.backup_first": "Se guarda una copia de recuperación antes de aplicar cambios.",

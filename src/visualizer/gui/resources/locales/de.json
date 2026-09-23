@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Lokal: {mine} / Galerie: {gallery}",
   "projects.gallery.conflict.choose_parts": "Wähle für jeden Teil, was erhalten bleiben soll.",
   "projects.gallery.conflict.local_content": "Gespeichertes Projekt",
+  "projects.gallery.conflict.saved_view_changed": "Im gespeicherten Projekt geändert",
   "projects.gallery.conflict.gallery_content": "Ansichtskopie ohne Trainingsverlauf",
   "projects.gallery.conflict.checkpoint_loss": "Die Galeriekopie hat keinen Trainingsverlauf. Galerie für den Szeneninhalt ersetzt die lokalen Splats und ihren Trainingsstand. Lokal behält sie.",
   "projects.gallery.conflict.backup_first": "Vor dem Übernehmen wird eine Wiederherstellungskopie angelegt.",

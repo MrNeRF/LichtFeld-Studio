@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "ローカル: {mine} / ギャラリー: {gallery}",
   "projects.gallery.conflict.choose_parts": "各項目で保持する内容を選んでください。",
   "projects.gallery.conflict.local_content": "保存済みプロジェクト",
+  "projects.gallery.conflict.saved_view_changed": "保存済みプロジェクトで変更",
   "projects.gallery.conflict.gallery_content": "トレーニング履歴のない閲覧用コピー",
   "projects.gallery.conflict.checkpoint_loss": "ギャラリーのコピーにはトレーニング履歴がありません。シーンの内容でギャラリーを選ぶと、ローカルのスプラットとチェックポイントが置き換わります。ローカルを選ぶと保持されます。",
   "projects.gallery.conflict.backup_first": "変更を適用する前に復元用コピーを保存します。",

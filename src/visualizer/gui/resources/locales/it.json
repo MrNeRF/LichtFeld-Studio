@@ -2785,6 +2785,7 @@
   "projects.gallery.conflict.values": "Locale: {mine} / Galleria: {gallery}",
   "projects.gallery.conflict.choose_parts": "Scegli cosa conservare per ogni parte.",
   "projects.gallery.conflict.local_content": "Progetto salvato",
+  "projects.gallery.conflict.saved_view_changed": "Modificato nel progetto salvato",
   "projects.gallery.conflict.gallery_content": "Copia di visualizzazione senza cronologia di addestramento",
   "projects.gallery.conflict.checkpoint_loss": "La copia della Galleria non ha cronologia di addestramento. Scegliere Galleria per il contenuto sostituisce gli splat locali e il loro checkpoint. Locale li conserva.",
   "projects.gallery.conflict.backup_first": "Viene conservata una copia di recupero prima di applicare le modifiche.",
