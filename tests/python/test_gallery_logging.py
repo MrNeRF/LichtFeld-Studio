@@ -80,7 +80,7 @@ def test_failing_part_put_has_stage_and_failure_lines(tmp_path, monkeypatch, cap
     assert "exception_class=HTTPError" in caplog.text
     assert "signature=secret" not in caplog.text
     assert calls[-1][1].endswith("/part-upload-urls")
-    assert put_calls == [120]
+    assert put_calls == [120] * (2 if status == 403 else 4)
 
 
 def test_preparation_exception_is_logged_and_journaled(tmp_path, monkeypatch, caplog):
