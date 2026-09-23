@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Projets : Entrée ouvre un projet local ; Ctrl+Entrée lance son action Galerie ; Ctrl+Maj+C copie son lien de partage ; F5 actualise la vue. Ces raccourcis fonctionnent lorsque Projets a le focus, hors des champs de texte.",
   "projects.gallery.confirm.processing_wait": "La Galerie prend plus de temps que prévu.",
   "projects.gallery.action.keep_waiting": "Continuer à attendre",
-  "projects.gallery.review.cover_kept": "La couverture est conservée. Vérifiez Story dans la Galerie après une modification importante du contenu.",
+  "projects.gallery.review.cover_on_update": "Si cette option est sélectionnée, la miniature du projet remplace la couverture. Sinon, la couverture reste inchangée. Vérifiez Story dans la Galerie après une modification importante du contenu.",
   "portal.status.connected": "Galerie : connectée",
   "portal.status.disconnected": "Galerie : déconnectée",
   "portal.status.linking": "Galerie : connexion…",

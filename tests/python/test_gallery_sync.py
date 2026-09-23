@@ -1045,6 +1045,116 @@ def test_completed_upload_records_exact_prepared_commit(tmp_path, monkeypatch):
     assert link['exchangedAt'] > 0
     assert received == [dict(title='Example', originProjectUuid='project', originCommitUuid='prepared-commit', clientMutationId=job)]
 
+
+@pytest.mark.parametrize('linked,use_cover', [(True, True), (True, False), (False, True)])
+def test_upload_updates_cover_only_for_linked_replacement(tmp_path, monkeypatch, linked, use_cover):
+    import base64
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=')
+    service = connected(tmp_path, monkeypatch)
+    original = dict(id='scene', title='Original', contentRevision='old', metadataRevision='old',
+                    presentationRevision='old', posterRevision='old')
+    if linked:
+        service._bucket()['links']['project'] = gallery_sync.exchange_link(original, 'saved')
+    path = tmp_path / 'project.licht'
+    path.write_bytes(b'prepared project')
+    updated = dict(original, contentRevision='new', metadataRevision='new', presentationRevision='new', posterRevision='new')
+    covers = []
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs: {'scene': updated}, raising=False)
+    monkeypatch.setattr(Client, 'set_cover', lambda _client, scene_id, scene, png: covers.append((scene_id, scene, png)), raising=False)
+    monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: updated, raising=False)
+    metadata = dict(title='Title', useEmbeddedPreview=use_cover,
+                    _previewPng=base64.b64encode(png).decode('ascii'))
+    if linked:
+        metadata['replaceSceneId'] = 'scene'
+        metadata['baseRevisions'] = {'content': 'old', 'metadata': 'old'}
+
+    job = service.queue_upload(path, metadata, 'project')
+    finish(service)
+
+    assert service._job(job)['status'] == 'completed'
+    assert covers == ([('scene', updated, png)] if linked and use_cover else [])
+
+
+@pytest.mark.parametrize('cover_fails', [False, True])
+def test_metadata_update_sets_cover_after_patch_and_reports_failure(tmp_path, monkeypatch, cover_fails):
+    service = connected(tmp_path, monkeypatch)
+    original = dict(id='scene', title='Original', contentRevision='old', metadataRevision='old',
+                    presentationRevision='old', posterRevision='old')
+    updated = dict(original, title='Updated', metadataRevision='new', presentationRevision='new', posterRevision='new')
+    service._bucket()['links']['project'] = gallery_sync.exchange_link(original, 'saved')
+    service.scenes = [original]
+    actions = []
+    monkeypatch.setattr(Client, 'update', lambda _client, *_args, **_kwargs: actions.append('patch') or updated, raising=False)
+    def set_cover(_client, scene_id, scene, png):
+        actions.append(('cover', scene_id, scene, png))
+        if cover_fails:
+            raise ValueError('Cover upload failed')
+    monkeypatch.setattr(Client, 'set_cover', set_cover, raising=False)
+    monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: updated, raising=False)
+
+    service.edit('scene', {'contentRevision': 'old', 'metadataRevision': 'old'}, {'title': 'Updated'},
+                 project_id='project', cover_png=b'thumbnail')
+    finish(service)
+
+    assert actions == ['patch', ('cover', 'scene', updated, b'thumbnail')]
+    if cover_fails:
+        from lfs_plugins.gallery_controller import asset_sync_state
+        assert service.snapshot()['links']['project']['metadataRevision'] == 'new'
+        saved = next(iter(json.loads(service._journal.read_text())['accounts'].values()))['links']['project']
+        assert saved['metadataRevision'] == 'new'
+        assert service.scenes == [updated]
+        assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
+                                service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
+        assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+        monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
+        covered = dict(updated, presentationRevision='covered', posterRevision='covered')
+        monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
+        service.set_cover('project', updated, b'thumbnail')
+        finish(service)
+        assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+    else:
+        assert service.snapshot()['links']['project']['metadataRevision'] == 'new'
+        assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'new'
+        assert service.snapshot()['actionFailure'] is None
+
+
+def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch):
+    import base64
+    service = connected(tmp_path, monkeypatch)
+    original = dict(id='scene', title='Original', contentRevision='old', metadataRevision='old',
+                    presentationRevision='old', posterRevision='old')
+    service._bucket()['links']['project'] = gallery_sync.exchange_link(original, 'saved')
+    path = tmp_path / 'project.licht'
+    path.write_bytes(b'prepared project')
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=')
+    updated = dict(original, contentRevision='new', metadataRevision='new', presentationRevision='new', posterRevision='new')
+    uploads = []
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs: uploads.append(True) or {'scene': updated}, raising=False)
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: (_ for _ in ()).throw(ValueError('Cover upload failed')), raising=False)
+    metadata = dict(title='Updated', replaceSceneId='scene', baseRevisions={'content': 'old', 'metadata': 'old'},
+                    useEmbeddedPreview=True, _previewPng=base64.b64encode(png).decode('ascii'), _commitUuid='saved')
+
+    job = service.queue_upload(path, metadata, 'project')
+    finish(service)
+
+    assert service._job(job)['status'] == 'completed'
+    assert service.snapshot()['links']['project']['contentRevision'] == 'new'
+    assert service.snapshot()['links']['project']['metadataRevision'] == 'new'
+    saved = next(iter(json.loads(service._journal.read_text())['accounts'].values()))['links']['project']
+    assert saved['contentRevision'] == 'new' and saved['metadataRevision'] == 'new'
+    assert service.scenes == [updated]
+    from lfs_plugins.gallery_controller import asset_sync_state
+    assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
+                            service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
+    assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+    covered = dict(updated, presentationRevision='covered', posterRevision='covered')
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
+    monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
+    service.set_cover('project', updated, png)
+    finish(service)
+    assert uploads == [True]
+    assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+
 def test_publish_as_new_keeps_old_pair_until_success(tmp_path, monkeypatch):
     service=connected(tmp_path,monkeypatch)
     old=dict(id='old',revision='r1',title='Old', contentRevision='r1', metadataRevision='r1')

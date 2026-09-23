@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "프로젝트: Enter는 로컬 프로젝트를 열고, Ctrl+Enter는 갤러리 작업을 실행합니다. Ctrl+Shift+C는 공유 링크를 복사하고, F5는 현재 보기를 새로 고칩니다. 이 단축키는 텍스트 입력란 밖에서 프로젝트 패널에 포커스가 있을 때 작동합니다.",
   "projects.gallery.confirm.processing_wait": "갤러리 처리에 예상보다 시간이 오래 걸리고 있습니다.",
   "projects.gallery.action.keep_waiting": "계속 기다리기",
-  "projects.gallery.review.cover_kept": "표지는 유지됩니다. 콘텐츠를 크게 변경한 후 갤러리에서 Story를 확인하세요.",
+  "projects.gallery.review.cover_on_update": "선택하면 프로젝트 썸네일이 표지를 대체합니다. 선택하지 않으면 표지는 그대로 유지됩니다. 콘텐츠를 크게 변경한 후 갤러리에서 Story를 확인하세요.",
   "portal.status.connected": "갤러리: 연결됨",
   "portal.status.disconnected": "갤러리: 연결 끊김",
   "portal.status.linking": "갤러리: 연결 중…",

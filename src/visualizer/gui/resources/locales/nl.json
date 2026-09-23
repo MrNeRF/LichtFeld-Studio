@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Projecten: Enter opent een lokaal project; Ctrl+Enter voert de Galerij-actie uit; Ctrl+Shift+C kopieert de deellink; F5 vernieuwt de weergave. Deze sneltoetsen werken wanneer Projecten de focus heeft, buiten tekstvelden.",
   "projects.gallery.confirm.processing_wait": "De Galerij duurt langer dan verwacht.",
   "projects.gallery.action.keep_waiting": "Blijven wachten",
-  "projects.gallery.review.cover_kept": "De omslag blijft behouden. Controleer Story in de Galerij na een ingrijpende inhoudswijziging.",
+  "projects.gallery.review.cover_on_update": "Als deze optie is geselecteerd, vervangt de projectminiatuur de omslag. Anders blijft de omslag ongewijzigd. Controleer Story in de Galerij na een ingrijpende inhoudswijziging.",
   "portal.status.connected": "Galerij: Verbonden",
   "portal.status.disconnected": "Galerij: Niet verbonden",
   "portal.status.linking": "Galerij: Verbinden…",

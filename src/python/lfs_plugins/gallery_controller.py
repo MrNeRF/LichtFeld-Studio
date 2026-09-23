@@ -1289,8 +1289,13 @@ class GalleryController:
             commit = str(lf.io.inspect_project(path).commit_uuid)
             if expected_commit is not None and commit != expected_commit:
                 raise ValueError(tr("error.project_changed"))
+            cover = {}
+            if metadata.get("useEmbeddedPreview"):
+                import base64
+                self._pin_publish_preview(metadata, path, commit)
+                cover["cover_png"] = base64.b64decode(metadata["_previewPng"], validate=True)
             self.service.edit(linked["sceneId"], {name + "Revision": token for name, token in metadata["baseRevisions"].items()}, details,
-                commit_uuid=commit, content_stamp=content_stamp, project_id=project_id)
+                commit_uuid=commit, content_stamp=content_stamp, project_id=project_id, **cover)
             return True
         return False
 

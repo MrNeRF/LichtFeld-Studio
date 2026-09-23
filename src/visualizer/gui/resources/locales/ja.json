@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "プロジェクト: Enterでローカルプロジェクトを開き、Ctrl+Enterでギャラリー操作を実行します。Ctrl+Shift+Cで共有リンクをコピーし、F5で現在の表示を更新します。これらのショートカットは、テキスト入力欄以外でプロジェクトパネルにフォーカスがある場合に使えます。",
   "projects.gallery.confirm.processing_wait": "ギャラリーの処理に予想より時間がかかっています。",
   "projects.gallery.action.keep_waiting": "待機を続ける",
-  "projects.gallery.review.cover_kept": "カバーは保持されます。コンテンツを大幅に変更した後は、ギャラリーでStoryを確認してください。",
+  "projects.gallery.review.cover_on_update": "選択すると、プロジェクトのサムネイルがカバーに反映されます。選択しない場合、カバーは変わりません。コンテンツを大幅に変更した後は、ギャラリーでStoryを確認してください。",
   "portal.status.connected": "ギャラリー: 接続済み",
   "portal.status.disconnected": "ギャラリー: 未接続",
   "portal.status.linking": "ギャラリー: 接続中…",

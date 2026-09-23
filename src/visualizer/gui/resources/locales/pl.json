@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Projekty: Enter otwiera lokalny projekt; Ctrl+Enter uruchamia jego działanie w Galerii; Ctrl+Shift+C kopiuje link udostępniania; F5 odświeża widok. Skróty działają, gdy panel Projekty jest aktywny, poza polami tekstowymi.",
   "projects.gallery.confirm.processing_wait": "Galeria potrzebuje więcej czasu niż oczekiwano.",
   "projects.gallery.action.keep_waiting": "Czekaj dalej",
-  "projects.gallery.review.cover_kept": "Okładka zostaje zachowana. Sprawdź Story w Galerii po znacznej zmianie treści.",
+  "projects.gallery.review.cover_on_update": "Po zaznaczeniu miniatura projektu zastąpi okładkę. W przeciwnym razie okładka pozostanie bez zmian. Sprawdź Story w Galerii po znacznej zmianie treści.",
   "portal.status.connected": "Galeria: Połączono",
   "portal.status.disconnected": "Galeria: Rozłączono",
   "portal.status.linking": "Galeria: Łączenie…",

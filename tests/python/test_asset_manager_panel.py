@@ -3901,11 +3901,11 @@ def test_freshness_uses_domain_tokens_not_presentation(panel_module, domain, exp
     remote["revision"] = "broad-change"
     assert asset_sync_state(local, link, remote)["freshness"] == expected
 
-def test_update_review_explains_cover_preservation(panel_module):
+def test_update_review_explains_cover_choice(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel._select_asset_id(local["id"])
     text = panel._gallery_review_includes()
-    assert "projects.gallery.review.cover_kept" in text
+    assert "projects.gallery.review.cover_on_update" in text
 
 @pytest.mark.parametrize('visibility', ['private', 'public'])
 def test_open_in_portal_uses_the_scene_login_destination(panel_module, visibility):

@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Projekte: Enter öffnet ein lokales Projekt; Strg+Enter führt die Galerie-Aktion aus; Strg+Umschalt+C kopiert den Freigabelink; F5 aktualisiert die Ansicht. Diese Kürzel gelten, wenn Projekte den Fokus hat und kein Textfeld aktiv ist.",
   "projects.gallery.confirm.processing_wait": "Die Galerie benötigt länger als erwartet.",
   "projects.gallery.action.keep_waiting": "Weiter warten",
-  "projects.gallery.review.cover_kept": "Das Titelbild bleibt erhalten. Prüfe Story in der Galerie nach einer wesentlichen Inhaltsänderung.",
+  "projects.gallery.review.cover_on_update": "Wenn ausgewählt, ersetzt das Projektvorschaubild das Titelbild. Andernfalls bleibt das Titelbild unverändert. Prüfe Story in der Galerie nach einer wesentlichen Inhaltsänderung.",
   "portal.status.connected": "Galerie: Verbunden",
   "portal.status.disconnected": "Galerie: Getrennt",
   "portal.status.linking": "Galerie: Verbinden…",

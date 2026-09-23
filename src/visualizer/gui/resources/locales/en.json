@@ -2734,7 +2734,7 @@
   "preferences.gallery.shortcuts_hint": "Projects: Enter opens a local project; Ctrl+Enter runs its Gallery action; Ctrl+Shift+C copies its share link; F5 checks the current view. These shortcuts work when Projects has focus, outside text fields.",
   "projects.gallery.confirm.processing_wait": "Gallery is taking longer than expected.",
   "projects.gallery.action.keep_waiting": "Keep waiting",
-  "projects.gallery.review.cover_kept": "The cover is kept. Review Story in the Gallery after a substantial content change.",
+  "projects.gallery.review.cover_on_update": "When selected, the project thumbnail replaces the cover. Otherwise, the cover stays unchanged. Review Story in the Gallery after a substantial content change.",
   "gallery.status.estimating": "Estimating…",
   "gallery.status.metrics": "{speed}/s · ~{remaining} left",
   "portal.status.uploading": "Gallery: Uploading",

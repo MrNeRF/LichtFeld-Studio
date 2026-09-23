@@ -775,7 +775,7 @@ class GalleryAssetMixin:
     def _gallery_review_includes(self, *, publish_new=False):
         text = tr("review.includes", saved=self.get_selected_asset_modified())
         if self._gallery_scene(self._get_selected_asset() or {}) and not publish_new:
-            text += " " + tr("review.cover_kept")
+            text += " " + tr("review.cover_on_update")
         return text
 
     def _gallery_published_summary(self):

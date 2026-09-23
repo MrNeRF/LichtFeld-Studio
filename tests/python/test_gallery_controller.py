@@ -908,6 +908,54 @@ def test_metadata_only_update_skips_native_export(gallery, monkeypatch):
     panel._publish_saved({'title':'New title','replaceSceneId':'scene','baseRevisions':{'content':'r1','metadata':'r1'}},'project','/project.licht',state['identity'], update=True)
     assert actions==[(('scene',{'contentRevision':'r1','metadataRevision':'r1'},{'title':'New title'}),{'commit_uuid':'new-commit','content_stamp':'same-content:same-view','project_id':'project'})]
 
+
+@pytest.mark.parametrize('use_cover', [False, True])
+def test_metadata_update_pins_requested_cover_to_saved_commit(gallery, monkeypatch, tmp_path, use_cover):
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    facts = import_module('lfs_plugins.gallery_project_facts')
+    project_path = tmp_path / 'project.licht'
+    project_path.write_bytes(b'project')
+    monkeypatch.setattr(facts, 'saved_content_stamp', lambda _: 'same-content:same-view')
+    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', str(project_path)))
+    monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(commit_uuid='saved-commit'))
+    monkeypatch.setattr(module.lf.io, 'read_preview', lambda _: b'thumbnail', raising=False)
+    monkeypatch.setattr(module.gallery_preparation, 'publication_preview', lambda image: image)
+    panel.service.edit = lambda *args, **kwargs: actions.append((args, kwargs))
+    state['links'] = {'project': {'sceneId': 'scene', 'contentStamp': 'same-content:same-view'}}
+    metadata = dict(title='Title', replaceSceneId='scene', baseRevisions={'content': 'r1', 'metadata': 'r1'},
+                    useEmbeddedPreview=use_cover)
+
+    panel._publish_saved(metadata, 'project', str(project_path), state['identity'], update=True)
+
+    assert len(actions) == 1
+    assert actions[0][1].get('cover_png') == (b'thumbnail' if use_cover else None)
+
+
+def test_replacement_pins_project_thumbnail_to_prepared_commit(gallery, monkeypatch, tmp_path):
+    import base64
+    panel, state, actions = gallery
+    module = import_module('lfs_plugins.gallery_controller')
+    project_path = tmp_path / 'project.licht'
+    project_path.write_bytes(b'project')
+    monkeypatch.setattr(import_module('lfs_plugins.gallery_project_facts'), 'saved_content_stamp', lambda _: '')
+    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', str(project_path)))
+    monkeypatch.setattr(panel, '_visible_splats', lambda: [SimpleNamespace(name='visible')])
+    monkeypatch.setattr(panel, '_schedule_poll', lambda: None)
+    monkeypatch.setattr(module.lf.io, 'inspect_project', lambda _: SimpleNamespace(commit_uuid='saved-commit'))
+    monkeypatch.setattr(module.lf.io, 'read_preview', lambda _: b'thumbnail', raising=False)
+    monkeypatch.setattr(module.gallery_preparation, 'publication_preview', lambda image: image)
+    monkeypatch.setattr(module.lf.ui, 'get_export_state', lambda: {'active': False}, raising=False)
+    monkeypatch.setattr(module.lf, 'prepare_gallery_project', lambda *args: actions.append(args), raising=False)
+    panel.service.root = tmp_path
+    state.update(source_formats=['licht'], links={'project': {'sceneId': 'scene', 'contentStamp': ''}})
+
+    panel._publish_saved(dict(title='Updated', replaceSceneId='scene', baseRevisions={'content': 'r1', 'metadata': 'r1'},
+                              useEmbeddedPreview=True), 'project', str(project_path), state['identity'], update=True)
+
+    assert actions[0][3] == 'saved-commit'
+    assert base64.b64decode(panel._export_pending[1]['_previewPng']) == b'thumbnail'
+
 def test_cancel_paused_job_does_not_pause_someone_elses_upload(gallery, monkeypatch):
     panel,state,actions=gallery
     monkeypatch.setattr(panel,'_schedule_poll',lambda:None)

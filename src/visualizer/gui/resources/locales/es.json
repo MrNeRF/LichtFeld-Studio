@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Proyectos: Intro abre un proyecto local; Ctrl+Intro ejecuta su acción de Galería; Ctrl+Mayús+C copia el enlace para compartir; F5 actualiza la vista. Estos atajos funcionan cuando Proyectos tiene el foco, fuera de los campos de texto.",
   "projects.gallery.confirm.processing_wait": "La Galería está tardando más de lo esperado.",
   "projects.gallery.action.keep_waiting": "Seguir esperando",
-  "projects.gallery.review.cover_kept": "Se conserva la portada. Revisa Story en la Galería tras un cambio importante de contenido.",
+  "projects.gallery.review.cover_on_update": "Si se selecciona, la miniatura del proyecto reemplaza la portada. De lo contrario, la portada no cambia. Revisa Story en la Galería tras un cambio importante de contenido.",
   "portal.status.connected": "Galería: Conectada",
   "portal.status.disconnected": "Galería: Desconectada",
   "portal.status.linking": "Galería: Conectando…",

@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "Progetti: Invio apre un progetto locale; Ctrl+Invio esegue la sua azione Galleria; Ctrl+Maiusc+C copia il link di condivisione; F5 aggiorna la vista. Queste scorciatoie funzionano quando Progetti ha il focus, fuori dai campi di testo.",
   "projects.gallery.confirm.processing_wait": "La Galleria sta impiegando più tempo del previsto.",
   "projects.gallery.action.keep_waiting": "Continua ad attendere",
-  "projects.gallery.review.cover_kept": "La copertina viene mantenuta. Controlla Story nella Galleria dopo una modifica sostanziale dei contenuti.",
+  "projects.gallery.review.cover_on_update": "Se selezionata, la miniatura del progetto sostituisce la copertina. Altrimenti, la copertina rimane invariata. Controlla Story nella Galleria dopo una modifica sostanziale dei contenuti.",
   "portal.status.connected": "Galleria: Connessa",
   "portal.status.disconnected": "Galleria: Disconnessa",
   "portal.status.linking": "Galleria: Connessione…",

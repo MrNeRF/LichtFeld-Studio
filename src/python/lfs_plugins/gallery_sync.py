@@ -947,6 +947,7 @@ class GallerySync:
             if job.get("retryable") is False:
                 raise ValueError(job["message"])
             bucket = self._bucket()
+            identity = self.identity()
             extend_processing = keep_waiting or job.get("needsAttention", False)
 
         def action():
@@ -984,6 +985,9 @@ class GallerySync:
             def complete_upload(result):
                 self._client()
                 scene = result["scene"]
+                cover_preview = (job.get("previewPng") if job["metadata"].get("useEmbeddedPreview")
+                    and job["metadata"].get("replaceSceneId") and not job.get("handoff") else None)
+                linked = bucket["links"].get(job["project"])
                 with self._lock:
                     self._check_handoff(job)
                     if job.get("handoff") and scene["id"] != job["handoff"]["sceneId"]:
@@ -1034,6 +1038,26 @@ class GallerySync:
                           content_revision=scene.get("contentRevision", ""),
                           metadata_revision=scene.get("metadataRevision", ""),
                           project_id=job["project"])
+                if cover_preview:
+                    try:
+                        if not linked or linked["sceneId"] != scene["id"]:
+                            raise ValueError("The Gallery link changed. Check gallery before setting its cover.")
+                        import base64
+                        client.set_cover(scene["id"], scene, base64.b64decode(cover_preview, validate=True))
+                        updated = client.scene(scene["id"])
+                        with self._lock:
+                            self.scenes = [updated if item["id"] == scene["id"] else item for item in self.scenes]
+                            link = bucket["links"][job["project"]]
+                            link["metadata"] = copy.deepcopy(updated)
+                            link["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
+                            job["result"] = updated
+                            self._completion["scene"] = copy.deepcopy(updated)
+                        self._save()
+                    except Exception as exc:
+                        log_failure("cover_after_upload", exc, project_id=job["project"])
+                        with self._lock:
+                            self.message = friendly_error(exc)
+                            self._action_failure = dict(id=str(uuid.uuid4()), identity=identity, message=self.message)
 
             try:
                 self._check_handoff(job)
@@ -1753,12 +1777,16 @@ class GallerySync:
             self._save()
         self._launch_metadata(action)
 
-    def edit(self, scene_id, baseline, metadata, *, commit_uuid=None, content_stamp=None, project_id=None):
+    def edit(self, scene_id, baseline, metadata, *, commit_uuid=None, content_stamp=None, project_id=None, cover_png=None):
         baseline = copy.deepcopy(baseline)
         metadata = copy.deepcopy(metadata)
         def action():
             client = self._client()
             bucket = self._bucket()
+            if cover_png is not None:
+                link = bucket["links"].get(project_id)
+                if not link or link["sceneId"] != scene_id:
+                    raise ValueError("The Gallery link changed. Check gallery before setting its cover.")
             scene = client.update(scene_id, domain_tokens(baseline), **metadata)
             with self._lock:
                 self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
@@ -1780,6 +1808,15 @@ class GallerySync:
                         if content_stamp:
                             link["contentStamp"] = content_stamp
             self._save()
+            if cover_png is not None:
+                client.set_cover(scene_id, scene, cover_png)
+                updated = client.scene(scene_id)
+                with self._lock:
+                    self.scenes = [updated if item["id"] == scene_id else item for item in self.scenes]
+                    bucket["links"][project_id]["metadata"] = copy.deepcopy(updated)
+                    bucket["links"][project_id]["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
+                    self._completion["scene"] = copy.deepcopy(updated)
+                self._save()
         self._launch_metadata(action)
 
 

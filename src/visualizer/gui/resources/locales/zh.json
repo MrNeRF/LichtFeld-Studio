@@ -2726,7 +2726,7 @@
   "preferences.gallery.shortcuts_hint": "项目：Enter 打开本地项目；Ctrl+Enter 执行其图库操作；Ctrl+Shift+C 复制分享链接；F5 刷新当前视图。这些快捷键仅在项目面板获得焦点且未编辑文本框时生效。",
   "projects.gallery.confirm.processing_wait": "图库处理所需时间超出预期。",
   "projects.gallery.action.keep_waiting": "继续等待",
-  "projects.gallery.review.cover_kept": "封面将保留。内容发生重大更改后，请在图库中检查Story。",
+  "projects.gallery.review.cover_on_update": "选中后，项目缩略图会替换封面。未选中时，封面保持不变。内容发生重大更改后，请在图库中检查Story。",
   "portal.status.connected": "图库：已连接",
   "portal.status.disconnected": "图库：未连接",
   "portal.status.linking": "图库：正在连接…",
