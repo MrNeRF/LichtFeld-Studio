@@ -211,6 +211,16 @@ def test_gallery_publishing_zip_timestamps_are_fixed():
                 assert member.date_time == (1980, 1, 1, 0, 0, 0)
 
 
+def test_gallery_publishing_compressed_projects_keep_native_textures():
+    corpus = FIXTURES / 'gallery_publishing'
+    for name in ('valid_sog_environment.licht', 'valid_ssog_license.licht'):
+        project = codec.ProjectFile(io.BytesIO((corpus / name).read_bytes()))
+        output = io.BytesIO()
+        project.copy_node(0, output)
+        with ZipFile(io.BytesIO(output.getvalue())) as archive:
+            assert any(member.endswith('.webp') for member in archive.namelist()), name
+
+
 def _validate(payload, count):
     return codec.validate_spz(codec.SliceReader(io.BytesIO(payload), 0, len(payload)), count)
 

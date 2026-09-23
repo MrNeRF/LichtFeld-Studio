@@ -64,6 +64,16 @@ def zip_payload(kind, *, license_name=None, license_method=ZIP_STORED, license_d
     return output.getvalue()
 
 
+def native_with_license(kind, name, method):
+    payload = base(kind)[1]
+    output = io.BytesIO()
+    with ZipFile(io.BytesIO(payload)) as original, ZipFile(output, 'w') as archive:
+        for entry in original.infolist():
+            archive.writestr(ZipInfo(entry.filename), original.read(entry), compress_type=entry.compress_type)
+        archive.writestr(ZipInfo(name), b'License: Example', compress_type=method)
+    return output.getvalue()
+
+
 def project(kind, *, environment=False, license=False, payload=None, history=False,
             training=False, extra_asset=False, degree=0):
     chapters, native_payload, env_payload = base('sog' if kind == 'spz' else kind)
@@ -165,14 +175,14 @@ def samples():
     spz = (SOURCE / 'spz' / 'native-v4.spz').read_bytes()
     yield 'valid_ply.licht', project('ply'), 'accept', None
     yield 'valid_sog_environment.licht', project('sog', environment=True, license=True,
-        payload=zip_payload('sog', license_name='license.txt', count=64)), 'accept', None
-    yield 'valid_ssog_license.licht', project('ssog', payload=zip_payload('ssog',
-        license_name='LICENSE.md', license_method=ZIP_DEFLATED, count=64)), 'accept', None
+        payload=native_with_license('sog', 'license.txt', ZIP_STORED)), 'accept', None
+    yield 'valid_ssog_license.licht', project('ssog', payload=native_with_license(
+        'ssog', 'LICENSE.md', ZIP_DEFLATED)), 'accept', None
     yield 'valid_spz.licht', project('spz', payload=spz), 'accept', None
     yield 'history.licht', project('ply', history=True), 'reject', 'history'
     yield 'training.licht', project('ply', training=True), 'reject', 'training'
     yield 'unreferenced_asset.licht', project('ply', extra_asset=True), 'reject', 'unreferenced_asset'
-    yield 'degree_over.licht', project('sog', payload=zip_payload('sog', count=64), degree=1), 'reject', 'degree'
+    yield 'degree_over.licht', project('sog', degree=1), 'reject', 'degree'
     for name, kw, verdict, reason in (
         ('license_case.sog', {'license_name': 'LiCeNsE'}, 'accept', None),
         ('license_deflated.sog', {'license_name': 'LICENSE.md', 'license_method': ZIP_DEFLATED}, 'accept', None),
