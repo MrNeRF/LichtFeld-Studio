@@ -399,17 +399,14 @@ class GalleryController:
                         metadata[key] = remote.get(key, "")
                 view = copy.deepcopy(remote_view if decisions.get("view") == "gallery" else apply_local_view)
                 track_source = remote_view if decisions.get("track") == "gallery" else apply_local_view
-                if (decisions.get("track") is None and decisions.get("view") == "gallery"
-                        and "cameraPath" not in track_source and remote_view.get("cameraPath") is None):
-                    track_source = remote_view
                 track = copy.deepcopy(track_source.get("cameraPath"))
                 if decisions.get("track") == "both":
                     if not apply_local_view.get("cameraPath"):
                         raise ValueError(tr("error.project_changed"))
                     track = combine_camera_tracks(apply_local_view["cameraPath"], remote_view["cameraPath"])
-                if track is not None or "cameraPath" in track_source:
+                if track is not None:
                     view["cameraPath"] = track
-                else:
+                elif decisions.get("view") != "gallery":
                     view.pop("cameraPath", None)
                 metadata["viewerSettings"] = view
 
