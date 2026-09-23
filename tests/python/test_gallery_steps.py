@@ -194,7 +194,8 @@ def open_case(gallery, monkeypatch, tmp_path):
     monkeypatch.setattr(import_module("lfs_plugins.portable_project"), "ProjectFile",
                         lambda source: SimpleNamespace(manifest={"nodes": [{"count": 2}]}))
     project = SimpleNamespace(project_uuid="new-project")
-    index = SimpleNamespace(load=lambda: True, register_licht_asset=lambda *args, **kwargs: (project, True))
+    index = SimpleNamespace(load=lambda: True, get_asset=lambda identifier: None,
+                            register_licht_asset=lambda *args, **kwargs: (project, True))
     monkeypatch.setattr(import_module("lfs_plugins.asset_index"), "AssetIndex", lambda: index)
     stage = {"id": "stage", "state": "ready", "projectPath": str(opened), "projectId": "new-project",
              "projectStamp": module.file_stamp(opened)}
@@ -287,6 +288,51 @@ def test_download_open_failure_characterization(open_case, monkeypatch, phase):
     assert journal["linkOperation"]["state"] == ("failed" if phase == "linking" else "ready")
 
 
+def test_download_keep_order_characterization(open_case):
+    panel, state, actions, source, opened, stage, journal = open_case
+    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+        "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
+    panel._finish_register_download(panel._import_pending)
+    assert panel._import_pending["_register"]["phase"] == "linking"
+    assert actions == ["viewing copy", "link requested"]
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
+    panel._finish_register_download(panel._import_pending)
+    assert panel._import_pending is None
+    assert panel._pulled_project == {"id": "new-project", "path": str(opened), "jobId": "download"}
+    assert journal["linkOperation"]["state"] == "ready"
+
+
+@pytest.mark.parametrize("phase", ["staging", "linking"])
+def test_download_keep_cancel_characterization(open_case, phase):
+    panel, state, actions, source, opened, stage, journal = open_case
+    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+        "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
+    if phase == "linking":
+        panel._finish_register_download(panel._import_pending)
+    panel._action_pause()
+    panel._finish_register_download(panel._import_pending)
+    assert panel._import_pending is None and panel._pulled_project is None
+    assert actions == (["viewing copy", "link requested"] if phase == "linking" else [])
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
+    assert journal["linkOperation"]["state"] == "ready"
+
+
+@pytest.mark.parametrize("phase", ["staging", "linking"])
+def test_download_keep_failure_characterization(open_case, phase):
+    panel, state, actions, source, opened, stage, journal = open_case
+    panel._import_pending = {"id": "download", "result": {"title": "Gallery"},
+        "_accountIdentity": state["identity"], "_register": {"phase": "staging", "stage_id": "stage"}}
+    if phase == "staging":
+        stage.update(state="failed", message="stage failed")
+    else:
+        panel._finish_register_download(panel._import_pending)
+        journal["linkOperation"].update(state="failed", message="link failed")
+    with pytest.raises(ValueError):
+        panel._finish_register_download(panel._import_pending)
+    assert source.read_bytes() == b"kept download" and opened.read_bytes() == b"new project"
+    assert journal["linkOperation"]["state"] == ("failed" if phase == "linking" else "ready")
+
+
 @pytest.mark.parametrize("outcome,keeps_export,queued", [
     ("active", True, False), ("canceled", False, False), ("failed", False, False),
     ("completed", True, True), ("timeout", False, False), ("foreign", False, False),
@@ -347,4 +393,21 @@ def test_publish_save_step_characterization(gallery, monkeypatch, tmp_path, outc
         panel._finish_current_project_save()
     assert actions == (["export start"] if outcome == "saved" else [])
     assert panel._save_pending is None and project_path.read_bytes() == b"saved project"
+    assert state["jobs"] == []
+
+
+def test_publish_never_queues_a_different_prepared_commit(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    export = tmp_path / "prepared.ply"
+    export.write_bytes(b"prepared scene")
+    panel._export_pending = (export, {"title": "Gallery"}, "project", 0)
+    panel._prepared_commit = "reviewed"
+    panel.service.queue_prepared_upload = lambda *args: actions.append("queued")
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {
+        "path": str(export), "active": False, "outcome": "completed", "commit_uuid": "different"}, raising=False)
+    panel._finish_export()
+    assert actions == [] and not export.exists()
+    assert panel._export_pending is None and panel._prepared_commit is None
+    assert panel.snapshot()["preparationFailure"]["status"] == "error"
     assert state["jobs"] == []

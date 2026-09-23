@@ -15,7 +15,7 @@ from .gallery_actions import gallery_actions
 from .gallery_transfer_ui import TransferEstimate, transfer_metrics, transfer_phase, transfer_rows
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
-from .gallery_sync_steps import LocalUpdateSteps, DownloadOpenSteps
+from .gallery_sync_steps import LocalUpdateSteps, DownloadOpenSteps, PublishSteps
 from .gallery_view import capture_view, restore_view
 from .portal_gallery import domain_tokens, UNSUPPORTED_PORTAL
 from . import gallery_preparation
@@ -71,6 +71,7 @@ class GalleryController:
         self._preparation_failure = None
         self._local_update_steps = LocalUpdateSteps(self)
         self._download_open_steps = DownloadOpenSteps(self)
+        self._publish_steps = PublishSteps(self, lambda *args: asset_sync_state(*args))
         from .ui import RuntimeState
         RuntimeState.account_state.subscribe(self._account_changed)
         self._publish_runtime_state(self.snapshot())
@@ -249,70 +250,7 @@ class GalleryController:
         self._schedule_poll()
 
     def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
-        """Prepare saved content without consulting the current scene or view."""
-        if upload_format not in ("studio", "sog", "ssog", "spz"):
-            raise ValueError("Choose a supported upload format.")
-        if "licht" not in self._state.get("source_formats", []):
-            raise ValueError(UNSUPPORTED_PORTAL)
-        project_id, path = asset["id"], asset["path"]
-        info = lf.io.inspect_project(path)
-        if str(info.project_uuid) != project_id:
-            raise ValueError(tr("error.project_changed"))
-        if any(j["project"] == project_id and j["status"] not in ("completed", "canceled") for j in self._state["jobs"]):
-            raise ValueError("This project already has an upload. Resume or discard it first.")
-        link = self._state["links"].get(project_id)
-        scene = next((s for s in self._state["scenes"] if link and s["id"] == link["sceneId"]), None) if update else None
-        if handoff:
-            scene = next((s for s in self._state["scenes"] if s["id"] == handoff["sceneId"]), None)
-        if (update or handoff) and scene is None:
-            raise ValueError(tr("error.refresh"))
-        if update and asset_sync_state(asset, link, scene)["freshness"] in ("diverged", "remote", "unknown"):
-            # Review must resolve remote write guards before any replacement.
-            raise ValueError(tr("error.refresh"))
-        if link and not update and not publish_as_new:
-            raise ValueError("This project is linked to a gallery item. Select it to replace, or unlink before publishing a new item.")
-        metadata = self._details(details)
-        if getattr(info, "file_uuid", ""):
-            metadata["originFileUuid"] = str(info.file_uuid)
-        metadata["_uploadFormat"] = upload_format
-        if publish_as_new:
-            metadata["_publishAsNew"] = True
-        if scene:
-            metadata.update(replaceSceneId=scene["id"], baseRevisions={name: scene[name + "Revision"] for name in ("content", "metadata")})
-        if handoff:
-            metadata.update(_handoff=copy.deepcopy(handoff), replaceSceneId=handoff["sceneId"],
-                            baseRevisions=copy.deepcopy(handoff["baseRevisions"]))
-        expected_commit = str(asset.get("commit_uuid") or getattr(info, "commit_uuid", ""))
-        identity = self.service.identity()
-        self._operation_project = project_id
-        self._operation_title = details.get("title") or asset.get("name", "")
-        self._last_canceled = False
-        self._reupload_reason = None
-        self.upload_format = upload_format
-
-        def start():
-            self._preparation_failure = None
-            if self.service.identity() != identity:
-                return
-            if lf.ui.get_export_state().get("active"):
-                raise ValueError("Wait for the current export to finish before uploading.")
-            if str(lf.io.inspect_project(path).commit_uuid) != expected_commit:
-                raise ValueError(tr("error.project_changed"))
-            if self._patch_saved_update(metadata, project_id, path, update=update):
-                return
-            self._pin_publish_preview(metadata, path, expected_commit)
-            metadata["viewerSettings"] = {}  # Portal imports VIEW/SEQR from the prepared .licht.
-            export = self.service.root / (str(uuid.uuid4()) + ".scene")
-            self._export_cancelled = False
-            self._export_identity = identity
-            self._export_progress = 0
-            lf.prepare_gallery_project(path, str(export), "ply" if upload_format == "studio" else upload_format, expected_commit)
-            self._prepared_commit = expected_commit
-            self._export_pending = (export, metadata, project_id, time.monotonic())
-            self._schedule_poll()
-
-        start()
-        self._schedule_poll()
+        return self._publish_steps.start_closed(asset, details, upload_format, update=update, publish_as_new=publish_as_new, handoff=handoff)
 
     def replace_published_asset(self, asset, scene, upload_format):
         self._check_identity()
@@ -1232,116 +1170,14 @@ class GalleryController:
 
     def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio", update=False,
                  save_project=True, expected_commit=None):
-        identity = self.service.identity()
-        project_id, path = self._project_identity()
-        if expected_project is not None and (project_id, path) != expected_project:
-            raise ValueError("The current project changed. Review its gallery details before uploading.")
-        pending = [j for j in self._state["jobs"] if j["project"] == project_id and j["status"] not in ("completed", "canceled")]
-        if pending:
-            raise ValueError("This project already has an upload. Resume or discard it first.")
-        linked = self._state["links"].get(project_id)
-        if linked and metadata.get("replaceSceneId") != linked["sceneId"] and not metadata.get("_publishAsNew"):
-            raise ValueError("This project is linked to a gallery item. Select it to replace, or unlink before publishing a new item.")
-        nodes = [n.name for n in self._visible_splats()]
-        if not nodes:
-            raise ValueError("There are no visible splats to upload.")
-        self._preparation_failure = None
-        try:
-            size = Path(path).stat().st_size
-        except OSError:
-            size = 0
-        account = getattr(self.service, "account", None)
-        log_stage("publish_requested", project_id=project_id, path=path, size=size,
-                  format=upload_format, account_origin=safe_url(getattr(account, "base_url", "")),
-                  update=update)
-        if save_project:
-            self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity,
-                                                                 environment_source, upload_format, update=update))
-        else:
-            if lf.project_poll_write().get("running"):
-                raise ValueError("Wait for the current project save before continuing.")
-            self._publish_saved(metadata, project_id, path, identity, environment_source, upload_format,
-                                update=update, expected_commit=expected_commit or str(lf.io.inspect_project(path).commit_uuid))
+        return self._publish_steps.start(metadata, expected_project=expected_project, environment_source=environment_source, upload_format=upload_format, update=update, save_project=save_project, expected_commit=expected_commit)
 
     def _patch_saved_update(self, metadata, project_id, path, *, update, expected_commit=None):
-        from .gallery_project_facts import saved_content_stamp
-        content_stamp = saved_content_stamp(path)
-        metadata["_contentStamp"] = content_stamp
-        linked = self.service.snapshot().get("links", {}).get(project_id, {})
-        if update and (":" not in content_stamp or ":" not in linked.get("contentStamp", "")):
-            self._reupload_reason = {"project": project_id, "message": tr("info.reupload_encoding")}
-        # Live metadata carries the complete view; a closed PATCH must also
-        # prove its saved VIEW/SEQR unchanged so it cannot lose local view edits.
-        baseline = linked.get("contentStamp", "")
-        comparable = lambda stamp: stamp.split(":", 1)[0] if "viewerSettings" in metadata else stamp
-        if (update and content_stamp and ":" in content_stamp and ":" in baseline
-                and comparable(content_stamp) == comparable(baseline)
-                and metadata.get("replaceSceneId") == linked.get("sceneId")):
-            details = {k: v for k, v in metadata.items() if k in ("title", "description", "viewerSettings")}
-            commit = str(lf.io.inspect_project(path).commit_uuid)
-            if expected_commit is not None and commit != expected_commit:
-                raise ValueError(tr("error.project_changed"))
-            cover = {}
-            if metadata.get("useEmbeddedPreview"):
-                import base64
-                self._pin_publish_preview(metadata, path, commit)
-                cover["cover_png"] = base64.b64decode(metadata["_previewPng"], validate=True)
-            self.service.edit(linked["sceneId"], {name + "Revision": token for name, token in metadata["baseRevisions"].items()}, details,
-                commit_uuid=commit, content_stamp=content_stamp, project_id=project_id, **cover)
-            return True
-        return False
+        return self._publish_steps.patch_saved_update(metadata, project_id, path, update=update, expected_commit=expected_commit)
 
     def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio", *, update=False,
                        expected_commit=None):
-        if self.service.identity() != identity or self._project_identity() != (project_id, path):
-            raise ValueError("The account or current project changed while saving. Review it before uploading.")
-        inspection = lf.io.inspect_project(path)
-        if expected_commit is not None and str(inspection.commit_uuid) != expected_commit:
-            raise ValueError(tr("error.project_changed"))
-        if expected_commit is not None:
-            references = lf.io.inspect_project_details(path).references
-            saved_environment = next((Path(ref.path).resolve() for ref in references if ref.kind == "environment_map"), None)
-            live_environment = Path(environment_source).resolve() if metadata.get("viewerSettings", {}).get("environment") and environment_source else None
-            if saved_environment != live_environment:
-                raise ValueError(tr("error.save_hdr_first"))
-        environment = metadata.get("viewerSettings", {}).get("environment")
-        if environment:
-            settings = lf.get_render_settings()
-            if (settings.environment_mode != "EQUIRECTANGULAR" or str(settings.environment_map_path) != environment_source
-                    or float(settings.environment_exposure) != environment["exposure"]
-                    or float(settings.environment_rotation_degrees) != environment["rotation"]):
-                raise ValueError("The HDR background changed. Review the current view and try uploading again.")
-        if self._patch_saved_update(metadata, project_id, path, update=update, expected_commit=expected_commit):
-            return
-        nodes = [n.name for n in self._visible_splats()]
-        if not nodes:
-            raise ValueError("There are no visible splats to upload.")
-        if upload_format not in ("studio", "sog", "ssog", "spz"):
-            raise ValueError("Choose a supported upload format.")
-        if "licht" not in self.service.snapshot().get("source_formats", []):
-            raise ValueError(UNSUPPORTED_PORTAL)
-        export = self.service.root / (str(uuid.uuid4()) + ".scene")
-        metadata = dict(metadata)
-        metadata["_commitUuid"] = str(getattr(inspection, "commit_uuid", ""))
-        file_uuid = str(getattr(inspection, "file_uuid", ""))
-        if file_uuid:
-            metadata["originFileUuid"] = file_uuid
-        metadata["_uploadFormat"] = upload_format
-        self._message = "Preparing the current scene for upload…"
-        self._refresh_model()
-        if lf.ui.get_export_state().get("active"):
-            raise ValueError("Wait for the current export to finish before uploading.")
-        self._export_cancelled = False
-        self._pin_publish_preview(metadata, path, metadata["_commitUuid"])
-        self._prepared_commit = metadata["_commitUuid"]
-        self._export_identity = identity
-        self._export_progress = 0
-        lf.prepare_gallery_project(path, str(export), "ply" if upload_format == "studio" else upload_format,
-                                   self._prepared_commit)
-        if self.service.identity() != identity:
-            self._export_cancelled = True
-        self._export_pending = (export, metadata, project_id, time.monotonic())
-        self._schedule_poll()
+        return self._publish_steps.start_saved(metadata, project_id, path, identity, environment_source, upload_format, update=update, expected_commit=expected_commit)
 
     @staticmethod
     def _pin_publish_preview(metadata, path, commit):
@@ -1355,93 +1191,16 @@ class GalleryController:
             metadata["_previewPng"] = base64.b64encode(gallery_preparation.publication_preview(preview)).decode("ascii")
 
     def _owns_export(self, state):
-        return bool(self._export_pending and state.get("path")
-            and Path(state["path"]) == Path(self._export_pending[0]))
+        return self._publish_steps.owns_export(state)
 
     def _cancel_own_export(self):
-        state = lf.ui.get_export_state()
-        if self._owns_export(state) and state.get("active"):
-            lf.ui.cancel_export()
+        return self._publish_steps.cancel_export()
 
     def _remove_preparation(self, export):
-        if Path(export).suffix == ".scene":
-            for path in gallery_preparation.staging_files(self.service.root, export):
-                self.service._unlink_temporary(path)
-        else:
-            Path(export).unlink(missing_ok=True)
+        return self._publish_steps.remove_preparation(export)
 
     def _finish_export(self):
-        export, metadata, project_id, started = self._export_pending
-        prepared_commit = self._prepared_commit
-        if self._export_identity is not None and self.service.identity() != self._export_identity:
-            self._export_cancelled = True
-        state = lf.ui.get_export_state()
-        if not self._owns_export(state):
-            self._export_pending = None
-            self._prepared_commit = None
-            self._remove_preparation(export)
-            self._message = "The scene preparation status changed. Please prepare your upload again."
-            self._refresh_model()
-            return
-        if state.get("active"):
-            progress = max(0, min(100, int(float(state.get("progress", 0)) * 100)))
-            if progress != self._export_progress:
-                self._export_progress = progress
-                self._message = "Canceling scene preparation…" if self._export_cancelled else f"Preparing scene for upload… {progress}%"
-                self._refresh_model()
-            return
-        outcome = state.get("outcome")
-        if self._export_cancelled or outcome in ("failed", "cancelled"):
-            self._prepared_commit = None
-            self._export_pending = None
-            self._remove_preparation(export)
-            error = str(state.get("error", ""))
-            self._message = "Scene preparation canceled." if self._export_cancelled or outcome == "cancelled" else (error or "Scene preparation failed. Check the export status and try again.")
-            if outcome == "failed" and not self._export_cancelled:
-                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
-                    "commitUuid": prepared_commit,
-                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
-                    "message": self._message, "failureReason": self._message}
-                log_failure("native_preparation", RuntimeError(self._message), project_id=project_id)
-            self._refresh_model()
-        elif outcome == "completed" and export.exists():
-            self._export_pending = None
-            source = self._prepared_commit
-            self._prepared_commit = None
-            try:
-                if source is not None:
-                    commit = str(state.get("commit_uuid", ""))
-                    if not commit or (source and commit != source):
-                        raise ValueError("The prepared project commit does not match the reviewed version.")
-                    metadata["_commitUuid"] = commit
-                    saved_view = gallery_preparation.publication_view_metadata(self.service.root, export)
-                    metadata["viewerSettings"] = saved_view | metadata.get("viewerSettings", {})
-                self.service.queue_prepared_upload(export, metadata, project_id)
-                self._message = ""
-            except Exception as exc:
-                log_failure("queue_after_preparation", exc, project_id=project_id)
-                self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
-                    "commitUuid": prepared_commit,
-                    "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
-                    "message": friendly_error(exc), "failureReason": friendly_error(exc)}
-                try:
-                    self._remove_preparation(export)
-                    self._message = friendly_error(exc)
-                except (OSError, ValueError) as cleanup_exc:
-                    log_failure("preparation_cleanup", cleanup_exc, project_id=project_id)
-                    self._message = "The upload could not be queued. Temporary files were kept; open the recovery folder to review them."
-            self._refresh_model()
-        elif time.monotonic() - started > 60:
-            self._prepared_commit = None
-            self._export_pending = None
-            self._remove_preparation(export)
-            self._message = "LichtFeld Studio could not prepare the scene. Check the export status and try again."
-            self._preparation_failure = {"id": "preparation:" + project_id, "project": project_id,
-                "commitUuid": prepared_commit,
-                "status": "error", "kind": "upload", "metadata": {"title": self._operation_title},
-                "message": self._message, "failureReason": self._message}
-            log_failure("native_preparation_timeout", TimeoutError(self._message), project_id=project_id)
-            self._refresh_model()
+        return self._publish_steps.advance()
 
     def _action_resume(self, job_id):
         job = next((job for job in self.service.snapshot()['jobs'] if job['id'] == job_id), {})
