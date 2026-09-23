@@ -3227,6 +3227,133 @@ def _gallery_fixture(panel_module):
         scenes=[remote,dict(remote,id='remote-only',title='Remote only')],jobs=[])
     return panel,local,remote
 
+
+def test_gallery_details_prefill_uses_unpublished_catalog_draft(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(name="project-a", gallery_details_draft={"title": "Gallery title", "description": "Prepared text"})
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._gallery_state = {"links": {}, "scenes": []}
+
+    assert panel._gallery_details(asset) == {"title": "Gallery title", "description": "Prepared text"}
+
+
+def test_linked_gallery_details_ignore_leftover_catalog_draft(panel_module):
+    panel, asset, _scene = _gallery_fixture(panel_module)
+    asset["gallery_details_draft"] = {"title": "Old draft", "description": "Old text"}
+    assert panel._gallery_details(asset) == {"title": "Published project", "description": ""}
+    panel._gallery_state["links"][asset["id"]]["localFields"] = {
+        "title": "Pending title", "description": "Pending text", "viewerSettings": {}
+    }
+    assert panel._gallery_details(asset) == {"title": "Pending title", "description": "Pending text"}
+
+
+def test_gallery_inspector_has_title_description_and_edit_action(panel_module):
+    template = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    gallery_section = template.split('class="inspector-section inspector-section-gallery"', 1)[1].split('class="inspector-section"', 1)[0]
+    assert "{{inspector_gallery_title}}" in gallery_section
+    assert "{{inspector_gallery_description}}" in gallery_section
+    assert "open_gallery_details" in gallery_section
+
+
+def test_gallery_inspector_reads_link_and_saves_pending_details(panel_module, monkeypatch):
+    panel, asset, scene = _gallery_fixture(panel_module)
+    panel._gallery_state["identity"] = "account"
+    panel._gallery_state["links"][asset["id"]]["localFields"] = {
+        "title": "Local title", "description": "Local description", "viewerSettings": {"camera": 1}
+    }
+    panel._select_asset_id(asset["id"])
+    assert panel._gallery_details() == {"title": "Local title", "description": "Local description"}
+    assert panel._can_edit_gallery_details()
+    forms = []
+    monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *args, **kwargs: forms.append((args, kwargs)), raising=False)
+    saved = []
+    service = SimpleNamespace(identity=lambda: "account", set_local_details=lambda *args: saved.append(args))
+    monkeypatch.setattr(panel, "_controller", lambda: SimpleNamespace(service=service, _schedule_poll=lambda: None))
+    panel.open_gallery_details()
+    assert 'name="gallery_title"' in forms[-1][0][2]
+    assert 'name="gallery_description"' in forms[-1][0][2]
+    panel._read_project_form({"gallery_title": "Edited title", "gallery_description": "Edited description"})
+    panel.confirm_project_dialog()
+    assert saved == [(asset["id"], "Edited title", "Edited description")]
+
+
+def test_recent_only_gallery_details_need_a_link(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    recent = _project(id="recent:project-a", recent_only=True, native_project_uuid="project-a")
+    panel._gallery_state = {"links": {}}
+    monkeypatch.setattr(panel, "_get_selected_asset", lambda: recent)
+    assert not panel._can_edit_gallery_details()
+    panel._gallery_state["links"]["project-a"] = {"sceneId": "scene"}
+    assert panel._can_edit_gallery_details()
+
+
+def test_unpublished_gallery_details_persist_without_renaming(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex
+
+    project_id = str(uuid.uuid4())
+    project_path = tmp_path / "project-a.licht"
+    project_path.write_bytes(b"local project")
+    catalog = tmp_path / "library.json"
+    catalog.write_text(json.dumps({
+        "schema_version": 6,
+        "folders": {"default": {"path": str(tmp_path)}},
+        "projects": {project_id: {"path": str(project_path), "folder_id": "default", "name": "project-a", "name_origin": "user", "future_field": 7}},
+    }))
+    index = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert index.load()
+    assert "gallery_details_draft" not in index.get_asset_dict(project_id)
+    monkeypatch.setattr(index, "_inspect_path", lambda _path, *_args: SimpleNamespace(project_uuid=project_id))
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = index
+    panel._gallery_state = {"links": {}, "scenes": []}
+    panel._select_asset_id(project_id)
+    assert panel._can_edit_gallery_details()
+    monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **kwargs: None)
+    panel.open_gallery_details()
+    panel._read_project_form({"gallery_title": "Prepared title", "gallery_description": "Prepared description"})
+    panel.confirm_project_dialog()
+    saved = json.loads(catalog.read_text())["projects"][project_id]
+    assert saved["gallery_details_draft"] == {"title": "Prepared title", "description": "Prepared description"}
+    assert saved["future_field"] == 7
+    assert saved["name"] == "project-a"
+    reloaded = AssetIndex(library_path=catalog, default_folder_path=tmp_path)
+    assert reloaded.load()
+    assert reloaded.get_asset_dict(project_id)["gallery_details_draft"] == saved["gallery_details_draft"]
+    assert panel._gallery_details(reloaded.get_asset_dict(project_id))["title"] == "Prepared title"
+
+
+@pytest.mark.parametrize("panel_available", [True, False])
+def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monkeypatch, tmp_path, panel_available):
+    from lfs_plugins import asset_index, file_menu, gallery_controller, gallery_file_panel
+
+    project_id = str(uuid.uuid4())
+    path = tmp_path / "project-a.licht"
+    path.write_bytes(b"local project")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={project_id: {
+        "id": project_id, "path": str(path), "name": "project-a",
+        "gallery_details_draft": {"title": "Prepared title", "description": "Prepared text"},
+    }})
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda panel_id: panel if panel_available else None, raising=False)
+    monkeypatch.setattr(asset_index, "AssetIndex", lambda: pytest.fail("File menu opened a second catalog"))
+    monkeypatch.setattr(file_menu, "_project_has_path", lambda: True)
+    monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": str(path)}, raising=False)
+    monkeypatch.setattr(panel_module.lf, "io", SimpleNamespace(inspect_project_card=lambda _path: SimpleNamespace(
+        project_uuid=project_id, title="File title", commit_uuid="saved", file_uuid="file", physical_file_size=1, has_preview=False
+    )), raising=False)
+    monkeypatch.setattr(gallery_controller, "get_gallery_controller", lambda: SimpleNamespace(
+        snapshot=lambda: {"links": {}, "scenes": [], "jobs": []}, upload_format="sog"
+    ))
+    reviews = []
+    monkeypatch.setattr(gallery_file_panel, "open_gallery_file_panel", lambda **kwargs: reviews.append(kwargs))
+
+    file_menu._publish_current_project_to_gallery()
+
+    assert reviews[0]["fields"]["title"] == ("Prepared title" if panel_available else "File title")
+    assert reviews[0]["fields"]["description"] == ("Prepared text" if panel_available else "")
+
+
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()

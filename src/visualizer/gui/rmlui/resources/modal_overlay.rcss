@@ -146,6 +146,8 @@ body {
     max-height: 28dp;
     margin: 0 0 8dp;
 }
+.modal-field--multiline { height: auto; min-height: 96dp; max-height: none; align-items: flex-start; }
+.modal-field--multiline textarea { flex: 1; min-width: 0; height: 88dp; }
 .modal-field-label {
     display: block;
     width: 200dp;

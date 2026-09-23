@@ -1777,6 +1777,30 @@ class GallerySync:
             self._save()
         self._launch_metadata(action)
 
+    def set_local_details(self, project_id, title, description):
+        with self._lock:
+            self._check_journal_ready()
+            bucket = self._bucket()
+            if any(job["project"] == project_id and job["status"] not in ("completed", "canceled")
+                   for job in bucket["jobs"]):
+                raise ValueError("Finish or discard this project's pending transfer before updating it.")
+            link = bucket["links"].get(project_id)
+            if link is None:
+                raise ValueError("The Gallery link changed. Review it again.")
+            previous = copy.deepcopy(link.get("localFields"))
+            had_local = "localFields" in link
+            fields = copy.deepcopy(link.get("localFields") or link.get("sharedFields") or shared_fields(link.get("metadata", {})))
+            fields.update(title=str(title), description=str(description))
+            link["localFields"] = fields
+            try:
+                self._save()
+            except Exception:
+                if had_local:
+                    link["localFields"] = previous
+                else:
+                    link.pop("localFields", None)
+                raise
+
     def edit(self, scene_id, baseline, metadata, *, commit_uuid=None, content_stamp=None, project_id=None, cover_png=None):
         baseline = copy.deepcopy(baseline)
         metadata = copy.deepcopy(metadata)

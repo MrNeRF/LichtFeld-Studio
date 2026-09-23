@@ -638,6 +638,15 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
         linked_fields = ((link or {}).get("localFields") or (link or {}).get("sharedFields")
                          or scene or {})
         project_name = str(getattr(card, "title", None) or project_path.stem)
+        if not link:
+            get_panel = getattr(lf.ui, "get_panel_object", None)
+            panel = get_panel("lfs.asset_manager") if callable(get_panel) else None
+            if panel is not None:
+                entry = panel._asset_dict(project_id)
+                if entry and Path(entry["path"]).resolve() == project_path:
+                    draft = entry.get("gallery_details_draft")
+                    if isinstance(draft, dict):
+                        linked_fields = draft
         asset = {
             "id": project_id,
             "path": path,

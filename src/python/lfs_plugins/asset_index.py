@@ -1813,7 +1813,8 @@ class AssetIndex:
         project = self._projects.get(asset_id)
         if project is None:
             return None
-        if kwargs and not self._mutation_preflight(project):
+        # Gallery text survives ordinary project saves; the write still checks project identity.
+        if kwargs and set(kwargs) != {"gallery_details_draft"} and not self._mutation_preflight(project):
             _log.warning("Asset Manager mutation preflight rejected %s", asset_id)
             return None
         previous_state = (
@@ -1831,6 +1832,14 @@ class AssetIndex:
             project.name_origin = "user"
         if "viewing_copy" in kwargs:
             project.extra = {**project.extra, "viewing_copy": bool(kwargs["viewing_copy"])}
+        if "gallery_details_draft" in kwargs:
+            draft = kwargs["gallery_details_draft"]
+            if draft is None:
+                project.extra.pop("gallery_details_draft", None)
+            else:
+                project.extra["gallery_details_draft"] = {
+                    "title": str(draft["title"]), "description": str(draft["description"])
+                }
         if not save:
             self._touch_catalog()
         if save and not self.save():

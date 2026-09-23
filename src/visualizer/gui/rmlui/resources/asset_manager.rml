@@ -316,6 +316,9 @@
                       <div class="parameter-row"><span class="parameter-label">{{prop_size_label}}</span><span class="parameter-value" data-attr-title="selected_asset_size">{{selected_asset_size}}</span></div>
                       <div class="parameter-row" data-if="inspector_has_saves"><span class="parameter-label">{{inspector_saves_label}}</span><span class="parameter-value" data-attr-title="inspector_saves">{{inspector_saves}}</span></div>
                       <div class="parameter-row"><span class="parameter-label">{{gallery_section_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
+                      <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.title</span><span class="parameter-value">{{inspector_gallery_title}}</span></div>
+                      <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.description</span><span class="parameter-value">{{inspector_gallery_description}}</span></div>
+                      <button class="btn btn--secondary" data-if="inspector_can_edit_gallery_details" data-event-click="open_gallery_details">@tr:projects.gallery.details.edit</button>
                     </div>
                   </div>
                   <div class="inspector-facts" data-if="!is_medium">
@@ -365,6 +368,9 @@
                     </button>
                     <div class="inspector-section-body" data-if="inspector_gallery_expanded">
                       <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
+                      <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.title</span><span class="parameter-value">{{inspector_gallery_title}}</span></div>
+                      <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.description</span><span class="parameter-value">{{inspector_gallery_description}}</span></div>
+                      <button class="btn btn--secondary" data-if="inspector_can_edit_gallery_details" data-event-click="open_gallery_details">@tr:projects.gallery.details.edit</button>
                       <span class="inspector-gallery-reason" data-if="gallery_has_selected_reason" data-attr-title="gallery_selected_reason">{{gallery_selected_reason}}</span>
                       <div class="parameter-row" data-if="inspector_has_license"><span class="parameter-label">{{inspector_license_label}}</span><span class="parameter-value inspector-ellipsis" data-attr-title="inspector_license_notice">{{inspector_license}}</span></div>
                       <span class="inspector-gallery-summary text-muted" data-if="gallery_linked" data-attr-title="gallery_exchange_summary">{{gallery_exchange_summary}}</span>

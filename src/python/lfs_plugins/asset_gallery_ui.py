@@ -745,7 +745,8 @@ class GalleryAssetMixin:
         asset = asset if asset is not None else self._get_selected_asset() or {}
         scene = self._gallery_scene(asset) or {}
         link = self._gallery_state.get("links", {}).get(asset.get("id"), {})
-        fields = link.get("localFields") or link.get("sharedFields") or scene
+        draft = asset.get("gallery_details_draft")
+        fields = link.get("localFields") or link.get("sharedFields") or scene or (draft if isinstance(draft, dict) else {})
         return {"title": fields.get("title", display_name(asset)),
                 "description": fields.get("description", "")}
 

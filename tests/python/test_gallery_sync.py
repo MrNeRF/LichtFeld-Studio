@@ -119,6 +119,26 @@ def test_linking_again_clears_explicit_unlink(tmp_path, monkeypatch):
     assert service.snapshot()["links"]["project"]["sceneId"] == "scene"
 
 
+def test_local_gallery_details_are_saved_as_pending_fields_with_rollback(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    scene = {"id": "scene", "title": "Shared title", "description": "Shared description",
+             "viewerSettings": {"camera": 1}, "contentRevision": "c1", "metadataRevision": "m1"}
+    service._bucket()["links"]["project"] = gallery_sync.exchange_link(scene, "saved")
+    service._save()
+    service.set_local_details("project", "Prepared title", "Prepared description")
+    link = service.snapshot()["links"]["project"]
+    assert link["localFields"] == {"title": "Prepared title", "description": "Prepared description", "viewerSettings": {"camera": 1}}
+    assert link["sharedFields"]["title"] == "Shared title"
+    assert json.loads(service._journal.read_text())["accounts"][next(iter(service._data["accounts"]))]["links"]["project"]["localFields"] == link["localFields"]
+    from lfs_plugins.gallery_controller import asset_sync_state
+    assert asset_sync_state({"id": "project", "commit_uuid": "saved", "exists": True}, link, scene)["freshness"] == "local"
+
+    monkeypatch.setattr(service, "_save", lambda **kwargs: (_ for _ in ()).throw(OSError("storage failed")))
+    with pytest.raises(OSError, match="storage failed"):
+        service.set_local_details("project", "Another title", "Another description")
+    assert service.snapshot()["links"]["project"] == link
+
+
 def test_relink_latches_automatic_refresh_but_manual_retry_is_allowed(tmp_path, monkeypatch):
     calls = []
     stages = []

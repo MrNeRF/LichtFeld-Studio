@@ -1152,6 +1152,11 @@
 .parameter-value { flex: 1 1 0dp; width: 0; min-width: 0; font-family: "JetBrains Mono"; font-size: 11dp; }
 .inspector-gallery-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .inspector-gallery-reason { display: block; padding: 4dp 0; }
+.inspector-gallery-detail-row { flex: 0 0 auto; height: auto; align-items: flex-start; }
+.inspector-gallery-detail-row .parameter-label, .inspector-gallery-detail-row .parameter-value {
+    height: auto; min-height: 24dp; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word;
+}
+.inspector-gallery-detail-row .parameter-value { line-height: 18dp; }
 
 .inspector-band-facts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16dp; min-width: 0; }
 .inspector-band-column { display: flex; flex: 1 1 240dp; flex-direction: column; min-width: 240dp; }
