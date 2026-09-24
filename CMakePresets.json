@@ -88,6 +88,23 @@
       }
     },
     {
+      "name": "macos-release",
+      "displayName": "macOS arm64 Release (Release-only dependencies)",
+      "description": "Native Apple Silicon viewer build with Release-only dependencies and no tests",
+      "inherits": "release-only-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "VCPKG_HOST_TRIPLET": "arm64-osx",
+        "LFS_VCPKG_MAX_CONCURRENCY": "2",
+        "BUILD_TESTS": "OFF"
+      }
+    },
+    {
       "name": "linux-relwithdebinfo",
       "displayName": "Linux x64 RelWithDebInfo (Release-only dependencies)",
       "description": "Optimized Linux x64 application with debug information, reusing the linux-release dependency profile; Vulkan validation remains enabled",
@@ -142,6 +159,16 @@
         "rhs": "Linux"
       },
       "jobs": 6
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "jobs": 2
     },
     {
       "name": "linux-relwithdebinfo",

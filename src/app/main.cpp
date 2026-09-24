@@ -32,9 +32,36 @@
 #include <filesystem>
 #include <print>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
+#ifdef __APPLE__
+    void configureHomebrewVulkanDriver() {
+        // The vcpkg Vulkan loader does not always discover Homebrew's MoltenVK
+        // manifest. Keep an explicit Vulkan driver selection from the caller.
+        if (std::getenv("VK_DRIVER_FILES") || std::getenv("VK_ICD_FILENAMES") ||
+            std::getenv("VK_ADD_DRIVER_FILES"))
+            return;
+
+        const auto try_prefix = [](const std::filesystem::path& prefix) {
+            const auto manifest = prefix / "etc/vulkan/icd.d/MoltenVK_icd.json";
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(manifest, error))
+                return false;
+            return lfs::core::environment::set_value("VK_DRIVER_FILES", manifest.string());
+        };
+
+        if (const char* const prefix = std::getenv("HOMEBREW_PREFIX")) {
+            if (try_prefix(prefix))
+                return;
+        }
+        if (try_prefix("/opt/homebrew"))
+            return;
+        (void)try_prefix("/usr/local");
+    }
+#endif
+
 #if LFS_HAS_CUDA
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
     // Setting these after cudaFree(nullptr) is too late — the driver has already
@@ -266,6 +293,10 @@ int main(int argc, char* argv[]) {
                      loaded_core_stamp != nullptr ? loaded_core_stamp : "<null>");
         return 2;
     }
+
+#ifdef __APPLE__
+    configureHomebrewVulkanDriver();
+#endif
 
     lfs::core::install_crash_handlers();
     lfs::core::record_session_start();

@@ -2,10 +2,11 @@
 
 ## Requirements
 
-- CUDA Toolkit 12.8+
+- CUDA Toolkit 12.8+ for Windows and Linux training builds
 - CMake 3.30+
 - vcpkg (`VCPKG_ROOT` environment variable set)
-- GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
+- Ninja for preset builds
+- Apple Clang (macOS), GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
 Windows builds require the **C++ Clang Compiler for Windows** Visual Studio
 Installer individual component in addition to the regular C++ desktop workload.
@@ -52,6 +53,28 @@ Without it configure fails with `pkg-config could not locate `gtk+-3.0``.
 The configure step now fails early if neither a usable X11 stack nor a usable Wayland stack is present.
 If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_LINUX_GUI_BACKENDS=OFF`.
 
+## macOS Apple Silicon viewer build
+
+Install the host tools and Vulkan driver with Homebrew:
+
+```bash
+brew install cmake ninja autoconf autoconf-archive automake libtool vulkan-loader molten-vk
+```
+
+With `VCPKG_ROOT` set to a vcpkg checkout, build the native viewer:
+
+```bash
+cmake --preset macos-release -DAPPLE=ON
+cmake --build --preset macos-release
+./build-macos-release/LichtFeld-Studio
+```
+
+The preset builds Release dependencies only, leaves tests disabled and limits
+vcpkg and Ninja to two concurrent jobs for machines with limited memory. On
+macOS, the application looks for Homebrew's MoltenVK driver manifest at startup
+when no Vulkan driver has been selected explicitly. `VK_DRIVER_FILES`,
+`VK_ICD_FILENAMES` and `VK_ADD_DRIVER_FILES` still take precedence.
+
 ## Build Options
 
 ### 1. Native Build (Development)
@@ -69,13 +92,14 @@ cmake --build build -j 16
 
 #### Release-only dependencies (optional)
 
-Native x64 Windows and Linux builds can use these presets to build only the
+Native Windows, Linux and Apple Silicon builds can use these presets to build only the
 Release variants of vcpkg dependencies, including host tools:
 
 | Platform | Release application | Optimized application with debug information |
 | --- | --- | --- |
 | Windows x64 | `windows-release` | `windows-relwithdebinfo` |
 | Linux x64 | `linux-release` | `linux-relwithdebinfo` |
+| macOS arm64 | `macos-release` | — |
 
 For example, from an initialized Windows x64 MSVC/CUDA development shell:
 
