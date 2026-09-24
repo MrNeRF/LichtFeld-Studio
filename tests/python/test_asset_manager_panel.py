@@ -3601,6 +3601,42 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
 
+def test_needs_attention_filter_only_shows_card_attention_states(panel_module):
+    panel, equal, _remote = _gallery_fixture(panel_module)
+    clean_local = _project("clean-local")
+    unpublished = _project("unpublished")
+    missing = _project("missing", status="MISSING", exists=False, available=False)
+    diverged = _project("diverged", commit_uuid="local-edit")
+    failed_upload = _project("failed-upload")
+    panel._asset_index.assets.update({
+        clean_local["id"]: clean_local,
+        unpublished["id"]: unpublished,
+        missing["id"]: missing,
+        diverged["id"]: diverged,
+        failed_upload["id"]: failed_upload,
+    })
+    panel._gallery_state["links"][diverged["id"]] = {
+        **panel._gallery_state["links"][equal["id"]], "sceneId": "scene",
+        "commitUuid": "saved",
+    }
+    panel._gallery_state["scenes"].append({
+        **_remote, "id": "diverged-scene", "originProjectUuid": diverged["id"],
+        "contentRevision": "r2", "metadataRevision": "r1",
+    })
+    panel._gallery_state["links"][diverged["id"]]["sceneId"] = "diverged-scene"
+    panel._gallery_state["jobs"] = [{
+        "id": "failed", "project": failed_upload["id"], "status": "completed",
+        "kind": "upload", "localUpdate": {"state": "failed"}, "message": "Upload failed",
+    }]
+    panel._active_filter = "attention"
+    assert panel._gallery_facts(unpublished)["action"] == "publish"
+    assert panel._gallery_badge(unpublished)["gallery_attention"] is False
+    assert {a["id"] for a in panel._asset_index.assets.values()
+            if panel._asset_matches_filter(a)} == {missing["id"], diverged["id"], failed_upload["id"]}
+    panel._gallery_state["relink_required"] = True
+    assert panel._gallery_badge(unpublished)["gallery_attention"] is True
+    assert panel._asset_matches_filter(unpublished) is True
+
 def test_update_all_visibility_matches_visible_candidates(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()

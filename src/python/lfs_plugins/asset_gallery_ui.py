@@ -13,6 +13,7 @@ import lichtfeld as lf
 from .gallery_messages import tr, localize_message
 
 from .gallery_controller import asset_sync_state, get_gallery_controller
+from .gallery_sync_facts import needs_attention
 from .gallery_actions import gallery_actions, gallery_quota
 from .asset_index import display_name, last_known_gallery_label, previous_scene_for
 
@@ -197,6 +198,7 @@ class GalleryAssetMixin:
         for key in ("signed_in", "busy", "relink_required", "unsupported", "source_formats", "quotaBytes", "usedBytes", "reservedBytes", "hdrBackgrounds"):
             if key in self._gallery_state:
                 facts[key] = self._gallery_state[key]
+        facts["attention"] = needs_attention(facts)
         previous = None if explicitly_unlinked else previous_scene_for(asset, self._gallery_state)
         acknowledged = self._gallery_state.get("replacementAcknowledgments", {}).get(asset.get("id"), {})
         if previous and not link and (acknowledged.get("oldProject") != asset.get("previous_project_uuid")
@@ -298,6 +300,7 @@ class GalleryAssetMixin:
                 "gallery_has_controls": can_cancel or bool(gallery_action),
                 "gallery_tooltip": "\n".join(filter(None, (label, facts.get("change_detail") or facts["reason"], byte_label, detail, primary.get("reason")))),
                 "health_badge": bool(facts["health_icon"]),
+                "gallery_attention": needs_attention(facts),
                 "health_tone": "asset-health-" + facts["health_tone"],
                 "gallery_ring": facts["active"],
                 "gallery_progress_value": (0.25 if indeterminate else facts["progress"] / 100.0),

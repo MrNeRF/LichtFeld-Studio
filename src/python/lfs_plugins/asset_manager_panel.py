@@ -1571,7 +1571,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         facts = self._gallery_facts(asset)
         scene = self._gallery_scene(asset)
         if active == "attention":
-            return bool(str(asset.get("status") or "") not in ("", "AVAILABLE")) or bool(facts.get("action"))
+            return bool(facts.get("attention"))
         if active == "not_published":
             return scene is None and not asset.get("remote_only")
         if active == "published":
