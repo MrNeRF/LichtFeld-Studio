@@ -174,41 +174,16 @@ body {
     text-overflow: ellipsis;
 }
 .form-modal input[type="text"], .form-modal select, .form-modal textarea {
-    box-sizing: border-box;
     display: block;
     flex: 1;
     min-width: 0;
-    height: 28dp;
-    min-height: 28dp;
-    max-height: 28dp;
-    line-height: 26dp;
-    border-width: 1dp;
-    padding: 0 8dp;
     margin: 0;
 }
 .form-modal select { overflow: visible; }
 .form-modal select selectvalue {
-    box-sizing: border-box;
-    position: relative;
-    top: 0;
-    height: 26dp;
-    line-height: 26dp;
-    margin: 0 24dp 0 0;
-    padding: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-.form-modal select selectarrow {
-    box-sizing: border-box;
-    position: relative;
-    /* Account for the transparent padding in the shared arrow bitmap. */
-    top: 4dp;
-    right: -2dp;
-    width: 16dp;
-    height: 16dp;
-    margin: 0;
-    padding: 0;
 }
 .form-modal select selectbox {
     box-sizing: border-box;

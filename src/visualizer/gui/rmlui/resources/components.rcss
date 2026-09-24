@@ -214,7 +214,10 @@ input[type="text"] {
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
-    padding: 2dp 4dp;
+    height: 18dp;
+    min-height: 18dp;
+    padding: 1dp 4dp;
+    box-sizing: border-box;
     transition: border-color 0.12s quadratic-out;
 }
 
@@ -291,6 +294,7 @@ selectbox option {
     display: block;
     padding: 2dp 6dp;
     font-size: 12dp;
+    white-space: nowrap;
     transition: background-color 0.1s quadratic-out;
 }
 
@@ -307,10 +311,11 @@ select selectvalue {
     height: 16dp;
     line-height: 16dp;
     margin-right: 18dp;
-    padding: 0 0 0 6dp;
+    padding: 0 0 0 4dp;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 select selectarrow {
@@ -320,7 +325,8 @@ select selectarrow {
     text-align: center;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 /* ── Progress ───────────────────────────────────────────── */

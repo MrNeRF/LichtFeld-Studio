@@ -1137,7 +1137,7 @@
     padding: 6dp 8dp;
     border-bottom-width: 1dp;
 }
-#asset-scope-controls select { box-sizing: border-box; width: 100%; height: 26dp; min-height: 26dp; }
+#asset-scope-controls select { box-sizing: border-box; width: 100%; height: 24dp; min-height: 24dp; }
 .asset-toolbar-quota { flex: 0 0 auto; white-space: nowrap; }
 .asset-shell.is-narrow .asset-toolbar-quota,
 .asset-shell.is-compact .asset-toolbar-quota { display: none; }

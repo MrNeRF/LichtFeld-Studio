@@ -3,10 +3,10 @@
 .gallery-file-content > span, .gallery-file-fields > span, .gallery-file-content label { white-space: normal; }
 .gallery-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-file-fields input, .gallery-file-fields textarea { width: 100%; box-sizing: border-box; }
-.gallery-file-fields input, .gallery-file-fields select { height: 24dp; }
+.gallery-file-fields input, .gallery-file-fields select { height: 24dp; min-height: 24dp; }
 .gallery-file-fields textarea { height: 64dp; }
 .gallery-file-fields .setting-row { display: flex; align-items: center; gap: 8dp; min-height: 24dp; }
-.gallery-file-fields .setting-row select { flex: 1; min-width: 200dp; }
+.gallery-file-fields .setting-row select { flex: 1; }
 .gallery-file-actions { display: flex; justify-content: flex-end; gap: 8dp; padding-top: 8dp; flex-shrink: 0; }
 .gallery-file-content .btn { height: 24dp; padding: 0dp 8dp; box-sizing: border-box; flex: 0 0 auto; width: auto; min-width: 64dp; max-width: 400dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gallery-file-content .btn span { display: inline; width: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
