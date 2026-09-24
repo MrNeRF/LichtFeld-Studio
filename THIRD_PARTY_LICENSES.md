@@ -18,6 +18,7 @@ This project builds upon and is inspired by the following:
 | [SplatShop](https://github.com/m-schuetz/Splatshop) | Gaussian Splat editing tool | MIT |
 | [splat-transform](https://github.com/playcanvas/splat-transform) | Transformation utilities for splats | MIT |
 | [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format (vendored at affd0ec) | MIT |
+| [glTF 2.0](https://github.com/KhronosGroup/glTF) | Khronos Group specification, with the [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) and [KHR_gaussian_splatting_compression_spz_2](https://github.com/KhronosGroup/glTF/pull/2531) extensions, implemented for `.glb` splat import/export (no specification text or code included). glTF™ is a trademark of The Khronos Group Inc. | CC-BY-4.0 (glTF 2.0); Khronos Specification Copyright (KHR extensions) |
 
 ## Mesh-to-Splat Conversion
 | Project | Description | License |

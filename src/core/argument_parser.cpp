@@ -462,6 +462,8 @@ namespace {
             return OutputFormat::USDC;
         if (str == "rad" || str == ".rad")
             return OutputFormat::RAD;
+        if (str == "glb" || str == ".glb")
+            return OutputFormat::GLB;
         return std::nullopt;
     }
 
@@ -481,7 +483,7 @@ namespace {
             if (!token.empty()) {
                 auto fmt = parseFormat(token);
                 if (!fmt) {
-                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, html, usd, usda, usdc, rad", token));
+                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, glb, html, usd, usda, usdc, rad", token));
                 }
                 if (std::ranges::find(formats, *fmt) == formats.end()) {
                     formats.push_back(*fmt);
@@ -1791,8 +1793,8 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
-        "  Output: .ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Output: .ply, .sog, .ssog, .spz, .glb, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1808,7 +1810,7 @@ namespace {
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
-        "  Output: .ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Output: .ply, .sog, .ssog, .spz, .glb, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1847,7 +1849,7 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or SSOG directory", {'o', "output"});
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
-        ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, ssog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, ssog, spz, glb, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         SogFlags sog_flags(parser);
@@ -1909,7 +1911,7 @@ namespace {
             if (const auto fmt = parseFormat(::args::get(format))) {
                 params.format = *fmt;
             } else {
-                return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
+                return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, glb, html, usd, usda, usdc, rad", ::args::get(format)));
             }
         } else if (!params.output_path.empty()) {
             if (const auto fmt = parseFormat(params.output_path.extension().string())) {

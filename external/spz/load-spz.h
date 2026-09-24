@@ -208,6 +208,9 @@ namespace spz {
         uint8_t shRestBits = DEFAULT_SH_REST_BITS; // Bits for SH degree 2+ coefficients
 
         int compressionLevel = 12; // zstd compression level for SPZ v4 streams
+
+        // Fractional bits of the 24-bit fixed-point positions; lower values widen the range.
+        uint8_t fractionalBits = 12;
     };
 
     struct UnpackOptions {

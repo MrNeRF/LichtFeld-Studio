@@ -3524,6 +3524,15 @@ namespace lfs::python {
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
 
         m.def(
+            "save_glb_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveGlbFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.");
+
+        m.def(
             "save_usd_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveUsdFileDialog(default_name);

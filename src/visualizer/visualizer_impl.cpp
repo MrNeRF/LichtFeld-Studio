@@ -575,6 +575,7 @@ namespace lfs::vis {
                                : fmt == core::ExportFormat::SSOG                                                                                                                                           ? "SSOG"
                                : fmt == core::ExportFormat::SOG                                                                                                                                            ? "SOG"
                                : fmt == core::ExportFormat::SPZ                                                                                                                                            ? "SPZ"
+                               : fmt == core::ExportFormat::GLB                                                                                                                                            ? "GLB"
                                : fmt == core::ExportFormat::HTML_VIEWER                                                                                                                                    ? "HTML"
                                : fmt == core::ExportFormat::USD                                                                                                                                            ? "USD"
                                : fmt == core::ExportFormat::NUREC_USDZ                                                                                                                                     ? "USDZ"

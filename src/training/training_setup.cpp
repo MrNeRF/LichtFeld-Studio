@@ -647,6 +647,7 @@ namespace lfs::training {
             case OutputFormat::SOG: return ".sog";
             case OutputFormat::SSOG: return ".ssog";
             case OutputFormat::SPZ: return ".spz";
+            case OutputFormat::GLB: return ".glb";
             case OutputFormat::HTML: return ".html";
             case OutputFormat::USD: return ".usd";
             case OutputFormat::USDA: return ".usda";
@@ -678,6 +679,8 @@ namespace lfs::training {
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
             case OutputFormat::SPZ:
                 return lfs::io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
+            case OutputFormat::GLB:
+                return lfs::io::save_spz(splat, {.output_path = output, .provenance = provenance, .glb = true});
             case OutputFormat::HTML:
                 return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
             case OutputFormat::USD:

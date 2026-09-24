@@ -4,9 +4,11 @@
 
 #include "spz.hpp"
 #include "coordinate-system-adobe.h"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "load-spz.h"
@@ -18,7 +20,13 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <thread>
@@ -268,13 +276,258 @@ namespace lfs::io {
 
             return cloud;
         }
+
+        // glTF binary container carrying an SPZ v3 payload via KHR_gaussian_splatting_compression_spz_2
+        // (the layout written by the geo-register plugin's 3D Tiles exporter). Implements the Khronos
+        // glTF 2.0 and KHR_gaussian_splatting specifications; see THIRD_PARTY_LICENSES.md.
+        constexpr uint32_t GLB_MAGIC = 0x46546C67; // "glTF"
+        constexpr uint32_t GLB_CHUNK_JSON = 0x4E4F534A;
+        constexpr uint32_t GLB_CHUNK_BIN = 0x004E4942;
+        constexpr const char* GLB_SPZ_EXTENSION = "KHR_gaussian_splatting_compression_spz_2";
+        constexpr const char* GLB_SPZ_POINTER =
+            "/extensions/KHR_gaussian_splatting/extensions/KHR_gaussian_splatting_compression_spz_2";
+
+        // 3D Tiles turns glTF Y-up content into Z-up; the node matrix pre-applies the inverse, so the
+        // payload stays in the splat's own frame (stored as-is, no RUB conversion).
+        const glm::dmat4 GLB_Y_UP_TO_Z_UP(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+
+        struct GlbSpz {
+            std::vector<uint8_t> spz;
+            glm::mat4 transform{1.0f};
+            bool linear_color = false;
+        };
+
+        // lin_rec709_display -> srgb_rec709_display: SH0 converts exactly, higher bands scale by
+        // the sRGB curve slope at the base color (first-order approximation).
+        void convert_linear_sh_to_srgb(float* sh0, float* shN, const size_t count, const size_t sh_coeffs) {
+            constexpr float SH_C0 = 0.28209479177387814f;
+            const auto encode = [](const float c) {
+                return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+            };
+            const auto slope = [](const float c) {
+                return c <= 0.0031308f ? 12.92f : 1.055f / 2.4f * std::pow(c, 1.0f / 2.4f - 1.0f);
+            };
+            parallel_for_chunks(count, [&](const size_t begin, const size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    for (size_t channel = 0; channel < 3; ++channel) {
+                        float& dc = sh0[i * 3 + channel];
+                        const float linear = std::clamp(dc * SH_C0 + 0.5f, 0.0f, 1.0f);
+                        dc = (encode(linear) - 0.5f) / SH_C0;
+                        const float gain = slope(linear);
+                        for (size_t k = 0; k < sh_coeffs; ++k) {
+                            shN[(i * sh_coeffs + k) * 3 + channel] *= gain;
+                        }
+                    }
+                }
+            });
+        }
+
+        lfs::Error glb_error(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        lfs::Result<glm::dmat4> glb_node_matrix(const nlohmann::json& node) {
+            if (node.contains("matrix")) {
+                const auto m = node["matrix"].get<std::vector<double>>();
+                if (m.size() != 16) {
+                    return glb_error("GLB node matrix must have 16 values");
+                }
+                return glm::dmat4(glm::make_mat4(m.data()));
+            }
+            const auto t = node.value("translation", std::vector<double>{0, 0, 0});
+            const auto r = node.value("rotation", std::vector<double>{0, 0, 0, 1});
+            const auto s = node.value("scale", std::vector<double>{1, 1, 1});
+            if (t.size() != 3 || r.size() != 4 || s.size() != 3) {
+                return glb_error("GLB node translation, rotation and scale must have 3, 4 and 3 values");
+            }
+            glm::dmat4 matrix = glm::mat4_cast(glm::dquat(r[3], r[0], r[1], r[2]));
+            matrix[0] *= s[0];
+            matrix[1] *= s[1];
+            matrix[2] *= s[2];
+            matrix[3] = glm::dvec4(t[0], t[1], t[2], 1.0);
+            return matrix;
+        }
+
+        lfs::Result<GlbSpz> read_glb_spz(const std::vector<uint8_t>& glb) {
+            uint32_t header[3] = {};
+            if (glb.size() < sizeof(header)) {
+                return glb_error("truncated GLB header");
+            }
+            std::memcpy(header, glb.data(), sizeof(header));
+            if (header[0] != GLB_MAGIC || header[1] != 2) {
+                return glb_error("not a glTF 2.0 binary");
+            }
+
+            nlohmann::json doc;
+            std::span<const uint8_t> bin;
+            for (size_t offset = sizeof(header); offset + 8 <= glb.size();) {
+                uint32_t chunk[2] = {};
+                std::memcpy(chunk, glb.data() + offset, sizeof(chunk));
+                offset += sizeof(chunk);
+                if (chunk[0] > glb.size() - offset) {
+                    return glb_error("truncated GLB chunk");
+                }
+                if (chunk[1] == GLB_CHUNK_JSON) {
+                    doc = nlohmann::json::parse(glb.begin() + offset, glb.begin() + offset + chunk[0]);
+                } else if (chunk[1] == GLB_CHUNK_BIN && bin.empty()) {
+                    bin = {glb.data() + offset, chunk[0]};
+                }
+                offset += chunk[0];
+            }
+
+            const nlohmann::json::json_pointer spz_pointer(GLB_SPZ_POINTER);
+            const auto meshes = doc.value("meshes", nlohmann::json::array());
+            for (size_t mesh = 0; mesh < meshes.size(); ++mesh) {
+                for (const auto& primitive : meshes[mesh].value("primitives", nlohmann::json::array())) {
+                    if (!primitive.contains(spz_pointer)) {
+                        continue;
+                    }
+                    const auto& view = doc.at("bufferViews").at(primitive.at(spz_pointer).at("bufferView").get<size_t>());
+                    const auto view_offset = view.value("byteOffset", size_t{0});
+                    const auto view_length = view.at("byteLength").get<size_t>();
+                    if (view.value("buffer", 0) != 0 || view_offset > bin.size() ||
+                        view_length > bin.size() - view_offset) {
+                        return glb_error("SPZ buffer view is outside the embedded GLB buffer");
+                    }
+
+                    GlbSpz result;
+                    result.spz.assign(bin.begin() + view_offset, bin.begin() + view_offset + view_length);
+                    result.linear_color = primitive.at(nlohmann::json::json_pointer("/extensions/KHR_gaussian_splatting"))
+                                              .value("colorSpace", "") == "lin_rec709_display";
+                    for (const auto& node : doc.value("nodes", nlohmann::json::array())) {
+                        if (node.value("mesh", -1) == static_cast<int>(mesh)) {
+                            auto node_matrix = glb_node_matrix(node);
+                            if (!node_matrix) {
+                                return std::move(node_matrix).error();
+                            }
+                            result.transform = glm::mat4(GLB_Y_UP_TO_Z_UP * *node_matrix);
+                            break;
+                        }
+                    }
+                    return result;
+                }
+            }
+            return glb_error(std::format("no primitive uses {}", GLB_SPZ_EXTENSION));
+        }
+
+        // Recenters positions and picks fractional bits so the extent fits the 24-bit fixed point.
+        // Returns the removed center; half_extent receives the recentered bounds.
+        glm::dvec3 recenter_for_glb(spz::GaussianCloud& cloud, spz::PackOptions& pack_options,
+                                    glm::dvec3& half_extent) {
+            glm::dvec3 lo(std::numeric_limits<double>::max());
+            glm::dvec3 hi(std::numeric_limits<double>::lowest());
+            for (size_t i = 0; i < cloud.positions.size(); i += 3) {
+                const glm::dvec3 p(cloud.positions[i], cloud.positions[i + 1], cloud.positions[i + 2]);
+                lo = glm::min(lo, p);
+                hi = glm::max(hi, p);
+            }
+            const glm::dvec3 center = (lo + hi) * 0.5;
+            half_extent = (hi - lo) * 0.5;
+            for (size_t i = 0; i < cloud.positions.size(); ++i) {
+                cloud.positions[i] = static_cast<float>(cloud.positions[i] - center[static_cast<int>(i % 3)]);
+            }
+            // Keep 2^bits * extent below 2^22 (one bit of headroom in the signed 24-bit range).
+            const double max_abs = std::max({half_extent.x, half_extent.y, half_extent.z});
+            pack_options.fractionalBits = static_cast<uint8_t>(
+                max_abs > 0.0 ? std::clamp(std::floor(std::log2(double(1 << 22) / max_abs)), 0.0, 12.0) : 12.0);
+            return center;
+        }
+
+        std::vector<uint8_t> wrap_spz_in_glb(const std::vector<uint8_t>& spz_data, const spz::GaussianCloud& cloud,
+                                             const glm::dvec3& center, const glm::dvec3& half_extent) {
+            using nlohmann::json;
+            json accessors = json::array();
+            json attributes = json::object();
+            const auto add_accessor = [&](const std::string& name, const char* type, const int component_type) {
+                attributes[name] = accessors.size();
+                accessors.push_back({{"componentType", component_type}, {"count", cloud.numPoints}, {"type", type}});
+                return &accessors.back();
+            };
+            auto* position = add_accessor("POSITION", "VEC3", 5126);
+            (*position)["min"] = {-half_extent.x, -half_extent.y, -half_extent.z};
+            (*position)["max"] = {half_extent.x, half_extent.y, half_extent.z};
+            (*add_accessor("COLOR_0", "VEC4", 5121))["normalized"] = true;
+            add_accessor("KHR_gaussian_splatting:SCALE", "VEC3", 5126);
+            add_accessor("KHR_gaussian_splatting:ROTATION", "VEC4", 5126);
+            add_accessor("KHR_gaussian_splatting:OPACITY", "SCALAR", 5126);
+            add_accessor("KHR_gaussian_splatting:SH_DEGREE_0_COEF_0", "VEC3", 5126);
+            for (int degree = 1; degree <= cloud.shDegree; ++degree) {
+                for (int coef = 0; coef < 2 * degree + 1; ++coef) {
+                    add_accessor(std::format("KHR_gaussian_splatting:SH_DEGREE_{}_COEF_{}", degree, coef), "VEC3", 5126);
+                }
+            }
+
+            const glm::dmat4 node = glm::inverse(GLB_Y_UP_TO_Z_UP) * glm::translate(glm::dmat4(1.0), center);
+            const size_t bin_length = (spz_data.size() + 3) & ~size_t{3};
+            const json spz_extension = {{"kernel", "ellipse"},
+                                        {"colorSpace", "srgb_rec709_display"},
+                                        {"extensions", {{GLB_SPZ_EXTENSION, {{"bufferView", 0}}}}}};
+            const json primitive = {{"mode", 0},
+                                    {"attributes", attributes},
+                                    {"extensions", {{"KHR_gaussian_splatting", spz_extension}}}};
+            const json doc = {
+                {"asset", {{"version", "2.0"}, {"generator", "LichtFeld Studio"}}},
+                {"extensionsUsed", json::array({"KHR_gaussian_splatting", GLB_SPZ_EXTENSION})},
+                {"extensionsRequired", json::array({"KHR_gaussian_splatting", GLB_SPZ_EXTENSION})},
+                {"scene", 0},
+                {"scenes", json::array({{{"nodes", {0}}}})},
+                {"nodes", json::array({{{"mesh", 0},
+                                        {"matrix", std::vector<double>(glm::value_ptr(node),
+                                                                       glm::value_ptr(node) + 16)}}})},
+                {"meshes", json::array({{{"primitives", json::array({primitive})}}})},
+                {"buffers", json::array({{{"byteLength", bin_length}}})},
+                {"bufferViews", json::array({{{"buffer", 0}, {"byteLength", spz_data.size()}}})},
+                {"accessors", accessors}};
+
+            std::string json_text = doc.dump();
+            json_text.resize((json_text.size() + 3) & ~size_t{3}, ' ');
+
+            std::vector<uint8_t> glb;
+            glb.reserve(28 + json_text.size() + bin_length);
+            const auto append_u32 = [&glb](const size_t value) {
+                const auto v = static_cast<uint32_t>(value);
+                glb.insert(glb.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
+            };
+            append_u32(GLB_MAGIC);
+            append_u32(2);
+            append_u32(28 + json_text.size() + bin_length);
+            append_u32(json_text.size());
+            append_u32(GLB_CHUNK_JSON);
+            glb.insert(glb.end(), json_text.begin(), json_text.end());
+            append_u32(bin_length);
+            append_u32(GLB_CHUNK_BIN);
+            glb.insert(glb.end(), spz_data.begin(), spz_data.end());
+            glb.resize(glb.size() + bin_length - spz_data.size(), 0);
+            return glb;
+        }
     } // namespace
+
+    bool is_spz_glb(const std::filesystem::path& filepath) {
+        std::ifstream in;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
+            return false;
+        }
+        uint32_t header[5] = {};
+        if (!in.read(reinterpret_cast<char*>(header), sizeof(header)) ||
+            header[0] != GLB_MAGIC || header[4] != GLB_CHUNK_JSON || header[3] > (64u << 20)) {
+            return false;
+        }
+        std::string json_text(header[3], '\0');
+        return in.read(json_text.data(), static_cast<std::streamsize>(json_text.size())) &&
+               json_text.find(GLB_SPZ_EXTENSION) != std::string::npos;
+    }
 
     std::expected<SplatData, std::string> load_spz(const std::filesystem::path& filepath) {
         auto start = std::chrono::high_resolution_clock::now();
 
         LOG_INFO("Loading SPZ file: {}", lfs::core::path_to_utf8(filepath));
 
+        std::string_view format_name = "SPZ"; // "GLB" once a glTF container is detected
         try {
             std::ifstream in;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
@@ -299,6 +552,20 @@ namespace lfs::io {
                              static_cast<std::streamsize>(data.size()))) {
                     return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
                 }
+            }
+
+            std::optional<glm::mat4> glb_transform;
+            bool glb_linear_color = false;
+            if (data.size() >= 4 && std::memcmp(data.data(), "glTF", 4) == 0) {
+                format_name = "GLB";
+                auto glb = read_glb_spz(data);
+                if (!glb) {
+                    return std::unexpected(std::format(
+                        "Failed to load {} file '{}': {}", format_name, lfs::core::path_to_utf8(filepath), glb.error().detail()));
+                }
+                data = std::move(glb->spz);
+                glb_transform = glb->transform;
+                glb_linear_color = glb->linear_color;
             }
 
             // Sniff the container so unsupported versions fail with a clear message.
@@ -341,7 +608,7 @@ namespace lfs::io {
             // Decode the packed streams first so the LichtFeld-owned pageable tensors can be
             // allocated with their final shapes and used as the unpack destination.
             spz::UnpackOptions options;
-            options.to = spz::CoordinateSystem::RDF;
+            options.to = glb_transform ? spz::CoordinateSystem::RUB : spz::CoordinateSystem::RDF;
             spz::PackedGaussians packed;
             {
                 LOG_TIMER_DEBUG("SPZ load: decompress");
@@ -351,13 +618,13 @@ namespace lfs::io {
             if (packed.numPoints <= 0 ||
                 static_cast<uint32_t>(packed.numPoints) > spz::kMaxSpzPoints) {
                 return std::unexpected(std::format(
-                    "Failed to load SPZ file '{}': header contains invalid point metadata",
-                    lfs::core::path_to_utf8(filepath)));
+                    "Failed to load {} file '{}': header contains invalid point metadata",
+                    format_name, lfs::core::path_to_utf8(filepath)));
             }
             if (packed.shDegree < 0 || packed.shDegree > 3) {
                 return std::unexpected(std::format(
-                    "Failed to load SPZ file '{}': {}",
-                    lfs::core::path_to_utf8(filepath),
+                    "Failed to load {} file '{}': {}",
+                    format_name, lfs::core::path_to_utf8(filepath),
                     "SPZ SH degree-4 files are not supported by LichtFeld yet "
                     "(supported degrees: 0-3)"));
             }
@@ -415,18 +682,26 @@ namespace lfs::io {
                 LOG_TIMER_DEBUG("SPZ load: unpackGaussians");
                 if (!spz::unpackGaussians(packed, options, output)) {
                     return std::unexpected(std::format(
-                        "Failed to load SPZ file '{}': failed to unpack Gaussian data",
-                        lfs::core::path_to_utf8(filepath)));
+                        "Failed to load {} file '{}': failed to unpack Gaussian data",
+                        format_name, lfs::core::path_to_utf8(filepath)));
                 }
             }
             if (auto validation = validate_spz_output(packed, output); !validation) {
                 return std::unexpected(std::format(
-                    "Failed to load SPZ file '{}': {}",
-                    lfs::core::path_to_utf8(filepath),
+                    "Failed to load {} file '{}': {}",
+                    format_name, lfs::core::path_to_utf8(filepath),
                     validation.error()));
             }
 
             LOG_DEBUG("SPZ loaded: {} points, SH degree {}", packed.numPoints, packed.shDegree);
+
+            if (glb_linear_color) {
+                LOG_WARN("GLB '{}' uses lin_rec709_display colors; converting to sRGB (SH bands approximated)",
+                         lfs::core::path_to_utf8(filepath));
+                convert_linear_sh_to_srgb(static_cast<float*>(sh0.data_ptr()),
+                                          shN.is_valid() ? static_cast<float*>(shN.data_ptr()) : nullptr,
+                                          num_points, sh_coeffs);
+            }
 
             SplatData splat;
             {
@@ -441,6 +716,9 @@ namespace lfs::io {
                     std::move(opacity),
                     SCENE_SCALE);
             }
+            if (glb_transform) {
+                lfs::core::transform(splat, *glb_transform);
+            }
 
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::high_resolution_clock::now() - start);
@@ -451,12 +729,16 @@ namespace lfs::io {
         } catch (const std::bad_alloc&) {
             return std::unexpected("SPZ input exceeds available memory");
         } catch (const std::exception& error) {
-            return std::unexpected(std::format("Failed to load SPZ: {}", error.what()));
+            return std::unexpected(std::format(
+                "Failed to load {} file '{}': {}", format_name, lfs::core::path_to_utf8(filepath), error.what()));
         }
     }
 
     Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options_in) {
         SpzSaveOptions options = options_in;
+        if (options.glb) {
+            options.version = 3; // KHR_gaussian_splatting_compression_spz_2 readers expect gzip SPZ
+        }
         // v3 has no extension zone; leave the slot empty so legacy files stay clean.
         if (options.version == 4 && !options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
@@ -495,9 +777,15 @@ namespace lfs::io {
         // Version 4 attaches the coordinate-system extension declaring RUB on disk.
         // Version 3 must attach no extensions: legacy readers hard-reject trailing bytes.
         spz::PackOptions pack_options;
-        pack_options.from = spz::CoordinateSystem::RDF;
+        pack_options.from = options.glb ? spz::CoordinateSystem::RUB : spz::CoordinateSystem::RDF;
         pack_options.version = static_cast<uint32_t>(options.version);
         pack_options.compressionLevel = options.compression_level;
+
+        glm::dvec3 glb_center{0.0};
+        glm::dvec3 glb_half_extent{0.0};
+        if (options.glb) {
+            glb_center = recenter_for_glb(cloud, pack_options, glb_half_extent);
+        }
 
 #ifdef SPZ_BUILD_EXTENSIONS
         if (options.version == 4) {
@@ -524,6 +812,9 @@ namespace lfs::io {
             if (!spz::saveSpz(cloud, pack_options, &data)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to pack SPZ data", options.output_path);
+            }
+            if (options.glb) {
+                data = wrap_spz_in_glb(data, cloud, glb_center, glb_half_extent);
             }
         }
 

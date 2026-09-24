@@ -125,6 +125,7 @@ namespace lfs::vis::gui {
         case ExportFormat::SOG: return "SOG";
         case ExportFormat::SSOG: return "SSOG";
         case ExportFormat::SPZ: return "SPZ";
+        case ExportFormat::GLB: return "GLB";
         case ExportFormat::HTML_VIEWER: return "HTML";
         case ExportFormat::USD: return "USD";
         case ExportFormat::NUREC_USDZ: return "USDZ";
@@ -1993,12 +1994,14 @@ namespace lfs::vis::gui {
                             }
                             break;
                         }
+                        case ExportFormat::GLB:
                         case ExportFormat::SPZ: {
                             const lfs::io::SpzSaveOptions options{
                                 .output_path = path,
                                 .version = spz_version,
                                 .progress_callback = update_progress,
-                                .provenance = provenance};
+                                .provenance = provenance,
+                                .glb = format == ExportFormat::GLB};
                             if (auto result = lfs::io::save_spz(*splat_data, options); result) {
                                 success = true;
                             } else {

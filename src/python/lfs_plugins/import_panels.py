@@ -362,7 +362,7 @@ class NewProjectPanel(_ImportDialogPanel):
         if lf.io.is_ssog_path(path):
             return True
         suffix = Path(path).suffix.lower()
-        return suffix in {".ply", ".sog", ".ssog", ".spz", ".rad"} or suffix.startswith(".usd")
+        return suffix in {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad"} or suffix.startswith(".usd")
 
     def _set_source_path(self, value, derive_name=False):
         previous = self._source_path

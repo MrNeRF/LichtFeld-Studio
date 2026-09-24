@@ -3685,6 +3685,8 @@ namespace lfs::vis {
                     info.source_type = "PLY";
                 } else if (ext == ".spz") {
                     info.source_type = "SPZ";
+                } else if (ext == ".glb") {
+                    info.source_type = "GLB";
                 } else if (ext == ".rad") {
                     info.source_type = "RAD";
                 }

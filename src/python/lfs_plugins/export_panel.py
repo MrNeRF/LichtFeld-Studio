@@ -28,6 +28,7 @@ class ExportFormat(IntEnum):
     RAD = 6
     COLMAP = 7
     SSOG = 8
+    GLB = 13
 
 
 FORMAT_INFO = (
@@ -35,6 +36,7 @@ FORMAT_INFO = (
     (ExportFormat.SOG, "export.format.sog_supersplat"),
     (ExportFormat.SSOG, "export.format.ssog"),
     (ExportFormat.SPZ, "export.format.spz_niantic"),
+    (ExportFormat.GLB, "export.format.glb_gltf"),
     (ExportFormat.RAD, "export.format.rad_random_access"),
     (ExportFormat.USD, "export.format.usd_openusd"),
     (ExportFormat.NUREC_USDZ, "export.format.usdz_nurec"),
@@ -47,6 +49,7 @@ EXPORT_PROGRESS_FORMAT_NAMES = {
     ExportFormat.SOG: "SOG",
     ExportFormat.SSOG: "SSOG",
     ExportFormat.SPZ: "SPZ",
+    ExportFormat.GLB: "GLB",
     ExportFormat.HTML_VIEWER: "HTML",
     ExportFormat.USD: "USD",
     ExportFormat.NUREC_USDZ: "USDZ",
@@ -265,7 +268,7 @@ class ExportPanel(Panel):
     def _show_include_provenance(self):
         if self._format == ExportFormat.COLMAP:
             return False
-        if self._format == ExportFormat.SPZ and self._spz_version == 3:
+        if self._format == ExportFormat.GLB or (self._format == ExportFormat.SPZ and self._spz_version == 3):
             return False
         return True
 
@@ -725,6 +728,8 @@ class ExportPanel(Panel):
             return lf.ui.save_sog_file_dialog(default_name)
         if self._format == ExportFormat.SPZ:
             return lf.ui.save_spz_file_dialog(default_name)
+        if self._format == ExportFormat.GLB:
+            return lf.ui.save_glb_file_dialog(default_name)
         if self._format == ExportFormat.USD:
             return lf.ui.save_usd_file_dialog(default_name)
         if self._format == ExportFormat.NUREC_USDZ:

@@ -15,6 +15,7 @@ namespace lfs::app {
             case OutputFormat::SOG: return ".sog";
             case OutputFormat::SSOG: return ".ssog";
             case OutputFormat::SPZ: return ".spz";
+            case OutputFormat::GLB: return ".glb";
             case OutputFormat::HTML: return ".html";
             case OutputFormat::USD: return ".usd";
             case OutputFormat::USDA: return ".usda";

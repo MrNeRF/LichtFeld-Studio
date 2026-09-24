@@ -135,6 +135,7 @@ namespace lfs::io {
         int compression_level = kSpzExportZstdLevel; // zstd compression level for SPZ v4
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        bool glb = false;                                  // wrap an SPZ v3 payload in a glTF binary (KHR_gaussian_splatting_compression_spz_2)
     };
 
     /**

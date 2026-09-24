@@ -206,6 +206,8 @@ namespace lfs::app {
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::SPZ:
                 return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress, .provenance = provenance});
+            case param::OutputFormat::GLB:
+                return lfs::io::save_spz(splat, {.output_path = output, .progress_callback = progress, .provenance = provenance, .glb = true});
             case param::OutputFormat::HTML:
                 return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::USD:
