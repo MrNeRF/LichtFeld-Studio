@@ -285,6 +285,14 @@ class GallerySync:
             self._disk_digest = digest
             self._journal_problem = self._stale = False
         if recover_interrupted:
+            interrupted_updates = [job for bucket in self._data["accounts"].values() for job in bucket["jobs"]
+                if job.get("stagedImport", {}).get("updateOnly") and not job.get("retired")]
+            for job in interrupted_updates:
+                job["stagedImport"]["cleanupPending"] = True
+            if interrupted_updates:
+                self._save()
+                for job in interrupted_updates:
+                    self._retire_update_download(job)
             pending_cleanup = [job for bucket in self._data["accounts"].values() for job in bucket["jobs"]
                                if job["status"] in ("error", "completed", "canceled") and job.get("ownedExport")
                                and (not job.get("preparedRemoved") or job.get("cleanupPending"))]
@@ -1343,7 +1351,7 @@ class GallerySync:
         self._launch(action)
         return update_id
 
-    def stage_download(self, job_id):
+    def stage_download(self, job_id, *, for_update=False):
         """Give a native import a unique name so it cannot be confused with local nodes."""
         self._client()
         job = self._job(job_id)
@@ -1351,12 +1359,20 @@ class GallerySync:
             raise ValueError("Finish downloading this scene first.")
         identifier = str(uuid.uuid4())
         record = {"id": identifier, "state": "preparing"}
+        if for_update:
+            record.update(updateOnly=True, path=str(self.root / "imports" / (identifier + ".scene")))
         source_identity = ProjectPathIdentity.capture(job["path"])
         source_project = job.get("downloadProject") or _project_uuid(job["path"])
-        from .asset_index import resolve_default_asset_directory
-        project_path = (Path(job["destination"]) if job.get("destination") else
-                        resolve_default_asset_directory() / ("Gallery-" + identifier + ".licht"))
-        destination_identity = ProjectPathIdentity.capture(project_path)
+        if not for_update:
+            from .asset_index import resolve_default_asset_directory
+            project_path = (Path(job["destination"]) if job.get("destination") else
+                            resolve_default_asset_directory() / ("Gallery-" + identifier + ".licht"))
+            destination_identity = ProjectPathIdentity.capture(project_path)
+        else:
+            project_path = None
+            with self._lock:
+                job["stagedImport"] = record
+            self._save()
 
         def action():
             target = self.root / "imports" / (identifier + ".scene")
@@ -1364,9 +1380,10 @@ class GallerySync:
             # Repeated updates must not orphan a directory on every attempt.
             try:
                 self._client()
-                previous_paths = self._cleanup_paths(job, {})
-                for path in previous_paths[1:]:  # The first path is the kept download.
-                    self._unlink_temporary(path)
+                if not for_update:
+                    previous_paths = self._cleanup_paths(job, {})
+                    for path in previous_paths[1:]:  # The first path is the kept download.
+                        self._unlink_temporary(path)
             except Exception as exc:
                 log_failure("download_staging_cleanup", exc, job_id=job["id"])
                 with self._lock:
@@ -1379,8 +1396,10 @@ class GallerySync:
             retained_asset = None
             retained_project = None
             try:
-                disk_preflight([(target, Path(job['path']).stat().st_size),
-                                (self._download_destination(job), Path(job['path']).stat().st_size)])
+                preflight = [(target, Path(job['path']).stat().st_size)]
+                if not for_update:
+                    preflight.append((self._download_destination(job), Path(job['path']).stat().st_size))
+                disk_preflight(preflight)
                 target.parent.mkdir(mode=0o700, exist_ok=True)
                 with self._lock:
                     record["path"] = str(target)
@@ -1394,28 +1413,29 @@ class GallerySync:
                         self.message = f"Checking downloaded scene… {int(100 * done / max(1, total))}%"
                         self.version += 1
                 gallery_preparation.unpack_project(target.parent, job["path"], target, progress=progress)
-                from .asset_index import resolve_default_asset_directory
-                assets = resolve_default_asset_directory()
-                assets.mkdir(parents=True, exist_ok=True)
-                if project_path.exists():
-                    raise ValueError("The destination already exists. Choose another file name.")
-                import lichtfeld as lf
-                self._client()
-                # A download is a new project each time, even when the same
-                # representation is downloaded twice on this machine.
-                source_identity.validate()
-                _require_project(job["path"], source_project)
-                destination_identity.validate()
-                planned_destination = Path(job.get("destinationPath", str(project_path.resolve())))
-                if ((job.get("destination") and planned_destination != project_path.resolve()) or
-                        planned_destination.parent != project_path.resolve().parent):
-                    raise ValueError("The download destination path changed. Choose it again.")
-                restored = lf.io.restore_save(job["path"], 1, project_path)
-                retained_project = ProjectPathIdentity.capture(project_path)
-                with self._lock:
-                    record["projectPath"] = str(project_path)
-                    record["projectId"] = str(restored.project_uuid)
-                    record["projectStamp"] = file_stamp(project_path)
+                if not for_update:
+                    from .asset_index import resolve_default_asset_directory
+                    assets = resolve_default_asset_directory()
+                    assets.mkdir(parents=True, exist_ok=True)
+                    if project_path.exists():
+                        raise ValueError("The destination already exists. Choose another file name.")
+                    import lichtfeld as lf
+                    self._client()
+                    # A download is a new project each time, even when the same
+                    # representation is downloaded twice on this machine.
+                    source_identity.validate()
+                    _require_project(job["path"], source_project)
+                    destination_identity.validate()
+                    planned_destination = Path(job.get("destinationPath", str(project_path.resolve())))
+                    if ((job.get("destination") and planned_destination != project_path.resolve()) or
+                            planned_destination.parent != project_path.resolve().parent):
+                        raise ValueError("The download destination path changed. Choose it again.")
+                    restored = lf.io.restore_save(job["path"], 1, project_path)
+                    retained_project = ProjectPathIdentity.capture(project_path)
+                    with self._lock:
+                        record["projectPath"] = str(project_path)
+                        record["projectId"] = str(restored.project_uuid)
+                        record["projectStamp"] = file_stamp(project_path)
                 background = target / "environment.lfsenv"
                 if background.exists():
                     # Keep a private asset independently of disposable import
@@ -1456,8 +1476,35 @@ class GallerySync:
                 with self._lock:
                     record.update(state="failed", message="Preparation canceled. Your download was kept." if isinstance(exc, GalleryTransferCanceled) else friendly_error(exc))
             self._save()
+            if for_update and record.get("cleanupPending"):
+                self._retire_update_download(job)
         self._launch(action)
         return identifier
+
+    def finish_update_download(self, job_id, stage_id):
+        job = self._job(job_id)
+        stage = job.get("stagedImport", {})
+        if stage.get("id") != stage_id or not stage.get("updateOnly"):
+            return
+        stage["cleanupPending"] = True
+        self._save()
+        if not self.busy:
+            self._retire_update_download(job)
+
+    def _retire_update_download(self, job):
+        stage = job.get("stagedImport", {})
+        if not stage.get("updateOnly") or not stage.get("cleanupPending"):
+            return
+        try:
+            paths = self._cleanup_paths(job, self._cleanup_references())
+            for path in paths:
+                self._unlink_temporary(path)
+            with self._lock:
+                job.update(retired=True, path="", completed=0, total=0)
+                job.pop("stagedImport", None)
+            self._save()
+        except (OSError, ValueError) as exc:
+            log_failure("update_download_cleanup", exc, job_id=job["id"])
 
     def environment_path(self, job):
         if not job.get("result", {}).get("viewerSettings", {}).get("environment"):

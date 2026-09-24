@@ -1130,6 +1130,7 @@ class GalleryController:
         self._check_identity()
         self._state = self.service.snapshot()
     def _advance_phases(self):
+        update_pending = self._local_update_steps.pending
         try:
             self._check_identity()
             if self._save_pending:
@@ -1161,6 +1162,12 @@ class GalleryController:
             self._failure_notice = self._message
             self._refresh_model()
         finally:
+            if update_pending and self._local_update_steps.pending is None:
+                update = update_pending.get("_update", {})
+                try:
+                    self.service.finish_update_download(update_pending["id"], update.get("stage_id"))
+                except Exception as exc:
+                    log_failure("update_download_cleanup", exc, job_id=update_pending["id"])
             self._release_native_use()
 
     def _discard_update_preview(self):

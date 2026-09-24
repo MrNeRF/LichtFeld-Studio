@@ -1970,7 +1970,7 @@ def test_pull_keeps_remote_snapshot_separate_from_local_choices(gallery, monkeyp
     controller._visible_splats = lambda: []
     controller._acquire_native_use = lambda _: None
     controller._schedule_poll = lambda: None
-    controller.service.stage_download = lambda _: "stage"
+    controller.service.stage_download = lambda _, **kwargs: "stage"
     monkeypatch.setattr(module.lf, "is_training_active", lambda: False, raising=False)
     monkeypatch.setattr(module.lf.ui, "get_import_state", lambda: {"active": False}, raising=False)
     remote = scene(viewerSettings={"exposure": 0})

@@ -111,7 +111,7 @@ class LocalUpdateSteps:
         if job.get("kind") != "download" or job["status"] != "completed":
             raise ValueError("Finish downloading this scene first.")
         self.acquire_native_use(job["id"])
-        stage_id = self.service.stage_download(job["id"])
+        stage_id = self.service.stage_download(job["id"], for_update=True)
         self.pending = dict(job, _accountIdentity=self.current_identity(),
             _update={"project": project, "phase": "staging", "stage_id": stage_id})
         self.detached = False

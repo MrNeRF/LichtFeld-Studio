@@ -835,6 +835,106 @@ def cleanup_download(service, *, backup=False):
     service._save()
     return job, path, stage
 
+@pytest.mark.parametrize("restart", [False, True])
+def test_update_stage_uses_only_temporary_import_and_cleans_on_finish_or_restart(tmp_path, monkeypatch, restart):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+
+    def unpack(root, source_path, target, *, progress):
+        target.mkdir(parents=True)
+        (target / "0.ply").write_bytes(b"node")
+    monkeypatch.setattr(gallery_preparation, "unpack_project", unpack)
+    import lichtfeld as lf
+    monkeypatch.setattr(lf.io, "restore_save", lambda *a: pytest.fail("Update must not create a project"))
+    stage_id = service.stage_download(identifier, for_update=True)
+    finish(service)
+    stage = job["stagedImport"]
+    assert stage["state"] == "ready"
+    assert stage["id"] == stage_id and "projectPath" not in stage
+    assert source.exists()
+
+    if restart:
+        restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    else:
+        service.finish_update_download(identifier, stage_id)
+        restarted = service
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert next(job for bucket in restarted._data["accounts"].values()
+        for job in bucket["jobs"] if job["id"] == identifier)["retired"]
+
+def test_canceled_update_stage_cleans_after_worker_finishes(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+    entered, resume = threading.Event(), threading.Event()
+
+    def unpack(root, source_path, target, *, progress):
+        target.mkdir(parents=True)
+        (target / "0.ply").write_bytes(b"node")
+        entered.set()
+        assert resume.wait(3)
+
+    monkeypatch.setattr(gallery_preparation, "unpack_project", unpack)
+    stage_id = service.stage_download(identifier, for_update=True)
+    assert entered.wait(3)
+    service.finish_update_download(identifier, stage_id)
+    assert source.exists()
+    resume.set()
+    finish(service)
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert job["retired"]
+
+def test_failed_update_stage_cleans_after_ui_finishes(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+    monkeypatch.setattr(gallery_preparation, "unpack_project",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("broken package")))
+
+    stage_id = service.stage_download(identifier, for_update=True)
+    finish(service)
+    assert job["stagedImport"]["state"] == "failed"
+    service.finish_update_download(identifier, stage_id)
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert job["retired"]
+
 def test_clear_download_preserves_backup_and_project_link(tmp_path, monkeypatch):
     from pathlib import Path
     service = connected(tmp_path, monkeypatch)
