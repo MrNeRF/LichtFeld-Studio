@@ -41,7 +41,9 @@ jobs:
         run: |
           mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
           git clone --filter=blob:none https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" checkout c3867e714dd3a51c272826eea77267876517ed99
+          # The vcpkg tool checkout must include the versions used by our overlays;
+          # vcpkg.json separately pins the baseline for registry dependencies.
+          git -C "$VCPKG_ROOT" checkout dc1232a6e05dcc49703091e83743e3b4df9b9b7c
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure

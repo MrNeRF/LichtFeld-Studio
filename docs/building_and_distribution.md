@@ -62,14 +62,16 @@ xcode-select --install
 brew install cmake ninja autoconf autoconf-archive automake libtool vulkan-loader molten-vk
 ```
 
-Clone the source with its submodule and use the vcpkg revision recorded in
-`vcpkg.json`. Skip these clone steps when both checkouts already exist:
+Clone the source with its submodule and use a vcpkg tool checkout that includes
+the versions required by the project's overlay ports. `vcpkg.json` separately
+pins the dependency baseline. Skip these clone steps when both checkouts
+already exist:
 
 ```bash
 git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio.git
 cd LichtFeld-Studio
 git clone https://github.com/microsoft/vcpkg.git ../vcpkg
-git -C ../vcpkg checkout c3867e714dd3a51c272826eea77267876517ed99
+git -C ../vcpkg checkout dc1232a6e05dcc49703091e83743e3b4df9b9b7c
 ../vcpkg/bootstrap-vcpkg.sh -disableMetrics
 export VCPKG_ROOT="$(cd ../vcpkg && pwd)"
 ```
