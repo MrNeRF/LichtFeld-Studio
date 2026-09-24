@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 180
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-cache
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/../vcpkg-cache
 
     steps:
       - name: Checkout source and submodules
