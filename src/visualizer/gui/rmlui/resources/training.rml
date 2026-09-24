@@ -33,6 +33,7 @@
     </div>
     <div data-if="show_ctrl_completed">
       <span class="status-text status-success">{{label_status_completed}}</span>
+      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{label_start_training}}</button>
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>

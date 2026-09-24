@@ -4454,6 +4454,13 @@ namespace lfs::vis::project {
         if (!trainer) {
             return std::nullopt;
         }
+        // A finished trainer is a new run, not a resume. Iteration above
+        // zero still needs overwrite consent before Start is accepted.
+        if (auto* const manager = viewer_.getTrainerManager();
+            manager && manager->isFinished() &&
+            trainer->get_current_iteration() > 0) {
+            return trainer->get_current_iteration();
+        }
         if (trainer->get_current_iteration() > 0) {
             return std::nullopt;
         }
