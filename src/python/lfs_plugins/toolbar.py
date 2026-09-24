@@ -105,32 +105,6 @@ def _current_selected_node_types() -> tuple[str, ...]:
         return ()
 
 
-def _keymap_shortcut(action_id, fallback=""):
-    if not action_id:
-        return fallback or ""
-    try:
-        import lichtfeld as lf
-
-        keymap = getattr(lf, "keymap", None)
-        action_enum = getattr(keymap, "Action", None)
-        mode_enum = getattr(keymap, "ToolMode", None)
-        if keymap is None or action_enum is None or mode_enum is None:
-            return fallback or ""
-        action = getattr(action_enum, action_id, None)
-        mode = getattr(mode_enum, "GLOBAL", None)
-        if action is None or mode is None:
-            return fallback or ""
-        is_bound = getattr(keymap, "is_bound", None)
-        if callable(is_bound) and not is_bound(action, mode):
-            return fallback or ""
-        describe = getattr(keymap, "get_trigger_description", None)
-        if callable(describe):
-            return describe(action, mode) or fallback or ""
-    except Exception:
-        return fallback or ""
-    return fallback or ""
-
-
 def _panel_enabled(panel_id):
     try:
         import lichtfeld as lf
@@ -211,7 +185,7 @@ def _crop_roi_param_state():
 
 def _button_record(button_id, action, value, icon_src, *,
                    tooltip_key="", tooltip_text="", action_id="",
-                   shortcut_text="", selected=False, enabled=True,
+                   selected=False, enabled=True,
                    separator_before=False, label=""):
     enabled = bool(enabled)
     record = {
@@ -223,7 +197,6 @@ def _button_record(button_id, action, value, icon_src, *,
         "tooltip_key": tooltip_key,
         "tooltip_text": _ui_label(tooltip_key, tooltip_text),
         "action_id": action_id,
-        "shortcut_text": _keymap_shortcut(action_id, shortcut_text),
         "selected": selected,
         "enabled": enabled,
         "opacity": "1" if enabled else "0.25",
@@ -488,7 +461,6 @@ class _GizmoToolbarController:
             tooltip_key=tooltip_key,
             tooltip_text=tool_def.label,
             action_id=self._TOOL_ACTIONS.get(tool_def.id, ""),
-            shortcut_text=tool_def.shortcut,
             selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
@@ -524,7 +496,6 @@ class _GizmoToolbarController:
                     tooltip_key=tooltip_key,
                     tooltip_text=mode.label,
                     action_id=self._SELECTION_MODE_ACTIONS.get(mode.id, ""),
-                    shortcut_text=mode.shortcut,
                     selected=selected,
                     enabled=enabled,
                 )
@@ -538,7 +509,6 @@ class _GizmoToolbarController:
             tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
             tooltip_text=tool_def.label,
             action_id="TOOL_SELECT",
-            shortcut_text=getattr(tool_def, "shortcut", ""),
             selected=active_tool_id == "builtin.select",
             enabled=enabled,
         )
@@ -563,7 +533,6 @@ class _GizmoToolbarController:
             tooltip_key="toolbar.transform_tools",
             tooltip_text="Transform Tools",
             action_id=display_button["action_id"],
-            shortcut_text=display_button["shortcut_text"],
             selected=active_button is not None,
             enabled=any(b["enabled"] for b in tool_buttons),
         )
@@ -581,7 +550,6 @@ class _GizmoToolbarController:
                 tooltip_key=self._TOOL_LOCALE_KEYS.get(self._MIRROR_TOOL_ID, ""),
                 tooltip_text=tool_def.label,
                 action_id=self._TOOL_ACTIONS.get(self._MIRROR_TOOL_ID, ""),
-                shortcut_text=getattr(tool_def, "shortcut", ""),
                 selected=active_tool_id == self._MIRROR_TOOL_ID,
                 enabled=tool_def.can_activate(context),
             )
@@ -856,6 +824,7 @@ class _GizmoToolbarController:
                 _icon_src("check"),
                 tooltip_key="common.apply",
                 tooltip_text="Apply",
+                action_id="APPLY_CROP_BOX",
                 enabled=active,
             ),
             _button_record(
@@ -1026,7 +995,6 @@ class _GizmoToolbarController:
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
                     tooltip_text=mode.label,
-                    shortcut_text=mode.shortcut,
                     selected=selected,
                 )
             )
@@ -1301,6 +1269,7 @@ class _UtilityToolbarController:
                 _icon_src("settings"),
                 tooltip_key="window.preferences",
                 tooltip_text="Preferences",
+                action_id="OPEN_PREFERENCES",
                 selected=_panel_enabled(self._PREFERENCES_PANEL_ID),
             ),
             _button_record(

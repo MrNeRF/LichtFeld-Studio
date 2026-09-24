@@ -134,6 +134,7 @@ def _install_lichtfeld_stub(monkeypatch):
             SELECT_ALL="select_all",
             DESELECT_ALL="deselect_all",
             OPEN_PREFERENCES="open_preferences",
+            TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -147,6 +148,7 @@ def _install_lichtfeld_stub(monkeypatch):
             "select_all": "Ctrl+A",
             "deselect_all": "Ctrl+D",
             "open_preferences": "Ctrl+,",
+            "toggle_performance_hud": "F10",
         }.get(action, "Unbound"),
     )
 
@@ -162,6 +164,25 @@ def _install_lichtfeld_stub(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
+
+
+def test_keymap_shortcut_bound_unbound_and_unavailable(monkeypatch):
+    _install_lichtfeld_stub(monkeypatch)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
+
+    menus_mod = import_module("lfs_plugins.layouts.menus")
+    keymap = sys.modules["lichtfeld"].keymap
+    assert menus_mod.keymap_shortcut(keymap.Action.UNDO) == "Ctrl+Z"
+
+    keymap.is_bound = lambda _action, _mode: False
+    assert menus_mod.keymap_shortcut(keymap.Action.UNDO) == ""
+
+    del sys.modules["lichtfeld"].keymap
+    assert menus_mod.keymap_shortcut("undo") == ""
 
 
 def test_menu_helpers_and_builtin_schemas(monkeypatch):
@@ -327,6 +348,20 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[5]["label"] == "tr:main_panel.console"
     view_items[5]["callback"]()
     assert state["python_console_shown"] == 1
+
+    keymap = sys.modules["lichtfeld"].keymap
+    keymap.get_trigger_description = lambda action, _mode: {
+        "toggle_performance_hud": "Ctrl+F10",
+        "open_preferences": "Alt+P",
+        "copy_selection": "Alt+C",
+    }.get(action, "")
+    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == "Ctrl+F10"
+    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == "Alt+P"
+    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == "Alt+C"
+    keymap.is_bound = lambda _action, _mode: False
+    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == ""
+    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == ""
+    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == ""
 
 
 def _import_tools_menu(monkeypatch):

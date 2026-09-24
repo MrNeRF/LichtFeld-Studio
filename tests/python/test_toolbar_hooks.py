@@ -400,6 +400,32 @@ def test_button_record_resolves_toolbar_tooltip(toolbar_module, monkeypatch):
     assert fallback["tooltip_text"] == "Custom Tool"
 
 
+def test_shortcut_buttons_declare_actions_without_cached_text(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    button = module._button_record(
+        "util-home", "home", "", "../icon/home.png", action_id="CAMERA_RESET_HOME"
+    )
+    assert button["action_id"] == "CAMERA_RESET_HOME"
+    assert "shortcut_text" not in button
+
+    resources = Path(__file__).resolve().parents[2] / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    overlay = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    assert "data-attr-data-shortcut" not in overlay
+    assert 'data-attr-data-action="button.action_id"' in overlay
+    assert 'data-action="delete_selected"' in overlay
+    assert 'data-keymap-mode="selection"' in overlay
+    projects = (resources / "asset_manager.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="asset_refresh"' in projects
+    assert 'data-keymap-action="asset_gallery_primary"' in projects
+    assert 'data-keymap-action="asset_gallery_copy_link"' in projects
+    scene = (resources / "scene_tree.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_scene_selection_training"' in scene
+    assert 'data-tooltip="common.undo" data-action="undo"' in scene
+    assert 'data-keymap-action="toggle_grid"' in (resources / "rendering.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_camera_frustums"' in (resources / "rendering.rml").read_text(encoding="utf-8")
+    assert 'data-keymap-action="toggle_ui"' in (resources / "menubar.rml").read_text(encoding="utf-8")
+
+
 def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
@@ -463,9 +489,9 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert snapshot["selection_group_buttons"][0]["value"] == "builtin.select"
     assert snapshot["selection_group_buttons"][0]["icon_src"] == "../icon/selection.png"
     assert snapshot["selection_group_buttons"][0]["tooltip_text"] == "Select"
-    assert snapshot["selection_group_buttons"][0]["shortcut_text"] == "Alt+8"
-    assert snapshot["selection_mode_buttons"][0]["shortcut_text"] == "Ctrl+9"
-    assert snapshot["selection_mode_buttons"][1]["shortcut_text"] == ""
+    assert snapshot["selection_group_buttons"][0]["action_id"] == "TOOL_SELECT"
+    assert snapshot["selection_mode_buttons"][0]["action_id"] == "SELECT_MODE_CENTERS"
+    assert all("shortcut_text" not in button for button in snapshot["selection_group_buttons"] + snapshot["selection_mode_buttons"])
     assert [button["action"] for button in snapshot["selection_mode_buttons"]] == [
         "selection_mode",
         "selection_mode",
@@ -868,7 +894,6 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "tooltip_key": "toolbar.enable_crop_box",
             "tooltip_text": "Enable Crop Box",
             "action_id": "",
-            "shortcut_text": "",
             "selected": True,
             "enabled": True,
             "opacity": "1",
@@ -884,7 +909,6 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "tooltip_key": "toolbar.crop_roi_settings",
             "tooltip_text": "Crop ROI Settings",
             "action_id": "",
-            "shortcut_text": "",
             "selected": False,
             "enabled": True,
             "opacity": "1",
@@ -1401,7 +1425,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 31
+    assert 'data-attr-data-shortcut="button.shortcut_text"' not in rml
+    assert rml.count('data-attr-data-action="button.action_id"') >= 31
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
@@ -1983,6 +2008,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert preferences["value"] == "lfs.preferences"
     assert preferences["icon_src"] == "../icon/settings.png"
     assert preferences["tooltip_text"] == "Preferences"
+    assert preferences["action_id"] == "OPEN_PREFERENCES"
     assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"

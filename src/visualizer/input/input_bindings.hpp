@@ -398,6 +398,7 @@ namespace lfs::vis::input {
 
     [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);
     [[nodiscard]] LFS_VIS_API std::optional<Action> actionFromName(std::string_view name);
+    [[nodiscard]] LFS_VIS_API ToolMode toolModeFromName(std::string_view name);
     [[nodiscard]] LFS_VIS_API std::string getLocalizedActionName(Action action);
     [[nodiscard]] LFS_VIS_API std::string getLocalizedToolModeName(ToolMode mode);
     [[nodiscard]] LFS_VIS_API std::string localizeTriggerDescription(std::string description);

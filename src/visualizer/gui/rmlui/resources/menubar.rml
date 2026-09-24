@@ -79,6 +79,7 @@
                 <div id="menu-window-toggle-ui"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="window_toggle_ui"
+                     data-keymap-action="toggle_ui"
                      title="@tr:ui.hide_ui">
                     <img src="../icon/layout-off.png" />
                 </div>

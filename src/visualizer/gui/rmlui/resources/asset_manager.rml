@@ -120,6 +120,7 @@
                 <span class="asset-gallery-scan-status" data-if="has_scan_status">{{scan_status}}</span>
                 <button class="asset-button asset-button--icon asset-view-button asset-refresh-button"
                         data-class-is-stop="scan_active" data-event-click="refresh_catalog"
+                        data-keymap-action="asset_refresh"
                         data-attr-data-tooltip="refresh_action_tooltip" aria-label="{{refresh_action_tooltip}}">
                   <span class="asset-refresh-glyph" data-if="!scan_active">&#x21BB;</span>
                   <span class="asset-button-text" data-if="scan_active">{{stop_scan_label}}</span>
@@ -254,8 +255,8 @@
                     <div class="inspector-actions">
                       <button class="btn btn--primary asset-button--toolbar24" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
                       <button class="btn btn--success asset-button--toolbar24" data-if="inspector_can_resume" data-event-click="on_load_asset" data-attr-title="resume_button_label"><span>{{resume_button_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attrif-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy"><span>{{g_action_copy}}</span></button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attrif-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-keymap-action="asset_gallery_primary" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy" data-keymap-action="asset_gallery_copy_link" data-attr-title="g_action_copy"><span>{{g_action_copy}}</span></button>
                       <button class="asset-button asset-button--small-icon inspector-more" data-event-click="open_inspector_menu" data-tooltip="common.more" data-attr-aria-label="inspector_more_label"><img src="../icon/more-vertical.png"/></button>
                     </div>
                   </div>
