@@ -348,6 +348,30 @@ def test_tools_menu_includes_gallery_entries(monkeypatch):
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
 
 
+def test_tools_menu_projects_selects_scope_when_available(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    selected = []
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace(
+        select_projects_scope=lambda: selected.append(True),
+    )
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[0]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+    assert selected == [True]
+
+
+def test_tools_menu_projects_skips_missing_select_projects_scope(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace()
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[0]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+
 
 def test_tools_menu_gallery_selects_scope_when_available(monkeypatch):
     state = _install_lichtfeld_stub(monkeypatch)

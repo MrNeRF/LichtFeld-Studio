@@ -3404,6 +3404,20 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
 
 
+def test_projects_menu_returns_from_gallery_without_resetting_local_scope(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    panel.select_gallery_scope()
+    assert panel._selected_folder_id == panel_module.SCOPE_PUBLISHED
+
+    panel.select_projects_scope()
+    assert panel._selected_folder_id == panel_module.SCOPE_ALL
+    assert [asset['id'] for asset in panel._filtered_assets()] == [local['id']]
+
+    panel._selected_folder_id = "default"
+    panel.select_projects_scope()
+    assert panel._selected_folder_id == "default"
+
+
 def test_explicit_unlink_hides_catalog_and_origin_associations(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     remote["originProjectUuid"] = local["id"]

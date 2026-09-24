@@ -17,6 +17,15 @@ def _open_gallery_scope() -> None:
         select_gallery_scope()
 
 
+def _open_projects_scope() -> None:
+    lf.ui.set_panel_enabled("lfs.asset_manager", True)
+    get_panel_object = getattr(lf.ui, "get_panel_object", None)
+    panel = get_panel_object("lfs.asset_manager") if callable(get_panel_object) else None
+    select_projects_scope = getattr(panel, "select_projects_scope", None)
+    if callable(select_projects_scope):
+        select_projects_scope()
+
+
 @register_menu
 class ToolsMenu:
     """Tools menu for the menu bar."""
@@ -30,7 +39,7 @@ class ToolsMenu:
         return [
             menu_action(
                 tr("menu.tools.asset_manager"),
-                lambda: lf.ui.set_panel_enabled("lfs.asset_manager", True),
+                _open_projects_scope,
             ),
             menu_action(
                 tr("menu.tools.gallery"),

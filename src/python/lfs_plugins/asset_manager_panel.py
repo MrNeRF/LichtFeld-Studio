@@ -906,6 +906,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _set_scope_value(self, value: Any) -> None:
         self._select_folder_id(str(value or SCOPE_ALL))
 
+    def select_projects_scope(self) -> None:
+        if self._selected_folder_id in GALLERY_SCOPES:
+            self._select_folder_id(SCOPE_ALL)
+
     def get_thumbnail_size(self) -> float:
         return self._thumbnail_size
 
