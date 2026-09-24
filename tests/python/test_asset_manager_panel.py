@@ -596,6 +596,27 @@ def test_filtered_rows_invalidate_after_folder_records_change(panel_module):
     assert panel._filtered_assets() is not first
 
 
+def test_saved_catalog_is_prefetched_before_panel_mount(panel_module, monkeypatch, tmp_path):
+    project = _project()
+    preview = {"projects": {project["id"]: project}, "folders": {}}
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda _id: None, raising=False)
+    monkeypatch.setattr(panel_module, "resolve_asset_manager_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(panel_module, "read_catalog_preview", lambda _path: preview)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+
+    assert panel._asset_index_assets()[project["id"]]["name"] == project["name"]
+    assert panel._asset_index is None
+
+
 def test_cached_catalog_preview_uses_persisted_card_metadata(panel_module, tmp_path):
     from lfs_plugins.asset_index import read_catalog_preview, SCHEMA_VERSION
 

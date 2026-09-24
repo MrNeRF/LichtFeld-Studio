@@ -206,6 +206,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._title_cache_pending: Dict[str, str] = {}
         self._title_cache_timer: Optional[threading.Timer] = None
         self._catalog_preview: Optional[Dict[str, Any]] = None
+        self._prefetched_catalog_preview: Optional[Dict[str, Any]] = None
         self._filtered_cache_key: Optional[tuple] = None
         self._filtered_cache_rows: List[Dict[str, Any]] = []
         self._filtered_cache_scope_count = 0
@@ -340,6 +341,38 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._remembered_left_dock_width: Optional[float] = None
         self._init_gallery()
         self._restore_project_manager_preferences()
+        self._start_catalog_preview_prefetch()
+
+    def _start_catalog_preview_prefetch(self) -> None:
+        # Panel instances are registered at startup, before their RML document
+        # is mounted. Read the saved catalog then so opening can draw its rows.
+        if not callable(getattr(lf.ui, "get_panel_object", None)):
+            return
+
+        def worker() -> None:
+            try:
+                preview = read_catalog_preview(resolve_asset_manager_storage_path() / "library.json")
+            except Exception:
+                _log.exception("Projects catalog preview prefetch failed")
+                return
+            if not preview:
+                return
+            self._prefetched_catalog_preview = preview
+
+            def publish() -> None:
+                if self._asset_index is not None or self._catalog_preview is preview:
+                    return
+                self._catalog_preview = preview
+                self._row_catalog_generation += 1
+                if self._doc is not None and self._panel_mounted:
+                    self._repair_selection()
+                    self._refresh_records(assets=True, folders=True)
+                    if self._handle:
+                        self._handle.dirty_all()
+
+            self._schedule_ui(publish)
+
+        threading.Thread(target=worker, daemon=True, name="AssetManagerPreview").start()
 
     def capture_chrome(self) -> Dict[str, Any]:
         folder_id = self._selected_folder_id
@@ -546,12 +579,16 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             try:
                 storage_path = resolve_asset_manager_storage_path()
                 storage_path.mkdir(parents=True, exist_ok=True)
-                cached_preview = read_catalog_preview(storage_path / "library.json")
+                cached_preview = self._prefetched_catalog_preview or read_catalog_preview(
+                    storage_path / "library.json"
+                )
                 if cached_preview:
                     def show_cached() -> None:
                         if generation != self._mount_generation or not self._panel_mounted:
                             return
                         if self._asset_index is not None:
+                            return
+                        if self._catalog_preview is cached_preview:
                             return
                         self._catalog_preview = cached_preview
                         self._row_catalog_generation += 1
@@ -5101,6 +5138,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        if self._catalog_preview is None and self._prefetched_catalog_preview:
+            self._catalog_preview = self._prefetched_catalog_preview
+            self._row_catalog_generation += 1
         self._invalidate_recent_scope_cache()
         RuntimeState.projects_panel_visible.value = True
         self._panel_mounted = True
