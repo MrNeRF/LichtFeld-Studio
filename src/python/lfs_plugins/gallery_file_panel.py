@@ -56,6 +56,7 @@ class GalleryFilePanel(Panel):
         self._handle = None
         self._unsubscribe = None
         self._submitting = False
+        self._description_focused = False
 
     def poll(self, _context):
         return self._review is not None
@@ -280,7 +281,10 @@ class GalleryFilePanel(Panel):
                 else:
                     review["on_submit"](decisions)
             else:
-                details = {k: self._fields[k].strip() for k in ("title", "description")}
+                details = {
+                    "title": self._fields["title"].strip(),
+                    "description": self._fields["description"],
+                }
                 details["useEmbeddedPreview"] = bool(self._fields.get("use_cover", False))
                 if review["open_project"]:
                     details["saveProject"] = bool(self._fields["save_project"])
@@ -346,11 +350,12 @@ class GalleryFilePanel(Panel):
 
         def keydown(event):
             key = int(event.get_parameter("key_identifier", "0"))
+            target = event.target()
             if key == KI_ESCAPE:
                 self._close(False)
                 event.stop_propagation()
-            elif key == KI_RETURN and event.target().tag_name != "textarea":
-                action = event.target().get_attribute("data-event-click", "")
+            elif key == KI_RETURN and not self._description_focused:
+                action = target.get_attribute("data-event-click", "")
                 if action == "apply_local":
                     self._submit(local_only=True)
                 elif action == "cancel":
@@ -360,6 +365,15 @@ class GalleryFilePanel(Panel):
                 event.stop_propagation()
 
         doc.add_event_listener("keydown", keydown)
+        description = doc.get_element_by_id("gallery-file-description")
+        self._description_focused = False
+        if description:
+            description.add_event_listener(
+                "focus", lambda _event: setattr(self, "_description_focused", True)
+            )
+            description.add_event_listener(
+                "blur", lambda _event: setattr(self, "_description_focused", False)
+            )
         title = doc.get_element_by_id("gallery-file-title")
         if title and not self._is_pull():
             rml_widgets.bind_select_all_on_focus(title)
