@@ -138,6 +138,8 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
     elif link and not project.get("exists", True):
         relationship = "local_missing"
     freshness = "unknown"
+    if link and link.get("liveSnapshot"):
+        freshness = "live_snapshot"
     if link and link.get("commitUuid") and project.get("commit_uuid") and scene and all(link.get(key) and scene.get(key) for key in ("contentRevision", "metadataRevision")):
         # Links written by older builds still include visibility in their saved fields.
         # Older applies could omit an explicit null camera track from local fields.

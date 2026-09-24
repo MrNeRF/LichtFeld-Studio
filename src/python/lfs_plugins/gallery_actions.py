@@ -91,6 +91,8 @@ def gallery_actions(entry, facts):
         return actions
     if facts.get("storage_issue"):
         return actions
+    if facts.get("state") == "live_snapshot":
+        return actions
     if facts.get("cachedUnverified"):
         add("check", enabled=not busy)
         return actions

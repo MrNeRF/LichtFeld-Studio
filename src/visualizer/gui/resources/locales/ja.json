@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "現在のビューからサムネイルを更新",
   "menu.file.thumbnail_updated": "プロジェクトのサムネイルを更新しました。",
   "menu.file.publish_to_gallery": "ギャラリーに公開…",
+  "menu.file.untitled_scene": "無題のシーン",
+  "menu.file.publish_unsaved_message": "このシーンはまだプロジェクトとして保存されていません。ギャラリーとのリンクを保つには保存するか、そのまま公開してください。",
+  "menu.file.publish_without_saving": "保存せずに公開",
+  "menu.file.save_and_publish": "保存して公開",
   "projects.gallery.action.update": "変更を公開",
   "projects.gallery.action.pull": "新しいプロジェクトとしてダウンロード",
   "projects.gallery.action.resolve": "解決…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "トレーニング履歴のない閲覧用コピーです。このコンピューターに新しいファイルを作成します。",
   "projects.gallery.review.use_cover": "プロジェクトのサムネイルをカバーに使用",
   "projects.gallery.review.save_project": "公開前にプロジェクトを保存",
-  "projects.gallery.review.unsaved_hint": "現在のビューのみ公開されます。その他の未保存のプロジェクト変更は含まれません。",
+  "projects.gallery.review.unsaved_hint": "プロジェクトの変更を保存せずに、現在のシーンを公開します。",
+  "projects.gallery.review.unlinked_hint": "ローカルプロジェクトには紐付けられません。アプリから更新できず、再公開すると新しいギャラリーシーンが作成されます。",
   "projects.gallery.review.estimate": "推定アップロードサイズ: {size}",
   "projects.gallery.review.estimate_pending": "準備後に表示",
   "projects.gallery.conflict.values": "ローカル: {mine} / ギャラリー: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "現在のシーンをそのままアップロードします。このコンピューターには何も保存されません。",
+  "projects.gallery.state.live_snapshot": "現在のシーンから公開"
 }

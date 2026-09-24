@@ -4,6 +4,7 @@
 
 from pathlib import Path, PureWindowsPath
 import threading
+import uuid
 
 import lichtfeld as lf
 from .asset_index import display_name
@@ -38,6 +39,15 @@ def _show_import_failure(path: str, reason: str, message_key: str) -> None:
     lf.ui.message_dialog(
         lf.ui.tr("menu.file.import_failed"), message, "error"
     )
+
+
+def _file_menu_publish_action(primary, link):
+    """Resolve the explicit File menu action for a linked publication."""
+    if primary:
+        return primary["id"]
+    # Live snapshots have no saved commit to compare with, so they expose no
+    # Projects-card action. File > Publish can still open a save-first update.
+    return "update" if link and link.get("liveSnapshot") else None
 
 
 def _run_import(path: str, callback) -> bool:
@@ -562,6 +572,49 @@ def _can_compact_project() -> bool:
     return _project_has_path()
 
 
+def _can_publish_scene() -> bool:
+    return _project_has_path() or bool(getattr(lf, "has_scene", lambda: False)())
+
+
+def _open_unlinked_gallery_review() -> None:
+    from .gallery_controller import get_gallery_controller
+    from .gallery_file_panel import open_gallery_file_panel
+    from .gallery_actions import gallery_quota
+    from .gallery_messages import tr as gallery_tr
+
+    scene = lf.get_scene()
+    nodes = [node for node in scene.get_nodes()
+             if node.type == lf.scene.NodeType.SPLAT and scene.is_node_effectively_visible(node.id)]
+    name = nodes[0].name if len(nodes) == 1 else lf.ui.tr("menu.file.untitled_scene")
+    controller = get_gallery_controller()
+    state = controller.snapshot()
+    quota_bytes, used_bytes, _ = gallery_quota(state)
+    quota = (gallery_tr("quota.used", used=f"{used_bytes / 1e9:.1f}", quota=f"{quota_bytes / 1e9:g}")
+             if quota_bytes is not None else "")
+    asset = {"id": str(uuid.uuid4()), "path": "", "name": name, "exists": True,
+             "status": "AVAILABLE", "publication": {"visibleSplats": len(nodes)}}
+    open_gallery_file_panel(controller=controller, asset=asset, scene=None, action="publish",
+                            fields={"title": name, "description": "", "visibility": "private",
+                                    "upload_format": controller.upload_format},
+                            quota=quota, unlinked=True)
+
+
+def _save_then_publish() -> None:
+    if not lf.project_save_as(""):
+        return
+
+    def poll():
+        state = lf.project_poll_write()
+        if state.get("running"):
+            timer = threading.Timer(0.1, lambda: lf.ui.schedule_on_ui_thread(poll))
+            timer.daemon = True
+            timer.start()
+        elif state.get("path") and not state.get("error"):
+            _publish_current_project_to_gallery()
+
+    poll()
+
+
 def _can_update_thumbnail_from_view() -> bool:
     if not _project_has_path():
         return False
@@ -604,13 +657,26 @@ def _update_thumbnail_from_view() -> None:
 
 
 def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
-    """Open the shared Gallery review for the active saved project."""
+    """Open the shared gallery review for the active scene."""
     from .gallery_messages import tr as gallery_tr
 
     title = lf.ui.tr("menu.file.publish_to_gallery")
     try:
         if not _project_has_path():
-            raise ValueError(gallery_tr("error.save_first"))
+            if not _can_publish_scene():
+                return
+            save_label = lf.ui.tr("menu.file.save_and_publish")
+            unlinked_label = lf.ui.tr("menu.file.publish_without_saving")
+
+            def choose(button):
+                if button == save_label:
+                    _save_then_publish()
+                elif button == unlinked_label:
+                    _open_unlinked_gallery_review()
+
+            lf.ui.confirm_dialog(title, lf.ui.tr("menu.file.publish_unsaved_message"),
+                                 [save_label, unlinked_label, lf.ui.tr("common.cancel")], choose)
+            return
         poll = lf.project_poll_write()
         raw_path = str(poll.get("path") or "")
         if not raw_path:
@@ -696,12 +762,11 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
                 if key in state:
                     facts[key] = state[key]
             primary = next((item for item in gallery_actions(asset, facts) if item["primary"]), None)
-            if not primary:
+            action = _file_menu_publish_action(primary, link)
+            if action is None:
                 raise ValueError(gallery_tr("error.refresh"))
-            if not primary["enabled"]:
+            if primary and not primary["enabled"]:
                 raise ValueError(primary["reason"] or gallery_tr("error.refresh"))
-
-            action = primary["id"]
             details = {key: fields[key] for key in ("title", "description", "visibility")}
             if action == "check":
                 if not refresh_once:
@@ -805,7 +870,7 @@ class FileMenu:
             menu_action(
                 lf.ui.tr("menu.file.publish_to_gallery"),
                 _publish_current_project_to_gallery,
-                enabled=_can_compact_project(),
+                enabled=_can_publish_scene(),
             ),
             menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
             menu_operator(CleanProjectOperator, enabled=_can_compact_project()),

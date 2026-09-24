@@ -44,6 +44,23 @@ def scene(**fields):
         visibility="private", revision="original", status="ready", **fields, contentRevision="original", metadataRevision="original")
 
 
+@pytest.mark.parametrize("commit_uuid", ["saved-commit", "later-save-commit"])
+def test_live_project_publication_has_no_commit_conflict_or_followup_action(commit_uuid):
+    facts_module = import_module("lfs_plugins.gallery_sync_facts")
+    asset = {"id": "project", "project_uuid": "project", "commit_uuid": commit_uuid,
+             "exists": True, "available": True, "publication": {"visibleSplats": 1}}
+    link = {"sceneId": "private-one", "commitUuid": "", "liveSnapshot": True}
+    published = scene()
+
+    state = facts_module.asset_sync_state(asset, link, published, checked=True)
+    actions = facts_module.gallery_actions(asset, state)
+
+    assert state["state"] == "live_snapshot"
+    assert state["relationship"] == "linked"
+    assert not state["attention"]
+    assert actions == []
+
+
 def test_gallery_update_removes_only_groups_emptied_by_replaced_splats(gallery, monkeypatch, tmp_path):
     panel, _, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
@@ -528,10 +545,13 @@ def test_publish_without_save_prepares_saved_commit_and_live_view(gallery, monke
 
 @pytest.mark.parametrize("save_project", [False, True])
 def test_publish_dirty_open_project_respects_save_choice(gallery, monkeypatch, tmp_path, save_project):
-    panel, _, actions = gallery
+    panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
     path = tmp_path / "project-a.licht"
     path.write_bytes(b"saved project")
+    before = path.read_bytes()
+    state["source_formats"] = ["licht"]
+    panel.service.root = tmp_path
     monkeypatch.setattr(panel, "_project_identity", lambda: ("project", str(path)))
     monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(name="visible")])
     monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
@@ -542,14 +562,43 @@ def test_publish_dirty_open_project_respects_save_choice(gallery, monkeypatch, t
     monkeypatch.setattr(module, "capture_view", lambda _: {"camera": {"position": [4, 2, 4]}})
     monkeypatch.setattr(panel, "_save_current_project", lambda continuation: (actions.append("saved"), continuation()))
     monkeypatch.setattr(panel, "_publish_saved", lambda metadata, *args, **kwargs: actions.append((metadata, kwargs)))
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *args: actions.append(("live", args)), raising=False)
 
     panel._review_publish(None, {"title": "Current view", "description": "", "saveProject": save_project}, "sog", False)
 
     assert ("saved" in actions) is save_project
-    published = next(action for action in actions if isinstance(action, tuple) and isinstance(action[0], dict))
-    assert published[0]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
-    if not save_project:
-        assert published[1]["expected_commit"] == "saved"
+    if save_project:
+        published = next(action for action in actions if isinstance(action, tuple) and isinstance(action[0], dict))
+        assert published[0]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
+    else:
+        assert actions == [("live", (str(panel._publish_steps.pending[0]), "sog"))]
+        assert panel._publish_steps.pending[1]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
+        assert panel._publish_steps.pending[1]["_liveSnapshot"] is True
+    assert path.read_bytes() == before
+
+
+def test_unlinked_scene_prepares_live_upload_without_saving(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    state["source_formats"] = ["licht"]
+    panel.service.root = tmp_path
+    monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(name="visible")])
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(module, "capture_view", lambda _: {"camera": "current"})
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **_: pytest.fail("Saved the project"), raising=False)
+    monkeypatch.setattr(module.lf, "project_save_as", lambda *_: pytest.fail("Opened Save As"), raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *args: actions.append(args), raising=False)
+
+    panel.publish_unlinked_scene({"name": "Scene"}, {"title": "Scene", "description": ""}, "studio")
+
+    export, metadata, project_id, _ = panel._publish_steps.pending
+    assert actions == [(str(export), "ply")]
+    assert metadata["_unlinked"] is True
+    assert metadata["viewerSettings"] == {"camera": "current"}
+    assert not list(tmp_path.glob("*.licht"))
 
 
 @pytest.mark.parametrize("open_project, dirty", [(True, False), (True, True), (False, False)])
@@ -576,6 +625,9 @@ def test_publish_review_save_choice_only_for_open_project(gallery, monkeypatch, 
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/gallery_file_panel.rml").read_text()
     assert 'data-if="show_save_project"' in rml
     assert 'data-if="show_unsaved_hint"' in rml
+    assert 'data-if="show_prepared_copy"' in rml
+    assert 'data-if="show_cover"' in rml
+    assert 'data-if="show_unlinked_hint">{{unlinked_copy}}' in rml
 
 
 def test_publish_without_save_rechecks_saved_commit(gallery, monkeypatch, tmp_path):

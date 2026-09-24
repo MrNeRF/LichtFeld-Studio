@@ -118,7 +118,7 @@ def _validate_journal(data):
             for key in ('createdAt', 'finishedAt', 'processingDeadline'):
                 require(key not in job or (type(job[key]) in (int, float) and math.isfinite(job[key]) and job[key] >= 0))
             require('attempts' not in job or (type(job['attempts']) is int and job['attempts'] >= 0))
-            for key in ("serverProcessing", "packaged", "needsAttention", "retryable", "requiresPreparation", "preparedRemoved"):
+            for key in ("serverProcessing", "packaged", "needsAttention", "retryable", "requiresPreparation", "preparedRemoved", "unlinked", "liveSnapshot"):
                 require(key not in job or type(job[key]) is bool)
             if "preparation" in job:
                 require(isinstance(job["preparation"], str) and job.get("kind", "upload") == "upload"
@@ -803,6 +803,8 @@ class GallerySync:
                       size=job["total"], format=Path(export_path).suffix.lower().lstrip("."),
                       account_origin=safe_url(self.account.base_url))
             job["commitUuid"] = job["metadata"].pop("_commitUuid", "")
+            job["unlinked"] = bool(job["metadata"].pop("_unlinked", False))
+            job["liveSnapshot"] = bool(job["metadata"].pop("_liveSnapshot", False))
             job["uploadFormat"] = job["metadata"].pop("_uploadFormat", "studio")
             job["contentStamp"] = job["metadata"].pop("_contentStamp", "")
             job["publishAsNew"] = job["metadata"].pop("_publishAsNew", False)
@@ -820,7 +822,8 @@ class GallerySync:
                 job["handoff"] = copy.deepcopy(handoff)
                 job["metadata"]["originFileUuid"] = handoff["fileUuid"]
                 self._check_handoff(job)
-            job["metadata"].setdefault("originProjectUuid", project_id)
+            if not job["unlinked"]:
+                job["metadata"].setdefault("originProjectUuid", project_id)
             if job["commitUuid"]:
                 job["metadata"].setdefault("originCommitUuid", job["commitUuid"])
             job["metadata"].setdefault("clientMutationId", job["id"])
@@ -1010,18 +1013,21 @@ class GallerySync:
                     previous_intents = copy.deepcopy(bucket.get("handoffIntents", {}))
                     previous_undo = []
                     self._completion = {"id": str(uuid.uuid4()), "kind": "publish", "scene": copy.deepcopy(scene)}
-                    bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
-                    bucket["unlinkedProjects"] = [project_id for project_id in previous_unlinked
-                                                   if project_id != job["project"]]
-                    bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
-                    bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
-                    for history in bucket["jobs"]:
-                        update = history.get("localUpdate", {})
-                        if (history.get("project") == job["project"] and update.get("state") == "applied"
-                                and not update.get("undoRestored") and update.get("appliedCommit") == job.get("commitUuid")
-                                and tuple(update.get("appliedIdentity", ())) == self.identity()):
-                            previous_undo.append((update, copy.deepcopy(update.get("appliedLink"))))
-                            update["appliedLink"] = copy.deepcopy(bucket["links"][job["project"]])
+                    if not job.get("unlinked"):
+                        bucket["links"][job["project"]] = exchange_link(scene, job.get("commitUuid", ""))
+                        bucket["unlinkedProjects"] = [project_id for project_id in previous_unlinked
+                                                       if project_id != job["project"]]
+                        bucket["links"][job["project"]]["uploadFormat"] = job.get("uploadFormat", "studio")
+                        bucket["links"][job["project"]]["contentStamp"] = job.get("contentStamp", "")
+                        if job.get("liveSnapshot"):
+                            bucket["links"][job["project"]]["liveSnapshot"] = True
+                        for history in bucket["jobs"]:
+                            update = history.get("localUpdate", {})
+                            if (history.get("project") == job["project"] and update.get("state") == "applied"
+                                    and not update.get("undoRestored") and update.get("appliedCommit") == job.get("commitUuid")
+                                    and tuple(update.get("appliedIdentity", ())) == self.identity()):
+                                previous_undo.append((update, copy.deepcopy(update.get("appliedLink"))))
+                                update["appliedLink"] = copy.deepcopy(bucket["links"][job["project"]])
                     job.update(status="completed", completed=job["total"], serverProcessing=False, message="Uploaded", result=scene)
                     job.pop("previewPng", None)
                     if job.get("handoff"):
@@ -1045,10 +1051,11 @@ class GallerySync:
                         self._completion = None
                     raise
                 self._retire_export(job)
-                log_stage("link_saved", scene_id=scene["id"],
-                          content_revision=scene.get("contentRevision", ""),
-                          metadata_revision=scene.get("metadataRevision", ""),
-                          project_id=job["project"])
+                if not job.get("unlinked"):
+                    log_stage("link_saved", scene_id=scene["id"],
+                              content_revision=scene.get("contentRevision", ""),
+                              metadata_revision=scene.get("metadataRevision", ""),
+                              project_id=job["project"])
                 if cover_preview:
                     try:
                         if not linked or linked["sceneId"] != scene["id"]:

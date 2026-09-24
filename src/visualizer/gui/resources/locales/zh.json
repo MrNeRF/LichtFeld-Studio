@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "从当前视图更新缩略图",
   "menu.file.thumbnail_updated": "项目缩略图已更新。",
   "menu.file.publish_to_gallery": "发布到图库…",
+  "menu.file.untitled_scene": "未命名场景",
+  "menu.file.publish_unsaved_message": "此场景尚未保存为项目。保存后可保持与图库的关联，也可以按当前状态直接发布。",
+  "menu.file.publish_without_saving": "不保存直接发布",
+  "menu.file.save_and_publish": "保存并发布",
   "projects.gallery.action.update": "发布更改",
   "projects.gallery.action.pull": "下载为新项目",
   "projects.gallery.action.resolve": "解决…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "不含训练历史的查看副本。将在此计算机上创建新文件。",
   "projects.gallery.review.use_cover": "使用项目缩略图作为封面",
   "projects.gallery.review.save_project": "发布前保存项目",
-  "projects.gallery.review.unsaved_hint": "仅发布当前视图。其他未保存的项目更改不会包含在内。",
+  "projects.gallery.review.unsaved_hint": "发布当前场景，但不保存项目更改。",
+  "projects.gallery.review.unlinked_hint": "不会关联本地项目：无法从应用中更新；再次发布会创建新的图库场景。",
   "projects.gallery.review.estimate": "预计上传大小：{size}",
   "projects.gallery.review.estimate_pending": "准备后可用",
   "projects.gallery.conflict.values": "本地：{mine} / 图库：{gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "当前场景将按原样上传。此计算机上不会保存任何内容。",
+  "projects.gallery.state.live_snapshot": "从当前场景发布"
 }

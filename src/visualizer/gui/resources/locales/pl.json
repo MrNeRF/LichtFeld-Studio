@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Zaktualizuj miniaturę z bieżącego widoku",
   "menu.file.thumbnail_updated": "Miniatura projektu została zaktualizowana.",
   "menu.file.publish_to_gallery": "Opublikuj w galerii…",
+  "menu.file.untitled_scene": "Scena bez tytułu",
+  "menu.file.publish_unsaved_message": "Ta scena nie jest jeszcze zapisana jako projekt. Zapisz ją, aby zachować połączenie z galerią, albo opublikuj ją w obecnym stanie.",
+  "menu.file.publish_without_saving": "Opublikuj bez zapisywania",
+  "menu.file.save_and_publish": "Zapisz i opublikuj",
   "projects.gallery.action.update": "Opublikuj zmiany",
   "projects.gallery.action.pull": "Pobierz jako nowy projekt",
   "projects.gallery.action.resolve": "Rozwiąż…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Kopia do przeglądania bez historii treningu. Nowy plik na tym komputerze.",
   "projects.gallery.review.use_cover": "Użyj miniatury projektu jako okładki",
   "projects.gallery.review.save_project": "Zapisz projekt przed publikacją",
-  "projects.gallery.review.unsaved_hint": "Zostanie opublikowany tylko bieżący widok. Pozostałe niezapisane zmiany projektu zostaną pominięte.",
+  "projects.gallery.review.unsaved_hint": "Bieżąca scena zostanie opublikowana bez zapisywania zmian projektu.",
+  "projects.gallery.review.unlinked_hint": "Brak powiązania z lokalnym projektem: aktualizacja z aplikacji nie będzie możliwa; ponowna publikacja utworzy nową scenę w galerii.",
   "projects.gallery.review.estimate": "Szacowany rozmiar przesyłania: {size}",
   "projects.gallery.review.estimate_pending": "dostępny po przygotowaniu",
   "projects.gallery.conflict.values": "Lokalne: {mine} / Galeria: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "Bieżąca scena zostanie przesłana bez zmian. Na tym komputerze nic nie zostanie zapisane.",
+  "projects.gallery.state.live_snapshot": "Opublikowano z bieżącej sceny"
 }

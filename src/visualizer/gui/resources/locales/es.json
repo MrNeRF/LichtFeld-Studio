@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Actualizar miniatura desde la vista actual",
   "menu.file.thumbnail_updated": "Se ha actualizado la miniatura del proyecto.",
   "menu.file.publish_to_gallery": "Publicar en la galería…",
+  "menu.file.untitled_scene": "Escena sin título",
+  "menu.file.publish_unsaved_message": "Esta escena aún no está guardada como proyecto. Guárdala para mantenerla vinculada a la galería o publícala tal como está.",
+  "menu.file.publish_without_saving": "Publicar sin guardar",
+  "menu.file.save_and_publish": "Guardar y publicar",
   "projects.gallery.action.update": "Publicar cambios",
   "projects.gallery.action.pull": "Descargar como proyecto nuevo",
   "projects.gallery.action.resolve": "Resolver…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Una copia de visualización sin historial de entrenamiento. Un archivo nuevo en este equipo.",
   "projects.gallery.review.use_cover": "Usar miniatura del proyecto como portada",
   "projects.gallery.review.save_project": "Guardar el proyecto antes de publicarlo",
-  "projects.gallery.review.unsaved_hint": "Solo se publicará la vista actual. Los demás cambios sin guardar del proyecto quedarán fuera.",
+  "projects.gallery.review.unsaved_hint": "Se publicará la escena actual sin guardar los cambios del proyecto.",
+  "projects.gallery.review.unlinked_hint": "Sin vínculo a un proyecto local: no se puede actualizar desde la aplicación; volver a publicar crea otra escena en la galería.",
   "projects.gallery.review.estimate": "Tamaño estimado de subida: {size}",
   "projects.gallery.review.estimate_pending": "disponible tras la preparación",
   "projects.gallery.conflict.values": "Local: {mine} / Galería: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "La escena actual se sube tal como está. No se guarda nada en este equipo.",
+  "projects.gallery.state.live_snapshot": "Publicada desde la escena actual"
 }

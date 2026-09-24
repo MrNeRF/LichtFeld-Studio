@@ -319,6 +319,18 @@ class GalleryController:
                              expected_commit=str(asset.get("commit_uuid") or getattr(lf.io.inspect_project(path), "commit_uuid", "")))
         self._schedule_poll()
 
+    def publish_unlinked_scene(self, asset, details, upload_format):
+        self._check_identity()
+        self._refresh_model()
+        if self._panel_busy() or lf.project_poll_write().get("path"):
+            raise ValueError(tr("error.project_changed"))
+        metadata = self._details(details)
+        metadata["viewerSettings"] = capture_view(lf)
+        metadata["useEmbeddedPreview"] = bool(details.get("useEmbeddedPreview"))
+        self.upload_format = upload_format
+        self._publish_steps.start_live(metadata, upload_format, unlinked=True)
+
+
     def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
         return self._publish_steps.start_closed(asset, details, upload_format, update=update, publish_as_new=publish_as_new, handoff=handoff)
 

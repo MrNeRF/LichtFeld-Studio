@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Mettre à jour la miniature depuis la vue actuelle",
   "menu.file.thumbnail_updated": "La miniature du projet a été mise à jour.",
   "menu.file.publish_to_gallery": "Publier dans la galerie…",
+  "menu.file.untitled_scene": "Scène sans titre",
+  "menu.file.publish_unsaved_message": "Cette scène n’est pas encore enregistrée comme projet. Enregistrez-la pour la garder liée à la galerie, ou publiez-la telle quelle.",
+  "menu.file.publish_without_saving": "Publier sans enregistrer",
+  "menu.file.save_and_publish": "Enregistrer et publier",
   "projects.gallery.action.update": "Publier les changements",
   "projects.gallery.action.pull": "Télécharger comme nouveau projet",
   "projects.gallery.action.resolve": "Résoudre…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Une copie de visualisation sans historique d’entraînement. Un nouveau fichier sur cet ordinateur.",
   "projects.gallery.review.use_cover": "Utiliser la vignette du projet comme couverture",
   "projects.gallery.review.save_project": "Enregistrer le projet avant la publication",
-  "projects.gallery.review.unsaved_hint": "Seule la vue actuelle sera publiée. Les autres modifications non enregistrées du projet seront exclues.",
+  "projects.gallery.review.unsaved_hint": "La scène actuelle sera publiée sans enregistrer les modifications du projet.",
+  "projects.gallery.review.unlinked_hint": "Aucun lien avec un projet local : mise à jour impossible depuis l’application ; republier crée une nouvelle scène dans la galerie.",
   "projects.gallery.review.estimate": "Taille estimée de l’envoi : {size}",
   "projects.gallery.review.estimate_pending": "disponible après préparation",
   "projects.gallery.conflict.values": "Local : {mine} / Galerie : {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "La scène actuelle est envoyée telle quelle. Rien n’est enregistré sur cet ordinateur.",
+  "projects.gallery.state.live_snapshot": "Publiée depuis la scène actuelle"
 }

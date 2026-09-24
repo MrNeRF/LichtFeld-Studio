@@ -70,9 +70,9 @@ class GalleryFilePanel(Panel):
     def show(self, *, controller, asset, scene, action, fields, includes="", quota="",
              warning="", publish_new=False, open_after=False, on_done=None,
              mode="publish", groups=(), on_submit=None, apply_only=False,
-             expected_project_path=None):
+             expected_project_path=None, unlinked=False):
         identity = controller.service.identity()
-        key = (identity, asset["id"], action, publish_new, open_after, expected_project_path, mode, apply_only)
+        key = (identity, asset["id"], action, publish_new, open_after, expected_project_path, mode, apply_only, unlinked)
         if self._review and self._review["key"] == key:
             lf.ui.set_panel_enabled(self.id, True)
             self._dirty()
@@ -83,7 +83,7 @@ class GalleryFilePanel(Panel):
                             quota=quota, warning=warning, publish_new=publish_new,
                             open_after=open_after, on_done=on_done, mode=mode,
                             groups=deepcopy(list(groups)), on_submit=on_submit, apply_only=apply_only,
-                            expected_project_path=expected_project_path)
+                            expected_project_path=expected_project_path, unlinked=unlinked)
         current_path = lf.project_poll_write().get("path") if mode == "publish" and action in ("publish", "update") else None
         open_project = bool(current_path and Path(current_path).resolve() == Path(asset["path"]).resolve())
         self._review["open_project"] = bool(open_project)
@@ -219,6 +219,10 @@ class GalleryFilePanel(Panel):
             "can_cover": lambda: bool((self._review or {}).get("asset", {}).get("has_preview")),
             "show_save_project": lambda: bool((self._review or {}).get("open_project")),
             "show_unsaved_hint": lambda: bool((self._review or {}).get("open_project") and not self._fields.get("save_project") and lf.project_is_dirty()),
+            "show_prepared_copy": lambda: not bool((self._review or {}).get("unlinked")),
+            "show_cover": lambda: not bool((self._review or {}).get("unlinked")),
+            "show_unlinked_hint": lambda: bool((self._review or {}).get("unlinked")),
+            "unlinked_copy": lambda: tr("review.unlinked_copy"),
             "submit_label": self._submit_label,
             "format_hint": lambda: tr("format." + self._fields.get("upload_format", "sog") + "_hint"),
             "includes": lambda: (self._review or {}).get("includes", ""),
@@ -289,8 +293,11 @@ class GalleryFilePanel(Panel):
                 if review["open_project"]:
                     details["saveProject"] = bool(self._fields["save_project"])
                 controller.upload_format = self._fields["upload_format"]
-                controller.publish_asset(review["asset"], details, self._fields["upload_format"],
-                                         update=review["action"] == "update", publish_as_new=review["publish_new"])
+                if review.get("unlinked"):
+                    controller.publish_unlinked_scene(review["asset"], details, self._fields["upload_format"])
+                else:
+                    controller.publish_asset(review["asset"], details, self._fields["upload_format"],
+                                             update=review["action"] == "update", publish_as_new=review["publish_new"])
             # Publishing an update can hand off to conflict resolution, which
             # replaces this panel's review synchronously. Only close the review
             # that submitted; closing whatever is current would dismiss the

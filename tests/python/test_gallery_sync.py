@@ -1437,6 +1437,40 @@ def test_saved_project_preparation_journals_source_commit_before_upload(tmp_path
     assert job['preparation'] == str(staging)
     assert '_commitUuid' not in job['metadata']
 
+
+def test_unlinked_upload_has_no_project_origin_or_local_link(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'prepared.licht'
+    source.write_bytes(b'current scene')
+    def upload(_client, _path, metadata, **_kwargs):
+        assert 'originProjectUuid' not in metadata
+        return {'scene': {'id': 'gallery-scene', 'contentRevision': 'c',
+                          'metadataRevision': 'm', 'title': 'Scene'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    service.queue_upload(source, {'title': 'Scene', '_unlinked': True}, 'temporary')
+    finish(service)
+    assert service.snapshot()['links'] == {}
+    assert service.snapshot()['jobs'][0]['status'] == 'completed'
+    assert not (tmp_path / 'temporary.licht').exists()
+
+def test_live_project_upload_records_link_without_claiming_a_project_commit(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'prepared.licht'
+    source.write_bytes(b'current scene')
+    def upload(_client, _path, metadata, **_kwargs):
+        assert metadata['originProjectUuid'] == 'project'
+        assert 'originCommitUuid' not in metadata
+        return {'scene': {'id': 'gallery-scene', 'contentRevision': 'c',
+                          'metadataRevision': 'm', 'title': 'Scene'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    service.queue_upload(source, {'title': 'Scene', '_liveSnapshot': True}, 'project')
+    finish(service)
+    link = service.snapshot()['links']['project']
+    assert link['sceneId'] == 'gallery-scene'
+    assert link['commitUuid'] == ''
+    assert link['liveSnapshot'] is True
+
+
 def test_domain_exchange_tokens_survive_journal_reload(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     scene = {"id": "scene", "revision": "legacy", "contentRevision": "content", "metadataRevision": "metadata", "title": "Title"}

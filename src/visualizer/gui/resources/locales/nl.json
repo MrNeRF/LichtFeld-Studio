@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Miniatuur bijwerken vanuit huidige weergave",
   "menu.file.thumbnail_updated": "De projectminiatuur is bijgewerkt.",
   "menu.file.publish_to_gallery": "Publiceren naar Gallery…",
+  "menu.file.untitled_scene": "Naamloze scène",
+  "menu.file.publish_unsaved_message": "Deze scène is nog niet als project opgeslagen. Sla haar op om de koppeling met de galerie te behouden, of publiceer haar zoals ze is.",
+  "menu.file.publish_without_saving": "Publiceren zonder op te slaan",
+  "menu.file.save_and_publish": "Opslaan en publiceren",
   "projects.gallery.action.update": "Wijzigingen publiceren",
   "projects.gallery.action.pull": "Downloaden als nieuw project",
   "projects.gallery.action.resolve": "Oplossen…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Een weergavekopie zonder trainingsgeschiedenis. Een nieuw bestand op deze computer.",
   "projects.gallery.review.use_cover": "Projectminiatuur als omslag gebruiken",
   "projects.gallery.review.save_project": "Project opslaan vóór publicatie",
-  "projects.gallery.review.unsaved_hint": "Alleen de huidige weergave wordt gepubliceerd. Andere niet opgeslagen projectwijzigingen blijven buiten beschouwing.",
+  "projects.gallery.review.unsaved_hint": "De huidige scène wordt gepubliceerd zonder projectwijzigingen op te slaan.",
+  "projects.gallery.review.unlinked_hint": "Geen koppeling met een lokaal project: bijwerken vanuit de app kan niet; opnieuw publiceren maakt een nieuwe galeriescène.",
   "projects.gallery.review.estimate": "Geschatte uploadgrootte: {size}",
   "projects.gallery.review.estimate_pending": "beschikbaar na voorbereiding",
   "projects.gallery.conflict.values": "Lokaal: {mine} / Galerie: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "De huidige scène wordt ongewijzigd geüpload. Er wordt niets opgeslagen op deze computer.",
+  "projects.gallery.state.live_snapshot": "Gepubliceerd vanuit de huidige scène"
 }

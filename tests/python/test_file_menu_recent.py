@@ -657,7 +657,7 @@ def test_file_menu_linked_alive_scene_opens_update_review(monkeypatch, tmp_path)
     assert checked is True
 
 
-def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):
+def test_file_menu_publish_is_disabled_without_a_scene(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.project_has_path = lambda: False
 
@@ -668,7 +668,7 @@ def test_file_menu_publish_is_disabled_for_unsaved_project(monkeypatch):
 
     assert item["enabled"] is False
     item["callback"]()
-    assert file_menu.lf.message_dialogs
+    assert file_menu.lf.message_dialogs == []
 
 
 def test_file_menu_publish_rejects_missing_saved_project(monkeypatch, tmp_path):

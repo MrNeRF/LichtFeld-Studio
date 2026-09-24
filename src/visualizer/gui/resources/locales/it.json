@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Aggiorna miniatura dalla vista corrente",
   "menu.file.thumbnail_updated": "La miniatura del progetto è stata aggiornata.",
   "menu.file.publish_to_gallery": "Pubblica nella Galleria…",
+  "menu.file.untitled_scene": "Scena senza titolo",
+  "menu.file.publish_unsaved_message": "Questa scena non è ancora salvata come progetto. Salvala per mantenerla collegata alla galleria oppure pubblicala così com’è.",
+  "menu.file.publish_without_saving": "Pubblica senza salvare",
+  "menu.file.save_and_publish": "Salva e pubblica",
   "projects.gallery.action.update": "Pubblica modifiche",
   "projects.gallery.action.pull": "Scarica come nuovo progetto",
   "projects.gallery.action.resolve": "Risolvi…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Una copia di visualizzazione senza cronologia di addestramento. Un nuovo file su questo computer.",
   "projects.gallery.review.use_cover": "Usa la miniatura del progetto come copertina",
   "projects.gallery.review.save_project": "Salva il progetto prima della pubblicazione",
-  "projects.gallery.review.unsaved_hint": "Verrà pubblicata solo la vista attuale. Le altre modifiche non salvate del progetto saranno escluse.",
+  "projects.gallery.review.unsaved_hint": "La scena attuale verrà pubblicata senza salvare le modifiche al progetto.",
+  "projects.gallery.review.unlinked_hint": "Nessun collegamento a un progetto locale: non puoi aggiornare dall’app; una nuova pubblicazione crea un’altra scena nella galleria.",
   "projects.gallery.review.estimate": "Dimensione di caricamento stimata: {size}",
   "projects.gallery.review.estimate_pending": "disponibile dopo la preparazione",
   "projects.gallery.conflict.values": "Locale: {mine} / Galleria: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "La scena attuale viene caricata così com’è. Non viene salvato nulla su questo computer.",
+  "projects.gallery.state.live_snapshot": "Pubblicata dalla scena attuale"
 }

@@ -685,11 +685,41 @@ class PublishSteps:
         if save_project:
             self.save_project(lambda: self.start_saved_port(metadata, project_id, path, identity,
                                                                  environment_source, upload_format, update=update))
+        elif not self.app.project_is_dirty():
+            self.start_saved_port(metadata, project_id, path, identity, environment_source, upload_format,
+                                  update=update, expected_commit=expected_commit or str(self.app.io.inspect_project(path).commit_uuid))
         else:
             if self.app.project_poll_write().get("running"):
                 raise ValueError("Wait for the current project save before continuing.")
-            self.start_saved_port(metadata, project_id, path, identity, environment_source, upload_format,
-                                update=update, expected_commit=expected_commit or str(self.app.io.inspect_project(path).commit_uuid))
+            self.start_live(metadata, upload_format, project_id=project_id)
+
+    def start_live(self, metadata, upload_format, *, project_id=None, unlinked=False):
+        if upload_format not in ("studio", "sog", "ssog", "spz"):
+            raise ValueError("Choose a supported upload format.")
+        if "licht" not in self.service.snapshot().get("source_formats", []):
+            raise ValueError(UNSUPPORTED_PORTAL)
+        if not [node for node in self.visible_splats()]:
+            raise ValueError("There are no visible splats to upload.")
+        if self.app.ui.get_export_state().get("active"):
+            raise ValueError("Wait for the current export to finish before uploading.")
+        if unlinked and self.app.project_poll_write().get("path"):
+            raise ValueError(tr("error.project_changed"))
+        project_id = project_id or str(uuid.uuid4())
+        metadata = dict(metadata, _uploadFormat=upload_format)
+        if unlinked:
+            metadata["_unlinked"] = True
+        elif project_id:
+            metadata["_liveSnapshot"] = True
+        self.preparation_failure = None
+        self.cancelled = False
+        self.identity = self.service.identity()
+        self.prepared_commit = None
+        self.progress = 0
+        self.set_operation(project_id, metadata["title"])
+        export = self.service.root / (str(uuid.uuid4()) + ".scene")
+        self.app.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
+        self.pending = (export, metadata, project_id, self.clock())
+        self.schedule_poll()
 
     def patch_saved_update(self, metadata, project_id, path, *, update, expected_commit=None):
         from .gallery_project_facts import saved_content_stamp

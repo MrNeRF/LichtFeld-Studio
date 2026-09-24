@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "현재 보기에서 썸네일 업데이트",
   "menu.file.thumbnail_updated": "프로젝트 썸네일이 업데이트되었습니다.",
   "menu.file.publish_to_gallery": "갤러리에 게시…",
+  "menu.file.untitled_scene": "제목 없는 장면",
+  "menu.file.publish_unsaved_message": "이 장면은 아직 프로젝트로 저장되지 않았습니다. 갤러리와 연결하려면 저장하거나 현재 상태 그대로 게시하세요.",
+  "menu.file.publish_without_saving": "저장하지 않고 게시",
+  "menu.file.save_and_publish": "저장하고 게시",
   "projects.gallery.action.update": "변경 사항 게시",
   "projects.gallery.action.pull": "새 프로젝트로 다운로드",
   "projects.gallery.action.resolve": "해결…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "학습 기록이 없는 보기용 사본입니다. 이 컴퓨터에 새 파일을 만듭니다.",
   "projects.gallery.review.use_cover": "프로젝트 썸네일을 표지로 사용",
   "projects.gallery.review.save_project": "게시하기 전에 프로젝트 저장",
-  "projects.gallery.review.unsaved_hint": "현재 보기만 게시됩니다. 저장하지 않은 다른 프로젝트 변경 사항은 제외됩니다.",
+  "projects.gallery.review.unsaved_hint": "프로젝트 변경 사항을 저장하지 않고 현재 장면을 게시합니다.",
+  "projects.gallery.review.unlinked_hint": "로컬 프로젝트에 연결되지 않습니다. 앱에서 업데이트할 수 없으며 다시 게시하면 새 갤러리 장면이 만들어집니다.",
   "projects.gallery.review.estimate": "예상 업로드 크기: {size}",
   "projects.gallery.review.estimate_pending": "준비 후 확인 가능",
   "projects.gallery.conflict.values": "로컬: {mine} / 갤러리: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "현재 장면을 그대로 업로드합니다. 이 컴퓨터에는 아무것도 저장되지 않습니다.",
+  "projects.gallery.state.live_snapshot": "현재 장면에서 게시됨"
 }

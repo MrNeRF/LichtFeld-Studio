@@ -2590,6 +2590,10 @@
   "menu.file.update_thumbnail_from_view": "Vorschaubild aus aktueller Ansicht aktualisieren",
   "menu.file.thumbnail_updated": "Projektvorschaubild wurde aktualisiert.",
   "menu.file.publish_to_gallery": "In der Galerie veröffentlichen…",
+  "menu.file.untitled_scene": "Unbenannte Szene",
+  "menu.file.publish_unsaved_message": "Diese Szene ist noch nicht als Projekt gespeichert. Speichere sie, damit sie mit der Galerie verknüpft bleibt, oder veröffentliche sie so, wie sie ist.",
+  "menu.file.publish_without_saving": "Ohne Speichern veröffentlichen",
+  "menu.file.save_and_publish": "Speichern und veröffentlichen",
   "projects.gallery.action.update": "Änderungen veröffentlichen",
   "projects.gallery.action.pull": "Als neues Projekt herunterladen",
   "projects.gallery.action.resolve": "Auflösen…",
@@ -2789,7 +2793,8 @@
   "projects.gallery.review.viewing_copy": "Eine Ansichtskopie ohne Trainingsverlauf. Eine neue Datei auf diesem Computer.",
   "projects.gallery.review.use_cover": "Projektvorschaubild als Titelbild verwenden",
   "projects.gallery.review.save_project": "Projekt vor der Veröffentlichung speichern",
-  "projects.gallery.review.unsaved_hint": "Nur die aktuelle Ansicht wird veröffentlicht. Andere ungespeicherte Projektänderungen bleiben außen vor.",
+  "projects.gallery.review.unsaved_hint": "Die aktuelle Szene wird veröffentlicht, ohne Projektänderungen zu speichern.",
+  "projects.gallery.review.unlinked_hint": "Keine lokale Projektverknüpfung: Updates aus der App sind nicht möglich; erneutes Veröffentlichen erstellt eine neue Galerieszene.",
   "projects.gallery.review.estimate": "Geschätzte Uploadgröße: {size}",
   "projects.gallery.review.estimate_pending": "nach der Vorbereitung verfügbar",
   "projects.gallery.conflict.values": "Lokal: {mine} / Galerie: {gallery}",
@@ -2941,5 +2946,7 @@
     "reading": "Reading the project…",
     "done": "Cleanup complete. The file is {size} smaller.\n{path}",
     "canceling": "Canceling cleanup… Please wait."
-  }
+  },
+  "projects.gallery.review.unlinked_copy": "Die aktuelle Szene wird unverändert hochgeladen. Auf diesem Computer wird nichts gespeichert.",
+  "projects.gallery.state.live_snapshot": "Aus der aktuellen Szene veröffentlicht"
 }
