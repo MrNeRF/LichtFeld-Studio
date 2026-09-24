@@ -234,6 +234,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._asset_scroll_event_suppressed = False
         self._asset_scroll_suppressed_top = -1.0
         self._last_asset_match_count = 0
+        self._last_asset_scope_count = 0
 
         self._panel_space = lf.ui.PanelSpace.LEFT_DOCK
         self._is_floating = False
@@ -1868,6 +1869,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         folder_id = self._selected_folder_id if folder_id is None else folder_id
         query = self._search_query.strip().casefold()
         rows: List[Dict[str, Any]] = []
+        scope_count = 0
         if folder_id == SCOPE_RECENT:
             source = self._recent_scope_assets()
         elif folder_id in GALLERY_SCOPES:
@@ -1879,6 +1881,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 continue
             if not self._asset_matches_query(asset, query):
                 continue
+            scope_count += 1
             if not self._asset_matches_filter(asset):
                 continue
             rows.append(asset)
@@ -1901,6 +1904,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return value, name
             rows.sort(key=sort_value, reverse=self._sort_descending)
         self._last_asset_match_count = len(rows)
+        self._last_asset_scope_count = scope_count
         return rows
 
     def _gallery_window_metrics(self, client_width: float) -> tuple[int, float, float]:
@@ -1998,6 +2002,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_asset_results_summary(self) -> str:
         try:
+            if self._active_filter != "all":
+                return localized_count(
+                    "projects.status.showing_filtered_projects",
+                    self._last_asset_match_count,
+                    total=self._last_asset_scope_count,
+                    filter=self.get_filter_label(),
+                )
             return localized_count(
                 "projects.status.showing_projects", self._last_asset_match_count
             )

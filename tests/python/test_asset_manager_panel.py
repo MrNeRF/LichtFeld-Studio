@@ -936,6 +936,24 @@ def test_filter_menu_names_the_all_option_as_a_clear_action(panel_module):
     assert '<span class="asset-button-text">{{filter_menu_label}}</span>' in rml
 
 
+def test_filter_summary_explains_empty_results_with_scope_count_and_filter(panel_module, monkeypatch):
+    panel, _local, _remote = _gallery_fixture(panel_module)
+    panel._active_filter = "missing"
+    translations = {
+        "projects.filter.missing": "Missing files",
+        "projects.status.showing_filtered_projects.other": (
+            "Showing {count}/{total} projects, filtered by: {filter}"
+        ),
+    }
+    monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: translations.get(key, key))
+
+    panel._filtered_assets()
+
+    assert panel.get_asset_results_summary() == (
+        "Showing 0/1 projects, filtered by: Missing files"
+    )
+
+
 def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     first = _project(name="Bicycle")
     second = _project(

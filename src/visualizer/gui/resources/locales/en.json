@@ -305,6 +305,9 @@
     "panel_title": "Projects",
     "tooltip.refresh": "Verify project files and refresh catalog status",
     "drag.open_project": "Drop to open project",
+    "status.showing_filtered_projects.one": "Showing {count}/{total} project, filtered by: {filter}",
+    "status.showing_filtered_projects.few": "Showing {count}/{total} projects, filtered by: {filter}",
+    "status.showing_filtered_projects.other": "Showing {count}/{total} projects, filtered by: {filter}",
     "status.showing_projects.one": "Showing {count} project",
     "status.showing_projects.few": "Showing {count} projects",
     "status.showing_projects.other": "Showing {count} projects"

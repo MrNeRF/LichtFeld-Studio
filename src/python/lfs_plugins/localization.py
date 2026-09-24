@@ -22,12 +22,12 @@ def plural_form(language: str, count: int) -> str:
     return "one" if abs(count) == 1 else "other"
 
 
-def localized_count(key: str, count: int) -> str:
+def localized_count(key: str, count: int, **values: object) -> str:
     """Format a count-sensitive localization key using the active language."""
     import lichtfeld as lf
 
     form = plural_form(lf.ui.get_current_language(), count)
-    return safe_format(lf.ui.tr(f"{key}.{form}"), count=count)
+    return safe_format(lf.ui.tr(f"{key}.{form}"), count=count, **values)
 
 
 def safe_format(text: str, *args: object, **values: object) -> str:
