@@ -3,6 +3,8 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -46,6 +48,60 @@ namespace lfs::core {
             features13.synchronization2 = VK_TRUE;
         }
     };
+
+    struct VulkanPhysicalDeviceEnumeration {
+        VkResult count_result = VK_SUCCESS;
+        VkResult devices_result = VK_SUCCESS;
+        uint32_t observed_count = 0;
+        uint32_t destination_capacity = 0;
+        std::vector<VkPhysicalDevice> devices;
+    };
+
+    inline VulkanPhysicalDeviceEnumeration enumerate_vulkan_physical_devices(VkInstance instance) {
+        VulkanPhysicalDeviceEnumeration result;
+        uint32_t count = 0;
+        result.count_result = vkEnumeratePhysicalDevices(instance, &count, nullptr);
+        result.observed_count = count;
+        if (result.count_result != VK_SUCCESS || count == 0)
+            return result;
+        result.destination_capacity = count;
+        result.devices.resize(count);
+        result.devices_result = vkEnumeratePhysicalDevices(instance, &count, result.devices.data());
+        result.observed_count = count;
+        if (result.devices_result == VK_SUCCESS)
+            result.devices.resize(count);
+        else
+            result.devices.clear();
+        return result;
+    }
+
+    inline VkResult create_vulkan_device(VkPhysicalDevice physical_device,
+                                         const std::vector<VkDeviceQueueCreateInfo>& queues,
+                                         const std::vector<const char*>& extensions,
+                                         const void* feature_chain,
+                                         const VkPhysicalDeviceFeatures* features,
+                                         VkDevice* device) {
+        VkDeviceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        info.pNext = feature_chain;
+        info.queueCreateInfoCount = static_cast<uint32_t>(queues.size());
+        info.pQueueCreateInfos = queues.data();
+        info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        info.ppEnabledExtensionNames = extensions.data();
+        info.pEnabledFeatures = features;
+        return vkCreateDevice(physical_device, &info, nullptr, device);
+    }
+
+    inline uint32_t find_vulkan_memory_type(const VkPhysicalDeviceMemoryProperties& memory,
+                                            uint32_t type_filter,
+                                            VkMemoryPropertyFlags properties) {
+        for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+            if ((type_filter & (1u << i)) &&
+                (memory.memoryTypes[i].propertyFlags & properties) == properties)
+                return i;
+        }
+        return std::numeric_limits<uint32_t>::max();
+    }
 
     // This feature list is shared by every Vulkan backend entry point.
     inline VulkanFeatureCheck check_vulkan_feature_requirements(

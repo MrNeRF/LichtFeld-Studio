@@ -108,16 +108,13 @@ namespace lfs::core {
                 return std::nullopt;
             }
 
-            uint32_t count = 0;
-            if (vkEnumeratePhysicalDevices(device.instance_, &count, nullptr) != VK_SUCCESS ||
-                count == 0) {
+            const auto enumeration = enumerate_vulkan_physical_devices(device.instance_);
+            if (enumeration.count_result != VK_SUCCESS ||
+                enumeration.devices_result != VK_SUCCESS || enumeration.devices.empty()) {
                 return std::nullopt;
             }
-            std::vector<VkPhysicalDevice> physical_devices(count);
-            if (vkEnumeratePhysicalDevices(
-                    device.instance_, &count, physical_devices.data()) != VK_SUCCESS) {
-                return std::nullopt;
-            }
+            const auto& physical_devices = enumeration.devices;
+            const auto count = static_cast<uint32_t>(physical_devices.size());
 
             std::vector<const char*> extensions;
             if (push_descriptors)
@@ -226,15 +223,8 @@ namespace lfs::core {
             queue_info.queueFamilyIndex = queue_family;
             queue_info.queueCount = 1;
             queue_info.pQueuePriorities = &priority;
-            VkDeviceCreateInfo create_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-            create_info.pNext = &features;
-            create_info.queueCreateInfoCount = 1;
-            create_info.pQueueCreateInfos = &queue_info;
-            create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-            create_info.ppEnabledExtensionNames =
-                extensions.empty() ? nullptr : extensions.data();
-            if (vkCreateDevice(physical, &create_info, nullptr, &device.device_) !=
-                VK_SUCCESS) {
+            if (create_vulkan_device(physical, {queue_info}, extensions, &features,
+                                     nullptr, &device.device_) != VK_SUCCESS) {
                 return std::nullopt;
             }
             vkGetDeviceQueue(device.device_, queue_family, 0, &device.queue_);

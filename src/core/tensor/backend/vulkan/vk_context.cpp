@@ -406,12 +406,10 @@ namespace lfs::core::internal {
             if (std::find(sharing_queue_families_.begin(), sharing_queue_families_.end(), family) == sharing_queue_families_.end())
                 sharing_queue_families_.push_back(family);
         }
-        uint32_t count = 0;
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                 "vkEnumeratePhysicalDevices(count)");
-        std::vector<VkPhysicalDevice> devices(count);
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                 "vkEnumeratePhysicalDevices(data)");
+        const auto enumeration = enumerate_vulkan_physical_devices(instance_);
+        vk_check(this, enumeration.count_result, "vkEnumeratePhysicalDevices(count)");
+        vk_check(this, enumeration.devices_result, "vkEnumeratePhysicalDevices(data)");
+        const auto& devices = enumeration.devices;
         const auto position = std::ranges::find(devices, physical_device_);
         if (position == devices.end()) {
             reject("Vulkan device adoption received a physical device that does not belong to the instance");
@@ -503,13 +501,11 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::select_physical_device() {
-        uint32_t count = 0;
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                 "vkEnumeratePhysicalDevices(count)");
-        LFS_ASSERT_MSG(count != 0, "Vulkan backend: no physical devices available");
-        std::vector<VkPhysicalDevice> devices(count);
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                 "vkEnumeratePhysicalDevices(data)");
+        const auto enumeration = enumerate_vulkan_physical_devices(instance_);
+        vk_check(this, enumeration.count_result, "vkEnumeratePhysicalDevices(count)");
+        LFS_ASSERT_MSG(!enumeration.devices.empty(), "Vulkan backend: no physical devices available");
+        vk_check(this, enumeration.devices_result, "vkEnumeratePhysicalDevices(data)");
+        const auto& devices = enumeration.devices;
 
         std::optional<uint32_t> selected;
         const auto options = tensor_backend_options();
@@ -666,14 +662,7 @@ namespace lfs::core::internal {
         queue_info.queueFamilyIndex = queue_family_;
         queue_info.queueCount = 1;
         queue_info.pQueuePriorities = &priority;
-        VkDeviceCreateInfo create_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-        create_info.pNext = &features;
-        create_info.queueCreateInfoCount = 1;
-        create_info.pQueueCreateInfos = &queue_info;
-        create_info.enabledExtensionCount =
-            static_cast<uint32_t>(enabled_extensions.size());
-        create_info.ppEnabledExtensionNames = enabled_extensions.data();
-        vk_check(this, vkCreateDevice(physical_device_, &create_info, nullptr, &device_),
+        vk_check(this, create_vulkan_device(physical_device_, {queue_info}, enabled_extensions, &features, nullptr, &device_),
                  "vkCreateDevice");
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
     }

@@ -946,12 +946,12 @@ void main() {
                                                   std::string& error) const {
                 VkPhysicalDeviceMemoryProperties mem_properties{};
                 vkGetPhysicalDeviceMemoryProperties(physical_device_, &mem_properties);
-                for (uint32_t i = 0; i < mem_properties.memoryTypeCount; ++i) {
-                    if ((type_filter & (1u << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
-                        return i;
-                }
+                const uint32_t memory_type = core::find_vulkan_memory_type(
+                    mem_properties, type_filter, properties);
+                if (memory_type != std::numeric_limits<uint32_t>::max())
+                    return memory_type;
                 error = "No compatible Vulkan memory type for Mesh2Splat";
-                return std::numeric_limits<uint32_t>::max();
+                return memory_type;
             }
 
             [[nodiscard]] std::expected<Buffer, std::string> createBuffer(VkDeviceSize size,
@@ -1183,18 +1183,17 @@ void main() {
             }
 
             bool pickPhysicalDevice(std::string& error) {
-                uint32_t count = 0;
-                VkResult result = vkEnumeratePhysicalDevices(instance_, &count, nullptr);
-                if (result != VK_SUCCESS || count == 0) {
+                const auto enumeration = lfs::core::enumerate_vulkan_physical_devices(instance_);
+                if (enumeration.count_result != VK_SUCCESS || enumeration.devices.empty()) {
+                    const VkResult result = enumeration.count_result;
                     error = result == VK_SUCCESS ? "No Vulkan physical devices available" : vkError("vkEnumeratePhysicalDevices", result);
                     return false;
                 }
-                std::vector<VkPhysicalDevice> devices(count);
-                result = vkEnumeratePhysicalDevices(instance_, &count, devices.data());
-                if (result != VK_SUCCESS) {
-                    error = vkError("vkEnumeratePhysicalDevices", result);
+                if (enumeration.devices_result != VK_SUCCESS) {
+                    error = vkError("vkEnumeratePhysicalDevices", enumeration.devices_result);
                     return false;
                 }
+                const auto& devices = enumeration.devices;
 
                 auto score_device = [&](VkPhysicalDevice candidate, uint32_t& family) -> int {
                     VkPhysicalDeviceFeatures features{};
@@ -1247,11 +1246,8 @@ void main() {
                 features.fragmentStoresAndAtomics = VK_TRUE;
                 features.shaderStorageImageWriteWithoutFormat = VK_FALSE;
 
-                VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-                info.queueCreateInfoCount = 1;
-                info.pQueueCreateInfos = &queue_info;
-                info.pEnabledFeatures = &features;
-                const VkResult result = vkCreateDevice(physical_device_, &info, nullptr, &device_);
+                const VkResult result = lfs::core::create_vulkan_device(
+                    physical_device_, {queue_info}, {}, nullptr, &features, &device_);
                 if (result != VK_SUCCESS) {
                     error = vkError("vkCreateDevice", result);
                     return false;

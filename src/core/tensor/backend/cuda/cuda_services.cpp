@@ -21,6 +21,7 @@
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_label.hpp"
 #include "core/tensor_vulkan_interop.hpp"
+#include "core/vulkan_helpers.hpp"
 #include "kernels/where_scalar.cuh"
 #include "runtime/size_bucketed_pool.hpp"
 
@@ -547,15 +548,9 @@ namespace lfs::core::internal {
                 vkGetBufferMemoryRequirements(device, buffer, &requirements);
                 VkPhysicalDeviceMemoryProperties properties{};
                 vkGetPhysicalDeviceMemoryProperties(static_cast<VkPhysicalDevice>(target.physical_device), &properties);
-                uint32_t memory_type = properties.memoryTypeCount;
-                for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-                    if ((requirements.memoryTypeBits & (1u << i)) &&
-                        (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-                        memory_type = i;
-                        break;
-                    }
-                }
-                if (memory_type == properties.memoryTypeCount)
+                const uint32_t memory_type = find_vulkan_memory_type(
+                    properties, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                if (memory_type == std::numeric_limits<uint32_t>::max())
                     throw TensorError("CUDA block has no compatible Vulkan memory type");
                 std::vector<VkSparseMemoryBind> binds;
                 for (const auto i : unbound) {

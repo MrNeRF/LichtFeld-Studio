@@ -7,6 +7,7 @@
 #include "vk_backend_ops.hpp"
 
 #include "core/logger.hpp"
+#include "core/vulkan_helpers.hpp"
 
 #include "../../internal/tensor_impl.hpp"
 #include "vk_context.hpp"
@@ -377,15 +378,9 @@ namespace lfs::core::internal {
                     vkGetBufferMemoryRequirements(buffer->device, buffer->buffer, &requirements);
                     VkPhysicalDeviceMemoryProperties memory{};
                     vkGetPhysicalDeviceMemoryProperties(static_cast<VkPhysicalDevice>(target_.physical_device), &memory);
-                    uint32_t memory_type = memory.memoryTypeCount;
-                    for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
-                        constexpr auto needed = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-                        if ((requirements.memoryTypeBits & (1u << i)) && (memory.memoryTypes[i].propertyFlags & needed) == needed) {
-                            memory_type = i;
-                            break;
-                        }
-                    }
-                    if (memory_type == memory.memoryTypeCount)
+                    constexpr auto needed = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                    const uint32_t memory_type = find_vulkan_memory_type(memory, requirements.memoryTypeBits, needed);
+                    if (memory_type == std::numeric_limits<uint32_t>::max())
                         throw TensorError("Consumer device has no coherent host-visible tensor memory");
                     VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
                     flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;

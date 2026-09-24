@@ -2435,23 +2435,19 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::pickPhysicalDevice() {
-        uint32_t count = 0;
-        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
+        const auto enumeration = lfs::core::enumerate_vulkan_physical_devices(instance_);
+        LFS_VK_CONTEXT_CHECK_MSG(enumeration.count_result,
                                  "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
-                                 vkHandleValue(instance_),
-                                 count);
-        if (count == 0) {
+                                 vkHandleValue(instance_), enumeration.observed_count);
+        if (enumeration.observed_count == 0) {
             return fail(std::format("No Vulkan physical devices found (instance={:#x}, observed_count=0)",
                                     vkHandleValue(instance_)));
         }
-
-        std::vector<VkPhysicalDevice> devices(count);
-        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
+        LFS_VK_CONTEXT_CHECK_MSG(enumeration.devices_result,
                                  "Failed to enumerate physical devices (instance={:#x}, destination_capacity={}, observed_count={})",
-                                 vkHandleValue(instance_),
-                                 devices.size(),
-                                 count);
-        devices.resize(count);
+                                 vkHandleValue(instance_), enumeration.destination_capacity,
+                                 enumeration.observed_count);
+        const auto& devices = enumeration.devices;
 
         const auto cuda_device = interopCudaDevice();
         const auto requested_device = lfs::core::tensor_backend_options().vulkan_device;
@@ -2886,15 +2882,8 @@ namespace lfs::vis {
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
-        VkDeviceCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        create_info.pNext = &features2;
-        create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_infos.size());
-        create_info.pQueueCreateInfos = queue_infos.data();
-        create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-        create_info.ppEnabledExtensionNames = extensions.data();
-
-        const VkResult result = vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
+        const VkResult result = lfs::core::create_vulkan_device(
+            physical_device_, queue_infos, extensions, &features2, nullptr, &device_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);
         }
@@ -3227,14 +3216,7 @@ namespace lfs::vis {
         VkPhysicalDeviceMemoryProperties memory_properties{};
         vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
 
-        for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-            const bool supported = (type_filter & (1u << i)) != 0;
-            const bool matches = (memory_properties.memoryTypes[i].propertyFlags & properties) == properties;
-            if (supported && matches) {
-                return i;
-            }
-        }
-        return std::numeric_limits<uint32_t>::max();
+        return lfs::core::find_vulkan_memory_type(memory_properties, type_filter, properties);
     }
 
     VkImageAspectFlags VulkanContext::depthStencilAspectMask() const {
