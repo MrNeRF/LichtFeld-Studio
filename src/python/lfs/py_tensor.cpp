@@ -1517,9 +1517,12 @@ namespace lfs::python {
 
         if (nb::hasattr(obj, "__dlpack__")) {
             nb::object dlpack_fn = obj.attr("__dlpack__");
-#if LFS_HAS_CUDA
             if (dlpack_producer_is_cuda_ordered(obj)) {
+#if LFS_HAS_CUDA
                 const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
+#else
+                const int64_t consumer = kDLPackLegacyDefault;
+#endif
                 try {
                     capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
                     stream_handshake = true;
@@ -1535,9 +1538,6 @@ namespace lfs::python {
             } else {
                 capsule = nb::cast<nb::capsule>(dlpack_fn());
             }
-#else
-            capsule = nb::cast<nb::capsule>(dlpack_fn());
-#endif
         } else if (nb::isinstance<nb::capsule>(obj)) {
             capsule = nb::cast<nb::capsule>(obj);
         } else {
