@@ -71,6 +71,7 @@ namespace {
            DirectRangeOddByteBufferCoversLastWordAndKeepsLogicalSize) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.synchronize_device();
         ops.trim();
         const uint64_t live_before = internal::vulkan_live_vma_objects_for_testing();
 
@@ -79,6 +80,7 @@ namespace {
             expect_logical_bytes_unchanged(slab, 255);
         }
         EXPECT_GT(internal::vulkan_live_vma_objects_for_testing(), live_before);
+        ops.synchronize_device();
         ops.trim();
         const uint64_t live_baseline = internal::vulkan_live_vma_objects_for_testing();
 
@@ -92,6 +94,9 @@ namespace {
             }
             ops.synchronize_device();
             tensor = Tensor();
+            EXPECT_LE(internal::vulkan_live_vma_objects_for_testing(),
+                      live_baseline + 256ull * 1024ull * 1024ull / kDirectLimitBytes);
+            ops.trim();
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), live_baseline);
         }
     }

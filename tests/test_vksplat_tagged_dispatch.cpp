@@ -112,6 +112,7 @@ namespace {
 
     struct CapturedBarrier2 {
         std::vector<VkBufferMemoryBarrier2> buffer_barriers;
+        std::vector<VkMemoryBarrier2> memory_barriers;
         std::uint32_t memory_barrier_count = 0;
     };
 
@@ -209,6 +210,10 @@ namespace {
             CapturedBarrier2 cap;
             if (info != nullptr) {
                 cap.memory_barrier_count = info->memoryBarrierCount;
+                if (info->memoryBarrierCount > 0) {
+                    cap.memory_barriers.assign(info->pMemoryBarriers,
+                                               info->pMemoryBarriers + info->memoryBarrierCount);
+                }
                 if (info->pBufferMemoryBarriers != nullptr && info->bufferMemoryBarrierCount > 0) {
                     cap.buffer_barriers.assign(
                         info->pBufferMemoryBarriers,
@@ -908,7 +913,8 @@ namespace {
     };
 
     [[nodiscard]] bool edge_covered(const std::vector<VkBufferMemoryBarrier2>& derived,
-                                    const HazardEdge& edge) {
+                                    const HazardEdge& edge,
+                                    const DispatchScript* script = nullptr) {
         const Scope want_src{toStageMask(edge.src), toAccessMask(edge.src)};
         const Scope want_dst{toStageMask(edge.dst), toAccessMask(edge.dst)};
         for (const auto& b : derived) {
@@ -921,6 +927,18 @@ namespace {
                 (want_dst.stage & ~b.dstStageMask) == 0 &&
                 (want_dst.access & ~b.dstAccessMask) == 0) {
                 return true;
+            }
+        }
+        if (script) {
+            for (const auto& captured : script->barriers) {
+                for (const auto& barrier : captured.memory_barriers) {
+                    if ((want_src.stage & ~barrier.srcStageMask) == 0 &&
+                        (want_src.access & ~barrier.srcAccessMask) == 0 &&
+                        (want_dst.stage & ~barrier.dstStageMask) == 0 &&
+                        (want_dst.access & ~barrier.dstAccessMask) == 0) {
+                        return true;
+                    }
+                }
             }
         }
         return false;
@@ -2699,7 +2717,7 @@ TEST(VkSplatTaggedDispatch, MacroDepthWavesAuditW1AndW3) {
              "L2988 histogram"},
         };
         for (const auto& edge : hoist_edges) {
-            EXPECT_TRUE(edge_covered(derived, edge))
+            EXPECT_TRUE(edge_covered(derived, edge, &script))
                 << "missing macro hoist edge W=" << armed << " " << edge.name;
         }
 

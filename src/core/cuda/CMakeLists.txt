@@ -12,8 +12,6 @@ set(LFS_CORE_CUDA_SOURCES
     exportable_storage.cpp
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu
-    kernels/selection_ops.cu
-    selection_attribute_ops.cpp
     kernels/splat_transform.cu
     kernels/sh_layout.cu
     sh_value_quant_kernels.cu
@@ -32,15 +30,17 @@ add_library(lfs_cuda_diagnostics_compile_check OBJECT
 target_include_directories(lfs_core_cuda
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src  # For core/cuda/* path
         ${CMAKE_SOURCE_DIR}/src/core/include  # For core headers (tensor, logger, etc.)
         ${CMAKE_BINARY_DIR}/include
         ${CUDAToolkit_INCLUDE_DIRS}
     PRIVATE
+        ${CMAKE_SOURCE_DIR}/src  # core/cuda/* and private tensor headers
         ${CMAKE_CURRENT_SOURCE_DIR}  # For local includes within cuda/
         ${CMAKE_SOURCE_DIR}/src/core/tensor  # For internal/ headers
         ${CMAKE_SOURCE_DIR}/src/core/tensor/internal  # For memory_pool.hpp and other internal headers
 )
+target_compile_definitions(lfs_core_cuda PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+target_compile_definitions(lfs_cuda_diagnostics_compile_check PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
 
 target_include_directories(lfs_cuda_diagnostics_compile_check
     PRIVATE

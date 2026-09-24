@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/metrics.hpp"
@@ -319,10 +320,9 @@ TEST(GeomMetricHelpers, FlatRenderedDepthAbsRel) {
     EXPECT_NEAR(*absrel, 0.2f, 1.0e-5f);
 }
 
-TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class MetricsEvaluatorGeom : public lfs::test::CudaBackendTest {};
+
+TEST_F(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_match";
@@ -357,10 +357,7 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     std::filesystem::remove_all(tmp);
 }
 
-TEST(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+TEST_F(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     ensure_image_loader();
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_rot";
@@ -393,10 +390,7 @@ TEST(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     std::filesystem::remove_all(tmp);
 }
 
-TEST(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+TEST_F(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
 
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_geom_metrics_depth";
     std::filesystem::remove_all(tmp);

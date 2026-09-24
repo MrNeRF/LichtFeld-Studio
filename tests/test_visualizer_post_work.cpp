@@ -16,7 +16,10 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/training_state.hpp"
 #include "core/user_paths.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
@@ -42,7 +45,6 @@
 #include "training/strategies/mcmc.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
-#include "training/training_state.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
@@ -405,7 +407,7 @@ TEST(VisualizerPostedWorkTest, GuardedShutdownCancellationMakesWaitingFutureRead
     EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
 }
 
-class VisualizerImplResetTest : public ::testing::Test {
+class VisualizerImplResetTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         isolated_home_.emplace(temporary_.path / "home");
@@ -561,13 +563,6 @@ protected:
 };
 
 namespace {
-
-    bool cuda_device_available() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) ==
-                   cudaSuccess &&
-               count > 0;
-    }
 
     std::shared_ptr<lfs::core::Camera>
     make_project_request_test_camera(
@@ -878,6 +873,7 @@ namespace {
         const std::filesystem::path& dataset_path = {},
         const int sh_degree = 0,
         const bool gut = false) {
+        const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
                          ? make_degree1_splat(count)
@@ -2739,6 +2735,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ActiveProjectPreviewWritePreservesEditsAndQueuesSave) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "preview-live.licht";
@@ -4405,6 +4402,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ForceExitDiscardOnAutoCreatedProjectLeavesProjectAndNoAutosave) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         std::vector<std::string> warnings;
         const auto handler_token =
@@ -4615,9 +4613,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingSnapshotCleanupTerminalizesProjectWrite) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "cleanup.licht";
@@ -4703,9 +4699,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingSnapshotPrepareFailureTerminalizesProjectWrite) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "prepare.licht";
@@ -4810,9 +4804,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "supersede.licht";
@@ -4906,6 +4898,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingSnapshotCancelTerminalizesBeforeSettlement) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "cancel.licht";
@@ -5380,6 +5373,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            NewProjectWhileTrainingPromptsInsteadOfErroring) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -5439,6 +5433,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            NewProjectStopTrainingThenSwitchWritesNoProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "stop-then-new.licht";
@@ -5505,6 +5500,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenProjectWhileTrainingPromptsInsteadOfErroring) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "open-while-training.licht";
@@ -5568,6 +5564,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenProjectStopTrainingThenSwitchWritesNoProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto current_path =
             temporary / "open-stop-current.licht";
@@ -5638,6 +5635,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileStopTrainingDefersDatasetLoad) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -5742,6 +5740,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadDatasetApiDoesNotDeferOrPrompt) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -5890,9 +5889,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileStopTrainingDefersSplatLoadUntilTrainerStops) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
@@ -6001,9 +5998,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileStopTrainingDefersWholeBatchInOrder) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto first_path = makeSplatFixture("bicycle_ref");
         const auto second_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(first_path));
@@ -6117,6 +6112,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "titled-dataset-replace.licht";
@@ -6311,6 +6307,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            DatasetLoadIntoTrainedAutoCreatedProjectStartsUntitledSessionAndKeepsProjectFile) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -6368,9 +6365,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
@@ -6445,9 +6440,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SplatAddOntoSplatSceneKeepsTitledProject) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
@@ -6504,6 +6497,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectOpenApiWhileTrainingStillErrors) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "api-while-training.licht";
@@ -6563,6 +6557,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            NewProjectWhileCompletionPendingStillErrors) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -7464,9 +7459,7 @@ namespace lfs::vis {
     // stopping trainer still owes its terminal append (lost training generation).
     TEST_F(VisualizerImplResetTest,
            StoppingTrainerBlocksIdleCompactionAndAutosave) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "stopping-window.licht";
@@ -7604,6 +7597,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            BaselineIdleCheckpointTrainerClosesWithoutTrainingPrompt) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "baseline-idle.licht";
@@ -7730,6 +7724,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProgressedPausedTrainerStillBlocksCleanClose) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "progressed-paused.licht";
@@ -8140,9 +8135,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectGetInfoSucceedsDuringUnboundTrainingWithoutCkpt) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "unbound_train.licht";
@@ -8216,9 +8209,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "train-autosave-light.licht";
@@ -8399,9 +8390,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "train-autosave-omit.licht";
@@ -8551,6 +8540,7 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest, ResetTrainingPreservesViewportCameraAfterSuccessfulReload) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ViewerOptions options;
         options.show_startup_overlay = false;
 
@@ -8601,6 +8591,7 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest, ResetTrainingStopsTrainerDuringStarting) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path = temporary_.path / "reset-starting-failure-dataset";
         write_minimal_transforms_dataset(dataset_path);
 
@@ -8651,6 +8642,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            CloseSaveRoutesTrainingSnapshotToLiveDocument) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "close-train.licht";
@@ -8774,6 +8766,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainerOwnedSaveTargetsLiveDocumentPath) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "trainer-target.licht";
@@ -8839,6 +8832,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartTrainingUntitledCreatesRealProjectInProjectLocation) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path =
             temporary / "train-start-out";
@@ -8903,6 +8897,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            PrepareTrainingStartProjectSucceedsAfterInitPlyLoad) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path =
             temporary / "init-ply-train-out";
@@ -8983,6 +8978,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            InvalidStartReturnsReasonBeforeCreatingProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         VisualizerImpl viewer(options);
         auto* const parameter_manager = viewer.getParameterManager();
@@ -9019,6 +9015,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartTrainingWithCliOutputPathBindsProjectThere) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path =
             temporary / "train-cli-out";
@@ -9087,6 +9084,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartTrainingWaitsOutInFlightScratchAutosave) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -9129,6 +9127,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            PausedUngrantedStartTrainingGrantsAndBinds) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path =
             temporary / "paused-ungranted-out";
@@ -9210,6 +9209,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            UntitledTrainingSnapshotAdoptionRegistersProjectInMru) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         auto options = projectOptions();
         {
@@ -9273,6 +9273,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto destination = temporary / "migrated-temp.licht";
         auto options = projectOptions();
@@ -9350,6 +9351,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            UntitledStartConflictNeverReportsExistingOutputProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path = temporary / "conflict-out";
         std::filesystem::create_directories(output_path);
@@ -9388,6 +9390,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            CompletedAutoCreatedTrainingSavesRealMasterOnClose) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         auto options = projectOptions();
         {
@@ -9456,6 +9459,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveSucceedsOnAutoCreatedTrainingProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -9491,6 +9495,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LightAutosaveWritesSidecarNextToAutoCreatedProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -9552,6 +9557,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectLocationPreferenceGovernsTrainingAutoCreate) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto home = temporary / "pref-home";
         const auto second_root = temporary / "project-location-b";
@@ -9620,6 +9626,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartupScansLegacyWorkingTmpDirectory) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto home = temporary_.path / "legacy-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
@@ -9675,6 +9682,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartupPrunesOlderUnlockedScratchFilesAfterOffer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         const auto temp_dir = temporary_.path / "tmp";
         std::filesystem::create_directories(temp_dir);
@@ -9709,6 +9717,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartupScansLegacyRecoveryDirectory) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         const auto legacy_dir = temporary_.path / "recovery";
         std::filesystem::create_directories(legacy_dir);
@@ -9734,6 +9743,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RecoverLegacyScratchThenSaveAsRemovesLegacyFile) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         const auto legacy_dir = temporary_.path / "recovery";
         std::filesystem::create_directories(legacy_dir);
@@ -9809,6 +9819,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RecoveredScratchSaveStillRefusesAndStaysOutOfMru) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         const auto scratch_dir = temporary_.path / "recovery";
         std::filesystem::create_directories(scratch_dir);
@@ -9844,6 +9855,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            PausedGrantedStartTrainingDoesNotRecreateProject) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto output_path =
             temporary / "paused-granted-out";
@@ -9937,13 +9949,11 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartConflictSeesDiskCheckpointAfterTrainerReplacement) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Reset Training replaces the trainer, so snapshot
         // adoption via metrics is gone while the master
         // still holds a checkpoint the next start would
         // overwrite.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "start-conflict-disk.licht";
@@ -10109,12 +10119,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveAsRoutesThroughFinishedTrainer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // A Finished-only saveAs gate (active/pending only) falls through
         // to synchronizeDocumentFromViewer and fails with
         // "needs a safe-point project snapshot".
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "finished-saveas.licht";
@@ -10204,9 +10212,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "untitled-finished-saveas.licht";
@@ -10324,12 +10330,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveWhilePausedTrainingRoutesThroughLiveTrainer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Treating completion_pending_ as "publishing the final
         // snapshot" rejects Save Project while paused instead of
         // starting the live trainer snapshot write.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "paused-save.licht";
@@ -10429,14 +10433,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveWhilePausedNoWorkerTrainerCompletes) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Checkpoint-installed paused trainers have
         // is_paused() true with no live training thread.
         // File Save must still route through the
         // trainer, inline-flush, and finish the
         // ProjectWrite job.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "paused-no-worker-save.licht";
@@ -10568,12 +10570,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveWhileStoppingStillBlocksUntilSnapshotPublished) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // The stop-window save gate must still refuse Save Project
         // while the trainer is Stopping and publishing its final
         // snapshot.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "stopping-save.licht";
@@ -10655,9 +10655,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveWhileTrainerWriterInFlightQueuesUntilCompletion) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path = temporary_.path / "queued-save.licht";
         write_empty_project(project_path);
         VisualizerImpl viewer(projectOptions());
@@ -10696,9 +10694,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TemporaryPauseRequestIsObservedAtNextSafePoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         ASSERT_TRUE(arm_running_trainer(viewer));
@@ -10722,12 +10718,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveAsWhilePausedTrainingRoutesThroughLiveTrainer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // The same completion_pending_ inner gate on saveAs rejects
         // Save As during paused training instead of routing through
         // the live trainer snapshot write.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "paused-saveas.licht";
@@ -10814,12 +10808,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SaveAsRoutesThroughFailedTerminalSnapshotAftermath) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Returning adoptCompletedTrainingSnapshot's failure from saveAs
         // after a failed terminal write dead-ends with
         // "The latest training project generation failed."
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "aftermath-saveas.licht";
@@ -10923,6 +10915,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            InfoSurvivesFailedTerminalSnapshotAftermath) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Catches info() returning synchronizeDocumentFromViewer
         // FailedPrecondition ("The training model needs a
         // safe-point project snapshot") after a failed
@@ -10930,9 +10923,6 @@ namespace lfs::vis {
         // the geometry CKPT check; a real unbound SPLAT
         // node is the shape that killed MCP save_as
         // preflight even after the adoption tolerance.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto failed_path =
             temporary / "failed-terminal.licht";
@@ -11028,12 +11018,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Equal counters mean nothing new to adopt.
         // last_path is a nonexistent file: success
         // proves ProjectDocument::open was not called.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto missing_path =
             temporary / "never-written.licht";
@@ -11082,12 +11070,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            AdoptedStepBoundaryPublishRebasesAutosaveBase) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Trainer step-boundary appends advance the on-disk
         // master without rebasing the GUI document. Settlement
         // must adopt so the next autosave binds the new commit.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "step-boundary-adopt.licht";
@@ -11362,14 +11348,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LightAutosaveRebasesWhenSnapshotCountersMissNewMaster) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Training restart creates a new snapshot service
         // whose completed_snapshots can match the previous
         // run's adopted count, so adoptSettled skips. Disk
         // already has the new master commit. Light autosave
         // must rebase before binding the sidecar.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "restart-autosave-base.licht";
@@ -11517,15 +11501,13 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Ctrl+S after a trainer-like append that the
         // lifecycle has not adopted. Idle explicit save
         // used to reuse proofs minted at document open
         // (project_document.cpp make_clean_proof) against
         // ProjectWriter::append locked at the new head
         // (project_writer.cpp reuse_if_clean authority).
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "ctrl-s-unadopted-append.licht";
@@ -11613,14 +11595,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ExplicitSaveAfterTrainerRewriteUsesCurrentHead) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Compact/save-as rewrite mints a new file UUID
         // and resets generation to 1. adoptCompletedTrainingSnapshot
         // used generation() >= opened->generation() to keep
         // the stale document, so Ctrl+S reused proofs for
         // the previous file UUID.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "ctrl-s-rewrite.licht";
@@ -11900,6 +11880,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingStartAutoCreateSuffixesOnCollision) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto location = temporary_.path / "projects";
         write_empty_project(location / "untitled.licht");
         write_empty_project(location / "untitled-2.licht");
@@ -12006,6 +11987,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectCreateWhileTrainingPromptsWithCreatePath) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto path = temporary_.path / "training-create.licht";
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
@@ -12036,6 +12018,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectCreateStopTrainingDefersWithoutBinding) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto path = temporary_.path / "deferred-create.licht";
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
@@ -12066,6 +12049,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            DeferredCreateLateCollisionDropsQueuedLoads) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto path = temporary_.path / "deferred-collision.licht";
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
@@ -12122,6 +12106,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartupPruneNeverTouchesProjectLocation) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto home = temporary_.path / "prune-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
@@ -12145,12 +12130,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Same rewrite/adopt gap on this branch's temp
         // master. Save As must rebase onto the rewritten
         // head before capturing or copying.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "temp-rewrite-saveas.licht";
@@ -12376,13 +12359,11 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ProjectGetInfoSucceedsWithUnboundPausedTrainer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Standalone checkpoint load leaves a Paused
         // trainer at baseline. info() used to require
         // Finished+flushable before skipping the unbound
         // CKPT sync error.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "unbound-paused.licht";
@@ -12519,9 +12500,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ForceExitWhileStoppingArmsWatcher) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
@@ -12637,9 +12616,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StopSaveAndExitBindsUntitledDestinationBeforeStop) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto chosen =
             temporary / "chosen-stop-save.licht";
@@ -12765,9 +12742,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            BoundCheckpointIterationCacheSkipsHeaderWhenWarm) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "ckpt-iter-cache.licht";
@@ -12861,9 +12836,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SelectedGaussiansAndSelectionToolSurviveSaveAndReopen) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto destination =
             temporary_.path / "selection-tool-reopen.licht";
         auto options = projectOptions();
@@ -12975,9 +12948,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            DatasetProjectWithoutCheckpointReloadsTrainer) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "dataset-without-checkpoint.licht";
@@ -13028,9 +12999,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            HydratedDatasetReopenMarksDeletedImageMissing) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             temporary_.path /
             "hydrated-deleted-image-source";
@@ -13120,9 +13089,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            HydratedDatasetReopenIncludesRestoredImage) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             temporary_.path /
             "hydrated-restored-image-source";
@@ -13192,9 +13159,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            HydratedDatasetReopenAllImagesMissingDoesNotCrash) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             temporary_.path /
             "hydrated-all-missing-source";
@@ -13286,9 +13251,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            MissingDatasetProjectArmsRelocationInsteadOfImport) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "dataset-missing-relocation.licht";
@@ -13341,9 +13304,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RelocateProjectDatasetRestoresTrainerFromNewRoot) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "dataset-relocate-restore.licht";
@@ -13422,9 +13383,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RelocateRejectsFolderWithoutDatasetElements) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "dataset-relocate-reject.licht";
@@ -13489,9 +13448,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpeningAnotherProjectClearsPendingRelocation) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "dataset-relocate-switch-a.licht";
@@ -13567,9 +13524,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            MissingCheckpointDatasetProjectArmsRelocationInsteadOfInstall) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "ckpt-missing-relocation.licht";
@@ -13623,9 +13578,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "ckpt-relocate-restore.licht";
@@ -13724,9 +13677,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             temporary_.path /
             "dataset-without-reference";
@@ -13773,9 +13724,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            NonDatasetProjectInsideDatasetRootIsNotReimported) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             temporary_.path / "dataset-containing-ply-project";
         write_minimal_transforms_dataset(dataset_path);
@@ -13824,14 +13773,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Pre-training open used to queue a dataset re-import
         // that a later open had to cancel. Hydrated SCNG is now
         // the source of truth, so the first open installs a Ready
         // trainer synchronously. Opening another project must still
         // complete hydration and replace that trainer.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto dataset_path =
             temporary_.path /
             "dataset-hydrated-restore-switch";
@@ -13974,9 +13921,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            TrainingCheckpointReopenRestoresPausedResumableState) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "training-resume-reopen.licht";
         const auto dataset_path =
@@ -14027,9 +13972,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ErrorFinishedCheckpointProjectReopensPausedAndResumable) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "error-finish-reopen.licht";
         const auto dataset_path =
@@ -14077,9 +14020,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StoredTrainingBackendComesFromCheckpointBeforeTrainerRestore) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         for (const bool gut : {false, true}) {
             const auto project_path = temporary_.path / (gut ? "gut-backend.licht" : "gs-backend.licht");
             const auto dataset_path = temporary_.path / (gut ? "gut-dataset" : "gs-dataset");
@@ -14106,9 +14047,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            CompletedCheckpointProjectStillReopensFinished) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "completed-finish-reopen.licht";
@@ -14155,9 +14094,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            EditModeSaveRetainsUnboundCheckpointHistory) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "training-edit-mode-save.licht";
         const auto dataset_path =
@@ -14281,9 +14218,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreKeepsCheckpointBytesOnSave) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-ckpt-save.licht";
         const auto dataset_path =
@@ -14341,9 +14276,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StartWhileProjectIsLoadingReturnsRetryReason) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path = temporary_.path / "start-loading.licht";
         const auto dataset_path = temporary_.path / "start-loading-dataset";
         write_minimal_transforms_dataset(dataset_path);
@@ -14370,9 +14303,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StoredSessionAtPrmsIterationsReportsCompleted) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "stored-session-complete.licht";
         const auto dataset_path =
@@ -14427,9 +14358,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StoredSessionBelowPrmsIterationsReportsNotCompleted) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "stored-session-paused.licht";
         const auto dataset_path =
@@ -14481,9 +14410,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            StopStoredSessionWithoutResumingKeepsCheckpointAndEntersEditMode) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "stored-session-paused.licht";
         const auto dataset_path =
@@ -14571,9 +14498,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreKeepsCheckpointBytesOnAutosave) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-ckpt-autosave.licht";
         const auto dataset_path =
@@ -14653,9 +14578,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            EditModeWithoutHydratedSessionRetainsCheckpointHistory) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-edit-mode.licht";
         const auto dataset_path =
@@ -14716,9 +14639,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            RestoreThenTrainWritesNewCheckpoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-restore-train.licht";
         const auto dataset_path =
@@ -14809,9 +14730,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreCkptModelIsRendererReady) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-ckpt-render.licht";
         const auto dataset_path =
@@ -14857,9 +14776,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreMissingDatasetCkptModelIsRendererReady) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "lazy-ckpt-missing-dataset-render.licht";
@@ -14901,9 +14818,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            OpenWithoutRestoreSpltModelIsRendererReady) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path / "lazy-splt-render.licht";
         write_splt_project(
@@ -14942,12 +14857,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            HeadlessOpenPrintsHydrationStagesWhenBenchPathSet) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         const char* bench = std::getenv("LFS_OPEN_BENCH_LICHT");
         if (bench == nullptr || bench[0] == '\0') {
             GTEST_SKIP() << "Set LFS_OPEN_BENCH_LICHT to a .licht file";
-        }
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
         }
         const std::filesystem::path project_path{bench};
         std::mutex log_mutex;
@@ -15003,12 +14916,10 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            ReopenedTwoSplatProjectBuildsExternalCombinedModel) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Reopening a two-visible-splat .licht left the combined
         // model on plain CUDA tensors (no Vulkan-external allocator),
         // so VkSplat refused to render until one node was hidden.
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto& temporary = temporary_.path;
         const auto destination =
             temporary / "two-splat-reopen.licht";
@@ -15092,9 +15003,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            AsyncCaptureKeepsNewerSceneDirty) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
@@ -15147,9 +15056,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            PreTrainingProjectSaveRestoresCameraEnabledAndHidden) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "pre-train-camera-flags.licht";
@@ -15263,9 +15170,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            PostTrainingProjectSaveRestoresCameraEnabledAndHidden) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto project_path =
             temporary_.path /
             "post-train-camera-flags.licht";
@@ -15425,9 +15330,7 @@ namespace lfs::vis {
 
     TEST_F(DatasetEmbedIntegrationTest,
            DatasetEmbedExtractionReopenIsIdempotent) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path = make_real_dataset_subset(
             temporary_.path / "extract-dataset");
         const auto project_path = temporary_.path / "extract.licht";
@@ -15502,9 +15405,7 @@ namespace lfs::vis {
 
     TEST_F(DatasetEmbedIntegrationTest,
            CreateLoadDeferredDatasetEmbedCompletes) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle";
         const auto project_path = temporary_.path / "create-load-embed.licht";
@@ -15549,9 +15450,7 @@ namespace lfs::vis {
 
     TEST_F(DatasetEmbedIntegrationTest,
            ProjectInfoReportsLiveDatasetBeforeFirstSave) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =
             std::filesystem::path(PROJECT_ROOT_PATH) /
             "data/bicycle";

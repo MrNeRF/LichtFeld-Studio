@@ -143,9 +143,13 @@ namespace {
                 std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
                 return 0;
             } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
-                applyCudaContextTuning();
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    applyCudaContextTuning();
+                }
                 preflightGpuOrExit(false);
-                analyzeCudaContextDistribution();
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    analyzeCudaContextDistribution();
+                }
                 return 0;
             } else if constexpr (std::is_same_v<T, lfs::core::args::TensorBackendSelftestMode>) {
                 const char* name = mode.backend == lfs::core::GpuBackend::Vulkan ? "vulkan" : "cuda";
@@ -175,15 +179,29 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                if constexpr (!LFS_BUILD_TRAINER) {
+                    if (mode.params->optimization.headless && !mode.params->render_path) {
+                        std::println(stderr, "Training is not included in this build.");
+                        return 1;
+                    }
+                }
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 
-                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
-                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
-                applyCudaContextTuning();
-
                 const bool interactive =
                     !mode.params->optimization.headless && !mode.params->render_path;
+                // A Vulkan viewer still constructs a CUDA trainer when a dataset opens.
+                // The primary context has to exist before that open.
+                const bool warm_cuda_context =
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                    (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA || interactive);
+
+                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
+                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
+                if (warm_cuda_context) {
+                    applyCudaContextTuning();
+                }
+
                 const bool viewer_only = lfs::app::training_params_are_viewer_only(*mode.params);
                 preflightGpuOrExit(interactive, viewer_only);
 
@@ -191,8 +209,7 @@ namespace {
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,
                 // plugin, and mesh2splat must not create a CUDA primary context just
                 // for HUD metrics.
-                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
-                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                if (warm_cuda_context) {
                     analyzeCudaContextDistribution();
                 }
                 if (mode.params->optimization.debug_python) {

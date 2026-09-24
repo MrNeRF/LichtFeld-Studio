@@ -12,7 +12,6 @@
 #include "py_error.hpp"
 #include "py_tensor.hpp"
 
-#include <cuda_runtime.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>

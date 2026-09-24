@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "training/trainer.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -68,6 +70,19 @@ namespace {
     };
 
     class CudaErrorTypedDeathTest : public CudaErrorTypedTest {};
+
+    class CudaErrorTrainerTest : public CudaErrorTypedTest {
+    protected:
+        void SetUp() override {
+            CudaErrorTypedTest::SetUp();
+            if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
+                GTEST_SKIP() << "CUDA device unavailable";
+            backend_scope_.emplace(lfs::core::GpuBackend::CUDA);
+        }
+
+    private:
+        std::optional<lfs::core::GpuBackendScope> backend_scope_;
+    };
 
     [[nodiscard]] lfs::core::CudaCheckCompletion completion_for(
         const cudaError_t effective_error) {
@@ -223,7 +238,7 @@ namespace {
         EXPECT_NE(std::get<std::string>(raw_status->value).find("cudaSuccess"), std::string::npos);
     }
 
-    TEST_F(CudaErrorTypedTest, TrainerShutdownIsIdempotent) {
+    TEST_F(CudaErrorTrainerTest, TrainerShutdownIsIdempotent) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_camera(0));
@@ -233,7 +248,7 @@ namespace {
         EXPECT_NO_THROW(trainer.shutdown());
     }
 
-    TEST_F(CudaErrorTypedTest, TrainerModelReadLifecycleSucceeds) {
+    TEST_F(CudaErrorTrainerTest, TrainerModelReadLifecycleSucceeds) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_camera(0));

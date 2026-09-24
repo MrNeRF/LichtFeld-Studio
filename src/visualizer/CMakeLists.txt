@@ -63,6 +63,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/viewport_frame_lifecycle_service.cpp
         rendering/viewport_interop_service.cpp
         rendering/viewport_appearance_correction.cpp
+        rendering/appearance_tensor_model.cpp
         rendering/viewport_request_builder.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
         rendering/passes/vulkan_viewport_pass.cpp
@@ -156,8 +157,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         input/sdl_key_mapping.cpp
 
         # Training integration
-        training/training_state.cpp
-        training/training_manager.cpp
+        core/training_state.cpp
+        project/training_session_state.cpp
+        $<$<BOOL:${LFS_BUILD_TRAINER}>:training/training_manager.cpp>
+        $<$<NOT:$<BOOL:${LFS_BUILD_TRAINER}>>:project/training_session_presenter.cpp>
 
         # Tools
         tools/selection_tool.cpp
@@ -244,6 +247,10 @@ if(MSVC)
     )
 endif()
 
+# Trainer seam only: the rest of the visualizer cannot include private tensor headers.
+set_property(SOURCE training/training_manager.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
+
 # Set include directories
 target_include_directories(lfs_visualizer
         PUBLIC
@@ -264,7 +271,7 @@ target_link_libraries(lfs_visualizer
         lfs_geometry
         lfs_io
         lfs_rendering_tensor
-        lfs_training
+        $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>
         lfs_python_runtime
         lfs_python_utils
         lfs_sequencer
@@ -298,17 +305,11 @@ endif()
 target_sources(lfs_visualizer
         PRIVATE
         gui/rmlui/rmlui_vk_backend.cpp
-        rendering/lod_page_dequant_cuda.cu
         rendering/vksplat_input_packer.cpp
-        rendering/vksplat_input_packer_cuda.cu
         rendering/vksplat_viewport_renderer.cpp
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
 
-# The CPU chunk decoders round multiplies and adds separately; FMA contraction
-# in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
-set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES
-        COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
 set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
     CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
 find_package(glslang CONFIG REQUIRED)

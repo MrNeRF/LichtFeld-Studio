@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/abi.hpp"
 #include "core/tensor.hpp"
 #include "io/formats/colmap.hpp"
@@ -211,11 +213,6 @@ namespace {
     }
 
     TEST(AssertHardeningRegression, CudaRowProxyPreservesInt64Exactly) {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-
         auto cpu = Tensor::empty({2}, Device::CPU, DataType::Int64);
         auto* values = cpu.ptr<int64_t>();
         values[0] = (int64_t{1} << 54) + 1;
@@ -227,12 +224,9 @@ namespace {
         EXPECT_EQ(cuda[1].item_int64(), values[1]);
     }
 
-    TEST(AssertHardeningRegression, ZeroLengthMatrixFactoriesDoNotPoisonCuda) {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    class AssertHardeningCudaRegression : public lfs::test::CudaBackendTest {};
 
+    TEST_F(AssertHardeningCudaRegression, ZeroLengthMatrixFactoriesDoNotPoisonCuda) {
         ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 
         const auto empty = Tensor::empty({0}, Device::GPU);

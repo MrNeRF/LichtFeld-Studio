@@ -5,12 +5,16 @@
 
 #include "core/camera.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "core/training_manager.hpp"
+#include "core/training_state.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panels/python_console_panel.hpp"
@@ -25,11 +29,8 @@
 #include "rendering/rendering_types.hpp"
 #include "sequencer/timeline.hpp"
 #include "tools/unified_tool_registry.hpp"
-#include "training/control/command_api.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
-#include "training/training_state.hpp"
 #include "visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
@@ -1478,9 +1479,10 @@ namespace {
     }
 
     class P5MetricsRestoreTest
-        : public ::testing::Test {
+        : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             lfs::event::EventBridge::instance()
                 .clear_all();
             auto& command_center =

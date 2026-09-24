@@ -345,7 +345,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             const uint innerIndex = uint(tid % parameters.inner);
             const int target = indices[position];
             if (target < 0 || target >= int(parameters.dimSize))
+            {
+                recordFault(parameters.faultAddress, target, parameters.dimSize, parameters.opId);
                 continue;
+            }
             const uint64_t destinationIndex =
                 uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
                 uint64_t(target) * parameters.inner + innerIndex;
@@ -379,7 +382,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             if (slot > 0 && keys[slot - 1] == key)
                 continue;
             if (key >= parameters.dimSize)
+            {
+                recordFault(parameters.faultAddress, int(key), parameters.dimSize, parameters.opId);
                 continue;
+            }
             const uint64_t destinationIndex =
                 uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
                 uint64_t(key) * parameters.inner + innerIndex;

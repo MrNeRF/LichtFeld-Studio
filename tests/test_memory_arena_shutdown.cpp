@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/memory_arena.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -16,9 +17,10 @@ namespace {
         return config;
     }
 
-    class GlobalArenaShutdownTest : public ::testing::Test {
+    class GlobalArenaShutdownTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
             auto& manager = lfs::core::GlobalArenaManager::instance();
             if (auto* arena = manager.try_get_arena()) {
@@ -29,6 +31,9 @@ namespace {
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             auto& manager = lfs::core::GlobalArenaManager::instance();
             if (auto* arena = manager.try_get_arena()) {
                 arena->full_reset();
@@ -50,7 +55,9 @@ TEST_F(GlobalArenaShutdownTest, ShutdownIsIdempotentWithoutConstructingArena) {
     EXPECT_EQ(manager.try_get_arena(), nullptr);
 }
 
-TEST(MemoryArenaShutdownTest, FullResetDestroysLastFrameEvent) {
+class MemoryArenaShutdownTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MemoryArenaShutdownTest, FullResetDestroysLastFrameEvent) {
     ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     lfs::core::RasterizerMemoryArena arena(test_config());
 
@@ -86,7 +93,7 @@ TEST_F(GlobalArenaShutdownTest, ShutdownLatchesUntilTestingReconfigure) {
 
 // full_reset must remain noexcept with a sticky CUDA error. Trigger a non-success
 // last-error without mapping invalid device memory, then verify teardown completes.
-TEST(MemoryArenaShutdownTest, FullResetToleratesPoisonedCudaContext) {
+TEST_F(MemoryArenaShutdownTest, FullResetToleratesPoisonedCudaContext) {
     ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     lfs::core::RasterizerMemoryArena arena(test_config());
 

@@ -3,18 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_appearance_correction.hpp"
+#include "appearance_tensor_model.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
+#include "ppisp_overrides_utils.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/export_post_process.hpp"
 #include "scene/scene_manager.hpp"
+#if LFS_BUILD_TRAINER
+#include "core/camera_metrics.hpp"
+#include "core/training_manager.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/tensor_completion.hpp"
 #include <algorithm>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <exception>
 #include <format>
 #include <mutex>
@@ -23,28 +29,12 @@
 namespace lfs::vis {
 
     namespace {
+#if LFS_BUILD_TRAINER
         [[nodiscard]] lfs::training::PPISPRenderOverrides toRenderOverrides(const PPISPOverrides& ov) {
-            lfs::training::PPISPRenderOverrides r;
-            r.exposure_offset = ov.exposure_offset;
-            r.vignette_enabled = ov.vignette_enabled;
-            r.vignette_strength = ov.vignette_strength;
-            r.wb_temperature = ov.wb_temperature;
-            r.wb_tint = ov.wb_tint;
-            r.color_red_x = ov.color_red_x;
-            r.color_red_y = ov.color_red_y;
-            r.color_green_x = ov.color_green_x;
-            r.color_green_y = ov.color_green_y;
-            r.color_blue_x = ov.color_blue_x;
-            r.color_blue_y = ov.color_blue_y;
-            r.gamma_multiplier = ov.gamma_multiplier;
-            r.gamma_red = ov.gamma_red;
-            r.gamma_green = ov.gamma_green;
-            r.gamma_blue = ov.gamma_blue;
-            r.crf_toe = ov.crf_toe;
-            r.crf_shoulder = ov.crf_shoulder;
-            return r;
+            return copyPpispOverrides<lfs::training::PPISPRenderOverrides>(ov);
         }
 
+#endif
         [[nodiscard]] bool isImageWithAlpha(const lfs::core::Tensor& image) {
             return image.ndim() == 3 &&
                    ((image.shape()[0] == 4) || (image.shape()[2] == 4));
@@ -57,10 +47,7 @@ namespace lfs::vis {
             return input.gpu();
         }
 
-        // Applies PPISP to an image regardless of who owns the component (standalone
-        // appearance model or an active trainer). A non-null pool selects the
-        // controller path; controller_params (from one thumbnail prediction) keeps
-        // banded application seam-free.
+#if LFS_BUILD_TRAINER
         [[nodiscard]] lfs::core::Tensor applyPpispAppearance(
             lfs::training::PPISP& ppisp,
             lfs::training::PPISPControllerPool* const pool,
@@ -93,33 +80,26 @@ namespace lfs::vis {
                              : ppisp.apply_with_overrides(
                                    input, camera_id, camera_uid, toRenderOverrides(overrides), region);
             } else {
-                // Eval convention: identity colour, 0 EV, camera-level vignetting/CRF
-                // (physical camera with the most registered frames). Manual overrides
-                // still apply on top.
-                const int fallback_camera = ppisp.majority_camera_id();
+                const int camera = ppisp.majority_camera_id();
                 result = overrides.isIdentity()
-                             ? ppisp.apply_with_exposure(input, fallback_camera, 0.0f, region)
-                             : ppisp.apply_with_exposure_and_overrides(
-                                   input, fallback_camera, 0.0f, toRenderOverrides(overrides), region);
+                             ? ppisp.apply_with_exposure(input, camera, 0.0f, region)
+                             : ppisp.apply_with_exposure_and_overrides(input, camera, 0.0f, toRenderOverrides(overrides), region);
             }
 
             return (was_hwc && result.is_valid()) ? result.permute({1, 2, 0}).contiguous() : result;
         }
 
+#endif
         [[nodiscard]] lfs::core::Tensor applyStandaloneAppearance(
-            const lfs::core::Tensor& rgb,
-            SceneManager& scene_mgr,
-            const int camera_uid,
-            const PPISPOverrides& overrides,
-            const bool use_controller) {
-            auto* ppisp = scene_mgr.getAppearancePPISP();
-            if (!ppisp) {
+            const lfs::core::Tensor& rgb, SceneManager& scene_mgr, int camera_uid,
+            const PPISPOverrides& overrides, bool use_controller) {
+            const auto* model = scene_mgr.getAppearanceTensorModel();
+            if (!model)
                 return rgb;
-            }
-            auto* const pool = use_controller && scene_mgr.hasAppearanceController()
-                                   ? scene_mgr.getAppearanceControllerPool()
-                                   : nullptr;
-            return applyPpispAppearance(*ppisp, pool, rgb, camera_uid, overrides);
+            const bool was_hwc = rgb.ndim() == 3 && rgb.shape()[2] == 3;
+            const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
+            auto result = model->apply(input, camera_uid, overrides, use_controller);
+            return was_hwc ? result.permute({1, 2, 0}).contiguous() : result;
         }
     } // namespace
 
@@ -169,6 +149,7 @@ namespace lfs::vis {
             return restored.contiguous();
         };
 
+#if LFS_BUILD_TRAINER
         if (const auto* tm = scene_manager->getTrainerManager()) {
             if (const auto* trainer = tm->getTrainer(); trainer && trainer->hasPPISP()) {
                 lfs::training::PPISPViewportOverrides trainer_overrides{};
@@ -196,6 +177,7 @@ namespace lfs::vis {
                 }
             }
         }
+#endif
 
         if (!scene_manager->hasAppearanceModel()) {
             return image;
@@ -232,7 +214,7 @@ namespace lfs::vis {
         constexpr int kThumbnailFallbackWidth = 1920;
         constexpr int kThumbnailFallbackHeight = 1080;
 
-        // Stride-sampled CUDA float CHW thumbnail for the one-shot controller
+        // Stride-sampled GPU float CHW thumbnail for the one-shot controller
         // prediction, targeting the live viewport size so every export resolution
         // predicts the same params the on-screen view uses.
         [[nodiscard]] lfs::core::Tensor makeExportThumbnailChw(const lfs::core::Tensor& image_u8_hwc_cpu,
@@ -294,30 +276,24 @@ namespace lfs::vis {
         const int height = static_cast<int>(image_u8_hwc_cpu.size(0));
         const int width = static_cast<int>(image_u8_hwc_cpu.size(1));
 
-        // Resolve the PPISP component regardless of owner: an active trainer keeps it
-        // internal; the viewer keeps a standalone appearance model on the scene.
         const bool use_controller = settings.ppisp_mode == RenderSettings::PPISPMode::AUTO;
+        const AppearanceTensorModel* tensor_model = scene_manager ? scene_manager->getAppearanceTensorModel() : nullptr;
+        bool trainer_owned = false;
+#if LFS_BUILD_TRAINER
         lfs::training::PPISP* ppisp = nullptr;
         lfs::training::PPISPControllerPool* controller_pool = nullptr;
-        bool trainer_owned = false;
         if (scene_manager) {
             if (const auto* tm = scene_manager->getTrainerManager()) {
                 if (const auto* trainer = tm->getTrainer(); trainer && trainer->hasPPISP()) {
                     ppisp = trainer->getPPISP();
-                    controller_pool = use_controller && trainer->hasPPISPController()
-                                          ? trainer->getPPISPControllerPool()
-                                          : nullptr;
+                    controller_pool = use_controller && trainer->hasPPISPController() ? trainer->getPPISPControllerPool() : nullptr;
                     trainer_owned = true;
+                    tensor_model = nullptr;
                 }
             }
-            if (ppisp == nullptr && scene_manager->hasAppearanceModel()) {
-                ppisp = scene_manager->getAppearancePPISP();
-                controller_pool = use_controller && scene_manager->hasAppearanceController()
-                                      ? scene_manager->getAppearanceControllerPool()
-                                      : nullptr;
-            }
         }
-        const bool apply_ppisp = settings.apply_appearance_correction && ppisp != nullptr;
+#endif
+        const bool apply_ppisp = settings.apply_appearance_correction && (trainer_owned || tensor_model);
 
         if (!apply_ppisp && !needs_env) {
             return image_u8_hwc_cpu;
@@ -339,10 +315,10 @@ namespace lfs::vis {
             }
         }
 
-        std::shared_ptr<const lfs::rendering::CudaEnvironmentMap> env_map;
+        std::shared_ptr<const lfs::rendering::EnvironmentMap> env_map;
         lfs::rendering::EnvironmentCompositeBandParams env_params;
         if (needs_env) {
-            auto loaded = lfs::rendering::getOrLoadCudaEnvironmentMap(settings.environment_map_path);
+            auto loaded = lfs::rendering::getOrLoadEnvironmentMap(settings.environment_map_path, lfs::core::default_gpu_backend());
             if (!loaded) {
                 return std::unexpected(std::format("export environment map failed: {}", loaded.error()));
             }
@@ -365,6 +341,11 @@ namespace lfs::vis {
             // identical exposure/color (per-band prediction would cause visible seams and
             // allocate CNN intermediates at export resolution).
             lfs::core::Tensor controller_params;
+            if (apply_ppisp && tensor_model && use_controller && tensor_model->hasController()) {
+                controller_params = tensor_model->predict(
+                    makeExportThumbnailChw(image_u8_hwc_cpu, view.controller_predict_size));
+            }
+#if LFS_BUILD_TRAINER
             if (apply_ppisp && controller_pool != nullptr) {
                 const bool is_training_camera = ppisp->is_known_frame(camera_uid);
                 const int camera_idx =
@@ -378,12 +359,21 @@ namespace lfs::vis {
                 // (which resizes those buffers and clones from one) out of an in-flight
                 // trainer predict/backward pair on another stream.
                 std::lock_guard<std::mutex> controller_lock(controller_pool->predict_mutex());
-                cudaDeviceSynchronize();
+                lfs::core::TensorCompletion completion;
+                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.wait();
                 controller_pool->allocate_buffers(thumbnail.size(1), thumbnail.size(2));
                 controller_params = controller_pool->predict(controller_idx, thumbnail.unsqueeze(0), 1.0f).clone();
-                cudaDeviceSynchronize();
+                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.wait();
             }
 
+#endif
+            lfs::core::PpispParams saved_parameters;
+            if (apply_ppisp && tensor_model) {
+                saved_parameters = tensor_model->parameters(camera_uid, overrides, controller_params);
+                saved_parameters.full_height = height;
+            }
             lfs::core::Tensor output = image_u8_hwc_cpu;
             if (needs_env) {
                 output = lfs::core::Tensor::empty(
@@ -398,23 +388,30 @@ namespace lfs::vis {
             const int band_rows = std::clamp(kMaxExportBandPixels / std::max(width, 1), 1, height);
             for (int y0 = 0; y0 < height; y0 += band_rows) {
                 const int band_height = std::min(band_rows, height - y0);
-                const auto band_cuda = image_u8_hwc_cpu
-                                           .slice(0, static_cast<size_t>(y0), static_cast<size_t>(y0 + band_height))
-                                           .gpu();
+                const auto band_gpu = image_u8_hwc_cpu
+                                          .slice(0, static_cast<size_t>(y0), static_cast<size_t>(y0 + band_height))
+                                          .gpu();
 
                 lfs::core::Tensor rgb_chw;
                 lfs::core::Tensor alpha;
                 if (auto unpacked = lfs::rendering::unpackU8HwcBandToChwFloat(
-                        band_cuda, rgb_chw, expected_channels == 4 ? &alpha : nullptr);
+                        band_gpu, rgb_chw, expected_channels == 4 ? &alpha : nullptr);
                     !unpacked) {
                     return std::unexpected(std::format("export band unpack failed: {}", unpacked.error()));
                 }
 
                 lfs::core::Tensor corrected = rgb_chw;
                 if (apply_ppisp) {
-                    const lfs::training::PPISPRegion region{.y_offset = y0, .full_height = height};
-                    corrected = applyPpispAppearance(*ppisp, controller_pool, rgb_chw, camera_uid, overrides,
-                                                     region, controller_params);
+                    if (tensor_model) {
+                        saved_parameters.y_offset = y0;
+                        corrected = lfs::core::ppisp_apply(rgb_chw, saved_parameters);
+                    }
+#if LFS_BUILD_TRAINER
+                    else {
+                        corrected = applyPpispAppearance(*ppisp, controller_pool, rgb_chw, camera_uid, overrides,
+                                                         {.y_offset = y0, .full_height = height}, controller_params);
+                    }
+#endif
                     if (!corrected.is_valid()) {
                         return std::unexpected("export PPISP correction produced no image");
                     }

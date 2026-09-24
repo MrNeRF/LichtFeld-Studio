@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
 #include "tensor_hardening_test_utils.hpp"
 
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
@@ -27,7 +28,9 @@ namespace {
 
 } // namespace
 
-TEST_F(CudaTest, D1_CloneWaitsForGatedProducer) {
+class CudaStreamTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(CudaStreamTest, D1_CloneWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -51,7 +54,7 @@ TEST_F(CudaTest, D1_CloneWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D1_ContiguousWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D1_ContiguousWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -76,7 +79,7 @@ TEST_F(CudaTest, D1_ContiguousWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D1_DtypeConversionWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D1_DtypeConversionWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -101,7 +104,7 @@ TEST_F(CudaTest, D1_DtypeConversionWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D1_CopyFromWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D1_CopyFromWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -131,7 +134,7 @@ TEST_F(CudaTest, D1_CopyFromWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D1_BinaryInPlaceWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D1_BinaryInPlaceWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -161,7 +164,7 @@ TEST_F(CudaTest, D1_BinaryInPlaceWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D2_MMWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D2_MMWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
     constexpr int size = 256;
@@ -187,7 +190,7 @@ TEST_F(CudaTest, D2_MMWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D2_DotWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D2_DotWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
     constexpr int count = 1 << 20;
@@ -213,7 +216,7 @@ TEST_F(CudaTest, D2_DotWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D2_DiagWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D2_DiagWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
     constexpr int count = 1024;
@@ -237,7 +240,7 @@ TEST_F(CudaTest, D2_DiagWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D2_MultinomialWaitsForGatedProducer) {
+TEST_F(CudaStreamTest, D2_MultinomialWaitsForGatedProducer) {
     GateStream producer;
     const cudaStream_t consumer = make_consumer_stream();
 
@@ -267,7 +270,7 @@ TEST_F(CudaTest, D2_MultinomialWaitsForGatedProducer) {
     destroy_stream_safely(consumer);
 }
 
-TEST_F(CudaTest, D3_WhereMetadataIsNotReusedAcrossConcurrentStreams) {
+TEST_F(CudaStreamTest, D3_WhereMetadataIsNotReusedAcrossConcurrentStreams) {
     cudaStream_t first_stream = make_consumer_stream();
     cudaStream_t second_stream = make_consumer_stream();
 
@@ -309,7 +312,7 @@ TEST_F(CudaTest, D3_WhereMetadataIsNotReusedAcrossConcurrentStreams) {
     destroy_stream_safely(first_stream);
 }
 
-TEST_F(CudaTest, D4_OverlappingTransposeCopyUsesSnapshotSemantics) {
+TEST_F(CudaStreamTest, D4_OverlappingTransposeCopyUsesSnapshotSemantics) {
     const std::vector<float> values = {1, 2, 3, 4,
                                        5, 6, 7, 8,
                                        9, 10, 11, 12,
@@ -328,7 +331,7 @@ TEST_F(CudaTest, D4_OverlappingTransposeCopyUsesSnapshotSemantics) {
     }
 }
 
-TEST_F(CudaTest, D4_OverlappingIndexSelectIntoUsesSnapshotSemantics) {
+TEST_F(CudaStreamTest, D4_OverlappingIndexSelectIntoUsesSnapshotSemantics) {
     const auto index = lfs_int_tensor({1, 0}, {2}, Device::GPU);
     for (int iteration = 0; iteration < 100; ++iteration) {
         auto ours = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::GPU);
@@ -341,7 +344,7 @@ TEST_F(CudaTest, D4_OverlappingIndexSelectIntoUsesSnapshotSemantics) {
     }
 }
 
-TEST_F(CudaTest, D5_AliasedScatterMatchesTorchOverlapContract) {
+TEST_F(CudaStreamTest, D5_AliasedScatterMatchesTorchOverlapContract) {
     const auto index = lfs_int_tensor({1, 2, 0}, {3}, Device::GPU);
     auto ours = lfs_float_tensor({1, 2, 3}, {3}, Device::GPU);
     bool ours_threw = false;

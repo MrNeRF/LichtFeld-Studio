@@ -53,41 +53,6 @@ if(MSVC)
     )
 endif()
 
-# RAD encode quantization kernels. Kept out of lfs_io_cuda: bit-parity with
-# the CPU PropertyEncoder requires IEEE arithmetic — no -use_fast_math, no
-# FMA contraction (same constraint as lod_page_dequant_cuda.cu).
-add_library(lfs_io_rad_quant_cuda STATIC
-        cuda/rad_encode_quant.hpp
-        cuda/rad_encode_quant.cu
-)
-
-target_include_directories(lfs_io_rad_quant_cuda
-        PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/core/include
-        ${CMAKE_SOURCE_DIR}/src
-)
-
-target_link_libraries(lfs_io_rad_quant_cuda
-        PRIVATE
-        lfs_diagnostics
-        CUDA::cudart
-)
-
-set_target_properties(lfs_io_rad_quant_cuda PROPERTIES
-        CUDA_SEPARABLE_COMPILATION OFF
-        CUDA_STANDARD 20
-        CUDA_STANDARD_REQUIRED ON
-        POSITION_INDEPENDENT_CODE ON
-)
-
-target_compile_options(lfs_io_rad_quant_cuda PRIVATE
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g --fmad=false -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 --fmad=false -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g --fmad=false>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 --fmad=false>
-)
-
 # SPZ library (Niantic compressed format) - MIT licensed
 add_library(spz_lib STATIC
         ${CMAKE_SOURCE_DIR}/external/spz/load-spz.cc
@@ -242,6 +207,8 @@ endif()
 add_library(lfs_io STATIC
         # Implementation file only (header is in include/io/)
         loader.cpp
+        ppisp_file.cpp
+        dataset_scene_import.cpp
         splat_decimate.cpp
 
         # Internal implementation files
@@ -419,7 +386,6 @@ target_link_libraries(lfs_io
         xxHash::xxhash         # REFS fingerprints and embedded-payload provenance
         CUDA::cudart           # CUDA runtime for nvImageCodec
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
-        lfs_io_rad_quant_cuda  # RAD encode quantization (bit-exact, no fast math)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
         lfs_tinyusdz           # USDA parser for flat Gaussian ParticleField interchange

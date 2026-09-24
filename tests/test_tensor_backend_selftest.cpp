@@ -14,6 +14,9 @@ namespace {
     using namespace lfs::core;
 
     TEST(TensorBackendSelftest, CudaSucceeds) {
+        if (!gpu_backend_available(GpuBackend::CUDA)) {
+            GTEST_SKIP() << "CUDA backend unavailable";
+        }
         const lfs::Status status = tensor_backend_selftest(GpuBackend::CUDA);
         ASSERT_TRUE(status.has_value()) << (status ? "" : std::string(status.error().user_message()));
     }

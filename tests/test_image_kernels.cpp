@@ -6,6 +6,7 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/training/refine_scratch.hpp"
@@ -18,16 +19,7 @@
 using namespace lfs::core;
 using namespace lfs::training::kernels;
 
-class ImageKernelsTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-};
+class ImageKernelsTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(ImageKernelsTest, FusedCannyUInt8MatchesNormalizedFloatInput) {
     constexpr int C = 3;

@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -18,17 +17,7 @@ using namespace lfs::core;
  * 5. Multiple slices share same underlying buffer
  */
 
-class TensorSlicingSafetyTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Ensure CUDA is available
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA devices available";
-        }
-    }
-};
+class TensorSlicingSafetyTest : public ::testing::Test {};
 
 /**
  * Test 1: Verify slicing is zero-copy (doesn't allocate new memory)
@@ -115,10 +104,8 @@ TEST_F(TensorSlicingSafetyTest, SliceModifiesOriginalTensor) {
     Tensor last_500 = full.slice(0, 500, 1000);
 
     // Copy first and last values to CPU to check
-    float first_val, last_val;
-    cudaMemcpy(&first_val, first_500.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&last_val, last_500.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    const float first_val = first_500.cpu().ptr<float>()[0];
+    const float last_val = last_500.cpu().ptr<float>()[0];
 
     EXPECT_FLOAT_EQ(first_val, 42.0f)
         << "Slice modification didn't affect original tensor!";
@@ -149,9 +136,7 @@ TEST_F(TensorSlicingSafetyTest, MultipleSlicesShareBuffer) {
 
     // Verify slice2's overlapping region [250:500] is modified
     Tensor overlap = slice2.slice(0, 0, 250); // First 250 of slice2 = [250:500] of full
-    float overlap_val;
-    cudaMemcpy(&overlap_val, overlap.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    const float overlap_val = overlap.cpu().ptr<float>()[0];
 
     EXPECT_FLOAT_EQ(overlap_val, 10.0f)
         << "Multiple slices don't share buffer!";

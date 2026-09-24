@@ -9,18 +9,12 @@
 
 #include <cmath>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
 
 using namespace lfs::core;
 
 namespace {
-
-    bool has_cuda_device() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-    }
 
     Tensor f32_cuda(const std::vector<float>& host, std::initializer_list<size_t> shape) {
         return Tensor::from_vector(host, TensorShape(shape), Device::GPU);
@@ -132,8 +126,6 @@ TEST(TensorElementwiseKernels, CompareFloat4SameShape) {
 TEST(TensorElementwiseKernels, Float16BinaryVectorized) {
     // Host already wires Float16 binary arithmetic (tensor_exports).
     // Unary/reduce host gates remain fail-loud; kernel launches exist.
-    if (!has_cuda_device())
-        GTEST_SKIP() << "CUDA required";
 
     const size_t n = 4096;
     std::vector<float> ha(n), hb(n);
@@ -154,8 +146,6 @@ TEST(TensorElementwiseKernels, Float16BinaryVectorized) {
 }
 
 TEST(TensorElementwiseKernels, Float16HostReduceIsCorrect) {
-    if (!has_cuda_device())
-        GTEST_SKIP() << "CUDA required";
 
     auto t = f32_cuda({1.f, 2.f, 3.f, 4.f}, 4).to(DataType::Float16);
     auto s = t.sum();

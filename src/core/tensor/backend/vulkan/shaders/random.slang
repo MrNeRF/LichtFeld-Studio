@@ -5,8 +5,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 // 3 normal(first, second), 4 multinomial with replacement over weights,
 // 5 Gumbel keys for sampling without replacement, 6 rank selection of the
 // sampleCount largest keys into the int64 output, 7 weight statistics
-// (output[0] = sum as float bits, output[1] = 1 when a weight is not finite
-// or negative), run by a single workgroup.
+// (output[0] = scaled sum, output[1] = invalid flag, output[2] = scale), run by a single workgroup.
 [SpecializationConstant]
 const uint kKind = 0;
 
@@ -93,31 +92,47 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
     {
         Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
         const uint thread = groupThreadId.x;
-        float sum = 0.0f;
+        float maximum = 0.0f;
         uint invalid = 0u;
         for (uint index = thread; index < parameters.count; index += LFS_LOCAL_SIZE_X)
         {
             const float weight = weights[index];
             if (!(weight >= 0.0f) || isinf(weight))
                 invalid = 1u;
-            sum += weight;
+            maximum = max(maximum, weight);
         }
-        sharedSum[thread] = sum;
+        sharedSum[thread] = maximum;
         sharedInvalid[thread] = invalid;
         GroupMemoryBarrierWithGroupSync();
         for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
         {
             if (thread < span)
             {
-                sharedSum[thread] += sharedSum[thread + span];
+                sharedSum[thread] = max(sharedSum[thread], sharedSum[thread + span]);
                 sharedInvalid[thread] |= sharedInvalid[thread + span];
             }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        maximum = sharedSum[0];
+        const uint exponent = min(max((asuint(maximum) >> 23) & 255u, 1u), 253u);
+        const float scale = asfloat((254u - exponent) << 23);
+        GroupMemoryBarrierWithGroupSync();
+        float sum = 0.0f;
+        for (uint index = thread; index < parameters.count; index += LFS_LOCAL_SIZE_X)
+            sum += weights[index] * scale;
+        sharedSum[thread] = sum;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
+        {
+            if (thread < span)
+                sharedSum[thread] += sharedSum[thread + span];
             GroupMemoryBarrierWithGroupSync();
         }
         if (thread == 0)
         {
             ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[0] = sharedSum[0];
             ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[1] = sharedInvalid[0];
+            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[2] = scale;
         }
         return;
     }
@@ -180,7 +195,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
             int64_t sample = int64_t(parameters.count - 1);
             for (uint category = 0; category < parameters.count; ++category)
             {
-                cumulative += weights[category];
+                cumulative += weights[category] * parameters.first;
                 if (u < cumulative)
                 {
                     sample = int64_t(category);

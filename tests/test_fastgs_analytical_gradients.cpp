@@ -12,6 +12,7 @@
  * 4. Compare CUDA kernel gradients against verified analytical gradients
  */
 
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
@@ -308,9 +309,10 @@ namespace {
 
 } // namespace
 
-class AnalyticalGradientTest : public ::testing::Test {
+class AnalyticalGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         if (!torch::cuda::is_available()) {
             GTEST_SKIP() << "CUDA not available";
         }
@@ -1169,9 +1171,10 @@ TEST_F(AnalyticalGradientTest, FullForwardChain) {
 // These tests compare actual CUDA backward kernel outputs against LibTorch autograd
 // =============================================================================
 
-class CUDAKernelGradientTest : public ::testing::Test {
+class CUDAKernelGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         if (!torch::cuda::is_available()) {
             GTEST_SKIP() << "CUDA not available";
         }

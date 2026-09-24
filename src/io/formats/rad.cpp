@@ -3,9 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rad.hpp"
-#include "rad_dequant_math.hpp"
-
-#include "io/cuda/rad_encode_quant.hpp"
+#include "core/rad_dequant_math.hpp"
 
 #include "core/bhatt_lod.hpp"
 #include "core/logger.hpp"
@@ -14,10 +12,10 @@
 #include "core/provenance.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 
-#include <cuda_runtime.h>
 #include <libdeflate.h>
 #include <nlohmann/json.hpp>
 #include <tbb/blocked_range.h>
@@ -54,6 +52,11 @@
 #include <vector>
 
 namespace lfs::io {
+    namespace radmath = lfs::core::radmath;
+    using lfs::core::kRadPackedMaxProps;
+    using lfs::core::RadPackedEncoding;
+    using lfs::core::RadPackedKind;
+    using lfs::core::RadPagePackedDesc;
 
     using lfs::core::Device;
     using lfs::core::SplatData;
@@ -85,6 +88,19 @@ namespace lfs::io {
 
         // SH coefficient count per degree: 0->0, 1->3, 2->8, 3->15
         constexpr int SH_COEFFS_FOR_DEGREE[] = {0, 3, 8, 15};
+
+        struct RadQuantChunkOut {
+            const std::uint8_t* center = nullptr;
+            const std::uint8_t* alpha = nullptr;
+            bool alpha_f16 = false;
+            float alpha_min = 0.0f;
+            float alpha_max = 0.0f;
+            const std::uint8_t* rgb = nullptr;
+            float rgb_min = 0.0f;
+            float rgb_max = 0.0f;
+            const std::uint8_t* sh[3] = {};
+            float sh_max_abs[3] = {};
+        };
 
         // ============================================================================
         // Encoding Type Enums
@@ -2028,7 +2044,7 @@ namespace lfs::io {
             const uint32_t* child_start_ptr,
             bool lod_tree,
             int compression_level,
-            const cuda::RadEncodeQuantChunkOut* gpu_planes = nullptr,
+            const RadQuantChunkOut* gpu_planes = nullptr,
             const std::function<bool(float)>& progress_callback = nullptr) {
 
             RadChunkMeta chunk_meta;
@@ -3775,6 +3791,127 @@ namespace lfs::io {
             return std::expected<SplatData, std::string>(std::move(splat_data));
         }
 
+        class RadTensorQuantizer {
+        public:
+            bool quantize_batch(const std::span<const RadStreamChunkSource> chunks,
+                                const int sh_coeffs,
+                                const bool lod_tree,
+                                const std::span<RadQuantChunkOut> out) {
+                if (chunks.size() != out.size()) {
+                    return false;
+                }
+                storage_.clear();
+                storage_.resize(chunks.size());
+                const core::GpuBackendScope scope(core::default_gpu_backend());
+                const float alpha_limit = lod_tree ? 2.0f : 1.0f;
+                const auto round_away = [](const Tensor& values) {
+                    return values.add(0.5f).floor().where(
+                        values.ge(0.0f), values.sub(0.5f).ceil());
+                };
+                try {
+                    for (std::size_t chunk_index = 0; chunk_index < chunks.size(); ++chunk_index) {
+                        const auto& chunk = chunks[chunk_index];
+                        auto& bytes = storage_[chunk_index];
+                        auto& result = out[chunk_index];
+                        const int count = static_cast<int>(chunk.count);
+                        if (count <= 0 || !chunk.means || !chunk.alpha || !chunk.rgb) {
+                            return false;
+                        }
+                        const auto upload = [count](const float* data, const int dims) {
+                            return Tensor::from_blob(const_cast<float*>(data),
+                                                     {static_cast<std::size_t>(count),
+                                                      static_cast<std::size_t>(dims)},
+                                                     Device::CPU, core::DataType::Float32)
+                                .gpu();
+                        };
+                        const auto means = upload(chunk.means, 3);
+                        bytes.center = means.view_as(core::DataType::UInt8)
+                                           .permute({2, 1, 0})
+                                           .contiguous()
+                                           .to_pageable_host()
+                                           .to_vector_uint8();
+                        result.center = bytes.center.data();
+
+                        const auto alpha = upload(chunk.alpha, 1);
+                        result.alpha_f16 = alpha.max_scalar() > 1.0f;
+                        result.alpha_min = 0.0f;
+                        result.alpha_max = alpha_limit;
+                        if (result.alpha_f16) {
+                            bytes.alpha = alpha.to(core::DataType::Float16)
+                                              .view_as(core::DataType::UInt8)
+                                              .to_pageable_host()
+                                              .to_vector_uint8();
+                        } else {
+                            bytes.alpha = round_away(alpha.div(alpha_limit).mul(255.0f))
+                                              .clamp(0.0f, 255.0f)
+                                              .to(core::DataType::UInt8)
+                                              .to_pageable_host()
+                                              .to_vector_uint8();
+                        }
+                        result.alpha = bytes.alpha.data();
+
+                        const auto rgb = upload(chunk.rgb, 3);
+                        const auto [rgb_min, rgb_max] = rgb.minmax();
+                        result.rgb_min = rgb_min;
+                        result.rgb_max = rgb_max;
+                        const float rgb_range = std::max(rgb_max - rgb_min, 1e-7f);
+                        const auto quant_rgb = round_away(rgb.sub(rgb_min).div(rgb_range).mul(255.0f))
+                                                   .clamp(0.0f, 255.0f)
+                                                   .to(core::DataType::Int32)
+                                                   .transpose(0, 1)
+                                                   .contiguous();
+                        auto rgb_delta = quant_rgb.clone();
+                        if (count > 1) {
+                            rgb_delta.slice(1, 1, count).copy_from(quant_rgb.slice(1, 1, count).sub(quant_rgb.slice(1, 0, count - 1)).add(256).mod(256));
+                        }
+                        bytes.rgb = rgb_delta.to(core::DataType::UInt8)
+                                        .to_pageable_host()
+                                        .to_vector_uint8();
+                        result.rgb = bytes.rgb.data();
+
+                        if (sh_coeffs > 0 && chunk.shN != nullptr) {
+                            const auto sh = upload(chunk.shN, sh_coeffs * 3);
+                            constexpr std::array<int, 3> starts{0, 3, 8};
+                            constexpr std::array<int, 3> widths{3, 5, 7};
+                            for (int band = 0; band < 3; ++band) {
+                                if (sh_coeffs < starts[band] + widths[band]) {
+                                    continue;
+                                }
+                                const auto values = sh.slice(1, starts[band] * 3,
+                                                             (starts[band] + widths[band]) * 3);
+                                const float max_abs = std::max(values.abs().max_scalar(), 1e-6f);
+                                result.sh_max_abs[band] = max_abs;
+                                bytes.sh[band] = round_away(values.div(max_abs).mul(127.0f))
+                                                     .clamp(-127.0f, 127.0f)
+                                                     .to(core::DataType::Int32)
+                                                     .add(256)
+                                                     .mod(256)
+                                                     .to(core::DataType::UInt8)
+                                                     .transpose(0, 1)
+                                                     .contiguous()
+                                                     .to_pageable_host()
+                                                     .to_vector_uint8();
+                                result.sh[band] = bytes.sh[band].data();
+                            }
+                        }
+                    }
+                } catch (const std::exception& error) {
+                    LOG_ERROR("RAD tensor quantization failed: {}", error.what());
+                    return false;
+                }
+                return true;
+            }
+
+        private:
+            struct ChunkBytes {
+                std::vector<std::uint8_t> center;
+                std::vector<std::uint8_t> alpha;
+                std::vector<std::uint8_t> rgb;
+                std::array<std::vector<std::uint8_t>, 3> sh;
+            };
+            std::vector<ChunkBytes> storage_;
+        };
+
     } // namespace
 
     // ============================================================================
@@ -4274,7 +4411,6 @@ namespace lfs::io {
             out.max_val = info->kind == RadPackedKind::Scales
                               ? prop.max_val.value_or(prop.scale.value_or(1.0f))
                               : prop.max_val.value_or(1.0f);
-            out.base = prop.base.value_or(0.0f);
             out.scale = prop.scale.value_or(1.0f);
         }
 
@@ -4724,10 +4860,8 @@ namespace lfs::io {
         bool emit_meta_sidecar = false;
         RadMetaInlineWriter meta_writer;
 
-        // GPU chunk quantization (bit-identical planes; DEFLATE stays on the
-        // CPU). Any CUDA failure falls back permanently for this writer.
         RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto;
-        std::unique_ptr<cuda::RadEncodeGpuQuantizer> gpu_quant;
+        std::unique_ptr<RadTensorQuantizer> gpu_quant;
         bool gpu_quant_resolved = false;
         std::optional<core::ProvenanceStamp> provenance;
 
@@ -4735,8 +4869,8 @@ namespace lfs::io {
             if (!gpu_quant_resolved) {
                 gpu_quant_resolved = true;
                 if (gpu_quantization == RadGpuQuantization::Auto &&
-                    cuda::rad_encode_gpu_available()) {
-                    gpu_quant = std::make_unique<cuda::RadEncodeGpuQuantizer>();
+                    core::gpu_backend_available(core::default_gpu_backend())) {
+                    gpu_quant = std::make_unique<RadTensorQuantizer>();
                 }
             }
             return gpu_quant != nullptr;
@@ -4892,21 +5026,11 @@ namespace lfs::io {
         const bool emit_meta = s.meta_writer.isOpen();
         std::vector<MetaSlice> meta(emit_meta ? chunks.size() : 0);
 
-        // Batch-quantize the pure-arithmetic planes on the GPU while the TBB
-        // workers keep the libm encoders (scales, orientation) and DEFLATE.
-        std::vector<cuda::RadEncodeQuantChunkOut> gpu_planes;
+        std::vector<RadQuantChunkOut> gpu_planes;
         if (s.gpuQuantEnabled()) {
-            std::vector<cuda::RadEncodeQuantChunkIn> gpu_in(chunks.size());
-            for (std::size_t i = 0; i < chunks.size(); ++i) {
-                const auto& chunk = chunks[i];
-                gpu_in[i] = {chunk.count, chunk.means, chunk.alpha, chunk.rgb,
-                             s.sh_coeffs > 0 ? chunk.shN : nullptr};
-            }
             gpu_planes.resize(chunks.size());
-            if (!s.gpu_quant->quantize_batch(gpu_in, s.sh_coeffs, s.lod_tree, gpu_planes)) {
-                gpu_planes.clear();
-                s.gpu_quant.reset();
-                LOG_WARN("RAD GPU encode quantization failed; using CPU encoders");
+            if (!s.gpu_quant->quantize_batch(chunks, s.sh_coeffs, s.lod_tree, gpu_planes)) {
+                return std::unexpected("RAD tensor quantization failed");
             }
         }
 
@@ -5785,9 +5909,8 @@ namespace lfs::io {
         if (logical_chunks <= 1) {
             return false;
         }
-        std::size_t free_bytes = 0;
-        std::size_t total_bytes = 0;
-        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || free_bytes == 0) {
+        const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend());
+        if (memory.free_bytes == 0) {
             return false;
         }
         const auto tensor_bytes = [](const lfs::core::Tensor& t) -> std::size_t {
@@ -5802,11 +5925,11 @@ namespace lfs::io {
             tensor_bytes(data.opacity_raw());
         // Stream when full residency would crowd the GPU: the renderer still
         // needs sort scratch, tile buffers, and framebuffers on top.
-        const bool paged = model_bytes > free_bytes / 2;
+        const bool paged = model_bytes > memory.free_bytes / 2;
         if (paged) {
             LOG_INFO("RAD paged load recommended: model={:.1f} MB, free VRAM={:.1f} MB",
                      static_cast<double>(model_bytes) / (1024.0 * 1024.0),
-                     static_cast<double>(free_bytes) / (1024.0 * 1024.0));
+                     static_cast<double>(memory.free_bytes) / (1024.0 * 1024.0));
         }
         return paged;
     }

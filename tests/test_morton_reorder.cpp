@@ -10,7 +10,8 @@
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -248,7 +249,9 @@ TEST(MortonReorderTest, CadenceMatchesStopRefineAndZeroDisables) {
     EXPECT_FALSE(morton::should_reorder(4999, 5000, 25000));
 }
 
-TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
+class MortonReorderCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MortonReorderCudaTest, PreservesPerRowAttributesAndAdamMoments) {
     const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 2048;
     auto splat = make_mixed_splat(n, 3);
@@ -365,7 +368,7 @@ TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
     ASSERT_TRUE(splat.shN_value_quantized());
 }
 
-TEST(MortonReorderTest, FrozenRangesSkipLeavesRowsUntouched) {
+TEST_F(MortonReorderCudaTest, FrozenRangesSkipLeavesRowsUntouched) {
     const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 512;
     auto splat = make_mixed_splat(n, 3);
@@ -382,7 +385,7 @@ TEST(MortonReorderTest, FrozenRangesSkipLeavesRowsUntouched) {
     EXPECT_LT(max_abs_diff(shN_before, splat.shN_canonical()), 1e-12);
 }
 
-TEST(MortonReorderTest, PermuteWritesNPrimsAndLeavesCapacityTailZero) {
+TEST_F(MortonReorderCudaTest, PermuteWritesNPrimsAndLeavesCapacityTailZero) {
     const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 300;
     constexpr size_t cap = 1024;
@@ -473,7 +476,9 @@ TEST(MortonReorderTest, PermuteWritesNPrimsAndLeavesCapacityTailZero) {
     }
 }
 
-TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
+class MortonReorderTrainingTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MortonReorderTrainingTest, TrainingLossStaysContinuousAndCountMatches) {
     const auto data_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
     if (!std::filesystem::exists(data_path / "sparse" / "0" / "cameras.bin")) {
         GTEST_SKIP() << "bicycle dataset not available";
@@ -612,7 +617,7 @@ TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
 // name (the GUI renders straight from that block). A permute that gathers into a
 // freshly "allocated" tensor of the same name therefore gathers a buffer into
 // itself; rows must still come out exactly permuted.
-TEST(MortonReorderTest, ExportableAliasingAllocatorPermutesRowsExactly) {
+TEST_F(MortonReorderCudaTest, ExportableAliasingAllocatorPermutesRowsExactly) {
     constexpr size_t n = 4096;
     constexpr int sh_degree = 1;
     auto storage_result = SplatExportableStorage::create(n, sh_degree, 0, n * 2);
@@ -704,7 +709,7 @@ void permute_shN_old_fp32_roundtrip(
     }
 }
 
-TEST(MortonReorderTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) {
+TEST_F(MortonReorderCudaTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) {
     const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 70000; // not a multiple of 256 or 32
     auto splat = make_mixed_splat(n, 3);

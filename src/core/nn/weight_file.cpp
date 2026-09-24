@@ -4,8 +4,10 @@
 #include "core/nn/weight_file.hpp"
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_upload.hpp"
 
 #include <cstring>
 #include <format>
@@ -67,13 +69,10 @@ namespace lfs::core::nn {
         if (default_gpu_backend() == GpuBackend::Vulkan) {
             auto tensor = Tensor::empty(found->shape, device, found->dtype);
             if (found->length > 0) {
-                internal::backend_ops_for(tensor).copy_host_to_device(internal::CopyRequest{
-                    .src = internal::raw_storage_ref(const_cast<void*>(src), found->dtype),
-                    .dst = internal::storage_ref(tensor),
-                    .bytes = static_cast<std::size_t>(found->length),
-                    .synchronous = false,
-                    .context = internal::ExecContext{tensor.stream()},
-                });
+                TensorUpload upload;
+                upload.enqueue(tensor, Tensor::from_blob(const_cast<void*>(src), found->shape,
+                                                         Device::CPU, found->dtype));
+                upload.wait();
             }
             return tensor.to(dest_dtype);
         }
@@ -106,7 +105,9 @@ namespace lfs::core::nn {
             out.emplace(name, std::move(*tensor));
         }
         if (device == Device::GPU && !out.empty()) {
-            internal::backend_ops_for(out.begin()->second).synchronize_device();
+            TensorCompletion completion;
+            completion.include(*gpu_backend_of(out.begin()->second));
+            completion.wait();
         }
         return out;
     }

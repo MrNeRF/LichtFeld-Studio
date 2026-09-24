@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/environment_math.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -11,9 +12,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "environment_image.hpp"
-#include "environment_math.hpp"
 #include "image_layout.hpp"
-#include "point_cloud_raster.cuh"
+#include "rasterizer/cuda/point_cloud_raster.cuh"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "screen_overlay_renderer.hpp"
@@ -30,6 +30,7 @@
 #include <vector>
 
 namespace lfs::rendering {
+    namespace envmath = lfs::core::envmath;
 
     namespace {
         struct RasterImageResult {

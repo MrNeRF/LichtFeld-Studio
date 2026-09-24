@@ -7,6 +7,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -264,7 +266,7 @@ namespace lfs::vis::gui {
                     throw std::runtime_error(std::string(retained.error().user_message()));
                 node.encoded = GalleryEncodedAsset{binding.source_kind, std::move(*retained)};
             }
-            node.load_payload = [document, binding, canceled]() -> std::shared_ptr<core::SplatData> {
+            node.load_payload = [document, binding, canceled](core::TensorCompletion& completion) -> std::shared_ptr<core::SplatData> {
                 throwIfCanceled(canceled, "Scene preparation canceled.");
                 if (binding.fourcc == "SPLT") {
                     const auto* chunk = document->source_reader()->find(pj::FOURCC_SPLT, binding.instance_uuid);
@@ -275,6 +277,7 @@ namespace lfs::vis::gui {
                     auto payload = pj::SplatChapterPayload::from_lfsp(std::move(*bytes));
                     if (!payload)
                         throw std::runtime_error(std::string(payload.error().user_message()));
+                    completion.include_current_gpu();
                     auto data = payload->hydrate();
                     if (!data)
                         throw std::runtime_error(std::string(data.error().user_message()));
@@ -283,6 +286,7 @@ namespace lfs::vis::gui {
                 if (binding.fourcc == "CKPT") {
                     std::shared_ptr<core::SplatData> data;
                     const auto result = document->find_checkpoint(binding.instance_uuid)->visit_materialized([&](std::istream& stream, const uint64_t bytes) -> lfs::Result<void> {
+                        completion.include_current_gpu();
                         auto loaded = core::load_checkpoint_splat_data(stream, bytes);
                         if (!loaded)
                             throw std::runtime_error(loaded.error());
@@ -299,6 +303,7 @@ namespace lfs::vis::gui {
                 auto loader = io::Loader::create();
                 io::LoadOptions options;
                 options.cancel_requested = canceled;
+                completion.include_current_gpu();
                 auto loaded = loader->load(*path, options);
                 if (!loaded)
                     throw std::runtime_error(loaded.error().message);
@@ -376,6 +381,8 @@ namespace lfs::vis::gui {
     void writeGalleryScenePublication(GalleryScenePublishRequest& request,
                                       const std::function<bool(float, const std::string&)>& report,
                                       const std::function<bool()>& canceled) {
+        // This also settles partial extraction work during cancellation/failure.
+        core::TensorCompletion completion;
         const auto preparation_started = std::chrono::steady_clock::now();
         LOG_INFO("gallery stage=preparation_start node_count={} staging_path={} format={}",
                  request.nodes.size(), lfs::core::path_to_utf8(request.path),
@@ -438,11 +445,16 @@ namespace lfs::vis::gui {
             std::shared_ptr<core::SplatData> loaded_payload;
             const auto materialize = [&] {
                 request.materialized_payload = true;
+                if (published.snapshot.data)
+                    if (const auto backend = core::gpu_backend_of(published.snapshot.data->means_raw()))
+                        completion.include(*backend);
                 if (published.load_payload) {
                     if (!loaded_payload)
-                        loaded_payload = published.load_payload();
+                        loaded_payload = published.load_payload(completion);
                     if (!loaded_payload)
                         throw std::runtime_error("Embedded asset is not splat data.");
+                    if (const auto backend = core::gpu_backend_of(loaded_payload->means_raw()))
+                        completion.include(*backend);
                     published.snapshot.row_count = loaded_payload->size();
                     if (published.metadata_known)
                         loaded_payload->set_active_sh_degree(published.snapshot.active_sh_degree);
@@ -631,6 +643,7 @@ namespace lfs::vis::gui {
         auto verified_project = pj::ProjectDocument::open(request.path / "project.licht");
         if (!verified_project)
             throw std::runtime_error(std::string(verified_project.error().user_message()));
+        completion.wait();
         std::ofstream manifest(request.path / "manifest.json.tmp", std::ios::binary | std::ios::trunc);
         manifest.exceptions(std::ios::badbit | std::ios::failbit);
         manifest << metadata.dump();

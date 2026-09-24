@@ -3,7 +3,6 @@
   "projects.sort.iteration": "迭代次数",
   "projects.sort.ascending": "升序",
   "projects.sort.descending": "降序",
-  "toolbar.asset_manager": "项目",
   "main_panel.color_exposure": "高斯点曝光",
   "projects.action.open": "打开",
   "projects.action.resume_training": "继续训练",
@@ -845,7 +844,6 @@
     "tensor_validation_sync": "Synchronization validation",
     "tensor_fp32_half": "Compute half precision in FP32",
     "tensor_no_atomic_float": "Use deterministic float accumulation",
-    "tensor_viewer_inputs": "Copy viewer inputs to Vulkan",
     "projects": "项目",
     "project_location": "项目位置",
     "project_location_hint": "新项目和默认文件夹：{path}",
@@ -1035,6 +1033,7 @@
     "align": "对齐"
   },
   "toolbar": {
+    "asset_manager": "项目",
     "selection": "选择",
     "translate": "移动",
     "rotate": "旋转",
@@ -2029,6 +2028,7 @@
     "primary_view": "主视图",
     "secondary_view": "副视图",
     "gpu": "GPU",
+    "gpu_budget": "GPU 显存预算",
     "strategy_default": "默认",
     "split": "分割：",
     "ui_fps": "UI FPS"

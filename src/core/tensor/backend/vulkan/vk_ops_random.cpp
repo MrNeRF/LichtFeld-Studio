@@ -90,9 +90,10 @@ namespace lfs::core::internal {
         struct WeightStatistics {
             float sum;
             uint32_t invalid;
+            float scale;
         };
 
-        // One workgroup sums the weights and flags negative or non-finite ones;
+        // One workgroup sums scaled weights and flags negative or non-finite ones;
         // the result is read back so the host can reject bad inputs like the CUDA
         // path does.
         WeightStatistics weight_statistics(VulkanContext& context, const StorageRef weights,
@@ -170,6 +171,7 @@ namespace lfs::core::internal {
                 .seed = program.seed,
                 .count = categories,
                 .sample_count = samples,
+                .first = statistics.scale,
                 .total = statistics.sum,
             };
             const std::array reads{weights};

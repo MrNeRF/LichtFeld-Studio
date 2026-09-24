@@ -13,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -23,7 +24,6 @@
 #include "io/formats/colmap.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -1200,6 +1200,7 @@ namespace lfs::vis::gui {
                                                      const bool update_cached_rows) {
         std::unordered_map<core::NodeId, std::string> camera_icon_colors;
 
+#if LFS_BUILD_TRAINER
         const auto* trainer_manager = services().trainerOrNull();
         const auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
         if (trainer) {
@@ -1234,6 +1235,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
+#endif
 
         bool changed = false;
         for (auto& [id, snapshot] : node_snapshots_) {

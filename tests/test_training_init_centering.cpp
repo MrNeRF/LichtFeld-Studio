@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/loader.hpp"
 #include "training/training_setup.hpp"
 
@@ -25,14 +26,13 @@ namespace {
     const std::array<glm::vec3, 4> dataset_points = {{{10, 20, 0}, {14, 20, 0}, {10, 24, 0}, {14, 24, 0}}};
     const std::array<glm::vec3, 4> init_points = {{{11, 21, 3}, {13, 21, 3}, {11, 23, 5}, {13, 23, 5}}};
 
-    class TrainingInitCentering : public ::testing::TestWithParam<std::tuple<int, bool, int>> {
+    class TrainingInitCentering : public lfs::test::CudaBackendTest,
+                                  public ::testing::WithParamInterface<std::tuple<int, bool, int>> {
     protected:
         fs::path root;
 
         void SetUp() override {
-            int devices = 0;
-            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
-                GTEST_SKIP() << "CUDA device required for training initialization";
+            LFS_CUDA_BACKEND_OR_RETURN();
             root = fs::temp_directory_path() / ("lfs_init_centering_" + generate_uuid_v4().to_string());
             fs::create_directories(root / "images");
             fs::create_directories(root / "sparse" / "0");

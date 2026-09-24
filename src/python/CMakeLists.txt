@@ -240,26 +240,26 @@ target_compile_definitions(lfs_py PRIVATE
 )
 
 
+set(LFS_PY_INTERNAL_LINK_LIBS
+    lfs_core
+    lfs_diagnostics
+    lfs_event_bridge
+    lfs_geometry
+    lfs_visualizer
+    lfs_mcp
+    lfs_python_runtime
+    lfs_io
+    lfs_video
+    lfs_rendering_tensor
+    lfs_sequencer
+    lfs_preprocessing
+)
+if(LFS_BUILD_TRAINER)
+    list(APPEND LFS_PY_INTERNAL_LINK_LIBS lfs_training)
+endif()
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
-    set(LFS_PY_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_video,lfs_rendering_tensor,lfs_sequencer,lfs_preprocessing>"
-    )
-else()
-    set(LFS_PY_INTERNAL_LINK_LIBS
-        lfs_core
-        lfs_diagnostics
-        lfs_event_bridge
-        lfs_geometry
-        lfs_visualizer
-        lfs_mcp
-        lfs_python_runtime
-        lfs_training
-        lfs_io
-        lfs_video
-        lfs_rendering_tensor
-        lfs_sequencer
-        lfs_preprocessing
-    )
+    list(JOIN LFS_PY_INTERNAL_LINK_LIBS "," _lfs_py_link_group)
+    set(LFS_PY_INTERNAL_LINK_LIBS "$<LINK_GROUP:RESCAN,${_lfs_py_link_group}>")
 endif()
 
 target_link_libraries(lfs_py PRIVATE

@@ -24,8 +24,8 @@ namespace {
 
     using lfs::core::DataType;
     using lfs::core::Device;
+    using lfs::core::PointProjectionModel;
     using lfs::core::Tensor;
-    using lfs::rendering::ScreenWindowCameraModel;
 
     constexpr int kWidth = 1280;
     constexpr int kHeight = 720;
@@ -35,7 +35,7 @@ namespace {
     constexpr std::size_t kRandomPointCount = 10'000;
 
     struct ScreenWindowConfig {
-        ScreenWindowCameraModel camera_model = ScreenWindowCameraModel::Pinhole;
+        lfs::core::PointProjectionModel camera_model = lfs::core::PointProjectionModel::Pinhole;
         int width = kWidth;
         int height = kHeight;
         float pixel_focal_x = kPixelFocalX;
@@ -112,10 +112,10 @@ namespace {
         const float H = static_cast<float>(config.height);
 
         ProjectedPoint projected{.depth = view_z};
-        if (config.camera_model == ScreenWindowCameraModel::Pinhole) {
+        if (config.camera_model == lfs::core::PointProjectionModel::Pinhole) {
             projected.px = config.center_x + config.pixel_focal_x * view_x / view_z;
             projected.py = config.center_y + config.pixel_focal_y * view_y / view_z;
-        } else if (config.camera_model == ScreenWindowCameraModel::Orthographic) {
+        } else if (config.camera_model == lfs::core::PointProjectionModel::Orthographic) {
             projected.px = 0.5f * W + config.ortho_scale * view_x;
             projected.py = 0.5f * H + config.ortho_scale * view_y;
         } else {
@@ -142,7 +142,7 @@ namespace {
 
         // KEEP IN SYNC: the screen-window formula lives in four places — this CPU
         // reference, vertex_shader.slang compute_splat_active_state,
-        // filterSelectionByScreenWindowKernel (selection_ops.cu), and (rect only,
+        // core::filter_points, and (rect only,
         // no depth test) the 2D overlay in gui_manager.cpp
         // appendScreenWindowOverlay.
         // Contract: the window RECTANGLE is framebuffer-centred in all four copies;
@@ -164,9 +164,9 @@ namespace {
                projected.depth <= config.far_depth && projected.depth > 0.0f;
     }
 
-    bool legacySingleScaleInside(const ProjectedPoint& projected,
-                                 const ScreenWindowConfig& config,
-                                 const float scale) {
+    bool uniformScaleReferenceInside(const ProjectedPoint& projected,
+                                     const ScreenWindowConfig& config,
+                                     const float scale) {
         const float W = static_cast<float>(config.width);
         const float H = static_cast<float>(config.height);
         const float half_w = 0.5f * scale * W;
@@ -185,12 +185,12 @@ namespace {
                                                 const float depth) {
         const float W = static_cast<float>(config.width);
         const float H = static_cast<float>(config.height);
-        if (config.camera_model == ScreenWindowCameraModel::Pinhole) {
+        if (config.camera_model == lfs::core::PointProjectionModel::Pinhole) {
             const float view_x = (px - config.center_x) * depth / config.pixel_focal_x;
             const float view_y = (py - config.center_y) * depth / config.pixel_focal_y;
             return {view_x, -view_y, -depth};
         }
-        if (config.camera_model == ScreenWindowCameraModel::Orthographic) {
+        if (config.camera_model == lfs::core::PointProjectionModel::Orthographic) {
             const float view_x = (px - 0.5f * W) / config.ortho_scale;
             const float view_y = (py - 0.5f * H) / config.ortho_scale;
             return {view_x, -view_y, -depth};
@@ -236,7 +236,7 @@ namespace {
             std::abs(projected.depth) < boundaryTolerance(depth_scale)) {
             return true;
         }
-        if (config.camera_model == ScreenWindowCameraModel::Equirectangular) {
+        if (config.camera_model == lfs::core::PointProjectionModel::Equirectangular) {
             const float seam_distance = std::min(std::abs(projected.px), std::abs(W - projected.px));
             return seam_distance < boundaryTolerance(W);
         }
@@ -307,16 +307,7 @@ namespace {
         return projected.cpu().to(DataType::Float32).to_vector();
     }
 
-    class SelectionScreenWindow : public ::testing::Test {
-    protected:
-        void SetUp() override {
-            int device = -1;
-            if (cudaGetDevice(&device) != cudaSuccess) {
-                (void)cudaGetLastError();
-                GTEST_SKIP() << "a live CUDA device is required";
-            }
-        }
-    };
+    class SelectionScreenWindow : public ::testing::Test {};
 
     TEST_F(SelectionScreenWindow, RandomCpuReferenceMatchesCuda) {
         std::mt19937 rng(0x51EC710u);
@@ -372,9 +363,9 @@ namespace {
             transform_indices, {transform_indices.size()}, Device::GPU);
 
         constexpr std::array models{
-            ScreenWindowCameraModel::Pinhole,
-            ScreenWindowCameraModel::Orthographic,
-            ScreenWindowCameraModel::Equirectangular,
+            lfs::core::PointProjectionModel::Pinhole,
+            lfs::core::PointProjectionModel::Orthographic,
+            lfs::core::PointProjectionModel::Equirectangular,
         };
         constexpr std::array scale_pairs{
             std::pair{0.05f, 0.05f},
@@ -446,7 +437,7 @@ namespace {
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         constexpr std::array configs{
             ScreenWindowConfig{
-                .camera_model = ScreenWindowCameraModel::Pinhole,
+                .camera_model = lfs::core::PointProjectionModel::Pinhole,
                 .width = 1024,
                 .height = 512,
                 .pixel_focal_x = 256.0f,
@@ -461,7 +452,7 @@ namespace {
                 .offset_y = 1.0f,
             },
             ScreenWindowConfig{
-                .camera_model = ScreenWindowCameraModel::Orthographic,
+                .camera_model = lfs::core::PointProjectionModel::Orthographic,
                 .width = 1024,
                 .height = 512,
                 .ortho_scale = 64.0f,
@@ -473,7 +464,7 @@ namespace {
                 .offset_y = -1.0f,
             },
             ScreenWindowConfig{
-                .camera_model = ScreenWindowCameraModel::Equirectangular,
+                .camera_model = lfs::core::PointProjectionModel::Equirectangular,
                 .width = 1024,
                 .height = 512,
                 .near_depth = 2.0f,
@@ -519,7 +510,7 @@ namespace {
         };
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         const ScreenWindowConfig config{
-            .camera_model = ScreenWindowCameraModel::Pinhole,
+            .camera_model = lfs::core::PointProjectionModel::Pinhole,
             .width = 1024,
             .height = 512,
             .pixel_focal_x = 256.0f,
@@ -571,9 +562,9 @@ namespace {
         };
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         constexpr std::array models{
-            ScreenWindowCameraModel::Pinhole,
-            ScreenWindowCameraModel::Orthographic,
-            ScreenWindowCameraModel::Equirectangular,
+            lfs::core::PointProjectionModel::Pinhole,
+            lfs::core::PointProjectionModel::Orthographic,
+            lfs::core::PointProjectionModel::Equirectangular,
         };
         constexpr std::array scales{0.05f, 0.35f, 1.0f};
         constexpr std::array offset_pairs{
@@ -610,13 +601,13 @@ namespace {
                     for (std::size_t i = 0; i < point_count; ++i) {
                         const auto projected =
                             projectCpu(point_arrays[i], config, identity_rows, origin);
-                        const bool legacy_inside = legacySingleScaleInside(projected, config, scale);
-                        ASSERT_EQ(cpuReferenceInside(projected, config), legacy_inside);
+                        const bool uniform_inside = uniformScaleReferenceInside(projected, config, scale);
+                        ASSERT_EQ(cpuReferenceInside(projected, config), uniform_inside);
                         if (nearDecisionBoundary(projected, config)) {
                             continue;
                         }
                         ++compared;
-                        ASSERT_EQ(actual[i], legacy_inside)
+                        ASSERT_EQ(actual[i], uniform_inside)
                             << "point=" << i << " model=" << static_cast<std::uint32_t>(model)
                             << " scale=" << scale << " offsets=(" << offset_x << ',' << offset_y
                             << ')';
@@ -701,7 +692,7 @@ namespace {
         };
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         const ScreenWindowConfig equirectangular{
-            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .camera_model = lfs::core::PointProjectionModel::Equirectangular,
             .width = 1024,
             .height = 512,
             .near_depth = 0.0f,
@@ -744,7 +735,7 @@ namespace {
         };
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         const ScreenWindowConfig pinhole{
-            .camera_model = ScreenWindowCameraModel::Pinhole,
+            .camera_model = lfs::core::PointProjectionModel::Pinhole,
             .width = 1024,
             .height = 512,
             .pixel_focal_x = 256.0f,
@@ -786,7 +777,7 @@ namespace {
                   (std::vector<bool>{true, true, true, true, true, true, false}));
 
         ScreenWindowConfig orthographic = pinhole;
-        orthographic.camera_model = ScreenWindowCameraModel::Orthographic;
+        orthographic.camera_model = lfs::core::PointProjectionModel::Orthographic;
         orthographic.ortho_scale = 64.0f;
         const std::vector<float> ortho_points{
             -4.0f,
@@ -803,7 +794,7 @@ namespace {
                   (std::vector<bool>{true, true, false}));
 
         const ScreenWindowConfig equirectangular{
-            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .camera_model = lfs::core::PointProjectionModel::Equirectangular,
             .width = 1024,
             .height = 512,
             .near_depth = 0.0f,
@@ -843,7 +834,7 @@ namespace {
         const std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
 
         ScreenWindowConfig config;
-        config.camera_model = ScreenWindowCameraModel::Orthographic;
+        config.camera_model = lfs::core::PointProjectionModel::Orthographic;
         config.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
 
         // Inside, outside on X, and dead centre. These are only distinguishable
@@ -993,7 +984,7 @@ namespace {
             1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
         constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
         ScreenWindowConfig orthographic;
-        orthographic.camera_model = ScreenWindowCameraModel::Orthographic;
+        orthographic.camera_model = lfs::core::PointProjectionModel::Orthographic;
         orthographic.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
         const std::vector<float> ortho_points{1.0f, 0.0f, -5.0f, 3.0f, 0.0f, -5.0f, 0.0f, 0.0f, -5.0f};
         const std::vector<bool> ortho_expected{true, false, true};
@@ -1003,7 +994,7 @@ namespace {
         EXPECT_EQ(runCuda(ortho_points, orthographic, identity_rows, origin), centred_ortho);
         EXPECT_EQ(centred_ortho, ortho_expected);
         const ScreenWindowConfig equirectangular{
-            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .camera_model = lfs::core::PointProjectionModel::Equirectangular,
             .width = 1024,
             .height = 512,
             .near_depth = 0.0f,
@@ -1029,7 +1020,7 @@ namespace {
         constexpr int kImageWidth = 100;
         constexpr int kImageHeight = 80;
         const ScreenWindowConfig equirect{
-            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .camera_model = lfs::core::PointProjectionModel::Equirectangular,
             .width = kImageWidth,
             .height = kImageHeight,
         };
@@ -1054,7 +1045,7 @@ namespace {
         // Control: the same splat is behind the camera in pinhole, so the shape
         // projector must still write an invalid screen position.
         ScreenWindowConfig pinhole = equirect;
-        pinhole.camera_model = ScreenWindowCameraModel::Pinhole;
+        pinhole.camera_model = lfs::core::PointProjectionModel::Pinhole;
         const auto pinhole_actual =
             runShapeProjector({0.0f, 0.0f, 1.0f}, pinhole, identity_rows, origin);
         ASSERT_EQ(pinhole_actual.size(), 2u);
@@ -1075,7 +1066,7 @@ namespace {
         }
 
         const ScreenWindowConfig config{
-            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .camera_model = lfs::core::PointProjectionModel::Equirectangular,
             .width = 1024,
             .height = 512,
         };

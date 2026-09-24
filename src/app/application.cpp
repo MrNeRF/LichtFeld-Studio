@@ -6,11 +6,11 @@
 #include "app/gpu_preflight.hpp"
 #include "app/headless_recovery_document.hpp"
 #include "app/headless_run_coordinator.hpp"
-#include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -31,11 +31,17 @@
 #include "io/embedded_dataset.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#if LFS_BUILD_TRAINER
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
+#endif
+#include "core/camera_metrics.hpp"
+#include <future>
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
+#endif
 #include "training/training_setup.hpp"
-#include "visualizer/training/training_manager.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
@@ -48,8 +54,8 @@
 #include "preprocessing/preprocess.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/vksplat_viewport_renderer.hpp"
 #include "sequencer/timeline.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
 #include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -64,7 +70,9 @@
 #include <future>
 #include <mutex>
 #include <print>
+#if LFS_BUILD_TRAINER
 #include <rasterization_api.h>
+#endif
 #include <string>
 #include <string_view>
 
@@ -119,6 +127,7 @@ namespace lfs::app {
             return io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
         }
 
+#if LFS_BUILD_TRAINER
         void export_final_splats(const training::Trainer& trainer,
                                  const core::param::TrainingParameters& params) {
             if (params.export_formats.empty()) {
@@ -148,6 +157,7 @@ namespace lfs::app {
                 }
             }
         }
+#endif
 
         struct HeadlessPluginSignalGuard {
             HeadlessPluginSignalGuard() {
@@ -315,6 +325,7 @@ namespace lfs::app {
             return {};
         }
 
+#if LFS_BUILD_TRAINER
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
 
@@ -384,6 +395,8 @@ namespace lfs::app {
             checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
             return checkpoint_params;
         }
+
+#endif
 
         struct LoadedTrainingProject {
             detail::HeadlessRecoveryDocument document;
@@ -636,6 +649,7 @@ namespace lfs::app {
         }
 
         int runHeadlessWithTCP(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+#if LFS_BUILD_TRAINER
             if (params->dataset.data_path.empty() &&
                 !params->resume_checkpoint &&
                 !params->resume_project) {
@@ -880,9 +894,15 @@ namespace lfs::app {
                 core::flush_and_exit(exit_code);
             }
             return exit_code;
+
+#else
+            LOG_ERROR("Training is not included in this build");
+            return 1;
+#endif
         }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+#if LFS_BUILD_TRAINER
             if (params->dataset.data_path.empty() &&
                 !params->resume_checkpoint &&
                 !params->resume_project) {
@@ -1109,54 +1129,85 @@ namespace lfs::app {
                 core::flush_and_exit(exit_code);
             }
             return exit_code;
+
+#else
+            LOG_ERROR("Training is not included in this build");
+            return 1;
+#endif
         }
 
         // Renders a sequencer camera path against a trained scene to a video file, headless.
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
 
-            // Load the trained scene.
-            std::shared_ptr<core::SplatData> model;
-            const auto load_ext = cfg.load_path.extension().string();
-            if (load_ext == ".resume") {
-                auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
-                if (!splat_result) {
-                    LOG_ERROR("Failed to load checkpoint: {}", splat_result.error());
-                    return 1;
-                }
-                model = std::make_shared<core::SplatData>(std::move(*splat_result));
-            } else {
-                auto loader = lfs::io::Loader::create();
-                auto load_result = loader->load(cfg.load_path);
-                if (!load_result) {
-                    LOG_ERROR("Failed to load scene: {}", load_result.error().message);
-                    return 1;
-                }
-                if (auto* const splat = std::get_if<std::shared_ptr<core::SplatData>>(&load_result->data)) {
-                    model = *splat;
-                } else {
-                    LOG_ERROR("--render-load is not a Gaussian splat scene: {}", core::path_to_utf8(cfg.load_path));
-                    return 1;
-                }
-            }
-            if (!model || model->size() == 0) {
-                LOG_ERROR("Loaded scene has no Gaussians: {}", core::path_to_utf8(cfg.load_path));
+            vis::VulkanContext context;
+            if (!context.initHeadless()) {
+                LOG_ERROR("Off-screen renderer initialization failed: {}", context.lastError());
                 return 1;
             }
+            struct BackendLifetime {
+                ~BackendLifetime() {
+                    if (auto result = core::shutdown_gpu_backend(core::GpuBackend::Vulkan); !result)
+                        LOG_WARN("Failed to shut down tensor backend: {}", result.error().detail());
+                }
+            } backend_lifetime;
+            vis::VksplatViewportRenderer renderer;
+            const auto splat_allocator = context.tensorInterop().splat_allocator(true);
+
+            // Pipeline creation does not read the scene. Overlap it with the load.
+            auto loading = std::async(std::launch::async, [&]() -> std::expected<std::shared_ptr<core::SplatData>, std::string> {
+                std::shared_ptr<core::SplatData> model;
+                const auto load_ext = cfg.load_path.extension().string();
+                if (load_ext == ".resume") {
+                    auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
+                    if (!splat_result) {
+                        return std::unexpected(std::format("Failed to load checkpoint: {}", splat_result.error()));
+                    }
+                    model = std::make_shared<core::SplatData>(std::move(*splat_result));
+                } else {
+                    auto loader = lfs::io::Loader::create();
+                    lfs::io::LoadOptions load_options;
+                    load_options.splat_tensor_allocator = splat_allocator;
+                    auto load_result = loader->load(cfg.load_path, load_options);
+                    if (!load_result) {
+                        return std::unexpected(std::format("Failed to load scene: {}", load_result.error().message));
+                    }
+                    if (auto* const splat = std::get_if<std::shared_ptr<core::SplatData>>(&load_result->data)) {
+                        model = *splat;
+                    } else {
+                        return std::unexpected(std::format(
+                            "--render-load is not a Gaussian splat scene: {}", core::path_to_utf8(cfg.load_path)));
+                    }
+                }
+                if (!model || model->size() == 0) {
+                    return std::unexpected(std::format(
+                        "Loaded scene has no Gaussians: {}", core::path_to_utf8(cfg.load_path)));
+                }
+                if (!lfs::io::splatTensorsRendererReady(*model)) {
+                    if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, splat_allocator); !migrated) {
+                        return std::unexpected(std::format(
+                            "Failed to prepare scene for rendering: {}", migrated.error().message));
+                    }
+                }
+                return model;
+            });
+            const auto pipelines = renderer.prepareDevice(context);
+            auto loaded = loading.get();
+            if (!pipelines) {
+                LOG_ERROR("Off-screen renderer initialization failed: {}", pipelines.error());
+                return 1;
+            }
+            if (!loaded) {
+                LOG_ERROR("{}", loaded.error());
+                return 1;
+            }
+            std::shared_ptr<core::SplatData> model = std::move(*loaded);
 
             lfs::sequencer::Timeline timeline;
             if (!timeline.loadFromJson(core::path_to_utf8(cfg.camera_path)) || timeline.empty()) {
                 LOG_ERROR("Failed to load camera path (or it has no keyframes): {}", core::path_to_utf8(cfg.camera_path));
                 return 1;
             }
-
-            // Solid black background, matching Trainer's default bg_color init.
-            auto background = core::Tensor::empty({3}, core::Device::CPU, core::DataType::Float32);
-            {
-                auto* const bg_ptr = background.ptr<float>();
-                bg_ptr[0] = bg_ptr[1] = bg_ptr[2] = 0.0f;
-            }
-            background = background.to(core::Device::GPU);
 
             lfs::io::video::VideoEncoder encoder;
             lfs::io::video::VideoExportOptions options;
@@ -1173,6 +1224,8 @@ namespace lfs::app {
             }
 
             const float duration = timeline.duration();
+            const std::vector<glm::mat4> model_transforms{
+                rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
             const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,
@@ -1182,47 +1235,28 @@ namespace lfs::app {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
 
-                const glm::mat4 data_view = rendering::dataWorldToCameraFromVisualizerPose(
-                    glm::mat3_cast(cam_state.rotation), cam_state.position);
-                const glm::mat3 r_w2c(data_view);
-                const glm::vec3 t_w2c(data_view[3]);
-
-                std::vector<float> r_flat(9);
-                for (int row = 0; row < 3; ++row) {
-                    for (int col = 0; col < 3; ++col) {
-                        r_flat[row * 3 + col] = r_w2c[col][row]; // glm is column-major
-                    }
+                rendering::ViewportRenderRequest request;
+                request.scene.model_transforms = &model_transforms;
+                request.frame_view.size = {cfg.width, cfg.height};
+                request.frame_view.rotation = glm::mat3_cast(cam_state.rotation);
+                request.frame_view.translation = cam_state.position;
+                request.frame_view.focal_length_mm = cam_state.focal_length_mm;
+                // The loaded scene is immutable for the whole path. The live-training
+                // upload flag shares the training arena and disables the immutable HiGS chain.
+                auto rendered = renderer.render(context, *model, request, frame == 0,
+                                                vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+                if (!rendered) {
+                    LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
+                    return 1;
                 }
-                auto R = core::Tensor::from_vector(r_flat, {3, 3}, core::Device::CPU);
-                auto T = core::Tensor::from_vector(
-                    std::vector<float>{t_w2c.x, t_w2c.y, t_w2c.z}, {3}, core::Device::CPU);
-
-                const auto [focal_x, focal_y] = rendering::computePixelFocalLengths(
-                    {cfg.width, cfg.height}, cam_state.focal_length_mm);
-
-                core::Camera camera(
-                    R, T,
-                    focal_x, focal_y,
-                    static_cast<float>(cfg.width) * 0.5f, static_cast<float>(cfg.height) * 0.5f,
-                    core::Tensor::empty({0}, core::Device::CPU),
-                    core::Tensor::empty({0}, core::Device::CPU),
-                    core::CameraModelType::PINHOLE,
-                    std::format("frame_{:06d}", frame),
-                    {}, {},
-                    cfg.width, cfg.height,
-                    frame);
-
-                auto render_output = training::fast_rasterize(camera, *model, background);
-                auto image = render_output.image;
-                if (image.dtype() != core::DataType::Float32) {
-                    image = image.to(core::DataType::Float32);
+                auto image = renderer.readOutputImage(context, vis::VksplatViewportRenderer::OutputSlot::Preview);
+                if (!image) {
+                    LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
+                    return 1;
                 }
-                if (image.device() != core::Device::GPU) {
-                    image = image.gpu();
-                }
-                auto image_hwc = image.permute({1, 2, 0}).contiguous();
+                auto image_hwc = **image;
 
-                const auto write_result = encoder.writeFrameGpu(image_hwc.data_ptr(), cfg.width, cfg.height, nullptr);
+                const auto write_result = encoder.writeFrame(image_hwc);
                 if (!write_result) {
                     LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
                     if (const auto close_result = encoder.close(); !close_result)
@@ -1277,6 +1311,17 @@ namespace lfs::app {
     // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
     // non-interactive process blocks it forever.
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            if (viewer_only &&
+                lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+                return true;
+            }
+            reportFatalStartupError(
+                "LichtFeld Studio - No usable GPU",
+                "The selected Vulkan tensor backend requires a Vulkan GPU and a viewer-only session.",
+                show_dialog);
+            return false;
+        }
         const bool cuda_usable =
             lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
         const bool vulkan_usable =
@@ -1388,7 +1433,9 @@ namespace lfs::app {
                     "curand_load",
                     after_curand > before_curand ? after_curand - before_curand : 0);
                 profiler.setCudaContextBaselineBytes(process_used_now());
+#if LFS_BUILD_TRAINER
                 fast_lfs::rasterization::warmup_kernels();
+#endif
                 profiler.captureCudaWarmupDelta();
             });
         }
@@ -1459,7 +1506,8 @@ namespace lfs::app {
             // module memory (the cuda.modules row). Without it the modules land in the
             // unattributed NVML residual. The pre-flight gate in run_mode covers
             // hardware compatibility before this warmup starts.
-            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
+                lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
                 warmupCudaAsync();
             }
 

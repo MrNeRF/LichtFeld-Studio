@@ -1,11 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
-#include "lfs/training/sh_value_codec.hpp"
-#include "lfs/training/sh_value_storage.hpp"
+#include "core/tensor_backend.hpp"
+
 #include "visualizer/gui_capabilities.hpp"
 #include <array>
 #include <cstring>
@@ -38,11 +39,11 @@ namespace {
             value = coefficient(random);
         for (size_t i = 0; i < n; ++i)
             rotations[4 * i] = 1;
-        return SplatData(3, Tensor::zeros({n, 3}, Device::CUDA), Tensor::zeros({n, 1, 3}, Device::CUDA),
-                         Tensor::from_vector(coefficients, {n, 15, 3}, Device::CUDA),
-                         Tensor::zeros({n, 3}, Device::CUDA),
-                         Tensor::from_vector(rotations, {n, 4}, Device::CUDA),
-                         Tensor::zeros({n, 1}, Device::CUDA), 1.0f);
+        return SplatData(3, Tensor::zeros({n, 3}, Device::GPU), Tensor::zeros({n, 1, 3}, Device::GPU),
+                         Tensor::from_vector(coefficients, {n, 15, 3}, Device::GPU),
+                         Tensor::zeros({n, 3}, Device::GPU),
+                         Tensor::from_vector(rotations, {n, 4}, Device::GPU),
+                         Tensor::zeros({n, 1}, Device::GPU), 1.0f);
     }
 
     glm::mat4 shear() {
@@ -53,7 +54,15 @@ namespace {
     }
 } // namespace
 
-TEST(SplatAffineSH, BakedColorsMatchNativeNonNormalizedDirection) {
+class SplatAffineSH : public testing::Test {
+protected:
+    void SetUp() override {
+        if (!gpu_backend_available(default_gpu_backend()))
+            GTEST_SKIP() << "Selected GPU backend unavailable";
+    }
+};
+
+TEST_F(SplatAffineSH, BakedColorsMatchNativeNonNormalizedDirection) {
     auto data = fixture();
     const auto before = data.shN_canonical().cpu().contiguous();
     const auto matrix = shear();
@@ -80,7 +89,7 @@ TEST(SplatAffineSH, BakedColorsMatchNativeNonNormalizedDirection) {
     }
 }
 
-TEST(SplatAffineSH, ExportDegreeLimitPrecedesMixingAndPreservesSource) {
+TEST_F(SplatAffineSH, ExportDegreeLimitPrecedesMixingAndPreservesSource) {
     const auto source = fixture();
     const auto original_dc = source.sh0_raw().cpu().contiguous();
     const auto original_sh = source.shN_canonical().cpu().contiguous();
@@ -116,7 +125,7 @@ TEST(SplatAffineSH, ExportDegreeLimitPrecedesMixingAndPreservesSource) {
         EXPECT_EQ(final_sh.ptr<float>()[i], original_sh.ptr<float>()[i]);
 }
 
-TEST(SplatAffineSH, IdentityBorrowDegreeLimitLeavesSourceStorageUnchanged) {
+TEST_F(SplatAffineSH, IdentityBorrowDegreeLimitLeavesSourceStorageUnchanged) {
     const auto source = fixture();
     const auto original = source.shN_canonical().cpu().contiguous();
     auto exported = Scene::mergeSplatsWithTransforms({{&source, glm::mat4(1)}}, Scene::MergeStorageMode::BorrowSingleIdentity, 1);
@@ -128,7 +137,7 @@ TEST(SplatAffineSH, IdentityBorrowDegreeLimitLeavesSourceStorageUnchanged) {
         EXPECT_EQ(final.ptr<float>()[i], original.ptr<float>()[i]);
 }
 
-TEST(SplatAffineSH, InactiveStoredBandsCannotLeakIntoExportColors) {
+TEST_F(SplatAffineSH, InactiveStoredBandsCannotLeakIntoExportColors) {
     auto source = fixture();
     source.set_active_sh_degree(1);
     auto exported = Scene::mergeSplatsWithTransforms({{&source, shear()}}, Scene::MergeStorageMode::Clone, 3);
@@ -141,14 +150,14 @@ TEST(SplatAffineSH, InactiveStoredBandsCannotLeakIntoExportColors) {
     EXPECT_EQ(source.get_active_sh_degree(), 1);
 }
 
-TEST(SplatAffineSH, Q16BorrowDegreeLimitPreservesSourceCodesAndBounds) {
-    using namespace lfs::training;
+TEST_F(SplatAffineSH, Q16BorrowDegreeLimitPreservesSourceCodesAndBounds) {
+
     struct QuantGuard {
-        QuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(true); }
-        ~QuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
+        QuantGuard() { lfs::core::sh_value_quant::set_enabled_for_testing(true); }
+        ~QuantGuard() { lfs::core::sh_value_quant::set_enabled_for_testing(std::nullopt); }
     } guard;
     auto source = fixture();
-    ASSERT_TRUE(sh_value::apply_shN_value_quant(source));
+    ASSERT_TRUE(source.apply_shN_value_quant());
     const auto codes = source.shN_raw().cpu().contiguous();
     const auto bounds = source.shN_value_bounds().cpu().contiguous();
     auto exported = Scene::mergeSplatsWithTransforms({{&source, glm::mat4(1)}}, Scene::MergeStorageMode::BorrowSingleIdentity, 1);
@@ -164,7 +173,7 @@ TEST(SplatAffineSH, Q16BorrowDegreeLimitPreservesSourceCodesAndBounds) {
     EXPECT_EQ(std::memcmp(bounds.data_ptr(), final_bounds.data_ptr(), bounds.bytes()), 0);
 }
 
-TEST(SplatAffineSH, MixedActiveDegreesMergeWithoutRevivingDormantBands) {
+TEST_F(SplatAffineSH, MixedActiveDegreesMergeWithoutRevivingDormantBands) {
     auto first = fixture(), second = fixture();
     first.set_active_sh_degree(1);
     for (const auto matrix : {glm::mat4(1), shear()}) {
@@ -198,16 +207,16 @@ TEST(SplatAffineSH, MixedActiveDegreesMergeWithoutRevivingDormantBands) {
     EXPECT_EQ(second.get_max_sh_degree(), 3);
 }
 
-TEST(SplatAffineSH, BakeTransformCopiesMixedBaseColorAndPreservesStorageKind) {
-    using namespace lfs::training;
+TEST_F(SplatAffineSH, BakeTransformCopiesMixedBaseColorAndPreservesStorageKind) {
+
     struct QuantGuard {
-        QuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(true); }
-        ~QuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
+        QuantGuard() { lfs::core::sh_value_quant::set_enabled_for_testing(true); }
+        ~QuantGuard() { lfs::core::sh_value_quant::set_enabled_for_testing(std::nullopt); }
     } guard;
     for (bool quantized : {false, true}) {
         auto source = fixture();
         if (quantized)
-            ASSERT_TRUE(sh_value::apply_shN_value_quant(source));
+            ASSERT_TRUE(source.apply_shN_value_quant());
         for (const auto matrix : {shear(), glm::scale(glm::mat4(1), glm::vec3(-1, 1, 1))}) {
             auto expected = source.clone();
             transform(expected, matrix);
@@ -224,4 +233,18 @@ TEST(SplatAffineSH, BakeTransformCopiesMixedBaseColorAndPreservesStorageKind) {
                 ASSERT_NEAR(sh.ptr<float>()[i], expected_sh.ptr<float>()[i], quantized ? 1e-2 : 1e-6);
         }
     }
+}
+
+TEST_F(SplatAffineSH, BakeLegacyHalfStorageCommitsQuantizedSh) {
+    auto source = fixture();
+    source.shN_raw() = source.shN_raw().to(DataType::Float16);
+    auto expected = source.clone();
+    transform(expected, shear());
+    ASSERT_TRUE(lfs::vis::cap::bakeSplatTransformPreservingStorage(source, shear()));
+    EXPECT_TRUE(source.shN_value_quantized());
+    const auto actual = source.shN_canonical().cpu().contiguous();
+    const auto reference = expected.shN_canonical().cpu().contiguous();
+    ASSERT_EQ(actual.numel(), reference.numel());
+    for (size_t i = 0; i < actual.numel(); ++i)
+        EXPECT_NEAR(actual.ptr<float>()[i], reference.ptr<float>()[i], 1e-2);
 }

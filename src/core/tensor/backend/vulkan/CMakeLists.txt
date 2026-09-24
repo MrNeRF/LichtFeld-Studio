@@ -21,21 +21,34 @@ find_package(SPIRV-Tools CONFIG QUIET)
 # Host tool run on every compiled module: declares the float-controls
 # execution modes the backend contract requires, validates the result when the
 # SPIRV-Tools library is available and writes the manifest from the binary.
-add_executable(lfs_tensor_spirv_finalize
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/tools/spirv_finalize.cpp)
-target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Headers::SPIRV-Headers)
+add_library(lfs_tensor_spirv STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/spirv_module.cpp)
+set_target_properties(lfs_tensor_spirv PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
+target_include_directories(lfs_tensor_spirv PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(lfs_tensor_spirv PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+target_link_libraries(lfs_tensor_spirv PUBLIC SPIRV-Headers::SPIRV-Headers)
 if(TARGET SPIRV-Tools-static)
-    target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Tools-static)
-    target_compile_definitions(lfs_tensor_spirv_finalize PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
+    target_link_libraries(lfs_tensor_spirv PRIVATE SPIRV-Tools-static)
+    target_compile_definitions(lfs_tensor_spirv PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
 elseif(TARGET SPIRV-Tools)
-    target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Tools)
-    target_compile_definitions(lfs_tensor_spirv_finalize PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
+    target_link_libraries(lfs_tensor_spirv PRIVATE SPIRV-Tools)
+    target_compile_definitions(lfs_tensor_spirv PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
 else()
     message(STATUS "tensor Vulkan shaders: SPIRV-Tools not found, finalized modules are not validated")
 endif()
+add_executable(lfs_tensor_spirv_finalize
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/tools/spirv_finalize.cpp)
+target_include_directories(lfs_tensor_spirv_finalize PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(lfs_tensor_spirv_finalize PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+target_link_libraries(lfs_tensor_spirv_finalize PRIVATE lfs_tensor_spirv)
 
 file(GLOB LFS_TENSOR_SLANG_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/*.slangh")
+list(APPEND LFS_TENSOR_SLANG_HEADERS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tensor/internal/point_filter.hpp")
 
 set(LFS_TENSOR_SHADER_OUTPUTS)
 function(_tensor_add_slang_kernel name src)
@@ -53,7 +66,7 @@ function(_tensor_add_slang_kernel name src)
                 -I ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders
                 -o ${_raw}
         COMMAND lfs_tensor_spirv_finalize ${_raw} ${_spv} ${_manifest}
-        DEPENDS ${_source} ${LFS_TENSOR_SLANG_HEADERS} ${LFS_TENSOR_SLANGC}
+        DEPENDS ${_source} ${LFS_TENSOR_SLANG_HEADERS} ${LFS_TENSOR_SLANGC} ${ARGN}
                 lfs_tensor_spirv_finalize
         COMMENT "slangc tensor/${name}.spv"
         VERBATIM)
@@ -87,6 +100,21 @@ _tensor_add_slang_kernel(cdist cdist.slang)
 _tensor_add_slang_kernel(nn nn.slang)
 _tensor_add_slang_kernel(inference inference.slang)
 _tensor_add_slang_kernel(random random.slang)
+_tensor_add_slang_kernel(radius_neighbors radius_neighbors.slang)
+_tensor_add_slang_kernel(project_points project_points.slang)
+_tensor_add_slang_kernel(point_region point_region.slang)
+_tensor_add_slang_kernel(histogram_u8 histogram_u8.slang)
+_tensor_add_slang_kernel(ppisp_apply ppisp_apply.slang)
+_tensor_add_slang_kernel(environment_composite environment_composite.slang)
+_tensor_add_slang_kernel(image_resample image_resample.slang)
+_tensor_add_slang_kernel(update_labels update_labels.slang)
+_tensor_add_slang_kernel(filter_points filter_points.slang)
+_tensor_add_slang_kernel(affine_splat_geometry affine_splat_geometry.slang)
+_tensor_add_slang_kernel(sh_codec sh_codec.slang)
+_tensor_add_slang_kernel(sh_encode sh_encode.slang)
+_tensor_add_slang_kernel(rad_page rad_page.slang
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/core/rad_packed_page.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/core/rad_dequant_math.hpp)
 # The library carries its modules: one generated translation unit holds every
 # finalized SPIR-V word stream and the facts the loader checks.
 set(LFS_TENSOR_SHADER_TABLE "${LFS_TENSOR_SPV_DIR}/lfs_tensor_shader_table.cpp")

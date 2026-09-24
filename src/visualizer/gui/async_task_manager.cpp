@@ -14,6 +14,7 @@
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/training_manager.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
@@ -22,6 +23,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/dataset_scene_import.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "project/session_state.hpp"
@@ -37,7 +39,6 @@
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -50,7 +51,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -98,12 +98,14 @@ namespace lfs::vis::gui {
             }
 
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+#if LFS_BUILD_TRAINER
             if (trainer) {
                 const auto strategy = lfs::core::param::canonical_strategy_name(
                     trainer->getParams().optimization.strategy);
                 if (!strategy.empty())
                     stamp.strategy = std::string(strategy);
             }
+#endif
             return stamp;
         }
 
@@ -164,6 +166,7 @@ namespace lfs::vis::gui {
         if (node->model->has_deleted_mask())
             return plan;
 
+#if LFS_BUILD_TRAINER
         if (node->uuid == scene.getTrainingModelNodeUuid()) {
             const auto* const trainer_manager = scene_manager.getTrainerManager();
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
@@ -172,6 +175,7 @@ namespace lfs::vis::gui {
             if (trainer)
                 plan.model_mutex = &trainer->getRenderMutex();
         }
+#endif
 
         plan.storage_mode = core::Scene::MergeStorageMode::BorrowSingleIdentity;
         return plan;
@@ -1777,12 +1781,6 @@ namespace lfs::vis::gui {
                     error = "Scene preparation failed.";
                     LOG_ERROR("gallery failure stage=preparation exception_class=<unknown> message={}", error);
                 }
-                // Settle extraction kernels before releasing owned GPU storage,
-                // including cancellation and partial-allocation failures.
-                if (!source || publication.materialized_payload) {
-                    if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess && error.empty())
-                        error = "Could not finish preparing the scene on the graphics device.";
-                }
                 publication.nodes.clear();
                 cancelled = canceled();
                 if (source && !cancelled && error.empty()) {
@@ -2504,15 +2502,6 @@ namespace lfs::vis::gui {
                         local_params = import_state_.params;
                     }
 
-                    const auto parse_centralize = [](const std::string& s) {
-                        if (s == "off")
-                            return lfs::io::CentralizeDataset::Off;
-                        if (s == "by_pointcloud")
-                            return lfs::io::CentralizeDataset::ByPointCloud;
-                        if (s == "by_cameras")
-                            return lfs::io::CentralizeDataset::ByCameras;
-                        return lfs::io::CentralizeDataset::Off;
-                    };
                     int effective_min_track_length = local_params.dataset.min_track_length;
                     if (effective_min_track_length > 0 &&
                         local_params.init_path.has_value() &&
@@ -2527,7 +2516,7 @@ namespace lfs::vis::gui {
                         .images_folder = local_params.dataset.images,
                         .min_track_length = effective_min_track_length,
                         .validate_only = false,
-                        .centralize = parse_centralize(local_params.dataset.centralize_dataset),
+                        .centralize = lfs::training::parse_centralize(local_params.dataset.centralize_dataset),
                         .progress = [this, job, &stop_token](const float pct, const std::string& msg) {
                         if (stop_token.stop_requested())
                             return;
@@ -2997,8 +2986,7 @@ namespace lfs::vis::gui {
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 
-                    const auto* const gpu_ptr = image_hwc.data_ptr();
-                    auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
+                    auto write_result = encoder->writeFrame(image_hwc);
                     if (!write_result) {
                         error_msg =
                             write_result.error();

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
@@ -56,11 +57,10 @@ namespace {
 
 } // anonymous namespace
 
-class TensorBasicTest : public ::testing::Test {
+class TensorBasicTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        // Ensure CUDA is available
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
+        LFS_CUDA_BACKEND_OR_RETURN();
 
         // Set random seed for reproducibility
         torch::manual_seed(42);

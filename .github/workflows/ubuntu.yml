@@ -209,6 +209,9 @@ jobs:
       - name: Enforce I/O discipline
         run: python3 tools/check_io_discipline.py
 
+      - name: Enforce backend neutrality
+        run: python3 tools/check_backend_neutrality.py
+
       - name: Upload error-debt census
         if: always()
         uses: actions/upload-artifact@v7

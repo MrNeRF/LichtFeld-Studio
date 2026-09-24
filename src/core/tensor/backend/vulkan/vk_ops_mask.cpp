@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../facade_trace.hpp"
+#include "../tensor_vulkan_interop.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -71,6 +72,9 @@ namespace lfs::core::internal {
                          const uint32_t predicate, const MaskPush& push,
                          const std::span<const StorageRef> reads,
                          const std::span<const StorageRef> writes, const uint32_t groups) {
+            const bool packed = (mode == kFillMode || mode == kAndLiveMode) && dtype_size(dtype) == 1;
+            const size_t work = (push.count + (push.data_address & 3u) + 3u) / 4u;
+            const uint32_t dispatch_count = packed ? dispatch_groups(context, work) : groups;
             const std::array constants{mode, shader_dtype(dtype), predicate};
             const VulkanPipeline& pipeline =
                 context.pipelines().specialized("mask", sizeof(MaskPush), constants);
@@ -81,34 +85,30 @@ namespace lfs::core::internal {
                     vkCmdPushConstants(command, pipeline.layout,
                                        VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(push), &push);
-                    vkCmdDispatch(command, groups, 1, 1);
+                    vkCmdDispatch(command, dispatch_count, 1, 1);
                 });
         }
 
-        // Exclusive scan of the predicate over count elements, computed by one
-        // workgroup so compaction offsets are deterministic; the total lands in a
-        // 16-byte scratch for callers that return the selected count.
-        struct Compaction {
-            StorageRef scan;
-            StorageRef total;
-        };
-
-        Compaction scan_predicate(VulkanContext& context, const uint32_t predicate,
+        StorageRef scan_predicate(VulkanContext& context, const uint32_t predicate,
                                   const StorageRef mask, const size_t count) {
-            Compaction result{
-                .scan = context.memory().allocate(count * sizeof(uint32_t), 16, {}),
-                .total = context.memory().allocate(16, 16, {}),
-            };
+            StorageRef scan = context.memory().allocate(count * sizeof(uint32_t), 16, {});
+            scan.dtype = DataType::Int32;
             const MaskPush push{
                 .mask_address = address(mask),
-                .source_address = address(result.total),
-                .scan_address = address(result.scan),
+                .scan_address = address(scan),
                 .count = checked_u32(count, "Vulkan mask count exceeds uint32"),
             };
             const std::array reads{mask};
-            const std::array writes{result.scan, result.total};
-            record_mask(context, kScanMode, DataType::UInt8, predicate, push, reads, writes, 1);
-            return result;
+            const std::array writes{scan};
+            record_mask(context, kScanMode, DataType::UInt8, predicate, push, reads, writes,
+                        dispatch_groups(context, count));
+            StridedLayout layout{};
+            layout.rank = 1;
+            layout.dims[0] = count;
+            layout.strides[0] = 1;
+            layout.element_count = count;
+            backend_ops(GpuBackend::Vulkan).cumsum(scan, layout, 0, {});
+            return scan;
         }
 
         uint32_t read_total(VulkanContext& context, const StorageRef total) {
@@ -129,23 +129,44 @@ namespace lfs::core::internal {
                 return 0;
             }
             const auto context = acquire_vulkan_context();
-            const Compaction compaction = scan_predicate(*context, predicate, input, program.count);
+            const StorageRef scan = scan_predicate(*context, predicate, input, program.count);
             const MaskPush push{
                 .mask_address = address(input),
                 .source_address = address(output),
-                .scan_address = address(compaction.scan),
+                .scan_address = address(scan),
                 .count = checked_u32(program.count, "Vulkan nonzero count exceeds uint32"),
             };
-            const std::array reads{input, compaction.scan};
+            const std::array reads{input, scan};
             const std::array writes{output};
             record_mask(*context, kNonzeroMode, DataType::Int64, predicate, push, reads, writes,
                         dispatch_groups(*context, program.count));
-            const uint32_t total = read_total(*context, compaction.total);
-            context->memory().deallocate(compaction.scan);
-            context->memory().deallocate(compaction.total);
+            const uint32_t total = read_total(*context, offset_storage_ref(scan, (program.count - 1) * sizeof(uint32_t)));
+            context->memory().deallocate(scan);
             return total;
         }
     } // namespace
+
+    void vulkan_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
+        LFS_FACADE_TRACE(where);
+        pin_operands({&output, &condition, &source});
+        const auto context = acquire_vulkan_context();
+        const auto [low, high] = fill_bits(output.dtype(), scalar_operand(value));
+        const auto destination = storage_ref(output);
+        const auto mask = storage_ref(condition);
+        const auto input = storage_ref(source);
+        const MaskPush push{
+            .data_address = address(destination),
+            .mask_address = address(mask),
+            .source_address = address(input),
+            .count = checked_u32(output.numel(), "Vulkan where_into count exceeds uint32"),
+            .fill_low = low,
+            .fill_high = high,
+        };
+        const std::array reads{mask, input};
+        const std::array writes{destination};
+        record_mask(*context, 6, output.dtype(), kBytePredicate, push, reads, writes,
+                    dispatch_groups(*context, output.numel()));
+    }
 
     void VulkanBackendOps::masked_fill(
         const StorageRef output, const StorageRef mask, const MaskProgram& program, ExecContext) {
@@ -176,20 +197,19 @@ namespace lfs::core::internal {
             return 0;
         }
         const auto context = acquire_vulkan_context();
-        const Compaction compaction = scan_predicate(*context, kBytePredicate, mask, program.count);
+        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
         const MaskPush push{
             .data_address = address(input),
             .mask_address = address(mask),
             .source_address = address(output),
-            .scan_address = address(compaction.scan),
+            .scan_address = address(scan),
             .count = checked_u32(program.count, "Vulkan masked_select count exceeds uint32"),
         };
-        const std::array reads{input, mask, compaction.scan};
+        const std::array reads{input, mask, scan};
         const std::array writes{output};
         record_mask(*context, kCompactSelectMode, input.dtype, kBytePredicate, push, reads, writes,
                     dispatch_groups(*context, program.count));
-        context->memory().deallocate(compaction.scan);
-        context->memory().deallocate(compaction.total);
+        context->memory().deallocate(scan);
         // The host sized the output from the same mask; like CUDA the launch trusts it.
         return program.selected_count;
     }
@@ -202,20 +222,19 @@ namespace lfs::core::internal {
             return;
         }
         const auto context = acquire_vulkan_context();
-        const Compaction compaction = scan_predicate(*context, kBytePredicate, mask, program.count);
+        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
         const MaskPush push{
             .data_address = address(output),
             .mask_address = address(mask),
             .source_address = address(source),
-            .scan_address = address(compaction.scan),
+            .scan_address = address(scan),
             .count = checked_u32(program.count, "Vulkan masked_scatter count exceeds uint32"),
         };
-        const std::array reads{mask, source, compaction.scan};
+        const std::array reads{mask, source, scan};
         const std::array writes{output};
         record_mask(*context, kCompactScatterMode, output.dtype, kBytePredicate, push, reads, writes,
                     dispatch_groups(*context, program.count));
-        context->memory().deallocate(compaction.scan);
-        context->memory().deallocate(compaction.total);
+        context->memory().deallocate(scan);
     }
 
     void VulkanBackendOps::and_live(
@@ -242,9 +261,9 @@ namespace lfs::core::internal {
         const StridedLayout& x_layout, const StridedLayout& y_layout,
         const StridedLayout& output_layout, ExecContext) {
         LFS_FACADE_TRACE(where);
-        LFS_ASSERT_MSG(x.dtype == DataType::Float32 && y.dtype == DataType::Float32 &&
-                           output.dtype == DataType::Float32,
-                       "Vulkan where supports only Float32 operands");
+        LFS_ASSERT_MSG(condition.dtype == DataType::Bool && x.dtype == y.dtype &&
+                           x.dtype == output.dtype,
+                       "Vulkan where requires a Bool condition and matching value dtypes");
         if (output_layout.element_count == 0) {
             return;
         }
@@ -265,7 +284,8 @@ namespace lfs::core::internal {
             .count = checked_u32(output_layout.element_count, "Vulkan where count exceeds uint32"),
         };
         const VulkanPipeline& pipeline =
-            context->pipelines().specialized("where", sizeof(WherePush), {});
+            context->pipelines().specialized("where", sizeof(WherePush),
+                                             std::array{static_cast<uint32_t>(output.dtype)});
         const std::array reads{condition, x, y};
         const std::array writes{output};
         context->recorders().record(
@@ -273,7 +293,7 @@ namespace lfs::core::internal {
                 vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
                 vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(push), &push);
-                vkCmdDispatch(command, dispatch_groups(*context, output_layout.element_count), 1, 1);
+                vkCmdDispatch(command, dispatch_groups(*context, dtype_size(output.dtype) == 1 ? (output_layout.element_count + (push.output_address & 3u) + 3u) / 4u : output_layout.element_count), 1, 1);
             });
     }
 

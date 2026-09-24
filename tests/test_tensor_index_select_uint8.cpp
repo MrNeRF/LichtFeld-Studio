@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -51,9 +52,13 @@ namespace {
 
 } // namespace
 
-class TensorIndexSelectUInt8Test : public ::testing::Test {
+class TensorIndexSelectUInt8Test : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 };
@@ -190,7 +195,7 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_2D_RowSelect) {
 
     auto lfs_data = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto t_cpu = t_data.cpu().contiguous();
-    cudaMemcpy(lfs_data.data_ptr(), t_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_data = Tensor::from_blob(t_cpu.data_ptr<uint8_t>(), lfs_data.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Random indices
     std::vector<int> idx_vec = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99};
@@ -210,7 +215,7 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_LargeScale) {
 
     auto lfs_data = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto t_cpu = t_data.cpu().contiguous();
-    cudaMemcpy(lfs_data.data_ptr(), t_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_data = Tensor::from_blob(t_cpu.data_ptr<uint8_t>(), lfs_data.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Select every 10th point
     std::vector<int> idx_vec;
@@ -326,8 +331,8 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_VsTorch) {
 
     auto t_means_cpu = t_means.cpu().contiguous();
     auto t_colors_cpu = t_colors.cpu().contiguous();
-    cudaMemcpy(lfs_means.data_ptr(), t_means_cpu.data_ptr<float>(), N * 3 * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(lfs_colors.data_ptr(), t_colors_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_means = Tensor::from_blob(t_means_cpu.data_ptr<float>(), lfs_means.shape(), Device::CPU, DataType::Float32).to(Device::GPU);
+    lfs_colors = Tensor::from_blob(t_colors_cpu.data_ptr<uint8_t>(), lfs_colors.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Create mask: x > 0
     auto t_x = t_means.select(1, 0);

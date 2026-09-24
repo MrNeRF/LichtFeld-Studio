@@ -4,8 +4,8 @@
 #include "components/bilateral_grid.hpp"
 #include "core/image_io.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/bilateral_grid.cuh"
-#include "tensor_hardening_test_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,7 +29,7 @@ namespace {
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_exposure_chroma_reference;
     using lfs::training::kernels::launch_bilateral_grid_slice_backward_reference;
 
-    class BilateralGridBackwardTiledTest : public tensor_hardening::CudaTest {};
+    class BilateralGridBackwardTiledTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();

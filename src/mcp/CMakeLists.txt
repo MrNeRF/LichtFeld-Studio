@@ -30,7 +30,7 @@ target_link_libraries(lfs_mcp
     lfs_core
     lfs_event_bridge
     lfs_io
-    lfs_training
+    $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>
     lfs_rendering_tensor
     lfs_python_utils
     OpenSSL::SSL

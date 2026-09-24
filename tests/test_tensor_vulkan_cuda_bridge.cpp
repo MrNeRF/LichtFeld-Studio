@@ -6,6 +6,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -20,13 +21,20 @@
 namespace {
     using namespace lfs::core;
 
-    class TensorVulkanCudaBridge : public testing::Test {
+    class TensorVulkanCudaBridge : public lfs::test::CudaDeviceTest {
     protected:
         void SetUp() override {
+            CudaDeviceTest::SetUp();
+            if (IsSkipped()) {
+                return;
+            }
             ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             const auto status = shutdown_gpu_backend(GpuBackend::Vulkan);
             EXPECT_TRUE(status.has_value());
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 0u);
@@ -464,6 +472,7 @@ namespace {
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
         if (!vulkan_backend_exports_memory()) {
+            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
             GTEST_SKIP() << "adopted device did not export memory for CUDA";
         }
         cudaStream_t stream = nullptr;
@@ -488,6 +497,7 @@ namespace {
 } // namespace
 
 TEST_F(TensorVulkanCudaBridge, DirectLargeAllocationsAreNotExportableButStayUsable) {
+    force_vulkan_context();
     if (!vulkan_backend_exports_memory()) {
         GTEST_SKIP() << "Vulkan tensor backend does not export memory";
     }

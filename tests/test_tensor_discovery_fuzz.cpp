@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
@@ -1156,8 +1157,9 @@ namespace {
 
 } // namespace
 
-TEST(DiscoveryFuzz, RandomizedProgramsMatchTorch) {
-    ASSERT_TRUE(torch::cuda::is_available()) << "Discovery fuzzer requires CUDA";
+class DiscoveryFuzz : public lfs::test::CudaBackendTest {};
+
+TEST_F(DiscoveryFuzz, RandomizedProgramsMatchTorch) {
 
     const uint64_t seed = env_uint64("LFS_DISCOVERY_SEED", 0x5eedc0deULL);
     const size_t start_iteration = static_cast<size_t>(

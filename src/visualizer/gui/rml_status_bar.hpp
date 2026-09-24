@@ -248,6 +248,7 @@ namespace lfs::vis::gui {
             std::string zoom_sep_color;
             std::string lfs_mem_text;
             std::string lfs_mem_color;
+            bool show_lfs_memory = true;
             bool show_gpu_model = false;
             bool gpu_panel_active = false;
             std::string gpu_model_text;

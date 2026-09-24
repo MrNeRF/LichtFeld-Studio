@@ -5,7 +5,9 @@
 #include "core/error.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <memory>
@@ -22,15 +24,15 @@ namespace lfs::core {
         int vulkan_validation = 0; // 0: off, 1: API validation, 2: synchronization validation.
         bool force_fp32_half = false;
         bool force_no_atomic_float = false;
-        bool viewer_vulkan_inputs = false;
     };
 
     LFS_CORE_API lfs::Status set_tensor_backend_options(const TensorBackendOptions& options);
     LFS_CORE_API TensorBackendOptions tensor_backend_options();
 
-    LFS_CORE_API GpuBackend default_gpu_backend();
     LFS_CORE_API lfs::Status set_default_gpu_backend(GpuBackend backend);
     LFS_CORE_API bool gpu_backend_available(GpuBackend backend);
+    // True while the backend holds device state (a CUDA context, a Vulkan context); never creates it.
+    LFS_CORE_API bool gpu_backend_live(GpuBackend backend);
 
     LFS_CORE_API MemoryInfo gpu_backend_memory_info(GpuBackend backend);
     LFS_CORE_API lfs::Status shutdown_gpu_backend(GpuBackend backend);
@@ -50,8 +52,11 @@ namespace lfs::core {
         void* device = nullptr;
         void* queue = nullptr;
         uint32_t queue_family = 0;
+        std::array<uint32_t, 3> sharing_queue_families{};
+        uint32_t sharing_queue_family_count = 0;
         bool shader_atomic_float = false;
         bool memory_budget = false;
+        bool shader_float64 = false;
         bool shader_float16 = false;
         bool external_memory = false;
         bool external_semaphore = false;
@@ -64,20 +69,9 @@ namespace lfs::core {
 
     // A Vulkan-backend tensor's storage for a consumer on the same device. The
     // buffer is valid while keep_alive is held; pending_timeline_value is the
-    // value of vulkan_backend_timeline() after which every pending write to the
+    // backend timeline value after which every pending write to the
     // tensor is complete (0 when nothing is pending); the query flushes the
     // recorder that owns those writes so the value will be signalled.
-    struct TensorVulkanBuffer {
-        void* buffer = nullptr;
-        uint64_t offset = 0;
-        uint64_t device_address = 0;
-        uint64_t bytes = 0;
-        uint64_t pending_timeline_value = 0;
-        std::shared_ptr<void> keep_alive;
-    };
-    LFS_CORE_API void* vulkan_backend_timeline();
-    LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
-
     // A CUDA-tagged tensor aliasing a Vulkan-backend tensor's memory on NVIDIA
     // devices with external memory support. The view is ordered after the
     // tensor's pending Vulkan writes on `stream`; it keeps the Vulkan storage

@@ -11,12 +11,14 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
-#include "visualizer/training/training_manager.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -229,9 +231,10 @@ namespace {
 
 } // namespace
 
-class TrainingSceneInitConcurrencyTest : public ::testing::Test {
+class TrainingSceneInitConcurrencyTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::services().clear();
     }
@@ -405,6 +408,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareKeepsSeedsOutsideEnabledCropbox)
     params.optimization.max_cap = 16;
     params.optimization.random = false;
 
+    const lfs::core::GpuBackendScope training_backend(lfs::core::GpuBackend::CUDA);
     const auto prepared = lfs::training::prepareTrainingModel(params, scene);
     ASSERT_TRUE(prepared) << prepared.error();
     ASSERT_TRUE(prepared->has_value());
@@ -527,6 +531,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, TrainerManagerFailureAndRepeatedStart) 
 }
 
 TEST_F(TrainingSceneInitConcurrencyTest, StartTrainingWaitsForOwnerBeforeReplacingPointCloud) {
+    const auto viewer_backend = lfs::core::default_gpu_backend();
     lfs::core::Scene scene;
     ASSERT_TRUE(populate_init_scene(scene));
     OwnerWorkQueue queue;
@@ -562,6 +567,15 @@ TEST_F(TrainingSceneInitConcurrencyTest, StartTrainingWaitsForOwnerBeforeReplaci
     ASSERT_TRUE(queue.pump_one()); // Actual initialization publishes its prepared model.
     ASSERT_NE(scene.getTrainingModel(), nullptr);
     EXPECT_EQ(scene.getTrainingModel()->size(), 8u);
+    EXPECT_EQ(lfs::core::gpu_backend_of(scene.getTrainingModel()->means_raw()),
+              lfs::core::GpuBackend::CUDA);
+    EXPECT_EQ(lfs::core::default_gpu_backend(), viewer_backend);
+    for (const auto& camera : scene.getAllCameras()) {
+        EXPECT_EQ(lfs::core::gpu_backend_of(camera->world_view_transform()),
+                  lfs::core::GpuBackend::CUDA);
+        EXPECT_EQ(lfs::core::gpu_backend_of(camera->cam_position()),
+                  lfs::core::GpuBackend::CUDA);
+    }
     EXPECT_FALSE(scene_has_type(scene, lfs::core::NodeType::POINTCLOUD));
     manager.stopTraining();
     ASSERT_TRUE(wait_until([&] {
@@ -569,4 +583,41 @@ TEST_F(TrainingSceneInitConcurrencyTest, StartTrainingWaitsForOwnerBeforeReplaci
         return !manager.isCompletionPending();
     }));
     std::filesystem::remove_all(params.dataset.output_path);
+}
+
+TEST_F(TrainingSceneInitConcurrencyTest, MigratesVulkanModelToCudaAllocator) {
+    if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "Vulkan backend unavailable";
+    }
+    using namespace lfs::core;
+    const auto process_backend = default_gpu_backend();
+    const GpuBackendScope viewer_backend(GpuBackend::Vulkan);
+    auto model = make_test_splat(8);
+    model->set_max_sh_degree(1);
+    for (auto* tensor : {&model->means(), &model->sh0(), &model->shN(),
+                         &model->scaling_raw(), &model->rotation_raw(), &model->opacity_raw()}) {
+        *tensor = tensor->gpu();
+    }
+    model->means() = model->means().reshape({8, 3});
+    model->deleted() = Tensor::zeros({8}, Device::GPU, DataType::Bool);
+    const auto original_means = model->means().to_vector();
+    const auto original_sh = model->shN().to_vector();
+    lfs::core::param::TrainingParameters params;
+    params.optimization.max_cap = 16;
+    params.optimization.sh_degree = 1;
+    const auto allocator = [](TensorShape shape, size_t capacity, DataType dtype, std::string_view) {
+        const GpuBackendScope backend(GpuBackend::CUDA);
+        return Tensor::zeros_direct(std::move(shape), capacity, Device::GPU, dtype);
+    };
+    const auto migrated = lfs::training::migrateTrainingModelToAllocator(params, *model, allocator);
+    ASSERT_TRUE(migrated) << migrated.error();
+    for (const auto* tensor : {&model->means(), &model->sh0(), &model->shN(),
+                               &model->scaling_raw(), &model->rotation_raw(), &model->opacity_raw(),
+                               &model->deleted()}) {
+        EXPECT_EQ(gpu_backend_of(*tensor), GpuBackend::CUDA);
+    }
+    EXPECT_EQ(model->means().to_vector(), original_means);
+    EXPECT_EQ(model->shN().to_vector(), original_sh);
+    EXPECT_EQ(gpu_backend_of(Tensor::zeros({1}, Device::GPU)), GpuBackend::Vulkan);
+    EXPECT_EQ(default_gpu_backend(), process_backend);
 }

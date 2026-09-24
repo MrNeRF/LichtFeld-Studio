@@ -33,6 +33,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "core/parameters.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/sh_value_codec.hpp"
@@ -57,6 +58,8 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 
 using namespace lfs::core;
 using namespace lfs::training;
+
+class MRNFStrategyTest : public lfs::test::CudaBackendTest {};
 
 namespace {
 
@@ -240,7 +243,7 @@ namespace {
 
 } // namespace
 
-TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
+TEST_F(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -269,7 +272,7 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
 }
 
-TEST(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
+TEST_F(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -327,7 +330,9 @@ TEST(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
     }
 }
 
-TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {
+class CropDampingStrategyTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -361,7 +366,7 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     EXPECT_EQ(unit_scale_candidates, unmasked_candidates);
 }
 
-TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
+TEST_F(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
     auto splat_data = create_mrnf_test_splat_data(1);
     MRNF strategy(splat_data);
 
@@ -376,7 +381,7 @@ TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate)
     EXPECT_GT(mean_lr, 0.0f);
 }
 
-TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) {
+TEST_F(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) {
     auto splat_data = create_mrnf_test_splat_data(8);
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();
@@ -416,7 +421,7 @@ TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) 
     }
 }
 
-TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
+TEST_F(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
     auto splat_data = create_mrnf_test_splat_data(10);
     MRNF strategy(splat_data);
 
@@ -432,7 +437,7 @@ TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
     EXPECT_GT(mean_lr, 0.0f);
 }
 
-TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
+TEST_F(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -465,7 +470,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
     });
 }
 
-TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
+TEST_F(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -490,7 +495,7 @@ TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
     }
 }
 
-TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShNDtype) {
+TEST_F(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShNDtype) {
     // Legacy per-primitive scale compaction removed with the legacy Adam codec.
     // Joint path: compact preserves joint packed moments + dtype.
     auto splat_data = create_mrnf_test_splat_data();
@@ -525,7 +530,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShN
               sh_swizzled_float_count(expected_rows, static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
+TEST_F(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -610,7 +615,7 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     }
 }
 
-TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
+TEST_F(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     auto splat_data = create_mrnf_test_splat_data(10, 0);
     MRNF strategy(splat_data);
 
@@ -656,7 +661,7 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     });
 }
 
-TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
+TEST_F(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
 
     constexpr int n_gaussians = 10;
     constexpr size_t max_cap = 70;
@@ -733,7 +738,7 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
 }
 
-TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
+TEST_F(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     constexpr size_t sfm_points = 8;
     constexpr size_t grown_points = sfm_points * 3;
 
@@ -784,7 +789,7 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     expect_prefix(strategy._explore_score_sum, 5.0f);
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
+TEST_F(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -839,7 +844,7 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
+TEST_F(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -904,7 +909,7 @@ TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
+TEST_F(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
     auto params = vanilla_mrnf_params();
     params.grow_until_iter = 15000;
     params.sparsify_steps = 15000;
@@ -918,7 +923,7 @@ TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
     EXPECT_EQ(params.stop_refine, 14250u);
 }
 
-TEST(MRNFStrategyTest, StopRefineBoundaryRequestsExclusiveMutation) {
+TEST_F(MRNFStrategyTest, StopRefineBoundaryRequestsExclusiveMutation) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -935,7 +940,7 @@ TEST(MRNFStrategyTest, StopRefineBoundaryRequestsExclusiveMutation) {
     EXPECT_FALSE(strategy.is_refining(151));
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
+TEST_F(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -964,7 +969,7 @@ TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     EXPECT_EQ(strategy.free_count(), 0u);
 }
 
-TEST(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
+TEST_F(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1002,7 +1007,7 @@ TEST(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
     EXPECT_FALSE(values[initial_size]);
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
+TEST_F(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1034,7 +1039,7 @@ TEST(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     EXPECT_EQ(strategy.active_count(), initial_size - 1);
 }
 
-TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
+TEST_F(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1067,7 +1072,7 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(strategy.free_count(), 1u);
 }
 
-TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
+TEST_F(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
 
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
@@ -1100,7 +1105,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
     EXPECT_EQ(restored.free_count(), 2u);
 }
 
-TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
+TEST_F(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
 
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
@@ -1131,7 +1136,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
                 1e-12);
 }
 
-TEST(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
+TEST_F(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
 
     auto splat_data = create_mrnf_test_splat_data(12);
     MRNF strategy(splat_data);
@@ -1160,7 +1165,7 @@ TEST(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
     EXPECT_FALSE(restored._edge_precompute_valid);
 }
 
-TEST(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
+TEST_F(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1275,7 +1280,7 @@ namespace {
 
 } // namespace
 
-TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
+TEST_F(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1329,7 +1334,7 @@ TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     EXPECT_TRUE(row3_split);
 }
 
-TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
+TEST_F(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1379,7 +1384,7 @@ TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
               static_cast<int>(std::lround(kFarGrowthCap * static_cast<double>(n_explore))));
 }
 
-TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
+TEST_F(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1441,7 +1446,7 @@ TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
     EXPECT_TRUE(found_seed);
 }
 
-TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
+TEST_F(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1515,7 +1520,7 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     }
 }
 
-TEST(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
+TEST_F(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();
@@ -1528,7 +1533,7 @@ TEST(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
     EXPECT_EQ(splat_data._densification_info.shape()[1], splat_data.size());
 }
 
-TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
+TEST_F(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();
@@ -1579,7 +1584,7 @@ namespace {
     }
 } // namespace
 
-TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
+TEST_F(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     auto splat_p = create_mrnf_test_splat_data(8);
     place_deep_far_probe(splat_p);
     auto splat_g = create_mrnf_test_splat_data(8);
@@ -1664,7 +1669,7 @@ TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     EXPECT_NEAR(dx_huge / dx_med, r_max / r_min, 0.02f * (r_max / r_min));
 }
 
-TEST(MRNFStrategyTest, CadenceScaledMatchesRefineEvery) {
+TEST_F(MRNFStrategyTest, CadenceScaledMatchesRefineEvery) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1685,7 +1690,7 @@ TEST(MRNFStrategyTest, CadenceScaledMatchesRefineEvery) {
     EXPECT_EQ(strategy.cadence_scaled(kExploreSplits), kExploreSplits / 2);
 }
 
-TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
+TEST_F(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
     EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(1.0f, kFarCapRatioFull, kFarCapRatioRich), 1.0f);
     EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(2.0f, kFarCapRatioFull, kFarCapRatioRich), 1.0f);
     EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(2.75f, kFarCapRatioFull, kFarCapRatioRich), 0.5f);
@@ -1770,7 +1775,7 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
     }
 }
 
-TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
+TEST_F(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     auto make_params = [](const bool background_improvements, const float min_frac,
                           const bool starvation = true) {
         auto opt = vanilla_mrnf_params();
@@ -1828,7 +1833,7 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     }
 }
 
-TEST(MRNFStrategyTest, ExploreStarvationWeights) {
+TEST_F(MRNFStrategyTest, ExploreStarvationWeights) {
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(0.0f, 4.0f), 0.0f);
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f), kStarvEps);
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f),
@@ -1912,7 +1917,7 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     }
 }
 
-TEST(MRNFStrategyTest, OptimizationParametersDefaultToBackgroundImprovementsOff) {
+TEST_F(MRNFStrategyTest, OptimizationParametersDefaultToBackgroundImprovementsOff) {
     const param::OptimizationParameters defaults{};
     EXPECT_FALSE(defaults.background_improvements);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
@@ -1932,7 +1937,7 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultToBackgroundImprovementsOff)
     EXPECT_FLOAT_EQ(kExploreStarvDose, 2.38f);
 }
 
-TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
+TEST_F(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1958,7 +1963,7 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
     EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), 1.0f);
 }
 
-TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
+TEST_F(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -1985,7 +1990,7 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
     EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
 }
 
-TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
+TEST_F(MRNFStrategyTest, PermutationRepublishesFarMask) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
     params.background_improvements = true;
@@ -2035,7 +2040,7 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
 }
 
-TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
+TEST_F(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
     params.background_improvements = true;
@@ -2073,7 +2078,7 @@ TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     EXPECT_EQ(fused.mean_step_far_mask_n, 1);
 }
 
-TEST(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
+TEST_F(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
     auto params = vanilla_mrnf_params();
     params.background_improvements = true;
     params.far_scene_min_fraction = 0.0f;
@@ -2138,7 +2143,7 @@ namespace {
     };
 } // namespace
 
-TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
+TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
     for (const int mask_n : {1, 4}) {
         SCOPED_TRACE(mask_n);
         auto splat = create_mrnf_test_splat_data(2, 0);
@@ -2172,7 +2177,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
     }
 }
 
-TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
+TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
     for (const int mask_n : {1, 4}) {
         SCOPED_TRACE(mask_n);
         auto splat = create_mrnf_test_splat_data(2, 0);
@@ -2209,7 +2214,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
     }
 }
 
-TEST(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
+TEST_F(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
     for (const bool pinned : {false, true}) {
         SCOPED_TRACE(pinned);
         auto splat = create_mrnf_test_splat_data(2, 0);
@@ -2255,7 +2260,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
     }
 }
 
-TEST(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
+TEST_F(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
     auto splat = create_mrnf_test_splat_data(2, 0);
     MRNF strategy(splat);
     strategy.initialize(vanilla_mrnf_params());
@@ -2305,7 +2310,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
     optimizer.set_mean_step_far_mask({});
 }
 
-TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
+TEST_F(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
     auto splat = create_mrnf_test_splat_data(2, 0);
     MRNF strategy(splat);
     strategy.initialize(vanilla_mrnf_params());
@@ -2334,7 +2339,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
 
-TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep) {
+TEST_F(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
     params.far_scene_min_fraction = 0.0f;
@@ -2369,7 +2374,7 @@ TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep)
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
 
-TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
+TEST_F(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     auto original_model = create_mrnf_test_splat_data(8);
     place_deep_far_probe(original_model);
     MRNF original(original_model);
@@ -2411,7 +2416,9 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     EXPECT_EQ(actual_mask, expected_mask);
 }
 
-TEST(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
+class MRNFDecayTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
     const std::vector<float> original{-80.0f, -20.0f, 0.0f, 16.85f, 20.0f, 80.0f};
     for (const auto [decay, train_t] : {std::pair{0.0f, 0.5f}, std::pair{0.004f, 1.0f}}) {
         auto opacity = Tensor::from_vector(original, {original.size()}, Device::CUDA);
@@ -2430,7 +2437,7 @@ TEST(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
     }
 }
 
-TEST(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
+TEST_F(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
     const float inf = std::numeric_limits<float>::infinity();
     const std::vector<float> original{16.85f, 20.0f, 80.0f, inf, -inf};
     for (const float decay : {0.0f, 1e-12f, 0.004f}) {
@@ -2453,7 +2460,7 @@ TEST(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
     }
 }
 
-TEST(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisible) {
+TEST_F(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisible) {
     const float inf = std::numeric_limits<float>::infinity();
     auto opacity = Tensor::from_vector(std::vector<float>{inf, 20.0f, std::nanf(""), 20.0f}, {4}, Device::CUDA);
     auto scales = Tensor::zeros({4, 3}, Device::CUDA);

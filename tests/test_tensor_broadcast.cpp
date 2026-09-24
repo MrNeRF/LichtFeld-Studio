@@ -3,6 +3,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <random>
 #include <torch/torch.h>
@@ -75,7 +76,7 @@ namespace {
             for (size_t i = 0; i < n; ++i) {
                 data[i] = static_cast<float>(i);
             }
-            cudaMemcpy(tensor.ptr<float>(), data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+            tensor = Tensor::from_vector(data, shape, device);
         } else {
             float* data = tensor.ptr<float>();
             for (size_t i = 0; i < n; ++i) {
@@ -103,9 +104,13 @@ namespace {
 
 } // anonymous namespace
 
-class TensorBroadcastTest : public ::testing::Test {
+class TensorBroadcastTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }

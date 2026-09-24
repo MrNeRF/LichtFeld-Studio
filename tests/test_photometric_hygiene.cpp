@@ -3,6 +3,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 
 #include <cmath>
@@ -32,7 +33,9 @@ namespace {
 
 } // namespace
 
-TEST(PhotometricHygieneTest, FusedLossValueStableAndNoCloneAlloc) {
+class PhotometricHygieneTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(PhotometricHygieneTest, FusedLossValueStableAndNoCloneAlloc) {
     constexpr int H = 64;
     constexpr int W = 64;
     constexpr float kSsimWeight = 0.2f;

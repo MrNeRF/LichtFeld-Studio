@@ -8,6 +8,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/ply.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -117,13 +118,17 @@ namespace {
 
 } // namespace
 
-class FastGSFuzzTest : public ::testing::Test {
+class FastGSFuzzTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         bg_ = Tensor::zeros({3}, Device::GPU);
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         cleanup_arena();
     }
 

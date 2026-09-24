@@ -2,11 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Rectangle, brush, polygon, and hover pick are tensor programs over projected
+// Rectangle, brush, polygon, and hover pick operate on projected
 // screen positions; they run on every GPU backend and follow the CPU rules:
 // invalid positions never select, the pick wants a finite position inside the
 // radius, and equal distances pick the largest index. Brush inclusion is the
-// CUDA disk test dx^2+dy^2 <= r^2. Polygon inclusion is even-odd.
+// disk test dx^2+dy^2 <= r^2. Polygon inclusion is even-odd.
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -26,7 +26,10 @@ namespace {
     constexpr float kInvalidThreshold = -1000.0f;
 
     std::vector<GpuBackend> backends_under_test() {
-        std::vector<GpuBackend> backends{GpuBackend::CUDA};
+        std::vector<GpuBackend> backends;
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            backends.push_back(GpuBackend::CUDA);
+        }
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             backends.push_back(GpuBackend::Vulkan);
         }
@@ -110,6 +113,28 @@ TEST(SelectionScreenOps, RectangleSelectionAccumulatesAndSkipsInvalidPositions) 
     }
 }
 
+TEST(SelectionScreenOps, SinglePointWritePreservesAdjacentBytesAndBackend) {
+    for (const auto backend : backends_under_test()) {
+        const GpuBackendScope scope(backend);
+        for (const auto dtype : {DataType::Bool, DataType::UInt8}) {
+            SCOPED_TRACE(::testing::Message() << label(backend) << " dtype=" << int(dtype));
+            auto storage = Tensor::full({12}, dtype == DataType::Bool ? 0 : 7, Device::GPU, dtype);
+            auto selected = storage.slice(0, 3, 8);
+            std::vector<float> expected(12, dtype == DataType::Bool ? 0 : 7);
+            const GpuBackendScope other(backend == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA);
+            for (int index : {0, 1, 4}) {
+                lfs::rendering::set_selection_element(selected, index, true);
+                expected[3 + index] = 1;
+            }
+            lfs::rendering::set_selection_element(selected, 1, false);
+            expected[4] = 0;
+            lfs::rendering::set_selection_element(selected, -1, true);
+            lfs::rendering::set_selection_element(selected, 5, true);
+            EXPECT_EQ(storage.cpu().to_vector(), expected);
+        }
+    }
+}
+
 TEST(SelectionScreenOps, PickFindsTheNearestValidPositionAndBreaksTiesHigh) {
     constexpr size_t n = 1501;
     auto values = positions(n);
@@ -168,26 +193,6 @@ TEST(SelectionScreenOps, BrushMatchesCpuDiskAndSkipsInvalid) {
         EXPECT_FALSE(got[14]);
         EXPECT_FALSE(got[15]);
     }
-}
-
-TEST(SelectionScreenOps, BrushProgramMatchesCudaKernel) {
-    if (!gpu_backend_available(GpuBackend::CUDA)) {
-        GTEST_SKIP() << "CUDA backend required for kernel vs program parity";
-    }
-    constexpr size_t n = 1024;
-    auto values = positions(n);
-    values[3 * 2] = kInvalid;
-    values[4 * 2] = 40.0f;
-    values[4 * 2 + 1] = 40.0f;
-    constexpr float mx = 40.0f;
-    constexpr float my = 40.0f;
-    constexpr float radius = 8.0f;
-    const Tensor screen = upload(values, TensorShape{n, 2}, GpuBackend::CUDA);
-    Tensor kernel_sel = uploadBool(std::vector<bool>(n, false), GpuBackend::CUDA);
-    Tensor program_sel = uploadBool(std::vector<bool>(n, false), GpuBackend::CUDA);
-    lfs::rendering::brush_select_tensor(screen, mx, my, radius, kernel_sel);
-    lfs::rendering::brush_select_tensor_program(screen, mx, my, radius, program_sel);
-    EXPECT_EQ(kernel_sel.to_vector_bool(), program_sel.to_vector_bool());
 }
 
 TEST(SelectionScreenOps, BrushStrokeUnionIsBoundedOrNotMatrix) {
@@ -273,31 +278,6 @@ TEST(SelectionScreenOps, PolygonEvenOddMatchesCpuAndSkipsInvalid) {
     }
 }
 
-TEST(SelectionScreenOps, PolygonProgramMatchesCudaKernel) {
-    if (!gpu_backend_available(GpuBackend::CUDA)) {
-        GTEST_SKIP() << "CUDA backend required for kernel vs program parity";
-    }
-    constexpr size_t n = 64;
-    auto values = positions(n);
-    const std::vector<float> bowtie{
-        0.0f,
-        0.0f,
-        40.0f,
-        40.0f,
-        40.0f,
-        0.0f,
-        0.0f,
-        40.0f,
-    };
-    const Tensor screen = upload(values, TensorShape{n, 2}, GpuBackend::CUDA);
-    const Tensor polygon = upload(bowtie, TensorShape{4, 2}, GpuBackend::CUDA);
-    Tensor kernel_sel = uploadBool(std::vector<bool>(n, false), GpuBackend::CUDA);
-    Tensor program_sel = uploadBool(std::vector<bool>(n, false), GpuBackend::CUDA);
-    lfs::rendering::polygon_select_tensor(screen, polygon, kernel_sel);
-    lfs::rendering::polygon_select_tensor_program(screen, polygon, program_sel);
-    EXPECT_EQ(kernel_sel.to_vector_bool(), program_sel.to_vector_bool());
-}
-
 TEST(SelectionScreenOps, ProjectPinholeMarksBehindCameraInvalid) {
     constexpr std::array<float, 9> rotation{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
     constexpr std::array<float, 3> translation{0.0f, 0.0f, 0.0f};
@@ -317,7 +297,7 @@ TEST(SelectionScreenOps, ProjectPinholeMarksBehindCameraInvalid) {
         const Tensor gpu_means = upload(means, TensorShape{3, 3}, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 640, 480, rotation, translation, 500.0f, 500.0f,
-            320.0f, 240.0f, lfs::rendering::ScreenWindowCameraModel::Pinhole, 1.0f,
+            320.0f, 240.0f, lfs::core::PointProjectionModel::Pinhole, 1.0f,
             nullptr, nullptr, {});
         ASSERT_TRUE(projected.is_valid());
         const auto xy = projected.cpu().to_vector();

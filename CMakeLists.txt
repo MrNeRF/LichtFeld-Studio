@@ -170,6 +170,7 @@ add_custom_target(lfs_git_version ALL
     VERBATIM
 )
 
+option(LFS_BUILD_TRAINER "Include training in the full LichtFeld Studio application" ON)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
 option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)
@@ -546,6 +547,7 @@ add_custom_target(lfs_core_abi_stamp ALL
         "-DLFS_CUDA_COMPILER_VERSION=${CMAKE_CUDA_COMPILER_VERSION}"
         "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
         "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        "-DLFS_BUILD_TRAINER=${LFS_BUILD_TRAINER}"
         -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
     COMMENT "Refreshing lfs_core ABI stamp"
     VERBATIM
@@ -583,6 +585,7 @@ else()
 endif()
 
 add_compile_definitions(
+    LFS_BUILD_TRAINER=$<BOOL:${LFS_BUILD_TRAINER}>
     $<$<CONFIG:Debug>:DEBUG_BUILD>
     $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
 )
@@ -592,7 +595,19 @@ add_compile_definitions(
 # =============================================================================
 add_subdirectory(src/diagnostics) # Shared diagnostics/profiling module
 add_subdirectory(src/core)       # Core module (lfs::core namespace)
-add_subdirectory(src/training)   # Training module (lfs::training namespace)
+if(LFS_BUILD_TRAINER)
+    add_subdirectory(src/training)
+    add_subdirectory(src/tcp)
+    # Trainer targets keep the private tensor headers. fastlfs and the training
+    # kernels included them through lfs_core_cuda's former public src/ directory.
+    foreach(_lfs_tensor_private IN ITEMS
+            lfs_training lfs_training_kernels fastlfs_backend gsplat_backend_lfs lfs_depth_anchor)
+        if(TARGET ${_lfs_tensor_private})
+            target_include_directories(${_lfs_tensor_private} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+            target_compile_definitions(${_lfs_tensor_private} PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+        endif()
+    endforeach()
+endif()
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
@@ -601,7 +616,6 @@ add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
 if(LFS_NVIDIA_DLSS_AVAILABLE)
     add_subdirectory(src/scene_upscalers/nvidia_dlss)
 endif()
-add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
@@ -685,26 +699,24 @@ target_include_directories(${PROJECT_NAME}
         ${CUDAToolkit_INCLUDE_DIRS}
 )
 
+set(LFS_APP_INTERNAL_LINK_LIBS
+    lfs_visualizer
+    lfs_mcp
+    lfs_sequencer
+    lfs_rendering_tensor
+    lfs_preprocessing
+    lfs_geometry
+    lfs_core
+    lfs_io
+    lfs_video
+    lfs_python_utils
+)
+if(LFS_BUILD_TRAINER)
+    list(APPEND LFS_APP_INTERNAL_LINK_LIBS lfs_training lfs_tcp fastlfs_backend)
+endif()
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
-    set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_preprocessing,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
-    )
-else()
-    set(LFS_APP_INTERNAL_LINK_LIBS
-        lfs_visualizer
-        lfs_tcp
-        lfs_mcp
-        lfs_sequencer
-        lfs_rendering_tensor
-        lfs_training
-        lfs_preprocessing
-        lfs_geometry
-        lfs_core
-        lfs_io
-        lfs_video
-        fastlfs_backend
-        lfs_python_utils
-    )
+    list(JOIN LFS_APP_INTERNAL_LINK_LIBS "," _lfs_app_link_group)
+    set(LFS_APP_INTERNAL_LINK_LIBS "$<LINK_GROUP:RESCAN,${_lfs_app_link_group}>")
 endif()
 
 target_link_libraries(${PROJECT_NAME}
@@ -1259,6 +1271,7 @@ message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
+message(STATUS "  Trainer: ${LFS_BUILD_TRAINER}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Temporal CPU Tests: ${BUILD_TEMPORAL_CPU_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")

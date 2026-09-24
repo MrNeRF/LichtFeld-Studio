@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <cstdint>
@@ -48,7 +49,9 @@ namespace {
 
 } // namespace
 
-TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
+class AdamCapacityInvariant : public lfs::test::CudaBackendTest {};
+
+TEST_F(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
 
@@ -140,7 +143,7 @@ TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
     EXPECT_GE(state->capacity, state->size);
 }
 
-TEST(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
+TEST_F(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
 
@@ -187,7 +190,7 @@ TEST(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
     EXPECT_GE(state->capacity, state->size);
 }
 
-TEST(AdamCapacityInvariant, SlowPathGrowPreservesPackedMoments) {
+TEST_F(AdamCapacityInvariant, SlowPathGrowPreservesPackedMoments) {
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
 

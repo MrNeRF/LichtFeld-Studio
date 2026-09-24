@@ -1,6 +1,8 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 #include "half_bits.slangh"
+#include "byte_word.slangh"
+#include "integer_math.slangh"
 
 [SpecializationConstant]
 const uint kOp = 0;
@@ -42,32 +44,7 @@ struct ChainOp
     uint64_t rhsAddress;
 };
 
-uint loadByte(uint64_t address, uint64_t index)
-{
-    const uint64_t byteAddress = address + index;
-    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
-    const uint64_t wordAddress = byteAddress & ~uint64_t(3);
-    return (((Ptr<uint, Access.Read>)wordAddress)[0] >> shift) & 255u;
-}
-
-void storeByte(uint64_t address, uint64_t index, uint value)
-{
-    const uint64_t byteAddress = address + index;
-    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
-    const uint mask = 255u << shift;
-    Ptr<uint, Access.ReadWrite> word =
-        (Ptr<uint, Access.ReadWrite>)(byteAddress & ~uint64_t(3));
-    uint assumed = word[0];
-    uint observed;
-    do
-    {
-        const uint replacement = (assumed & ~mask) | ((value & 255u) << shift);
-        InterlockedCompareExchange(word[0], assumed, replacement, observed);
-        if (observed == assumed)
-            return;
-        assumed = observed;
-    } while (true);
-}
+#include "byte_read.slangh"
 
 float ieeeRound(float value)
 {
@@ -300,7 +277,7 @@ int intBinary(int lhs, int rhs)
     if (kOp == 2 || kOp == 6) return lhs * rhs;
     if (kOp == 3 || kOp == 7) return rhs == 0 ? 0 : rhs == -1 ? -lhs : lhs / rhs;
     if (kOp == 8 || kOp == 25) return intPow(lhs, rhs);
-    if (kOp == 9 || kOp == 26) return rhs == 0 || rhs == -1 ? 0 : lhs % rhs;
+    if (kOp == 9 || kOp == 26) return signedRemainder(lhs, rhs);
     if (kOp == 27 || kOp == 57) return max(lhs, rhs);
     if (kOp == 28 || kOp == 58) return min(lhs, rhs);
     return lhs;
@@ -380,6 +357,42 @@ void storeFloat(uint64_t address, uint index, float value)
         ((Ptr<uint16_t, Access.ReadWrite>)address)[index] = uint16_t(floatToHalfBits(value));
 }
 
+uint evaluateByte(uint index, uniform Parameters parameters)
+{
+    if (kInputDType == kFloat32 || kInputDType == kFloat16)
+    {
+        const float lhs = loadFloat(parameters.lhsAddress, index);
+        const float rhs = kArity == 2 ? loadFloat(parameters.rhsAddress, index)
+                                     : parameters.scalarFloat;
+        return floatPredicate(lhs, rhs) ? 1u : 0u;
+    }
+    if (kInputDType == kInt64)
+    {
+        const int64_t lhs = ((Ptr<int64_t, Access.Read>)parameters.lhsAddress)[index];
+        const int64_t rhs = ((Ptr<int64_t, Access.Read>)parameters.rhsAddress)[index];
+        return int64Predicate(lhs, rhs) ? 1u : 0u;
+    }
+    if (kInputDType == kUInt32)
+    {
+        const uint lhs = ((Ptr<uint, Access.Read>)parameters.lhsAddress)[index];
+        const uint rhs = ((Ptr<uint, Access.Read>)parameters.rhsAddress)[index];
+        return (kOp == 29 ? lhs == rhs : kOp == 30 ? lhs != rhs
+                : kOp == 31 ? lhs < rhs : kOp == 32 ? lhs <= rhs
+                : kOp == 33 ? lhs > rhs : kOp == 34 ? lhs >= rhs
+                : kOp == 35 ? lhs != 0u && rhs != 0u
+                : kOp == 36 ? lhs != 0u || rhs != 0u : (lhs != 0u) != (rhs != 0u)) ? 1u : 0u;
+    }
+    const int lhs = kInputDType == kInt32
+                       ? ((Ptr<int, Access.Read>)parameters.lhsAddress)[index]
+                       : int(loadByte(parameters.lhsAddress, index));
+    const int rhs = kArity != 2 ? int(parameters.scalarInt64)
+                     : kInputDType == kInt32
+                         ? ((Ptr<int, Access.Read>)parameters.rhsAddress)[index]
+                         : int(loadByte(parameters.rhsAddress, index));
+    return kOutputDType == kBool ? (intPredicate(lhs, rhs) ? 1u : 0u)
+                                : uint(intBinary(lhs, rhs)) & 255u;
+}
+
 void evaluateScalar(uint index, uniform Parameters parameters)
 {
     const bool scalarOnRight = (parameters.flags & 1u) != 0u;
@@ -418,11 +431,6 @@ void evaluateScalar(uint index, uniform Parameters parameters)
         const float lhs = loadFloat(parameters.lhsAddress, index);
         const float rhs = kArity == 2 ? loadFloat(parameters.rhsAddress, index)
                                      : parameters.scalarFloat;
-        if (kOutputDType == kBool)
-        {
-            storeByte(parameters.outputAddress, index, floatPredicate(lhs, rhs) ? 1u : 0u);
-            return;
-        }
         storeFloat(parameters.outputAddress, index,
                    kArity == 2 ? floatBinary(lhs, rhs)
                                : floatUnary(lhs, rhs, scalarOnRight));
@@ -434,45 +442,42 @@ void evaluateScalar(uint index, uniform Parameters parameters)
         const int rhs = kArity == 2
                             ? ((Ptr<int, Access.Read>)parameters.rhsAddress)[index]
                             : int(parameters.scalarInt64);
-        if (kOutputDType == kBool)
-            storeByte(parameters.outputAddress, index, intPredicate(lhs, rhs) ? 1u : 0u);
-        else
-            ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
-                kArity == 2 ? intBinary(lhs, rhs) : intUnary(lhs, rhs, scalarOnRight);
+        ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
+            kArity == 2 ? intBinary(lhs, rhs) : intUnary(lhs, rhs, scalarOnRight);
         return;
     }
     if (kInputDType == kInt64)
     {
         const int64_t lhs = ((Ptr<int64_t, Access.Read>)parameters.lhsAddress)[index];
         const int64_t rhs = ((Ptr<int64_t, Access.Read>)parameters.rhsAddress)[index];
-        if (kOutputDType == kBool)
-            storeByte(parameters.outputAddress, index, int64Predicate(lhs, rhs) ? 1u : 0u);
-        else
-            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                int64Binary(lhs, rhs);
-        return;
-    }
-    if (kInputDType == kUInt8 || kInputDType == kBool)
-    {
-        const uint lhs = loadByte(parameters.lhsAddress, index);
-        const uint rhs = kArity == 2
-                             ? loadByte(parameters.rhsAddress, index)
-                             : uint(parameters.scalarInt64);
-        if (kOutputDType == kBool)
-            storeByte(parameters.outputAddress, index,
-                      intPredicate(int(lhs), int(rhs)) ? 1u : 0u);
-        else
-            storeByte(parameters.outputAddress, index,
-                      uint(intBinary(int(lhs), int(rhs))) & 255u);
+        ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
+            int64Binary(lhs, rhs);
         return;
     }
     if (kInputDType == kUInt32)
     {
         const uint lhs = ((Ptr<uint, Access.Read>)parameters.lhsAddress)[index];
         const uint rhs = ((Ptr<uint, Access.Read>)parameters.rhsAddress)[index];
-        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
-            kOp == 4 ? lhs + rhs : kOp == 5 ? lhs - rhs : kOp == 6 ? lhs * rhs
-            : kOp == 7 ? (rhs == 0u ? 0u : lhs / rhs) : lhs;
+        uint result = lhs;
+        if (kOp == 4) result = lhs + rhs;
+        else if (kOp == 5) result = lhs - rhs;
+        else if (kOp == 6) result = lhs * rhs;
+        else if (kOp == 7) result = rhs == 0u ? 0u : lhs / rhs;
+        else if (kOp == 26) result = rhs == 0u ? 0u : lhs % rhs;
+        else if (kOp == 27) result = max(lhs, rhs);
+        else if (kOp == 28) result = min(lhs, rhs);
+        else if (kOp == 25)
+        {
+            result = 1u;
+            uint factor = lhs, exponent = rhs;
+            while (exponent != 0u)
+            {
+                if ((exponent & 1u) != 0u) result *= factor;
+                factor *= factor;
+                exponent >>= 1u;
+            }
+        }
+        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] = result;
     }
 }
 
@@ -504,6 +509,33 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
                                 ((floatPredicate(lhs.z, rhs.z) ? 1u : 0u) << 16u) |
                                 ((floatPredicate(lhs.w, rhs.w) ? 1u : 0u) << 24u);
             ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[dispatchThreadId.x] = packed;
+        }
+        return;
+    }
+    if (kOutputDType == 4 || kOutputDType == 5)
+    {
+        const uint64_t start = parameters.outputAddress;
+        const uint64_t end = start + uint64_t(parameters.count);
+        const uint64_t firstWord = start & ~uint64_t(3);
+        const uint wordCount = uint((end - firstWord + uint64_t(3)) / uint64_t(4));
+        const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+        for (uint wordIndex = dispatchThreadId.x; wordIndex < wordCount;
+             wordIndex += groups.x * LFS_LOCAL_SIZE_X)
+        {
+            const uint64_t wordAddress = firstWord + uint64_t(wordIndex) * uint64_t(4);
+            uint packed = 0;
+            uint mask = 0;
+            [unroll]
+            for (uint lane = 0; lane < 4u; ++lane)
+            {
+                const uint64_t byteAddress = wordAddress + uint64_t(lane);
+                if (byteAddress >= start && byteAddress < end)
+                {
+                    packed |= evaluateByte(uint(byteAddress - start), parameters) << (lane * 8u);
+                    mask |= 255u << (lane * 8u);
+                }
+            }
+            storeByteWord(wordAddress, packed, mask);
         }
         return;
     }

@@ -4,7 +4,6 @@
 
 #include "vulkan_external_tensor.hpp"
 
-#include "core/cuda_error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
@@ -13,12 +12,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cuda_runtime.h>
 #include <format>
 #include <limits>
 
 namespace lfs::vis {
 
+#if LFS_BUILD_TRAINER
     namespace {
         [[nodiscard]] lfs::Error interop_error(lfs::ErrorCode code, std::string message) {
             return lfs::make_error(lfs::ErrorInit{
@@ -29,130 +28,27 @@ namespace lfs::vis {
             });
         }
 
-        [[nodiscard]] std::size_t rowSize(const lfs::core::TensorShape& shape) {
-            if (shape.rank() == 0) {
-                return 1;
-            }
-            std::size_t row_size = 1;
-            for (std::size_t i = 1; i < shape.rank(); ++i) {
-                if (shape[i] != 0 && row_size > std::numeric_limits<std::size_t>::max() / shape[i]) {
-                    return 0;
-                }
-                row_size *= shape[i];
-            }
-            return row_size;
-        }
     } // namespace
 
     VulkanExternalTensorStorage::VulkanExternalTensorStorage(
-        VulkanContext& context,
-        VulkanContext::ExternalBuffer buffer,
-        const std::size_t bytes,
-        std::string debug_label,
-        std::shared_ptr<void> extra_owner,
-        const void* cuda_ptr)
-        : context_(&context),
-          buffer_(buffer),
-          bytes_(bytes),
-          extra_owner_(std::move(extra_owner)) {
-        registered_cuda_base_ = cuda_ptr;
-        if (registered_cuda_base_ != nullptr) {
-            lfs::core::register_cuda_address_range(
-                registered_cuda_base_, bytes_, std::move(debug_label));
-        }
+        VulkanContext& context, std::shared_ptr<lfs::core::ExportableBlock> block)
+        : context_(&context) {
+        void* const pointer = block->device_ptr;
+        block_tensor_ = lfs::core::Tensor::from_external_owner(pointer, {1},
+                                                               lfs::core::Device::GPU, lfs::core::DataType::UInt8, std::move(block), 1,
+                                                               nullptr, "vulkan_external_buffer");
+        buffer_ = context.tensorInterop().buffer(block_tensor_).value();
     }
 
-    VulkanExternalTensorStorage::VulkanExternalTensorStorage(
-        std::shared_ptr<VulkanExternalTensorStorage> parent,
-        const std::size_t offset,
-        const std::size_t bytes)
-        : parent_(std::move(parent)),
-          offset_(offset),
-          bytes_(bytes) {}
-
-    VulkanExternalTensorStorage::VulkanExternalTensorStorage(
-        std::shared_ptr<VulkanExternalTensorStorage> parent,
-        std::shared_ptr<lfs::core::SplatExportableStorage::Control> control,
-        const lfs::core::SplatExportableStorage::Region region)
-        : parent_(std::move(parent)),
-          live_control_(std::move(control)),
-          live_region_(region) {
-        if (live_control_ &&
-            static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
-            offset_ = live_control_->region_offsets[live_region_];
-            bytes_ = live_control_->region_bytes[live_region_];
-        }
-    }
-
-    VulkanExternalTensorStorage::~VulkanExternalTensorStorage() {
-        // Sub-views don't own anything; their parent's destructor handles Vulkan/CUDA
-        // teardown when the last sub-view's shared_ptr ref drops, then the parent's
-        // own shared_ptr ref drops with it.
-        if (parent_) {
-            return;
-        }
-        if (registered_cuda_base_ != nullptr) {
-            lfs::core::unregister_cuda_address_range(registered_cuda_base_);
-        }
-        if (context_) {
-            context_->destroyExternalBuffer(buffer_);
-        }
-        // extra_owner_ release (e.g. ExportableBlock cuMemUnmap/cuMemRelease/close)
-        // happens automatically when this destructor returns.
-    }
-
-    VkBuffer VulkanExternalTensorStorage::vkBuffer() const {
-        return parent_ ? parent_->vkBuffer() : buffer_.buffer;
-    }
-
-    VkDeviceSize VulkanExternalTensorStorage::vkBufferSize() const {
-        return parent_ ? parent_->vkBufferSize() : buffer_.size;
-    }
-
-    VkDeviceSize VulkanExternalTensorStorage::vkOffset() const {
-        if (parent_) {
-            std::size_t rel = offset_;
-            if (live_control_ &&
-                static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
-                rel = live_control_->region_offsets[live_region_];
-            }
-            return parent_->vkOffset() + static_cast<VkDeviceSize>(rel);
-        }
-        return 0;
-    }
-
-    VkDeviceAddress VulkanExternalTensorStorage::vkDeviceAddress() const {
-        if (parent_) {
-            const VkDeviceAddress parent_addr = parent_->vkDeviceAddress();
-            if (parent_addr == 0) {
-                return 0;
-            }
-            std::size_t rel = offset_;
-            if (live_control_ &&
-                static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
-                rel = live_control_->region_offsets[live_region_];
-            }
-            return parent_addr + static_cast<VkDeviceAddress>(rel);
-        }
-        return buffer_.device_address;
-    }
-
-    std::size_t VulkanExternalTensorStorage::bytes() const {
-        if (live_control_ &&
-            static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
-            return live_control_->region_bytes[live_region_];
-        }
-        return bytes_;
-    }
+    VulkanExternalTensorStorage::~VulkanExternalTensorStorage() = default;
 
     bool VulkanExternalTensorStorage::bindNewExportableChunks(const lfs::core::ExportableBlock& block) {
-        if (parent_) {
-            return parent_->bindNewExportableChunks(block);
-        }
         if (!context_) {
             return false;
         }
-        return context_->bindNewChunks(buffer_, block);
+        (void)block;
+        buffer_ = context_->tensorInterop().buffer(block_tensor_).value();
+        return true;
     }
 
     std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
@@ -161,103 +57,15 @@ namespace lfs::vis {
         const lfs::core::DataType dtype,
         const std::size_t capacity,
         const char* const debug_name) {
-        if (!context.externalMemoryInteropEnabled()) {
-            return std::unexpected("Vulkan external tensor allocation requires CUDA/Vulkan external-memory interop");
+        try {
+            auto tensor = context.tensorInterop().empty(std::move(shape), dtype,
+                                                        lfs::core::GpuBackend::CUDA, capacity);
+            if (debug_name)
+                tensor.set_name(debug_name);
+            return tensor;
+        } catch (const std::exception& error) {
+            return std::unexpected(error.what());
         }
-        if (shape.rank() == 0) {
-            return std::unexpected("Vulkan external tensor allocation requires a non-scalar tensor shape");
-        }
-
-        const std::size_t rows = shape[0];
-        const std::size_t cap_rows = std::max(capacity, rows);
-        const std::size_t row_elements = rowSize(shape);
-        const std::size_t element_bytes = lfs::core::dtype_size(dtype);
-        if (row_elements == 0 || element_bytes == 0 || cap_rows == 0 ||
-            cap_rows > std::numeric_limits<std::size_t>::max() / row_elements ||
-            cap_rows * row_elements > std::numeric_limits<std::size_t>::max() / element_bytes) {
-            return std::unexpected(std::format(
-                "Vulkan external tensor byte sizing must be non-zero and overflow-free (name='{}', rows={}, capacity_rows={}, row_elements={}, element_bytes={}, rank={})",
-                debug_name ? debug_name : "<unnamed>",
-                rows,
-                cap_rows,
-                row_elements,
-                element_bytes,
-                shape.rank()));
-        }
-        const std::size_t total_elements = cap_rows * row_elements;
-        const std::size_t bytes = total_elements * element_bytes;
-
-        int device = 0;
-        if (const cudaError_t err = cudaGetDevice(&device); err != cudaSuccess) {
-            return std::unexpected(std::format(
-                "Vulkan external tensor '{}' cudaGetDevice failed: {} ({})",
-                debug_name ? debug_name : "<unnamed>",
-                cudaGetErrorName(err),
-                cudaGetErrorString(err)));
-        }
-
-        auto block_result = lfs::core::allocateExportableDeviceBlock(
-            bytes, device, /*track_splat_bytes=*/false, bytes);
-        if (!block_result) {
-            return std::unexpected(std::format("Vulkan external tensor '{}' allocation failed: {}",
-                                               debug_name ? debug_name : "<unnamed>",
-                                               block_result.error()));
-        }
-        auto block = std::move(*block_result);
-
-        VulkanContext::ExternalBuffer imported{};
-        constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (!context.importExportableBlock(*block,
-                                           usage,
-                                           imported,
-                                           "vulkan.external_tensor.buffer",
-                                           debug_name ? debug_name : "unnamed")) {
-            return std::unexpected(std::format("Vulkan external tensor '{}' allocation failed: {}",
-                                               debug_name ? debug_name : "<unnamed>",
-                                               context.lastError()));
-        }
-        context.setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
-                                    imported.buffer,
-                                    "interop.tensor.{}[{}]",
-                                    debug_name ? debug_name : "unnamed",
-                                    bytes);
-        if (imported.size < static_cast<VkDeviceSize>(bytes) ||
-            imported.allocation_size < imported.size) {
-            const std::string error = std::format(
-                "Vulkan external tensor allocation size disagrees with the CUDA-visible payload (name='{}', requested_bytes={}, vulkan_visible_size={}, vulkan_allocation_size={})",
-                debug_name ? debug_name : "<unnamed>",
-                bytes,
-                imported.size,
-                imported.allocation_size);
-            context.destroyExternalBuffer(imported);
-            return std::unexpected(error);
-        }
-
-        void* const cuda_ptr = block->device_ptr;
-        if (!cuda_ptr) {
-            context.destroyExternalBuffer(imported);
-            return std::unexpected(std::format("Vulkan external tensor '{}' mapped to a null CUDA pointer",
-                                               debug_name ? debug_name : "<unnamed>"));
-        }
-
-        auto owner = std::make_shared<VulkanExternalTensorStorage>(
-            context,
-            imported,
-            bytes,
-            debug_name ? debug_name : "<unnamed>",
-            std::shared_ptr<void>(block),
-            cuda_ptr);
-        return lfs::core::Tensor::from_external_owner(
-            cuda_ptr,
-            std::move(shape),
-            lfs::core::Device::GPU,
-            dtype,
-            owner,
-            cap_rows,
-            nullptr,
-            "vulkan_external_buffer");
     }
 
     lfs::Result<lfs::core::SplatTensorAllocator>
@@ -311,52 +119,20 @@ namespace lfs::vis {
                                 context.lastError())));
             }
         } else {
-            VulkanContext::ExternalBuffer imported{};
-            constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            if (!context.importExportableBlock(*storage.block,
-                                               usage,
-                                               imported,
-                                               "vulkan.external_tensor.alias",
-                                               "exportable_splat_block")) {
-                return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
-                    lfs::ErrorCode::Internal,
-                    std::format("Vulkan import of CUDA-exported splat block failed: {}",
-                                context.lastError())));
-            }
-
-            parent = std::make_shared<VulkanExternalTensorStorage>(
-                context,
-                imported,
-                static_cast<std::size_t>(storage.block->reserved_bytes),
-                "exportable_splat_block",
-                std::shared_ptr<void>(storage.block));
+            parent = std::make_shared<VulkanExternalTensorStorage>(context, storage.block);
             if (parent_keep) {
                 *parent_keep = parent;
             }
         }
 
         // Live control block: offsets are constant; bytes/generation update on
-        // grow(). Sub-views pin the stable VkBuffer; bindNewChunks appends.
+        // grow(). The parent pins the stable VkBuffer; bindNewChunks appends.
         auto ctrl = storage.control();
         if (!ctrl) {
             return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
                 lfs::ErrorCode::FailedPrecondition,
                 "SplatExportableStorage control block missing; refuse by-value "
                 "interop snapshot allocator"));
-        }
-
-        // Live-control sub-views: bytes() re-resolves on every query. Offsets
-        // stay put; the parent VkBuffer is reused across growth.
-        std::array<std::shared_ptr<VulkanExternalTensorStorage>,
-                   lfs::core::SplatExportableStorage::Count>
-            sub_views;
-        for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
-            sub_views[i] = std::make_shared<VulkanExternalTensorStorage>(
-                parent,
-                ctrl,
-                static_cast<lfs::core::SplatExportableStorage::Region>(i));
         }
 
         // Resolve a name → region enum index.
@@ -381,10 +157,8 @@ namespace lfs::vis {
                 "makeSplatExportableInteropAllocator: unknown tensor name '{}'", name));
         };
 
-        // Capture control for live offsets + sub_views for Vulkan ownership.
-        // clamp requested capacity to the committed exportable layout.
-        // shape/capacity bytes must fit region_bytes (fail loud).
-        return [sub_views, ctrl, region_from_name](
+        // Shape and capacity must fit the committed region; the parent pins its import.
+        return [parent, ctrl, region_from_name](
                    lfs::core::TensorShape shape,
                    std::size_t capacity,
                    lfs::core::DataType dtype,
@@ -398,7 +172,7 @@ namespace lfs::vis {
             // Live pointer from control (not a by-value offset snapshot).
             void* const data = ctrl->region_ptr(region);
             const std::size_t region_bytes = ctrl->region_bytes[region];
-            std::shared_ptr<void> owner = sub_views[region];
+            std::shared_ptr<void> owner = parent;
             std::size_t clamped = capacity;
             if (region == R::ShN) {
                 if (lfs::core::sh_value_quant::enabled()) {
@@ -487,50 +261,13 @@ namespace lfs::vis {
         };
     }
 
+#endif
+
     lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator(const bool preserve_float_shN) {
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
-            return [](lfs::core::TensorShape shape,
-                      const size_t capacity,
-                      const lfs::core::DataType dtype,
-                      const std::string_view name) -> lfs::core::Tensor {
-                (void)capacity;
-                auto tensor = lfs::core::Tensor::empty(
-                    std::move(shape), lfs::core::Device::GPU, dtype);
-                tensor.set_name(std::string{name});
-                return tensor;
-            };
-        }
-
-        auto* const window_manager = services().windowOrNull();
-        auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
-        if (!context || !context->externalMemoryInteropEnabled()) {
-            return {};
-        }
-
-        return [context, preserve_float_shN](lfs::core::TensorShape shape,
-                                             const size_t capacity,
-                                             const lfs::core::DataType dtype,
-                                             const std::string_view name) -> lfs::core::Tensor {
-            const std::string debug_name{name};
-            if (!preserve_float_shN && keepFloatShNInPooledCuda(debug_name, dtype)) {
-                auto pooled = lfs::core::Tensor::zeros_direct(
-                    std::move(shape), capacity, lfs::core::Device::GPU, dtype);
-                pooled.set_name(debug_name);
-                return pooled;
-            }
-            auto tensor = makeVulkanExternalTensor(
-                *context, std::move(shape), dtype, capacity, debug_name.c_str());
-            if (!tensor) {
-                const auto message = std::format(
-                    "Vulkan-external splat tensor allocation failed for '{}': {}", debug_name, tensor.error());
-                if (lfs::core::is_shareable_allocation_limit_message(tensor.error())) {
-                    throw lfs::core::ShareableAllocationLimitError(message);
-                }
-                throw lfs::core::TensorError(message);
-            }
-            tensor->set_name(debug_name);
-            return std::move(*tensor);
-        };
+        auto* window = services().windowOrNull();
+        auto* context = window ? window->getVulkanContext() : nullptr;
+        return context ? context->tensorInterop().splat_allocator(preserve_float_shN)
+                       : lfs::core::SplatTensorAllocator{};
     }
 
 } // namespace lfs::vis

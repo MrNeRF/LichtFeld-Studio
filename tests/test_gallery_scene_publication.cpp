@@ -626,7 +626,8 @@ namespace {
     using lfs::vis::gui::verifyGalleryProjectCommit;
 
     std::filesystem::path portable_fixture(const std::string& kind) {
-        return std::filesystem::path(__FILE__).parent_path() / "data" / ("portable-" + kind + ".licht");
+        return std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" /
+               ("portable-" + kind + ".licht");
     }
 
     // Deliberately invalid bindings cannot pass ProjectDocument::save validation.
@@ -671,7 +672,7 @@ TEST(GalleryProjectExportTest, EncodedPortableAssetsAndSessionAreRetainedWithout
         ASSERT_TRUE(publication.nodes[0].encoded.has_value());
         EXPECT_FALSE(publication.nodes[0].snapshot.data);
         // Prove writer does not invoke the document decoder for a reusable asset.
-        publication.nodes[0].load_payload = []() -> std::shared_ptr<SplatData> {
+        publication.nodes[0].load_payload = [](lfs::core::TensorCompletion&) -> std::shared_ptr<SplatData> {
             throw std::runtime_error("Unexpected tensor hydration on encoded copy path");
         };
         EXPECT_EQ(publication.published_render, *source.view().dom().get_json("render_settings"));
@@ -752,7 +753,7 @@ TEST(GalleryProjectExportTest, SavedSpzV4IsByteIdentical) {
                                       ExportFormat::GALLERY_SPZ, ""},
                                      publication, commit);
     ASSERT_TRUE(publication.nodes.front().encoded.has_value());
-    publication.nodes.front().load_payload = []() -> std::shared_ptr<SplatData> {
+    publication.nodes.front().load_payload = [](lfs::core::TensorCompletion&) -> std::shared_ptr<SplatData> {
         throw std::runtime_error("SPZ copy must not hydrate");
     };
     writeGalleryScenePublication(publication, {}, {});

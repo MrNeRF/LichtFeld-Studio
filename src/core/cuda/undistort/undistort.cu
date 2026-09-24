@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_image.hpp"
 #include "undistort.hpp"
 
 #include <algorithm>
@@ -810,6 +812,11 @@ namespace lfs::core {
     }
 
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        if (gpu_backend_of(src) != GpuBackend::CUDA) {
+            return internal::undistort_image_tensor(src, params, false);
+        }
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
+
         assert(src.is_valid());
         assert(src.ndim() == 3);
         assert(src.device() == Device::GPU);
@@ -842,6 +849,11 @@ namespace lfs::core {
     }
 
     Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        if (gpu_backend_of(src) != GpuBackend::CUDA) {
+            return internal::undistort_image_tensor(src, params, true);
+        }
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
+
         assert(src.is_valid());
         assert(src.ndim() == 2);
         assert(src.device() == Device::GPU);

@@ -231,6 +231,8 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(RenderingPanel)
 
     def training_panel():
+        if not getattr(getattr(lf, "build_info", None), "training_enabled", True):
+            return
         from .training_panel import TrainingPanel
 
         lf.register_class(TrainingPanel)

@@ -49,9 +49,8 @@
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
-#include "control/command_api.hpp"
-#include "control/control_boundary.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -72,6 +71,7 @@
 #include "io/project_recovery.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
+#include "training/control/control_boundary.hpp"
 
 #include "config.h"
 #include "core/checkpoint_format.hpp"
@@ -80,13 +80,19 @@
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
+#endif
+#include "core/camera_metrics.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_state.hpp"
+#endif
+#include "core/training_state.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -94,7 +100,6 @@
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
@@ -384,7 +389,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -638,7 +643,11 @@ namespace {
         PyContextView() {
             snapshot_ = current_training_snapshot();
             if (snapshot_.trainer) {
+#if LFS_BUILD_TRAINER
                 strategy_ = snapshot_.trainer->getParams().optimization.strategy;
+#else
+                strategy_ = snapshot_.strategy;
+#endif
             }
         }
 
@@ -667,7 +676,11 @@ namespace {
         void refresh() {
             snapshot_ = current_training_snapshot();
             if (snapshot_.trainer) {
+#if LFS_BUILD_TRAINER
                 strategy_ = snapshot_.trainer->getParams().optimization.strategy;
+#else
+                strategy_ = snapshot_.strategy;
+#endif
             } else {
                 strategy_ = "none";
             }
@@ -683,21 +696,33 @@ namespace {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().size();
+#else
+            return 0;
+#endif
         }
 
         int sh_degree() const {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().get_active_sh_degree();
+#else
+            return 0;
+#endif
         }
 
         int max_sh_degree() const {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().get_max_sh_degree();
+#else
+            return 0;
+#endif
         }
     };
 
@@ -731,7 +756,11 @@ namespace {
             const auto snap = get_command_center().snapshot();
             if (!snap.trainer)
                 return 0.0f;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_optimizer().get_lr();
+#else
+            return 0;
+#endif
         }
     };
 
@@ -837,9 +866,11 @@ namespace {
             return app_scene;
         }
         // Priority 2: Current trainer (headless mode during hooks)
+#if LFS_BUILD_TRAINER
         if (g_current_trainer) {
             return g_current_trainer->getScene();
         }
+#endif
         // Priority 3: Operation context (short-lived, for capability invocations)
         return lfs::python::get_scene_for_python();
     }
@@ -1062,7 +1093,11 @@ NB_MODULE(lichtfeld, m) {
         "trainer_saving_model",
         []() {
             const auto* const tm = lfs::python::get_trainer_manager();
+#if LFS_BUILD_TRAINER
             return tm && tm->getTrainer() && tm->getTrainer()->is_saving_model();
+#else
+            return false;
+#endif
         },
         "Whether the terminal stop/completion model save is in progress");
 
@@ -3204,6 +3239,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Build info submodule
     auto build_info = m.def_submodule("build_info", "Build configuration and version information");
+    build_info.attr("training_enabled") = bool(LFS_BUILD_TRAINER);
     build_info.attr("version") = GIT_TAGGED_VERSION;
     build_info.attr("commit") = GIT_COMMIT_HASH_SHORT;
 #ifdef DEBUG_BUILD

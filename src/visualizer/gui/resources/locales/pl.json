@@ -3,7 +3,6 @@
   "projects.sort.iteration": "Iteracja",
   "projects.sort.ascending": "Rosnąco",
   "projects.sort.descending": "Malejąco",
-  "toolbar.asset_manager": "Projekty",
   "main_panel.color_exposure": "Ekspozycja splatów",
   "projects.action.open": "Otwórz",
   "projects.action.resume_training": "Wznów trenowanie",
@@ -845,7 +844,6 @@
     "tensor_validation_sync": "Synchronization validation",
     "tensor_fp32_half": "Compute half precision in FP32",
     "tensor_no_atomic_float": "Use deterministic float accumulation",
-    "tensor_viewer_inputs": "Copy viewer inputs to Vulkan",
     "projects": "Projekty",
     "project_location": "Lokalizacja projektów",
     "project_location_hint": "Nowe projekty i folder domyślny: {path}",
@@ -1035,6 +1033,7 @@
     "align": "Wyrównaj"
   },
   "toolbar": {
+    "asset_manager": "Projekty",
     "selection": "Zaznaczenie",
     "translate": "Przesunięcie",
     "rotate": "Obrót",
@@ -2029,6 +2028,7 @@
     "primary_view": "Widok główny",
     "secondary_view": "Widok pomocniczy",
     "gpu": "GPU",
+    "gpu_budget": "Budżet GPU",
     "strategy_default": "Domyślny",
     "split": "Podział:",
     "ui_fps": "UI FPS"

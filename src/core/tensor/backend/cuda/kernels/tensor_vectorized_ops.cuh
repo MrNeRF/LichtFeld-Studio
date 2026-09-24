@@ -6,6 +6,7 @@
  */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/cuda_error.hpp"
 #include "core/tensor/internal/gpu_config.hpp"

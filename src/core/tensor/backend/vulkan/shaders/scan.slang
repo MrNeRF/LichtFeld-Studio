@@ -4,8 +4,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 32;
 // Element codes follow DataType: 0 Float32, 2 Int32.
 [SpecializationConstant]
 const uint kDType = 0;
-// 0 one thread per scan line, 1 one workgroup per scan line in chunks of
-// LFS_LOCAL_SIZE_X elements with a carried running total.
+// 0 short lines, 1 single-block lines, 2 independent blocks, 3 scanned block offsets.
 [SpecializationConstant]
 const uint kMode = 0;
 
@@ -16,8 +15,7 @@ struct Parameters
     uint dim;
     uint inner;
     uint lines;
-    uint pad0;
-    uint pad1;
+    uint64_t totalsAddress;
 };
 
 groupshared float sharedFloat[LFS_LOCAL_SIZE_X];
@@ -65,51 +63,63 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         return;
     }
 
-    for (uint line = groupId.x; line < parameters.lines; line += numWorkgroups.x)
+    const uint blocks = (parameters.dim + LFS_LOCAL_SIZE_X - 1) / LFS_LOCAL_SIZE_X;
+    if (kMode == 3)
     {
-        const uint64_t base = lineBase(line, parameters);
-        float carryFloat = 0.0f;
-        int carryInt = 0;
-        for (uint chunk = 0; chunk < parameters.dim; chunk += LFS_LOCAL_SIZE_X)
+        const uint64_t count = uint64_t(parameters.lines) * parameters.dim;
+        const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+        for (uint64_t index = dispatchThreadId.x; index < count; index += stride)
         {
-            const uint element = chunk + thread;
-            const bool live = element < parameters.dim;
-            const uint64_t index = base + uint64_t(element) * parameters.inner;
+            const uint element = uint(index / parameters.inner) % parameters.dim;
+            if (element < LFS_LOCAL_SIZE_X) continue;
+            const uint64_t line = index / (uint64_t(parameters.dim) * parameters.inner) * parameters.inner
+                                  + index % parameters.inner;
+            const uint64_t preceding = line * blocks + element / LFS_LOCAL_SIZE_X - 1;
             if (kDType == 0)
-                sharedFloat[thread] = live ? floats[index] : 0.0f;
+                floats[index] += ((Ptr<float, Access.Read>)parameters.totalsAddress)[preceding];
             else
-                sharedInt[thread] = live ? ints[index] : 0;
+                ints[index] += ((Ptr<int, Access.Read>)parameters.totalsAddress)[preceding];
+        }
+        return;
+    }
+    const uint64_t tasks = uint64_t(parameters.lines) * (kMode == 2 ? blocks : 1u);
+    for (uint64_t task = groupId.x; task < tasks; task += numWorkgroups.x)
+    {
+        const uint line = kMode == 2 ? uint(task / blocks) : uint(task);
+        const uint element = (kMode == 2 ? uint(task % blocks) * LFS_LOCAL_SIZE_X : 0u) + thread;
+        const bool live = element < parameters.dim;
+        const uint64_t index = lineBase(line, parameters) + uint64_t(element) * parameters.inner;
+        if (kDType == 0)
+            sharedFloat[thread] = live ? floats[index] : 0.0f;
+        else
+            sharedInt[thread] = live ? ints[index] : 0;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
+        {
+            float partialFloat = 0.0f;
+            int partialInt = 0;
+            if (thread >= offset)
+            {
+                if (kDType == 0) partialFloat = sharedFloat[thread - offset];
+                else partialInt = sharedInt[thread - offset];
+            }
             GroupMemoryBarrierWithGroupSync();
-            for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
-            {
-                float partialFloat = 0.0f;
-                int partialInt = 0;
-                if (thread >= offset)
-                {
-                    if (kDType == 0)
-                        partialFloat = sharedFloat[thread - offset];
-                    else
-                        partialInt = sharedInt[thread - offset];
-                }
-                GroupMemoryBarrierWithGroupSync();
-                if (kDType == 0)
-                    sharedFloat[thread] += partialFloat;
-                else
-                    sharedInt[thread] += partialInt;
-                GroupMemoryBarrierWithGroupSync();
-            }
-            if (live)
-            {
-                if (kDType == 0)
-                    floats[index] = sharedFloat[thread] + carryFloat;
-                else
-                    ints[index] = sharedInt[thread] + carryInt;
-            }
-            if (kDType == 0)
-                carryFloat += sharedFloat[LFS_LOCAL_SIZE_X - 1];
-            else
-                carryInt += sharedInt[LFS_LOCAL_SIZE_X - 1];
+            if (kDType == 0) sharedFloat[thread] += partialFloat;
+            else sharedInt[thread] += partialInt;
             GroupMemoryBarrierWithGroupSync();
         }
+        if (live)
+        {
+            if (kDType == 0) floats[index] = sharedFloat[thread];
+            else ints[index] = sharedInt[thread];
+        }
+        if (kMode == 2 && thread == LFS_LOCAL_SIZE_X - 1)
+        {
+            if (kDType == 0)
+                ((Ptr<float, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedFloat[thread];
+            else
+                ((Ptr<int, Access.ReadWrite>)parameters.totalsAddress)[task] = sharedInt[thread];
+        }
+        GroupMemoryBarrierWithGroupSync();
     }
 }

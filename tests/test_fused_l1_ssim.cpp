@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
@@ -23,17 +24,8 @@
 using namespace lfs::core;
 using namespace lfs::training::kernels;
 
-class FusedL1SSIMTest : public ::testing::Test {
+class FusedL1SSIMTest : public lfs::test::CudaBackendTest {
 protected:
-    void SetUp() override {
-        // Ensure CUDA is available
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-
     // Reference implementation: compute L1 + SSIM loss correctly
     // IMPORTANT: The fused kernel computes PER-PIXEL combined loss for ALL pixels,
     // then crops to valid region (5 pixels from each edge) before taking mean.
@@ -403,16 +395,8 @@ TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
 // Masked Fused L1+SSIM Tests
 // ============================================================================
 
-class MaskedFusedL1SSIMTest : public ::testing::Test {
+class MaskedFusedL1SSIMTest : public lfs::test::CudaBackendTest {
 protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-
     // Reference implementation for masked loss
     std::pair<float, Tensor> compute_reference_masked_loss(
         const Tensor& img1, const Tensor& img2, const Tensor& mask, float ssim_weight) {

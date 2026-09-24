@@ -10,7 +10,8 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -136,6 +137,11 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
 
+        // Camera metadata and Vulkan viewing do not need a CUDA image stream.
+        if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
+            return;
+        }
+
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
         // log_cuda_teardown_failure is the frozen no-throw log-and-continue adapter.
@@ -163,7 +169,7 @@ namespace lfs::core {
     Camera::~Camera() {
         // Destroy CUDA stream if it was created
         if (_stream) {
-            CudaMemoryPool::instance().release_stream(_stream);
+            release_cuda_stream(_stream);
             LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             _stream = nullptr;
         }
@@ -228,7 +234,7 @@ namespace lfs::core {
         if (this != &other) {
             // Destroy our current stream
             if (_stream) {
-                CudaMemoryPool::instance().release_stream(_stream);
+                release_cuda_stream(_stream);
                 LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             }
 
@@ -320,6 +326,10 @@ namespace lfs::core {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
 
+        if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
+            return;
+        }
+
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
         // log_cuda_teardown_failure is the frozen no-throw log-and-continue adapter.
@@ -343,6 +353,19 @@ namespace lfs::core {
             _stream = nullptr;
         }
     }
+
+    void Camera::to_backend(const GpuBackend backend) {
+        for (auto* tensor : {&_R, &_T, &_radial_distortion, &_tangential_distortion,
+                             &_world_view_transform, &_cam_position, &_cached_mask,
+                             &_in_memory_mask_raw, &_cached_depth, &_cached_normal}) {
+            if (tensor->is_valid() && tensor->device() == Device::GPU &&
+                gpu_backend_of(*tensor) != backend) {
+                auto migrated = (*tensor).to(backend);
+                std::swap(*tensor, migrated);
+            }
+        }
+    }
+
     Tensor Camera::K() const {
         // Create [1, 3, 3] zero matrix on same device as world_view_transform
         auto K = Tensor::zeros({1, 3, 3}, _world_view_transform.device());

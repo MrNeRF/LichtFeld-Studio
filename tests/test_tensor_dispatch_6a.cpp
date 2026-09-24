@@ -5,7 +5,6 @@
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -39,12 +38,6 @@ namespace {
             Tensor::reset_lazy_telemetry();
         }
     };
-
-    bool has_cuda_device() {
-        int device_count = 0;
-        const auto status = cudaGetDeviceCount(&device_count);
-        return status == cudaSuccess && device_count > 0;
-    }
 
 } // namespace
 
@@ -129,10 +122,6 @@ TEST(TensorDispatch, EagerBinaryDoesNotRecordWhenIrOff) {
 }
 
 TEST(TensorDispatch, UnaryReduceFusesWithIrOff) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     Dispatch6AGuard guard;
     // Production-like: IR off, fusion on.
     internal::lazy_ir_set_active_for_testing(false);
@@ -214,10 +203,6 @@ TEST(TensorDispatch, BinaryFastPathInt64) {
 }
 
 TEST(TensorDispatch, BinaryFastPathFloat32Cuda) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
@@ -230,10 +215,6 @@ TEST(TensorDispatch, BinaryFastPathFloat32Cuda) {
 }
 
 TEST(TensorDispatch, BinaryFastPathFloat16Cuda) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 

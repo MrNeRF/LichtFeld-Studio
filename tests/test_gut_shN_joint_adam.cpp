@@ -6,6 +6,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -104,7 +105,9 @@ namespace {
 
 } // namespace
 
-TEST(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
+class GutShNJointAdam : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
     CodecsOnGuard guard;
     constexpr size_t n = 300;
     constexpr size_t cap = 512;

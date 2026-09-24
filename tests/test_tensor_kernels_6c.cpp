@@ -6,6 +6,7 @@
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -43,12 +44,6 @@ namespace {
         }
     };
 
-    bool has_cuda_device() {
-        int device_count = 0;
-        const auto status = cudaGetDeviceCount(&device_count);
-        return status == cudaSuccess && device_count > 0;
-    }
-
     Tensor fill_linear(const std::vector<size_t>& shape, float scale, Device dev) {
         auto t = Tensor::empty(TensorShape(shape), Device::CPU, DataType::Float32);
         auto* p = t.ptr<float>();
@@ -80,10 +75,9 @@ namespace {
 // Binary(+reduce) fusion
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+class TensorKernelFusion : public lfs::test::CudaBackendTest {};
+
+TEST_F(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
     Kernels6CGuard guard;
 
     // Large enough to cross the size-heuristic defer threshold (4 KiB default).
@@ -115,10 +109,7 @@ TEST(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
     expect_close(fused, ref, 1e-5f, "mul+add");
 }
 
-TEST(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 8192;
@@ -149,10 +140,7 @@ TEST(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
     expect_close(s, ref, 1e-3f, "mul+sum"); // reduce accum may use double path vs fused
 }
 
-TEST(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
     Kernels6CGuard guard;
 
     // Below 4 KiB threshold → eager fast path, not deferred fusion seed.
@@ -163,10 +151,7 @@ TEST(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
     expect_close(c, a.cpu().mul(b.cpu()).to(Device::GPU), 1e-5f, "small mul");
 }
 
-TEST(TensorKernelFusion, BinaryFusionNumericalSuite) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, BinaryFusionNumericalSuite) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 4096;
@@ -198,10 +183,7 @@ TEST(TensorKernelFusion, BinaryFusionNumericalSuite) {
 // where host clones + same-shape broadcast
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 4096;
@@ -238,10 +220,7 @@ TEST(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
     }
 }
 
-TEST(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 1 << 18; // 256k floats
@@ -274,10 +253,7 @@ TEST(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
 // Channel3D kernel selection
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
     Kernels6CGuard guard;
 
     const std::vector<size_t> Cs = {1, 3, 4, 16, 64};

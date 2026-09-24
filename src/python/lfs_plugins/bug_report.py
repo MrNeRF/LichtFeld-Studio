@@ -128,6 +128,8 @@ def collect_diagnostics() -> dict[str, object]:
                 for key, value in native.items()
                 if str(key) in _DIAGNOSTIC_KEYS
             )
+            if native.get("vram_used_available") is False:
+                diagnostics.pop("vram_used_mb", None)
     except Exception:
         _log.debug("Native diagnostic collection was unavailable")
 

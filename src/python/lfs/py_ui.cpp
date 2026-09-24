@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_ui.hpp"
-#include "control/command_api.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -48,6 +48,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/sequencer_ui_state.hpp"
@@ -62,7 +63,6 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
-#include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
 #include <typeinfo>
@@ -5447,15 +5447,17 @@ namespace lfs::python {
         m.def("get_tensor_backend_preferences", [] {
             const auto state = vis::UserPreferences::instance().tensorBackend();
             nb::dict result;
-            result["backend"] = state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda";
+            std::string backend = core::gpu_backend_name(state.backend);
+            std::transform(backend.begin(), backend.end(), backend.begin(),
+                           [](const unsigned char c) { return std::tolower(c); });
+            result["backend"] = backend;
             result["vulkan_device"] = state.options.vulkan_device;
             result["vulkan_validation"] = state.options.vulkan_validation;
             result["force_fp32_half"] = state.options.force_fp32_half;
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
-            result["viewer_vulkan_inputs"] = state.options.viewer_vulkan_inputs;
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
-        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, bool viewer_inputs) {
+        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
                   if (backend != "cuda" && backend != "vulkan")
                       throw nb::value_error("Backend must be cuda or vulkan");
                   if (validation < 0 || validation > 2)
@@ -5463,10 +5465,9 @@ namespace lfs::python {
                   const vis::TensorPreferenceState state{
                       .backend = backend == "vulkan" ? core::GpuBackend::Vulkan : core::GpuBackend::CUDA,
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
-                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float,
-                                  .viewer_vulkan_inputs = viewer_inputs},
+                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("viewer_vulkan_inputs") = false, "Save tensor backend preferences for the next application start");
+                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

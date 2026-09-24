@@ -4,6 +4,7 @@
  */
 
 #pragma once
+#include "io/snapshot_path.hpp"
 
 #include "core/error.hpp"
 #include "core/parameters.hpp"
@@ -115,8 +116,5 @@ namespace lfs::training {
     materialize_project_snapshot_cpu_chapters(
         ProjectSnapshotCpuState state,
         ProjectSnapshotChapters& output);
-
-    void absolutize_dataset_path_for_snapshot(
-        std::filesystem::path& path);
 
 } // namespace lfs::training

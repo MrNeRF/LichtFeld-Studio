@@ -7,6 +7,7 @@
 #include <random>
 #include <torch/torch.h>
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
 
 namespace {
@@ -237,7 +238,7 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         return g;
     }
 
-    class PPISPCudaVsTorchTest : public ::testing::Test {};
+    class PPISPCudaVsTorchTest : public lfs::test::CudaBackendTest {};
 
     TEST_F(PPISPCudaVsTorchTest, NegativeRadianceDoesNotBecomeBrightRedOrYellow) {
         auto params = createParams(1, 1, DEFAULT_SEED);

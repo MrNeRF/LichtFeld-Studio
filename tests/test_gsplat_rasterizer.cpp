@@ -11,6 +11,7 @@
 #include "core/environment.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -236,9 +237,10 @@ namespace {
 
 } // namespace
 
-class GsplatRasterizerTest : public ::testing::Test {
+class GsplatRasterizerTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Create minimal test data
         const size_t N = 100; // Number of Gaussians
         const int sh_degree = 0;
@@ -291,6 +293,8 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped())
+            return;
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
         gsplat_lfs::set_cuda_allocation_failure_for_testing(false);
 #endif
@@ -305,7 +309,9 @@ protected:
     Tensor bg_color_;
 };
 
-TEST(VmmDeviceBufferTest, GrowsInPlace) {
+class VmmDeviceBufferTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(VmmDeviceBufferTest, GrowsInPlace) {
     constexpr size_t kMiB = 1024u * 1024u;
     constexpr size_t kFirstCommit = 256u * kMiB;
     constexpr size_t kSecondCommit = 512u * kMiB;
@@ -375,7 +381,9 @@ TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
 }
 #endif
 
-TEST(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
+class GsplatRasterizerPPISP : public lfs::test::CudaBackendTest {};
+
+TEST_F(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
     constexpr int width = 32;
     constexpr int height = 32;
     auto camera = make_camera(width, height);
@@ -527,7 +535,9 @@ TEST_F(GsplatRasterizerTest, GutModeSteadyStateAllocs) {
 
 // gut/gsplat forward+backward with default quant ON + sh_degree>0.
 // Saves dequant temp in ctx so backward does not dtype-abort on q16 codes.
-TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
+class GsplatRasterizerQuantTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
     // Default flags: quant ON (no force-off).
     lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(true);
 
@@ -588,7 +598,7 @@ TEST(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
     lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
+TEST_F(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
     auto camera = make_camera(32, 32);
     constexpr size_t n = 4;
     constexpr size_t rest = 3;
@@ -625,11 +635,9 @@ TEST(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
     }
 }
 
-TEST(GsplatRasterizerEdgeScores, GutFusedScoresRespectEdgeMapAndCameraModel) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class GsplatRasterizerEdgeScores : public lfs::test::CudaBackendTest {};
+
+TEST_F(GsplatRasterizerEdgeScores, GutFusedScoresRespectEdgeMapAndCameraModel) {
 
     auto run = [](Camera camera, const Tensor& edge_map) {
         auto splat = make_visible_splat(32);
@@ -687,11 +695,7 @@ TEST(GsplatRasterizerEdgeScores, GutFusedScoresRespectEdgeMapAndCameraModel) {
     EXPECT_TRUE(fisheye_has_positive);
 }
 
-TEST(GsplatRasterizerEdgeScores, GutAndFastGsHavePositiveScoreCorrelation) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+TEST_F(GsplatRasterizerEdgeScores, GutAndFastGsHavePositiveScoreCorrelation) {
 
     constexpr int width = 64;
     constexpr int height = 64;
@@ -788,11 +792,9 @@ TEST(GsplatIntersectionCount, RoundedCapacityCannotOverflowSignedSortCount) {
     EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536, limit + 65536), limit);
 }
 
-TEST(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCache) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class GsplatRasterizerTestPositive : public lfs::test::CudaBackendTest {};
+
+TEST_F(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCache) {
     struct CacheCleanup {
         ~CacheCleanup() { (void)gsplat_lfs::release_intersect_thread_local_cache(); }
     } cleanup;
@@ -884,11 +886,9 @@ TEST(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCach
     }
 }
 
-TEST(GsplatRasterizerErrors, GutArenaExhaustionPreservesTypedResourceError) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class GsplatRasterizerErrors : public lfs::test::CudaBackendTest {};
+
+TEST_F(GsplatRasterizerErrors, GutArenaExhaustionPreservesTypedResourceError) {
 
     lfs::core::RasterizerMemoryArena::Config config;
     config.virtual_size = 64ULL << 20;
@@ -1298,7 +1298,7 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
 
 // Regression for issue #2189. Run with and without the existing pair-budget
 // test override to cover both the single-list and tile replay dispatch paths.
-class GutScreenShare : public ::testing::TestWithParam<int> {};
+class GutScreenShare : public lfs::test::CudaBackendTest, public ::testing::WithParamInterface<int> {};
 
 TEST_P(GutScreenShare, PublishedOncePerFrameAndConstrainsOnlyWhenEnabled) {
     using Model = lfs::core::CameraModelType;
@@ -1526,7 +1526,9 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
     }
 }
 
-TEST(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
+class GutScreenShareGeometry : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
     auto radii = Tensor::from_vector(std::vector<int32_t>{10, 10, 10, 10, 0, 10, 100, 100}, {4, 2}, Device::CUDA);
     auto centers = Tensor::from_vector({5.f, 5.f, 95.f, 45.f, 50.f, 25.f, 50.f, 25.f}, {4, 2}, Device::CUDA);
     auto shares = Tensor::from_vector({.1f, 0.f, .3f, 0.f}, {4}, Device::CUDA);
@@ -1561,7 +1563,9 @@ TEST(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
     EXPECT_EQ(h.ptr<float>()[2], 0.f);
 }
 
-TEST(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
+class GutScreenShareStrategy : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
     auto model = make_parity_splat(100, 42);
     MRNF strategy(*model);
     auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
@@ -1586,7 +1590,7 @@ TEST(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
     EXPECT_FALSE(strategy.get_optimizer().collect_projected_screen_share());
 }
 
-TEST(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLimit) {
+TEST_F(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLimit) {
     auto camera = make_camera(96, 64);
     for (bool enabled : {false, true}) {
         auto model = make_visible_splat(1);

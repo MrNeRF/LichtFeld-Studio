@@ -30,6 +30,16 @@
       }
     },
     {
+      "name": "no-trainer",
+      "displayName": "Application without training",
+      "description": "Full viewer and editor with the trainer excluded",
+      "inherits": "build",
+      "binaryDir": "${sourceDir}/build-no-trainer",
+      "cacheVariables": {
+        "LFS_BUILD_TRAINER": "OFF"
+      }
+    },
+    {
       "name": "release-only-base",
       "hidden": true,
       "inherits": "build",
@@ -96,6 +106,11 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "jobs": 6
+    },
+    {
+      "name": "no-trainer",
+      "configurePreset": "no-trainer",
       "jobs": 6
     },
     {

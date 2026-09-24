@@ -17,7 +17,9 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_sh.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
@@ -1644,6 +1646,8 @@ namespace lfs::io {
         }
 
         try {
+            const lfs::core::GpuBackendScope backend_scope(
+                lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend()));
             const auto export_started = std::chrono::steady_clock::now();
             const bool debug_logging_enabled =
                 lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
@@ -1740,7 +1744,7 @@ namespace lfs::io {
                 palette_size = std::clamp(palette_size, 1, num_rows_int);
 
                 // k-means expects 1D float32 swizzled layout. Resident shN may be:
-                //  - Float32 swizzled (training default / legacy)
+                //  - Float32 swizzled
                 //  - Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
                 const auto& shN_raw = splat_data.shN_raw();
@@ -1759,33 +1763,14 @@ namespace lfs::io {
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    const lfs::core::GpuBackendScope scope(*lfs::core::gpu_backend_of(shN_raw));
                     shN_float_swizzled = Tensor::empty(
                         {float_count}, Device::GPU, lfs::core::DataType::Float32);
-
-                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    if (shN_float_swizzled.stream() != stream)
-                        shN_float_swizzled.set_stream(stream);
-                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data);
-                    if (q16.codes == nullptr || q16.bounds == nullptr) {
-                        return make_error(ErrorCode::INVALID_DATASET,
-                                          "Invalid q16 SH codes or bounds for SOG export",
-                                          options.output_path);
-                    }
-                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
-                        reinterpret_cast<const std::uint16_t*>(q16.codes),
-                        q16.bounds,
-                        shN_float_swizzled.ptr<float>(),
-                        n,
-                        k,
-                        stream);
-                    const cudaError_t sync_status = cudaStreamSynchronize(stream);
-                    if (sync_status != cudaSuccess) {
-                        return make_error(
-                            ErrorCode::ENCODING_FAILED,
-                            std::format("Failed to decode quantized SH tensor for SOG export: {}",
-                                        cudaGetErrorString(sync_status)),
-                            options.output_path);
-                    }
+                    lfs::core::sh_codec(splat_data.shN_raw(), shN_float_swizzled,
+                                        {.source_format = lfs::core::ShFormat::Q16, .source_rows = n, .destination_rows = n, .count = n, .source_rest = k, .destination_rest = k}, nullptr, &splat_data.shN_value_bounds());
+                    lfs::core::TensorCompletion completion;
+                    completion.include(shN_float_swizzled);
+                    completion.wait();
                 } else {
                     // Fallback for IEEE-f16 without q16 bounds and any other layout:
                     // materialise canonical [N,K,3], then re-swizzle to float1D.
@@ -1802,17 +1787,24 @@ namespace lfs::io {
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
-                    shN_float_swizzled = Tensor::zeros({float_count}, Device::GPU, lfs::core::DataType::Float32);
-                    lfs::core::reorder_sh_to_swizzled(
-                        shN_canon.ptr<float>(),
-                        shN_float_swizzled.ptr<float>(),
-                        n, k, k);
+                    const lfs::core::GpuBackendScope scope(*lfs::core::gpu_backend_of(shN_canon));
+                    shN_float_swizzled = Tensor::empty({float_count}, Device::GPU, lfs::core::DataType::Float32);
+                    lfs::core::sh_codec(shN_canon, shN_float_swizzled,
+                                        {.source_format = lfs::core::ShFormat::Canonical,
+                                         .destination_format = lfs::core::ShFormat::Float32,
+                                         .source_rows = n,
+                                         .destination_rows = n,
+                                         .count = n,
+                                         .source_rest = k,
+                                         .destination_rest = k});
                 }
 
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
                      iterations = options.kmeans_iterations, fast = options.fast_webp, export_started]() mutable {
+                        const lfs::core::GpuBackendScope backend_scope(
+                            *lfs::core::gpu_backend_of(shN_float_swizzled));
                         const auto started = std::chrono::steady_clock::now();
                         auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
                             shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/alloc_counter.hpp"
 #include "core/nn.hpp"
 
@@ -143,7 +145,9 @@ TEST(Moge2Test, CommittedFixtureIsSmall) {
     EXPECT_TRUE(payload["full"].contains("normal"));
 }
 
-TEST(Moge2Test, FullModelParityIsOptIn) {
+class Moge2CudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(Moge2CudaTest, FullModelParityIsOptIn) {
     const char* weights = std::getenv("LFS_MOGE2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_MOGE2_WEIGHTS to run full-model parity";
@@ -252,7 +256,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     EXPECT_EQ(driver_allocs, 0u);
 }
 
-TEST(Moge2Test, DeviceFootprintStaysUnderBudget) {
+TEST_F(Moge2CudaTest, DeviceFootprintStaysUnderBudget) {
     const char* weights = std::getenv("LFS_MOGE2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_MOGE2_WEIGHTS to run the VRAM budget check";

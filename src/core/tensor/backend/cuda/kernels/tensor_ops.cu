@@ -12,12 +12,15 @@
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
+#include "tensor_clamp.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cub/block/block_merge_sort.cuh>
 #include <cub/device/device_reduce.cuh>
+#include <cub/device/device_segmented_radix_sort.cuh>
 #include <cub/device/device_segmented_reduce.cuh>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -328,15 +331,19 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream) {
+    void launch_clamp_fused(const int* src, int* dst, int min_val, int max_val, size_t n, cudaStream_t stream) {
         if (n == 0)
             return;
-        auto data_ptr = thrust::device_pointer_cast(data);
-
+        auto src_ptr = thrust::device_pointer_cast(src);
+        auto dst_ptr = thrust::device_pointer_cast(dst);
         run_with_thrust_policy(stream, [&](auto policy) {
-            thrust::transform(policy, data_ptr, data_ptr + n, data_ptr,
+            thrust::transform(policy, src_ptr, src_ptr + n, dst_ptr,
                               ops::clamp_range_op<int>(min_val, max_val));
         });
+    }
+
+    void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream) {
+        launch_clamp_fused(data, data, min_val, max_val, n, stream);
     }
 
     // Float16 clamp via promote-to-float (preserves NaN semantics of f32 path).
@@ -2175,64 +2182,116 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    __global__ void extract_slice_kernel(const float* input, float* output,
-                                         size_t outer_size, size_t dim_size, size_t inner_size,
-                                         size_t outer_idx, size_t inner_idx) {
-        size_t d = blockIdx.x * blockDim.x + threadIdx.x;
-        if (d < dim_size) {
-            size_t src_idx = outer_idx * dim_size * inner_size + d * inner_size + inner_idx;
-            output[d] = input[src_idx];
+    struct SortOrder {
+        bool descending;
+        __device__ bool operator()(float a, float b) const {
+            return descending ? ops::sort_greater_op{}(a, b) : ops::sort_less_op{}(a, b);
+        }
+    };
+
+    template <int Threads, int Items>
+    __global__ void sort_segments_kernel(float* values, int64_t* indices,
+                                         size_t segments, size_t dim_size, size_t inner_size,
+                                         bool descending) {
+        using Sort = cub::BlockMergeSort<float, Threads, Items, int64_t>;
+        __shared__ typename Sort::TempStorage storage;
+        for (size_t segment = blockIdx.x; segment < segments; segment += gridDim.x) {
+            float keys[Items];
+            int64_t order[Items];
+            const size_t base = (segment / inner_size) * dim_size * inner_size + segment % inner_size;
+            const float padding = __uint_as_float(descending ? 0xff800000U : 0x7fffffffU);
+            for (int item = 0; item < Items; ++item) {
+                const size_t d = threadIdx.x * Items + item;
+                keys[item] = d < dim_size ? values[base + d * inner_size] : padding;
+                order[item] = d;
+            }
+            Sort(storage).StableSort(keys, order, SortOrder{descending}, int(dim_size), padding);
+            for (int item = 0; item < Items; ++item) {
+                const size_t d = threadIdx.x * Items + item;
+                if (d < dim_size) {
+                    values[base + d * inner_size] = keys[item];
+                    indices[base + d * inner_size] = order[item];
+                }
+            }
+            __syncthreads();
         }
     }
 
-    __global__ void write_slice_kernel(float* output, int64_t* output_idx,
-                                       const float* sorted_vals, const int64_t* sorted_idx,
-                                       size_t outer_size, size_t dim_size, size_t inner_size,
-                                       size_t outer_idx, size_t inner_idx) {
-        size_t d = blockIdx.x * blockDim.x + threadIdx.x;
-        if (d < dim_size) {
-            size_t dst_idx = outer_idx * dim_size * inner_size + d * inner_size + inner_idx;
-            output[dst_idx] = sorted_vals[d];
-            output_idx[dst_idx] = sorted_idx[d];
+    __global__ void pack_sort_segments(const float* values, uint32_t* keys, uint64_t* payload,
+                                       size_t count, size_t dim_size, size_t inner_size, bool descending) {
+        for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            const size_t segment = i / dim_size;
+            const size_t d = i % dim_size;
+            const size_t source = (segment / inner_size) * dim_size * inner_size + d * inner_size + segment % inner_size;
+            const uint32_t bits = __float_as_uint(values[source]);
+            const uint32_t magnitude = bits & 0x7fffffffU;
+            uint32_t key = magnitude > 0x7f800000U ? 0xffffffffU
+                           : magnitude == 0        ? 0x80000000U
+                           : (bits & 0x80000000U)  ? ~bits
+                                                   : bits ^ 0x80000000U;
+            keys[i] = descending ? ~key : key;
+            payload[i] = (uint64_t(bits) << 32) | uint32_t(d);
+        }
+    }
+
+    __global__ void unpack_sort_segments(float* values, int64_t* indices, const uint64_t* payload,
+                                         size_t count, size_t dim_size, size_t inner_size) {
+        for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < count; i += size_t(gridDim.x) * blockDim.x) {
+            const size_t segment = i / dim_size;
+            const size_t destination = (segment / inner_size) * dim_size * inner_size + (i % dim_size) * inner_size + segment % inner_size;
+            values[destination] = __uint_as_float(uint32_t(payload[i] >> 32));
+            indices[destination] = uint32_t(payload[i]);
         }
     }
 
     void launch_sort_2d(float* values, int64_t* indices,
                         size_t outer_size, size_t dim_size, size_t inner_size,
-                        int dim, bool descending, cudaStream_t stream) {
+                        int, bool descending, cudaStream_t stream) {
         if (dim_size == 0 || outer_size == 0 || inner_size == 0)
             return;
-
-        thrust::device_vector<float> temp_vals(dim_size);
-        thrust::device_vector<int64_t> temp_idx(dim_size);
-        int blocks = (dim_size + 255) / 256;
-
-        for (size_t outer = 0; outer < outer_size; ++outer) {
-            for (size_t inner = 0; inner < inner_size; ++inner) {
-                extract_slice_kernel<<<blocks, 256, 0, stream>>>(
-                    values, thrust::raw_pointer_cast(temp_vals.data()),
-                    outer_size, dim_size, inner_size, outer, inner);
-                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.sort2d_extract_slice");
-
-                thrust::sequence(thrust::cuda::par_nosync.on(stream), temp_idx.begin(), temp_idx.end(), 0LL);
-
-                if (descending) {
-                    thrust::sort_by_key(thrust::cuda::par_nosync.on(stream),
-                                        temp_vals.begin(), temp_vals.end(), temp_idx.begin(),
-                                        ops::sort_greater_op{});
-                } else {
-                    thrust::sort_by_key(thrust::cuda::par_nosync.on(stream),
-                                        temp_vals.begin(), temp_vals.end(), temp_idx.begin(),
-                                        ops::sort_less_op{});
-                }
-
-                write_slice_kernel<<<blocks, 256, 0, stream>>>(
-                    values, indices,
-                    thrust::raw_pointer_cast(temp_vals.data()),
-                    thrust::raw_pointer_cast(temp_idx.data()),
-                    outer_size, dim_size, inner_size, outer, inner);
-                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.sort2d_write_slice");
-            }
+        const size_t segments = outer_size * inner_size;
+        if (segments == 1) {
+            launch_sort_1d(values, indices, dim_size, descending, stream);
+            return;
+        }
+        const size_t blocks = std::min(segments, size_t{65535});
+        const auto launch = [&]<int Threads, int Items>() {
+            sort_segments_kernel<Threads, Items><<<blocks, Threads, 0, stream>>>(
+                values, indices, segments, dim_size, inner_size, descending);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.sort.segments");
+        };
+        if (dim_size <= 32)
+            launch.template operator()<32, 1>();
+        else if (dim_size <= 128)
+            launch.template operator()<128, 1>();
+        else if (dim_size <= 512)
+            launch.template operator()<128, 4>();
+        else if (dim_size <= 2048)
+            launch.template operator()<128, 16>();
+        else {
+            LFS_ASSERT_MSG(dim_size <= size_t(std::numeric_limits<int32_t>::max()), "sort segment exceeds the CUB index range");
+            const size_t count = segments * dim_size;
+            ScopedDeviceBuffer key_storage(count * sizeof(uint32_t), stream, "tensor.sort.keys");
+            ScopedDeviceBuffer payload_storage(count * sizeof(uint64_t), stream, "tensor.sort.payload");
+            auto* keys = static_cast<uint32_t*>(key_storage.get());
+            auto* payload = static_cast<uint64_t*>(payload_storage.get());
+            const size_t grid = std::min((count + 255) / 256, size_t{65535});
+            pack_sort_segments<<<grid, 256, 0, stream>>>(values, keys, payload, count, dim_size, inner_size, descending);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.sort.pack");
+            auto offsets = thrust::make_transform_iterator(thrust::counting_iterator<int64_t>(0),
+                                                           [dim_size] __host__ __device__(int64_t segment) { return segment * int64_t(dim_size); });
+            cub::DoubleBuffer<uint32_t> key_buffers(keys, reinterpret_cast<uint32_t*>(values));
+            cub::DoubleBuffer<uint64_t> payload_buffers(payload, reinterpret_cast<uint64_t*>(indices));
+            run_cub_operation("cub::DeviceSegmentedRadixSort::SortPairs", stream,
+                              [&](void* workspace, size_t& workspace_bytes) {
+                                  return cub::DeviceSegmentedRadixSort::SortPairs(workspace, workspace_bytes,
+                                                                                  key_buffers, payload_buffers, count, segments, offsets, offsets + 1, 0, 32, stream);
+                              });
+            // Strided output cannot overwrite a payload that another thread still reads.
+            if (payload_buffers.Current() != payload)
+                LFS_CUDA_CHECK(cudaMemcpyAsync(payload, payload_buffers.Current(), count * sizeof(uint64_t), cudaMemcpyDeviceToDevice, stream));
+            unpack_sort_segments<<<grid, 256, 0, stream>>>(values, indices, payload, count, dim_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.sort.unpack");
         }
     }
 

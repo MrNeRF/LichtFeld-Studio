@@ -7,6 +7,7 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_shader_table.hpp"
 #include "core/tensor_backend.hpp"
+#include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
 
@@ -20,6 +21,7 @@
 #include <latch>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <span>
@@ -33,6 +35,7 @@ namespace {
     class TensorVulkanRuntime : public testing::Test {
     protected:
         void SetUp() override {
+            previous_backend_ = default_gpu_backend();
             ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         }
 
@@ -44,8 +47,57 @@ namespace {
                  internal::vulkan_validation_messages_for_testing()) {
                 ADD_FAILURE() << message;
             }
+            internal::gpu_backend_reset_for_testing();
+            EXPECT_TRUE(set_default_gpu_backend(previous_backend_));
         }
+
+    private:
+        GpuBackend previous_backend_ = GpuBackend::CUDA;
     };
+
+    class TensorVulkanCudaInterop : public TensorVulkanRuntime {
+    protected:
+        void SetUp() override {
+            TensorVulkanRuntime::SetUp();
+            if (!gpu_backend_available(GpuBackend::CUDA)) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            cuda_scope_.emplace(GpuBackend::CUDA);
+        }
+
+    private:
+        std::optional<GpuBackendScope> cuda_scope_;
+    };
+
+    TEST_F(TensorVulkanRuntime, HostStagingAndDiagnosticsDoNotCreateCudaContext) {
+        if (gpu_backend_live(GpuBackend::CUDA))
+            GTEST_SKIP() << "Run alone with --tensor-backend=vulkan before any CUDA work";
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setEnabled(true);
+        profiler.pushTimerScope("lazy_context");
+        {
+            const auto cpu = Tensor::ones({1024}, Device::CPU);
+            const auto gpu = cpu.to(Device::GPU);
+            EXPECT_EQ(gpu.to(Device::CPU).sum().item<float>(), 1024.0f);
+        }
+        Tensor::trim_memory_pool();
+        profiler.popTimerScope(0.0);
+        profiler.sampleCudaMemory();
+        EXPECT_EQ(profiler.acquireGpuEventPair("lazy_context", nullptr), -1);
+        EXPECT_FALSE(gpu_backend_live(GpuBackend::CUDA));
+        profiler.setEnabled(false);
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            GpuBackendScope cuda(GpuBackend::CUDA);
+            const auto tensor = Tensor::ones({1024}, Device::GPU);
+            EXPECT_EQ(tensor.sum().item<float>(), 1024.0f);
+            EXPECT_TRUE(gpu_backend_live(GpuBackend::CUDA));
+            profiler.setEnabled(true);
+            profiler.sampleCudaMemory();
+            EXPECT_TRUE(profiler.snapshot().process.cuda_memory_valid);
+            profiler.setEnabled(false);
+        }
+    }
 
     TEST_F(TensorVulkanRuntime, EmptyCreatesNativeVulkanStorageDescriptor) {
         // Catches Tensor::empty dropping the native allocation descriptor returned by VMA.
@@ -208,6 +260,28 @@ namespace {
                   retired_allocation);
     }
 
+    TEST_F(TensorVulkanRuntime, LargeOutputsReturnToTheDriverWhenFreed) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        {
+            const auto warm = Tensor::ones({1}, Device::GPU);
+            ASSERT_FLOAT_EQ(warm.sum_scalar(), 1.f);
+        }
+        Tensor::trim_memory_pool();
+        const auto baseline = internal::vulkan_live_vma_objects_for_testing();
+        {
+            std::vector<Tensor> outputs;
+            for (int i = 0; i < 6; ++i)
+                outputs.push_back(Tensor::empty({34u * 1024u * 1024u}, Device::GPU, DataType::UInt8));
+            EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 6);
+        }
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
+        {
+            const Tensor output = Tensor::empty({204u * 1024u * 1024u}, Device::GPU, DataType::UInt8);
+            EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 1);
+        }
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
+    }
+
     TEST_F(TensorVulkanRuntime, RecorderProtectsReadAllocationsUntilTimelineCompletion) {
         // Catches a recorder that stamps allocation lifetime only for writes.
         GpuBackendScope scope(GpuBackend::Vulkan);
@@ -235,7 +309,7 @@ namespace {
                   source_allocation);
     }
 
-    TEST_F(TensorVulkanRuntime, ExplicitCrossBackendCopyIsBitExactBothWays) {
+    TEST_F(TensorVulkanCudaInterop, ExplicitCrossBackendCopyIsBitExactBothWays) {
         // Catches copy_to_backend consulting the active scope instead of the requested backend.
         Tensor scoped_same_device_clone;
         {
@@ -254,15 +328,15 @@ namespace {
             cuda = Tensor::from_vector(std::vector<float>{1, -2, 3, 9}, {4},
                                        Device::GPU);
         }
-        const Tensor vulkan = internal::copy_to_backend(cuda, GpuBackend::Vulkan);
+        const Tensor vulkan = cuda.to(GpuBackend::Vulkan);
         const Tensor cuda_roundtrip =
-            internal::copy_to_backend(vulkan, GpuBackend::CUDA);
+            vulkan.to(GpuBackend::CUDA);
         EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
         EXPECT_EQ(gpu_backend_of(cuda_roundtrip), GpuBackend::CUDA);
         EXPECT_EQ(cuda_roundtrip.to_vector(), cuda.to_vector());
     }
 
-    TEST_F(TensorVulkanRuntime, MixedBackendOperandsFailAtTheFacade) {
+    TEST_F(TensorVulkanCudaInterop, MixedBackendOperandsFailAtTheFacade) {
         // Catches mixed storage reaching either API.
         Tensor cuda;
         Tensor vulkan;
@@ -511,6 +585,53 @@ namespace {
         EXPECT_EQ(shared.to_vector(), std::vector<float>(4099, 2.0f));
     }
 
+    TEST_F(TensorVulkanRuntime, CrossThreadWriteWaitsForPendingReaders) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        Tensor source = Tensor::ones({4099}, Device::GPU);
+        internal::backend_ops(GpuBackend::Vulkan).synchronize_device();
+        std::latch writer_opened{1}, reader_recorded{1}, writer_recorded{1};
+        Tensor copy, clamped;
+        std::thread writer([&] {
+            GpuBackendScope thread_scope(GpuBackend::Vulkan);
+            const Tensor warm = Tensor::ones({17}, Device::GPU);
+            writer_opened.count_down();
+            reader_recorded.wait();
+            source.fill_(7.f);
+            writer_recorded.count_down();
+        });
+        std::thread reader([&] {
+            GpuBackendScope thread_scope(GpuBackend::Vulkan);
+            writer_opened.wait();
+            copy = source.clone();
+            clamped = source.clamp(0.f, 3.f);
+            reader_recorded.count_down();
+            writer_recorded.wait();
+        });
+        writer.join();
+        reader.join();
+        EXPECT_EQ(copy.to_vector(), std::vector<float>(4099, 1.f));
+        EXPECT_EQ(clamped.to_vector(), std::vector<float>(4099, 1.f));
+        EXPECT_EQ(source.to_vector(), std::vector<float>(4099, 7.f));
+    }
+
+    TEST_F(TensorVulkanRuntime, OverlappingViewsKeepReadsAndWritesInOrder) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        Tensor source = Tensor::ones({513}, Device::GPU);
+        std::vector<Tensor> copies;
+        std::vector<std::vector<float>> expected;
+        std::vector<float> reference(513, 1.f);
+        for (int i = 0; i < 70; ++i) {
+            const int begin = (i * 37) % 256;
+            copies.push_back(source.slice(0, begin, begin + 257).clone());
+            expected.emplace_back(reference.begin() + begin, reference.begin() + begin + 257);
+            source.slice(0, begin + 1, begin + 129).fill_(static_cast<float>(i));
+            std::fill(reference.begin() + begin + 1, reference.begin() + begin + 129, static_cast<float>(i));
+        }
+        for (size_t i = 0; i < copies.size(); ++i)
+            EXPECT_EQ(copies[i].to_vector(), expected[i]);
+        EXPECT_EQ(source.to_vector(), reference);
+    }
+
     TEST_F(TensorVulkanRuntime, ConfigurationSelectsVulkanForPublicFactories) {
         internal::gpu_backend_reset_for_testing();
         ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
@@ -529,6 +650,7 @@ namespace {
                                                "PhysicalStorageBufferAddresses",
                                                "SignedZeroInfNanPreserve", "Float16",
                                                "AtomicFloat32AddEXT"};
+        const std::set<std::string_view> half_modules{"pointwise_half", "sh_codec", "sh_encode"};
         const std::span<const internal::EmbeddedShader> shaders = internal::embedded_shaders();
         ASSERT_FALSE(shaders.empty());
         for (const internal::EmbeddedShader& shader : shaders) {
@@ -543,16 +665,27 @@ namespace {
                 EXPECT_TRUE(known.contains(capability)) << module << " declares " << capability;
             }
             const bool half = std::ranges::find(shader.capabilities, "Float16") != shader.capabilities.end();
-            EXPECT_EQ(half, module == "pointwise_half") << module;
+            EXPECT_EQ(half, half_modules.contains(module)) << module;
             EXPECT_EQ(std::ranges::find(shader.capabilities, "AtomicFloat32AddEXT") !=
                           shader.capabilities.end(),
                       module == "index_atomic")
                 << module;
             EXPECT_TRUE(std::ranges::equal(shader.float_widths, shader.signed_zero_inf_nan_preserve))
                 << module;
-            const bool byte_mover = module == "fill" || module == "cat_pad";
+            bool uses_fp32 = false;
+            for (size_t word = 5; word < shader.code.size();) {
+                const uint32_t instruction = shader.code[word];
+                const uint32_t count = instruction >> 16;
+                ASSERT_GT(count, 0u) << module;
+                ASSERT_LE(word + count, shader.code.size()) << module;
+                if ((instruction & 0xffffu) == 22u && count >= 3 &&
+                    shader.code[word + 2] == 32u) {
+                    uses_fp32 = true;
+                }
+                word += count;
+            }
             EXPECT_EQ(std::ranges::find(shader.float_widths, 32u) != shader.float_widths.end(),
-                      !byte_mover)
+                      uses_fp32)
                 << module;
             EXPECT_EQ(std::ranges::find(shader.float_widths, 16u) != shader.float_widths.end(), half)
                 << module;
@@ -562,7 +695,7 @@ namespace {
         EXPECT_TRUE(caps.float_controls_fp16 || !caps.shader_float16);
     }
 
-    TEST_F(TensorVulkanRuntime, HalfConversionsMatchCudaBitForBitOnEverySpecialValue) {
+    TEST_F(TensorVulkanCudaInterop, HalfConversionsMatchCudaBitForBitOnEverySpecialValue) {
         // The fp32 modules convert Float16 storage with integer arithmetic; a
         // wrong tie, a dropped subnormal, an early overflow or a NaN turned
         // infinity differs from the CUDA conversion in at least one bit.
@@ -889,5 +1022,46 @@ namespace {
         expect_bytes(rank5_destination,
                      std::vector<uint8_t>{8, 4, 7, 3, 6, 2, 5, 1}, "rank5 scatter");
     }
+
+    class TensorHostTransfer : public testing::TestWithParam<GpuBackend> {};
+
+    TEST_P(TensorHostTransfer, OffsetRoundTripsPreservePinnedAndPageableBytes) {
+        const auto backend = GetParam();
+        if (!gpu_backend_available(backend))
+            GTEST_SKIP() << "Backend unavailable";
+        GpuBackendScope scope(backend);
+        for (const size_t count : {size_t{17}, size_t{8 * 1024 * 1024 + 13}, size_t{64 * 1024 * 1024 + 17}}) {
+            for (const bool pageable : {false, true}) {
+                Tensor source = pageable ? Tensor::empty_pageable_host({count + 8}, DataType::UInt8)
+                                         : Tensor::empty({count + 8}, Device::CPU, DataType::UInt8);
+                auto* bytes = source.ptr<uint8_t>();
+                for (size_t i = 0; i < source.numel(); ++i)
+                    bytes[i] = static_cast<uint8_t>(i * 37);
+                const Tensor view = source.slice(0, 3, count + 3);
+                Tensor gpu = view.gpu();
+                const Tensor downloaded = gpu.cpu();
+                EXPECT_EQ(std::memcmp(downloaded.data_ptr(), bytes + 3, count), 0);
+                gpu.copy_from(view);
+                Tensor destination = pageable ? Tensor::empty_pageable_host({count + 8}, DataType::UInt8)
+                                              : Tensor::empty({count + 8}, Device::CPU, DataType::UInt8);
+                auto* output = destination.ptr<uint8_t>();
+                std::memset(output, 0xA5, count + 8);
+                auto output_view = destination.slice(0, 5, count + 5);
+                output_view.copy_from(gpu);
+                EXPECT_EQ(std::memcmp(output + 5, bytes + 3, count), 0);
+                for (size_t i = 0; i < 5; ++i)
+                    EXPECT_EQ(output[i], 0xA5);
+                for (size_t i = count + 5; i < count + 8; ++i)
+                    EXPECT_EQ(output[i], 0xA5);
+            }
+        }
+        if (backend == GpuBackend::Vulkan) {
+            EXPECT_TRUE(shutdown_gpu_backend(backend).has_value());
+            EXPECT_TRUE(internal::vulkan_validation_messages_for_testing().empty());
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, TensorHostTransfer,
+                             testing::ValuesIn(kGpuBackends));
 
 } // namespace

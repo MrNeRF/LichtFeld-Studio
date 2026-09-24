@@ -1,7 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
 
@@ -16,6 +20,7 @@
 #include <limits>
 #include <numeric>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -179,14 +184,13 @@ namespace {
         expect_exact(source.gather(0, indices, BoundaryMode::Wrap), wrapped, "gather wrap");
         // The launch records the first out-of-range index; the next
         // synchronization raises it as a Vulkan-domain error and clears it.
-        EXPECT_THROW(static_cast<void>(source.index_select(0, indices, BoundaryMode::Assert)),
+        EXPECT_THROW(static_cast<void>(source.index_select(0, indices, BoundaryMode::Assert).cpu()),
                      std::exception);
         const std::vector<int> fine{1, 2, 3};
         const Tensor fine_indices = upload_vulkan(Tensor::from_vector(fine, {3}, Device::CPU));
         expect_exact(source.index_select(0, fine_indices, BoundaryMode::Assert),
                      {values[1], values[2], values[3]}, "assert after fault is consumed");
-        // gather validates its indices on the host before any launch.
-        EXPECT_THROW(static_cast<void>(source.gather(0, indices, BoundaryMode::Assert)), std::exception);
+        EXPECT_THROW(static_cast<void>(source.gather(0, indices, BoundaryMode::Assert).cpu()), std::exception);
     }
 
     TEST_F(TensorVulkanIndex, ScatterFamilyAssignsAndAccumulates) {
@@ -302,10 +306,12 @@ namespace {
 
     class TensorVulkanIndexNoAtomicFloat : public TensorVulkanIndex {
         TensorBackendOptions previous_options_;
+        GpuBackend previous_backend_ = GpuBackend::CUDA;
 
     protected:
         void SetUp() override {
             ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+            previous_backend_ = default_gpu_backend();
             previous_options_ = tensor_backend_options();
             internal::gpu_backend_reset_for_testing();
             auto options = previous_options_;
@@ -318,6 +324,7 @@ namespace {
             TensorVulkanIndex::TearDown();
             internal::gpu_backend_reset_for_testing();
             EXPECT_TRUE(set_tensor_backend_options(previous_options_));
+            EXPECT_TRUE(set_default_gpu_backend(previous_backend_));
         }
     };
 
@@ -618,4 +625,219 @@ namespace {
         }
     }
 
+    class TensorByteIndex : public TensorVulkanIndex,
+                            public testing::WithParamInterface<DataType> {};
+
+    TEST_P(TensorByteIndex, GatherAndSelectPreserveOffsetViews) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        std::vector<uint8_t> values(19);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = GetParam() == DataType::Bool ? i % 3 != 0 : static_cast<uint8_t>(i * 17);
+        const Tensor source = Tensor::from_blob(values.data(), {values.size()}, Device::CPU, GetParam()).gpu().slice(0, 1, 18);
+        const std::vector<int> picks{9, 0, 3, 3, 6, 2, 10};
+        const Tensor indices = Tensor::from_vector(picks, {picks.size()}, Device::GPU);
+        std::vector<uint8_t> expected;
+        for (const int index : picks)
+            expected.push_back(values[index + 1]);
+        Tensor output = Tensor::empty({picks.size()}, Device::GPU, GetParam());
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.gather(internal::storage_ref(source), internal::storage_ref(indices), internal::storage_ref(output),
+                   internal::strided_layout(source), internal::strided_layout(indices),
+                   internal::IndexProgram{.dim = 0, .boundary_mode = static_cast<int>(BoundaryMode::Assert), .total_elements = picks.size()}, {});
+        EXPECT_EQ(output.to_vector_uint8(), expected);
+        ops.take(internal::storage_ref(source), internal::storage_ref(indices), internal::storage_ref(output),
+                 internal::IndexProgram{.input_size = source.numel(), .index_size = picks.size()}, {});
+        EXPECT_EQ(output.to_vector_uint8(), expected);
+        EXPECT_EQ(source.index_select(0, indices).to_vector_uint8(), expected);
+        for (size_t offset = 0; offset < 4; ++offset) {
+            std::vector<uint8_t> guarded(19, 0xA5);
+            Tensor destination = Tensor::from_blob(guarded.data(), {guarded.size()}, Device::CPU, GetParam()).gpu();
+            auto view = destination.slice(0, offset + 4, offset + 11);
+            source.index_select_into(view, 0, indices, BoundaryMode::Assert);
+            std::copy(expected.begin(), expected.end(), guarded.begin() + offset + 4);
+            EXPECT_EQ(destination.to_vector_uint8(), guarded);
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Dtypes, TensorByteIndex,
+                             testing::Values(DataType::UInt8, DataType::Bool));
+
+} // namespace
+
+namespace {
+    class TensorIndexBounds : public testing::TestWithParam<std::tuple<GpuBackend, int>> {
+    protected:
+        void SetUp() override {
+            if (!gpu_backend_available(std::get<0>(GetParam())))
+                GTEST_SKIP() << "Backend unavailable";
+        }
+
+        Tensor apply(Tensor& destination, const Tensor& indices, const Tensor& source) {
+            const int dim = static_cast<int>(destination.ndim()) - 1;
+            switch (std::get<1>(GetParam())) {
+            case 0: return destination.gather(dim, indices, BoundaryMode::Assert);
+            case 1: return destination.scatter_(dim, indices, source);
+            case 2: return destination.index_copy_(dim, indices, source);
+            case 3: return destination.index_add_(dim, indices, source);
+            case 4: return destination.scatter_(dim, indices, source, ScatterMode::Add);
+            default: return destination.scatter_(dim, indices, 7.0f);
+            }
+        }
+
+        Tensor indices(int64_t last, DataType dtype, Device device, bool matrix = true) {
+            const bool gather = std::get<1>(GetParam()) == 0 && matrix;
+            const std::vector<int64_t> values = gather ? std::vector<int64_t>{0, 2, 0, last}
+                                                       : std::vector<int64_t>{0, last};
+            auto result = Tensor::empty(gather ? TensorShape{2, 2} : TensorShape{2}, Device::CPU, DataType::Int64);
+            std::copy(values.begin(), values.end(), result.ptr<int64_t>());
+            return result.to(dtype).to(device);
+        }
+    };
+
+    TEST_P(TensorIndexBounds, ValidIndicesMatchCpuExactly) {
+        const GpuBackendScope scope(std::get<0>(GetParam()));
+        for (const bool matrix : {false, true}) {
+            for (const auto index_type : {DataType::Int32, DataType::Int64}) {
+                for (const auto value_type : {DataType::Float32, DataType::Int32, DataType::Int64, DataType::UInt8, DataType::Bool}) {
+                    const int op = std::get<1>(GetParam());
+                    if ((op == 0 && value_type != DataType::Float32 && value_type != DataType::Int64) ||
+                        (op != 0 && value_type == DataType::Int64) ||
+                        ((op == 3 || op == 4) && value_type != DataType::Float32 && value_type != DataType::Int32))
+                        continue;
+                    SCOPED_TRACE(int(index_type));
+                    SCOPED_TRACE(int(value_type));
+                    auto cpu = Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CPU).to(value_type);
+                    if (!matrix)
+                        cpu = cpu.flatten().slice(0, 0, 3);
+                    auto gpu = cpu.gpu();
+                    auto source = Tensor::from_vector(std::vector<float>{10, 20, 30, 40}, {2, 2}, Device::CPU).to(value_type);
+                    if (!matrix)
+                        source = source.flatten().slice(0, 0, 2);
+                    const auto index = indices(2, index_type, Device::CPU, matrix);
+                    const auto expected = apply(cpu, index, source).to(DataType::Float32).to_vector();
+                    EXPECT_EQ(apply(gpu, index.gpu(), source.gpu()).cpu().to(DataType::Float32).to_vector(), expected);
+                }
+            }
+        }
+    }
+
+    TEST_P(TensorIndexBounds, InvalidIndicesRaiseByReadback) {
+        const GpuBackendScope scope(std::get<0>(GetParam()));
+        for (const bool matrix : {false, true}) {
+            for (const auto index_type : {DataType::Int32, DataType::Int64}) {
+                for (const int64_t invalid : {-1LL, 3LL, 4294967296LL}) {
+                    if (index_type == DataType::Int32 && invalid > INT32_MAX)
+                        continue;
+                    SCOPED_TRACE(invalid);
+                    SCOPED_TRACE(int(index_type));
+                    auto destination = Tensor::zeros(matrix ? TensorShape{2, 3} : TensorShape{3}, Device::GPU);
+                    const auto source = Tensor::ones(matrix ? TensorShape{2, 2} : TensorShape{2}, Device::GPU);
+                    const auto index = indices(invalid, index_type, Device::GPU, matrix);
+#ifdef NDEBUG
+                    Tensor result;
+                    ASSERT_NO_THROW(result = apply(destination, index, source));
+                    try {
+                        (void)result.cpu();
+                        FAIL() << "Expected a deferred bounds fault";
+                    } catch (const lfs::Exception& error) {
+                        EXPECT_EQ(error.error().code(), lfs::ErrorCode::BoundsViolation);
+                        ASSERT_FALSE(error.error().frames().empty());
+                        bool found_value = false;
+                        for (const auto& field : error.error().frames().front().fields.entries()) {
+                            if (field.key == "value") {
+                                EXPECT_EQ(std::get<int64_t>(field.value), invalid);
+                                found_value = true;
+                            }
+                        }
+                        EXPECT_TRUE(found_value);
+                    }
+#else
+                    EXPECT_ANY_THROW((void)apply(destination, index, source).cpu());
+#endif
+                    EXPECT_NO_THROW((void)destination.cpu());
+                }
+            }
+        }
+    }
+
+    TEST_P(TensorIndexBounds, LaterValidLaunchPreservesFirstFault) {
+        const GpuBackendScope scope(std::get<0>(GetParam()));
+        for (const auto value_type : {DataType::Float32, DataType::Int32}) {
+            if (std::get<1>(GetParam()) == 0 && value_type == DataType::Int32)
+                continue;
+            auto destination = Tensor::zeros({2, 3}, Device::GPU, value_type);
+            auto source = Tensor::ones({2, 2}, Device::GPU, value_type);
+            auto output = Tensor::empty({2, 2}, Device::GPU, value_type);
+            const auto bad = indices(3, DataType::Int32, Device::GPU);
+            const auto good = indices(2, DataType::Int32, Device::GPU);
+            (void)destination.cpu();
+            (void)source.cpu();
+            (void)bad.cpu();
+            (void)good.cpu();
+            const auto launch = [&](const Tensor& index) {
+                auto& ops = internal::backend_ops_for(destination);
+                const internal::IndexProgram program{.dim = 1, .boundary_mode = 0, .index_size = 2, .total_elements = 4};
+                const auto dst = internal::storage_ref(destination);
+                const auto idx = internal::storage_ref(index);
+                const auto src = internal::storage_ref(source);
+                const auto layout = internal::strided_layout(destination);
+                const internal::ExecContext context{destination.stream()};
+                switch (std::get<1>(GetParam())) {
+                case 0:
+                    ops.gather(dst, idx, internal::storage_ref(output), layout, internal::strided_layout(index), program, context);
+                    break;
+                case 2: ops.index_copy(dst, idx, src, layout, program, context); break;
+                case 3:
+                case 4: ops.index_add(dst, idx, src, layout, program, context); break;
+                default: ops.scatter(dst, idx, src, layout, internal::strided_layout(source), program, context); break;
+                }
+            };
+            ASSERT_NO_THROW(launch(bad));
+            ASSERT_NO_THROW(launch(good));
+            EXPECT_ANY_THROW((void)(std::get<1>(GetParam()) == 0 ? output : destination).cpu());
+            EXPECT_NO_THROW((void)destination.cpu());
+        }
+    }
+
+    TEST_P(TensorIndexBounds, CrossStreamInt64FaultReachesReadback) {
+        if (std::get<0>(GetParam()) != GpuBackend::CUDA)
+            GTEST_SKIP() << "CUDA stream ordering";
+        const GpuBackendScope scope(GpuBackend::CUDA);
+        cudaStream_t producer{}, consumer{};
+        ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
+        {
+            const CUDAStreamGuard guard(consumer);
+            auto destination = Tensor::zeros({2, 3}, Device::GPU);
+            auto source = Tensor::ones({2, 2}, Device::GPU);
+            Tensor index;
+            {
+                const CUDAStreamGuard producer_guard(producer);
+                index = indices(4294967296LL, DataType::Int64, Device::GPU);
+            }
+#ifdef NDEBUG
+            Tensor result;
+            EXPECT_NO_THROW(result = apply(destination, index, source));
+            EXPECT_ANY_THROW((void)result.cpu());
+#else
+            EXPECT_ANY_THROW((void)apply(destination, index, source).cpu());
+#endif
+            EXPECT_NO_THROW((void)destination.cpu());
+            EXPECT_NO_THROW((void)index.cpu());
+        }
+        CudaMemoryPool::instance().release_stream(consumer);
+        CudaMemoryPool::instance().release_stream(producer);
+        EXPECT_EQ(cudaStreamDestroy(consumer), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+    }
+
+    std::string index_bounds_name(const testing::TestParamInfo<std::tuple<GpuBackend, int>>& info) {
+        constexpr const char* names[]{"Gather", "Scatter", "IndexCopy", "IndexAdd", "ScatterAdd", "ScatterScalar"};
+        return std::string(std::get<0>(info.param) == GpuBackend::CUDA ? "Cuda" : "Vulkan") + names[std::get<1>(info.param)];
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, TensorIndexBounds,
+                             testing::Combine(testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan),
+                                              testing::Range(0, 6)),
+                             index_bounds_name);
 } // namespace

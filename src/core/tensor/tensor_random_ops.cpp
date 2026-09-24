@@ -28,25 +28,28 @@ namespace lfs::core {
         std::atomic<uint64_t> call_counter_{0};
         uint64_t cuda_offset_ = 0;
         uint64_t seed_ = 42;
-        void* cuda_generator_ = nullptr;
+        curandGenerator_t cuda_generator_ = nullptr;
         std::mt19937_64 cpu_generator_;
         std::mutex cuda_mutex_;
 
         RandomGeneratorImpl() : seed_(42),
-                                cpu_generator_(seed_) {
-            // Initialize CUDA random generator with Philox (same as PyTorch - much faster!)
-            curandGenerator_t* gen = new curandGenerator_t;
-            CHECK_CURAND(curandCreateGenerator(gen, CURAND_RNG_PSEUDO_PHILOX4_32_10));
-            CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(*gen, seed_));
-            cuda_generator_ = gen;
+                                cpu_generator_(seed_) {}
+
+        void ensure_cuda_generator() {
+            if (cuda_generator_)
+                return;
+            CHECK_CURAND(curandCreateGenerator(&cuda_generator_, CURAND_RNG_PSEUDO_PHILOX4_32_10));
+            const auto status = curandSetPseudoRandomGeneratorSeed(cuda_generator_, seed_);
+            if (status != CURAND_STATUS_SUCCESS) {
+                curandDestroyGenerator(cuda_generator_);
+                cuda_generator_ = nullptr;
+                CHECK_CURAND(status);
+            }
         }
 
         ~RandomGeneratorImpl() {
-            if (cuda_generator_) {
-                curandGenerator_t* gen = static_cast<curandGenerator_t*>(cuda_generator_);
-                curandDestroyGenerator(*gen);
-                delete gen;
-            }
+            if (cuda_generator_)
+                curandDestroyGenerator(cuda_generator_);
         }
     };
 
@@ -79,10 +82,9 @@ namespace lfs::core {
         impl->cuda_offset_ = 0;
 
         if (impl->cuda_generator_) {
-            curandGenerator_t* gen = static_cast<curandGenerator_t*>(impl->cuda_generator_);
-            CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(*gen, seed));
+            CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(impl->cuda_generator_, seed));
             // IMPORTANT: Reset the offset to ensure reproducibility
-            CHECK_CURAND(curandSetGeneratorOffset(*gen, 0));
+            CHECK_CURAND(curandSetGeneratorOffset(impl->cuda_generator_, 0));
         }
     }
 
@@ -105,10 +107,10 @@ namespace lfs::core {
         LFS_ASSERT_MSG(count <= std::numeric_limits<uint64_t>::max() - impl->cuda_offset_,
                        "CUDA random generator offset overflow");
 
-        curandGenerator_t* gen = static_cast<curandGenerator_t*>(impl->cuda_generator_);
+        impl->ensure_cuda_generator();
         impl->cuda_offset_ += count;
-        CHECK_CURAND(curandSetStream(*gen, stream));
-        CHECK_CURAND(curandGenerateNormal(*gen, output, count, mean, std));
+        CHECK_CURAND(curandSetStream(impl->cuda_generator_, stream));
+        CHECK_CURAND(curandGenerateNormal(impl->cuda_generator_, output, count, mean, std));
     }
 
     void* RandomGenerator::get_generator(Device device) {
@@ -116,7 +118,9 @@ namespace lfs::core {
         LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "random generator received an invalid device");
         if (device == Device::GPU) {
-            return impl->cuda_generator_;
+            std::lock_guard lock(impl->cuda_mutex_);
+            impl->ensure_cuda_generator();
+            return &impl->cuda_generator_;
         } else {
             return &impl->cpu_generator_;
         }

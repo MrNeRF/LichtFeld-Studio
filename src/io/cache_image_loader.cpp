@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -322,10 +323,13 @@ namespace lfs::io {
     lfs::core::Tensor CacheLoader::load_cached_image(const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        determine_nv_image_codec();
-
-        if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
-            return load_jpeg_with_hardware_decode(path, params);
+        // Hardware decode and its layout kernels write CUDA storage. Viewer
+        // image loading on another tensor backend uses the existing CPU cache.
+        if (default_gpu_backend() == GpuBackend::CUDA) {
+            determine_nv_image_codec();
+            if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
+                return load_jpeg_with_hardware_decode(path, params);
+            }
         }
 
         determine_cache_mode(path, params);

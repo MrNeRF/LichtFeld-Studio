@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/sh_value_quant.hpp"
@@ -11,7 +13,6 @@
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -36,11 +37,6 @@ namespace {
 
     constexpr size_t kPartialFinalPrims = 513; // 256 + 256 + 1
     constexpr std::uint32_t kShRest = 15;
-
-    [[nodiscard]] bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count != 0;
-    }
 
     class ScopedPlyQ16BandPrims {
     public:
@@ -304,9 +300,6 @@ namespace {
 } // namespace
 
 TEST(PlyVulkanQ16Bands, SkipsFloatShNAndBandedMatchesUnbanded) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
@@ -334,10 +327,9 @@ TEST(PlyVulkanQ16Bands, SkipsFloatShNAndBandedMatchesUnbanded) {
     }
 }
 
-TEST(PlyVulkanQ16Bands, CudaVulkanDecodedParityAtBandBoundaries) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class PlyVulkanQ16Parity : public lfs::test::CudaDeviceTest {};
+
+TEST_F(PlyVulkanQ16Parity, CudaVulkanDecodedParityAtBandBoundaries) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
@@ -371,10 +363,7 @@ TEST(PlyVulkanQ16Bands, CudaVulkanDecodedParityAtBandBoundaries) {
     expect_decoded_canonical_equal(cuda_model, vulkan_model);
 }
 
-TEST(PlyVulkanQ16Bands, NanInfCleanupPreservesQ16Parity) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+TEST_F(PlyVulkanQ16Parity, NanInfCleanupPreservesQ16Parity) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }

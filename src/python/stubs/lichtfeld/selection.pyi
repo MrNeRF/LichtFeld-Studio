@@ -188,10 +188,12 @@ def is_group_locked(group_id: int) -> bool:
     """Check if a selection group is locked"""
 
 def grow(radius: float, iterations: int = 1) -> None:
-    """Grow selection by radius (scene units). Uses spatial hashing, O(N)."""
+    """Grow selection by radius (scene units) on the scene's tensor backend."""
 
 def shrink(radius: float, iterations: int = 1) -> None:
-    """Shrink selection by radius (scene units). Uses spatial hashing, O(N)."""
+    """
+    Shrink selection by radius (scene units) on the scene's tensor backend.
+    """
 
 def by_opacity(min_opacity: float = 0.0, max_opacity: float = 1.0) -> None:
     """Select gaussians by activated opacity range [min, max]."""

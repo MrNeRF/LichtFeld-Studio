@@ -1,4 +1,5 @@
 #include "gs_pipeline.h"
+#include "core/vulkan_shader_requirements.hpp"
 #include "gs_renderer.h"
 #include "perf_timer.h"
 
@@ -644,7 +645,6 @@ void VulkanGSPipeline::cleanup() {
     command_queue = VK_NULL_HANDLE;
     queue_family_index = UINT32_MAX;
     pending_timeline_waits_.clear();
-    last_timeline_wait_values_.clear();
     last_timeline_signal_values_.clear();
     for (CommandBatchSlot& slot : command_batch_slots_) {
         slot.pending_signal = VK_NULL_HANDLE;
@@ -663,6 +663,10 @@ void VulkanGSPipeline::cleanup() {
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
+    const auto missing = lfs::core::missing_viewer_shader_features(selected_physical_device);
+    if (!missing.empty())
+        lfs::rendering::throw_renderer_contract("VkSplat device lacks required shader features: " + missing,
+                                                LFS_SOURCE_SITE_CURRENT());
     VkPhysicalDeviceSubgroupProperties subgroupProperties{};
     subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
     VkPhysicalDeviceProperties2 deviceProperties2{};
@@ -1203,18 +1207,13 @@ void VulkanGSPipeline::addTimelineWait(
                 pending_timeline_waits_.size()),
             LFS_SOURCE_SITE_CURRENT());
     }
-    const std::uint64_t previous = last_timeline_wait_values_[semaphore];
-    if (value <= previous) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "VkSplat Vulkan timeline waits must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, pending_waits={})",
-                lfs::rendering::vkHandleValue(semaphore),
-                value,
-                previous,
-                pending_timeline_waits_.size()),
-            LFS_SOURCE_SITE_CURRENT());
+    for (auto& wait : pending_timeline_waits_) {
+        if (wait.semaphore == semaphore) {
+            wait.value = std::max(wait.value, value);
+            wait.stage_mask |= stage_mask;
+            return;
+        }
     }
-    last_timeline_wait_values_[semaphore] = value;
     pending_timeline_waits_.push_back(PendingTimelineWait{
         .semaphore = semaphore,
         .value = value,
@@ -1224,9 +1223,7 @@ void VulkanGSPipeline::addTimelineWait(
 
 void VulkanGSPipeline::endCommandBatch(bool use_fence,
                                        VkSemaphore signal_semaphore,
-                                       std::uint64_t signal_value,
-                                       VkSemaphore secondary_signal_semaphore,
-                                       std::uint64_t secondary_signal_value) {
+                                       std::uint64_t signal_value) {
     if (!commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1265,28 +1262,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 active_command_batch_slot_),
             LFS_SOURCE_SITE_CURRENT());
     }
-    if ((secondary_signal_semaphore == VK_NULL_HANDLE) != (secondary_signal_value == 0)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "endCommandBatch secondary timeline signal handle/value must be supplied together (semaphore={:#x}, value={}, use_fence={}, active_slot={})",
-                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                secondary_signal_value,
-                use_fence,
-                active_command_batch_slot_),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (signal_semaphore != VK_NULL_HANDLE &&
-        signal_semaphore == secondary_signal_semaphore) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "endCommandBatch timeline signal handles must be distinct (primary={:#x}, secondary={:#x}, primary_value={}, secondary_value={}, active_slot={})",
-                lfs::rendering::vkHandleValue(signal_semaphore),
-                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                signal_value,
-                secondary_signal_value,
-                active_command_batch_slot_),
-            LFS_SOURCE_SITE_CURRENT());
-    }
     if (use_fence && fence == VK_NULL_HANDLE) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1304,20 +1279,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                     "VkSplat Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
                     lfs::rendering::vkHandleValue(signal_semaphore),
                     signal_value,
-                    previous,
-                    active_command_batch_slot_),
-                LFS_SOURCE_SITE_CURRENT());
-        }
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
-        const std::uint64_t previous =
-            last_timeline_signal_values_[secondary_signal_semaphore];
-        if (secondary_signal_value <= previous) {
-            lfs::rendering::throw_renderer_contract(
-                std::format(
-                    "VkSplat secondary Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
-                    lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                    secondary_signal_value,
                     previous,
                     active_command_batch_slot_),
                 LFS_SOURCE_SITE_CURRENT());
@@ -1390,10 +1351,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         signal_semaphores.push_back(signal_semaphore);
         signal_values.push_back(signal_value);
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE && secondary_signal_value != 0) {
-        signal_semaphores.push_back(secondary_signal_semaphore);
-        signal_values.push_back(secondary_signal_value);
     }
 
     VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
@@ -1515,9 +1472,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     // T5 — publish once (host-side evidence map). Never host-signal.
     if (signal_semaphore != VK_NULL_HANDLE) {
         last_timeline_signal_values_[signal_semaphore] = signal_value;
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
-        last_timeline_signal_values_[secondary_signal_semaphore] = secondary_signal_value;
     }
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         using lfs::rendering::SubmissionFencePolicy;

@@ -138,6 +138,19 @@ def recursive_strings(value):
         yield value
 
 
+def test_unavailable_device_memory_usage_is_omitted(monkeypatch, fake_runtime):
+    fake_lf = make_fake_lf()
+    native = fake_lf.diagnostics.collect()
+    native.update(vram_used_available=False, vram_budget_mb=22000, vram_budget_used_mb=2048)
+    fake_lf.diagnostics.collect = lambda: native
+    monkeypatch.setattr(bug_report, "lf", fake_lf)
+    diagnostics = bug_report.collect_diagnostics()
+    assert diagnostics["gpu"] == "Test GPU"
+    assert diagnostics["vram_mb"] == 24564
+    assert "vram_used_mb" not in diagnostics
+    assert "vram_budget_mb" not in diagnostics
+
+
 def valid_form():
     return {
         "category": "crash",

@@ -2053,13 +2053,13 @@ class HistogramPanel(Panel):
 
     @staticmethod
     def _device_string(tensor: lf.Tensor) -> str:
-        return "cuda" if bool(getattr(tensor, "is_cuda", False)) else "cpu"
+        return "cuda" if tensor.backend != "cpu" else "cpu"
 
     @staticmethod
     def _to_device(tensor: lf.Tensor, device: str) -> lf.Tensor:
         if device == "cuda" or device == "gpu":
-            return tensor if tensor.is_cuda else tensor.cuda()
-        return tensor.cpu() if tensor.is_cuda else tensor
+            return tensor if tensor.backend != "cpu" else tensor.cuda()
+        return tensor.cpu() if tensor.backend != "cpu" else tensor
 
     @staticmethod
     def _any_true(mask: lf.Tensor) -> bool:
@@ -2462,7 +2462,7 @@ class HistogramPanel(Panel):
             if in_range_count > 0:
                 ones = lf.Tensor.ones([in_range_count], dtype="int32", device=device)
                 counts_tensor.index_add_(0, in_range_indices.contiguous().to("int32"), ones)
-        counts = counts_tensor.cpu().tolist() if counts_tensor.is_cuda else counts_tensor.tolist()
+        counts = counts_tensor.cpu().tolist() if counts_tensor.backend != "cpu" else counts_tensor.tolist()
         counts = [int(count) for count in counts]
         return counts, edges
 
@@ -2652,7 +2652,7 @@ class HistogramPanel(Panel):
         selected = self._selection_bin_indices[normalized]
         if int(selected.numel) == 0:
             return set()
-        values = selected.contiguous().cpu().tolist() if selected.is_cuda else selected.tolist()
+        values = selected.contiguous().cpu().tolist() if selected.backend != "cpu" else selected.tolist()
         return {int(value) for value in values if int(value) >= 0}
 
     def _selected_compare_cells_from_mask(self, mask: lf.Tensor | None) -> set[tuple[int, int]]:
@@ -2668,8 +2668,8 @@ class HistogramPanel(Panel):
         y_selected = self._compare_y_bin_indices[normalized]
         if int(x_selected.numel) == 0:
             return set()
-        x_values = x_selected.contiguous().cpu().tolist() if x_selected.is_cuda else x_selected.tolist()
-        y_values = y_selected.contiguous().cpu().tolist() if y_selected.is_cuda else y_selected.tolist()
+        x_values = x_selected.contiguous().cpu().tolist() if x_selected.backend != "cpu" else x_selected.tolist()
+        y_values = y_selected.contiguous().cpu().tolist() if y_selected.backend != "cpu" else y_selected.tolist()
         return {
             (int(x_bin), int(y_bin))
             for x_bin, y_bin in zip(x_values, y_values)
@@ -2783,7 +2783,7 @@ class HistogramPanel(Panel):
                 flat_indices = (y_in * x_bin_count + x_in).reshape([-1]).to("int32")
                 ones = lf.Tensor.ones([in_range_count], dtype="int32", device=device)
                 counts_tensor.index_add_(0, flat_indices.contiguous(), ones)
-        counts = counts_tensor.cpu().tolist() if counts_tensor.is_cuda else counts_tensor.tolist()
+        counts = counts_tensor.cpu().tolist() if counts_tensor.backend != "cpu" else counts_tensor.tolist()
         return [int(count) for count in counts], x_edges, y_edges
 
     def _set_compare_empty(self, title: str, message: str, clear_scene: bool):

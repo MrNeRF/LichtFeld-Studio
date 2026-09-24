@@ -6,11 +6,11 @@
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 
-#include "control/command_api.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/scene.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
-#include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
 

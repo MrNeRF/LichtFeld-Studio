@@ -34,12 +34,11 @@ find_package(GTest CONFIG REQUIRED)
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
-if(BUILD_VISUALIZER_TESTS)
+if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     # The focused menu-bar suite exercises no GPU code. Windows CI installs
     # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
-    # until a driver API is actually called. Normal application builds retain
-    # their existing eager driver dependency.
-    if(MSVC)
+    # until a driver API is actually called. Application builds load the driver eagerly.
+    if(MSVC AND BUILD_VISUALIZER_TESTS)
         target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lfs_core PRIVATE delayimp)
         target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
@@ -404,10 +403,39 @@ if(WIN32)
 else()
     set(Torch_DIR "${PROJ_ROOT_DIR}/external/libtorch/share/cmake/Torch")
 endif()
+# The native reference kernel must use the Release tensor-kernel flags it is compared against.
+set_source_files_properties(test_tensor_expression_cuda.cu PROPERTIES
+    COMPILE_OPTIONS "$<TARGET_PROPERTY:lfs_tensor_kernels,COMPILE_OPTIONS>")
+
+# The shared harness records tensor facade traces, and tensor-library tests may
+# include private tensor headers. Other tests do not get the definition, so a stray
+# private include fails to compile.
+function(lfs_tensor_private_access)
+    set(_prefixes
+        test_main test_tensor_ tensor_ bench_tensor_ test_allocator_ test_cuda_ test_stale_stream_
+        test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter
+        test_zip_gather)
+    foreach(_src IN LISTS ARGN)
+        get_filename_component(_name "${_src}" NAME)
+        foreach(_prefix IN LISTS _prefixes)
+            if(_name MATCHES "^${_prefix}")
+                set_property(SOURCE "${_src}" APPEND PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
+                break()
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+if(NOT LFS_BUILD_TRAINER)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/ViewerTests.cmake)
+    return()
+endif()
+
 find_package(Torch REQUIRED)
 message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tests")
 
 # Regular test sources (unit tests, integration tests)
+
 set(TEST_FILES
     licht_test_support.cpp
     test_assert_hardening.cpp
@@ -422,6 +450,13 @@ set(TEST_FILES
     test_device_fault.cpp
     device_fault_cuda_utils.cu
     test_selection_ops.cpp
+    test_tensor_point_ops.cpp
+    test_tensor_expression.cpp
+    test_tensor_expression_cuda.cu
+    test_splat_codec_edits.cpp
+    test_tensor_splat_affine.cpp
+    test_tensor_sh_codec.cpp
+    test_tensor_image_ops.cpp
     test_selection_cursor.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
@@ -462,8 +497,10 @@ set(TEST_FILES
     test_selection_screen_ops.cpp
     test_selection_tensor_projection.cpp
     test_export_band_pack.cpp
+    test_viewer_appearance.cpp
     test_point_cloud_merge.cpp
     test_display_tensors.cpp
+    test_viewer_gpu_memory.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_async_consts.cpp
@@ -614,6 +651,8 @@ set(TEST_FILES
     test_training_scene_init_concurrency.cpp
     test_training_init_centering.cpp
     test_scene_consolidation.cpp
+    test_scene_combining_backends.cpp
+    test_scene_snapshot_backend.cpp
     test_scene_graph_fuzz.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
@@ -637,6 +676,7 @@ set(TEST_FILES
     test_input_controller_dataset_load.cpp
     test_input_controller_panel_camera.cpp
     test_selection_service_interactions.cpp
+    test_selection_group_mask.cpp
     test_scene_graph_identity.cpp
     test_undo_history.cpp
     test_selection_command_dispatch.cpp
@@ -718,6 +758,7 @@ set(TEST_FILES
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
+    test_tensor_completion.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu
     test_cuda_event_pool.cpp
@@ -754,6 +795,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_backend_parity.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
+        test_headless_vulkan_device_selection.cpp
         test_viewer_no_cuda.cpp
         test_selection_mask_ops.cpp
         test_sh_quant_tensor_program.cpp
@@ -788,8 +830,8 @@ list(APPEND TEST_FILES test_readback_ticket_ring.cpp)
 list(APPEND TEST_FILES test_gpu_resource_pool.cpp)
 list(APPEND TEST_FILES test_viewport_scratch_bucket.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
-list(APPEND TEST_FILES test_lod_page_dequant.cpp)
-list(APPEND TEST_FILES test_lod_upload_engine.cpp)
+list(APPEND TEST_FILES test_vulkan_lod_upload_engine.cpp)
+list(APPEND TEST_FILES test_splat_sh_tensor_layout.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
@@ -1066,8 +1108,7 @@ string(CONCAT LFS_SLOW_TEST_FILTER
     "UndistortCameraTest.BicyclePinholeNoDist:"
     "VideoColorConvertTest.*FullHD*:"
     "PlyToRadLod.*:"
-    "LodPageDequant.*:"
-    "LodUploadEngine.*:"
+    "TensorBackends/LodUpload.*:"
     "RadMetaSidecar.*:"
     "OctreeLod.*:"
     "NurecUsdzFormatTest.*:"
@@ -1206,6 +1247,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_hygiene_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_keymap_bindings.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_verified_dead_code_cleanup.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewer_spirv.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_layout_composition.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_manage_stubs.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh.py
@@ -1563,3 +1605,12 @@ target_link_libraries(gsplat_tests PRIVATE lfs_training lfs_core GTest::gtest CU
 if(COMMAND lfs_enable_fast_cxx_compile)
     lfs_enable_fast_cxx_compile(gsplat_tests)
 endif()
+
+lfs_tensor_private_access(${TEST_SOURCES})
+foreach(_lfs_tensor_test_target IN ITEMS
+        tensor_hardening_tests tensor_interface_freeze tensor_backend_corpus
+        bench_tensor_launch_overhead bench_tensor_gui)
+    if(TARGET ${_lfs_tensor_test_target})
+        target_compile_definitions(${_lfs_tensor_test_target} PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+    endif()
+endforeach()

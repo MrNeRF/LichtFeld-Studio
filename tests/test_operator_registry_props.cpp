@@ -8,6 +8,8 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gizmo_transform.hpp"
 #include "operation/ops/select_ops.hpp"
@@ -21,7 +23,6 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -108,7 +109,7 @@ namespace {
 
 } // namespace
 
-class OperatorRegistryPropsTest : public ::testing::Test {
+class OperatorRegistryPropsTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
@@ -226,6 +227,7 @@ TEST_F(OperatorRegistryPropsTest, DeleteOperatorDeletesMultipleSelectedNodes) {
 }
 
 TEST_F(OperatorRegistryPropsTest, DeleteOperatorRejectsMixedTrainingBatchWithoutPartialRemoval) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
     lfs::vis::services().set(trainer_manager.get());
 

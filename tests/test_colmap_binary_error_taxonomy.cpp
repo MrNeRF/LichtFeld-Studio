@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -143,11 +142,6 @@ namespace {
         fs::path temp_dir_;
     };
 
-    bool has_cuda_device() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-    }
-
     TEST_F(ColmapBinaryErrorTaxonomyTest, SkipsInvalidBinaryCameraAndPreservesValidIntrinsics) {
         std::vector<char> mixed_cameras;
         append_pod(mixed_cameras, uint64_t{2});
@@ -225,9 +219,6 @@ namespace {
     }
 
     TEST_F(ColmapBinaryErrorTaxonomyTest, SkipsInvalidBinaryPointAndCapsSamples) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
         std::vector<char> points;
         append_pod(points, uint64_t{11});
         append_point(points, 1, 1.0, 7);

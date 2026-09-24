@@ -8,13 +8,14 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
+#include "cuda_backend_test.hpp"
 #include "operation/ops/edit_ops.hpp"
 #include "operation/pipeline.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
@@ -294,7 +295,7 @@ namespace {
 
 } // namespace
 
-class UndoHistoryTest : public ::testing::Test {
+class UndoHistoryTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
@@ -2795,6 +2796,7 @@ TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
 }
 
 TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
@@ -2843,6 +2845,7 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
 }
 
 TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
@@ -2923,6 +2926,7 @@ TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
 }
 
 TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();

@@ -15,8 +15,6 @@
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
 #include "selection/selection_service.hpp"
-#include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller_pool.hpp"
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -27,6 +25,8 @@
 #include <unordered_map>
 
 namespace lfs::vis {
+
+    class AppearanceTensorModel;
 
     namespace op {
         class SceneSnapshot;
@@ -184,7 +184,7 @@ namespace lfs::vis {
 
         // Multi-selection support
         [[nodiscard]] glm::vec3 getSelectionCenter() const;
-        [[nodiscard]] glm::vec3 getSelectionWorldCenter() const; // Deprecated legacy data-world center for compatibility
+        [[nodiscard]] glm::vec3 getSelectionWorldCenter() const;
         [[nodiscard]] glm::vec3 getSelectionVisualizerWorldCenter() const;
 
         // Cropbox operations for selected node
@@ -308,15 +308,11 @@ namespace lfs::vis {
         [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
         void completePendingSelectionCounts() const;
 
-        void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
+        void setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model);
         void clearAppearanceModel();
-        [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
-        [[nodiscard]] const lfs::training::PPISP* getAppearancePPISP() const { return appearance_ppisp_.get(); }
-        [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() { return appearance_controller_pool_.get(); }
-        [[nodiscard]] const lfs::training::PPISPControllerPool* getAppearanceControllerPool() const { return appearance_controller_pool_.get(); }
-        [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
-        [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
+        [[nodiscard]] const AppearanceTensorModel* getAppearanceTensorModel() const { return appearance_tensor_model_.get(); }
+        [[nodiscard]] bool hasAppearanceController() const;
+        [[nodiscard]] bool hasAppearanceModel() const { return appearance_tensor_model_ != nullptr; }
 
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
         // in-flight Vulkan work references model tensors that are about to be
@@ -364,6 +360,8 @@ namespace lfs::vis {
                                                                       HistoryMode history_mode,
                                                                       TrainingRemovalImpact impact);
         void setupEventHandlers();
+        [[nodiscard]] lfs::Status prepareDatasetTrainer(
+            const lfs::core::param::TrainingParameters& params);
         void finalizeDatasetSceneLoad(const std::filesystem::path& dataset_path,
                                       const std::filesystem::path& scene_path,
                                       lfs::core::events::state::SceneLoaded::Type type,
@@ -437,8 +435,7 @@ namespace lfs::vis {
         ClipboardEntry::HierarchyNode copyNodeHierarchy(const core::SceneNode* node);
         void pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, core::NodeId parent_id);
 
-        std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
-        std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
+        std::unique_ptr<AppearanceTensorModel> appearance_tensor_model_;
 
         void beginSelectionPreview();
 

@@ -101,13 +101,23 @@ namespace lfs::core::internal {
             };
             std::copy_n(layout.dims.begin(), layout.rank, push.dims.begin());
             std::copy_n(layout.strides.begin(), layout.rank, push.strides.begin());
+            const size_t vector_width = 16 / dtype_size(input_dtype);
+            bool vectorized = input_dtype == output_dtype &&
+                              (push.input_address & 15u) == 0 && (push.output_address & 15u) == 0 &&
+                              layout.strides[layout.rank - 1] == 1 &&
+                              layout.dims[layout.rank - 1] % vector_width == 0;
+            for (size_t axis = 0; axis + 1 < layout.rank; ++axis)
+                vectorized &= layout.dims[axis] == 1 || layout.strides[axis] % vector_width == 0;
             const std::array constants{static_cast<uint32_t>(input_dtype),
                                        static_cast<uint32_t>(output_dtype),
-                                       scatter ? 1u : 0u};
+                                       scatter ? 1u : 0u,
+                                       vectorized ? static_cast<uint32_t>(vector_width) : 0u};
             const bool packed = packed_byte_gather(scatter, input_dtype) &&
                                 packed_byte_gather(false, output_dtype);
             size_t work = layout.element_count;
-            if (packed) {
+            if (vectorized) {
+                work /= vector_width;
+            } else if (packed) {
                 assert_packed_byte_alignment(input);
                 work = packed_byte_gather_work(output, layout.element_count);
             }

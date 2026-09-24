@@ -111,9 +111,10 @@ namespace lfs::core::internal {
             // a count above the device's group limit is dispatched in chunks with the
             // operand addresses advanced per chunk. Chunk boundaries are multiples of
             // four elements and of four bytes for every dtype.
+            const bool byte_output = dtype_size(program.out_dtype) == 1;
             const uint64_t chunk_elements =
                 static_cast<uint64_t>(context->caps().max_workgroup_count[0]) * kLocalSize *
-                (vectorized ? 4u : 1u);
+                (vectorized || byte_output ? 4u : 1u);
             const size_t in_bytes = dtype_size(program.in_dtype);
             const size_t out_bytes = dtype_size(program.out_dtype);
             std::array<StorageRef, 2> reads{lhs, rhs};
@@ -141,7 +142,9 @@ namespace lfs::core::internal {
                                            sizeof(push), &push);
                         vkCmdDispatch(command,
                                       dispatch_groups(*context,
-                                                      vectorized ? chunk / 4 : chunk),
+                                                      vectorized    ? chunk / 4
+                                                      : byte_output ? (chunk + (push.output_address & 3u) + 3u) / 4u
+                                                                    : chunk),
                                       1, 1);
                     });
             }
@@ -235,6 +238,14 @@ namespace lfs::core::internal {
             }
             LFS_ASSERT_MSG(layout.rank <= MAX_TENSOR_RANK,
                            "Vulkan strided fill rank exceeds MAX_TENSOR_RANK");
+            if (dtype_size(output.dtype) == 1 && is_contiguous(layout)) {
+                acquire_vulkan_context()->memory().memset(FillRequest{
+                    .dst = output,
+                    .bytes = layout.element_count,
+                    .value = static_cast<uint8_t>(fill_pattern(output.dtype, value)),
+                });
+                return;
+            }
             FillPush push{
                 .output_address = address(output),
                 .pattern = fill_pattern(output.dtype, value),
@@ -271,7 +282,7 @@ namespace lfs::core::internal {
             case DataType::Float32:
                 return output == DataType::Float16 || output == DataType::Int32 ||
                        output == DataType::Int64 || output == DataType::UInt8 ||
-                       output == DataType::UInt32;
+                       output == DataType::UInt32 || output == DataType::Bool;
             case DataType::Float16:
                 return output == DataType::Float32 || output == DataType::Int32 ||
                        output == DataType::Int64 || output == DataType::UInt8;
@@ -379,7 +390,7 @@ namespace lfs::core::internal {
                                    VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(push), &push);
                 vkCmdDispatch(command,
-                              dispatch_groups(*context, output_layout.element_count),
+                              dispatch_groups(*context, convert_work_items(output, output_layout.element_count)),
                               1, 1);
             });
     }
@@ -449,20 +460,24 @@ namespace lfs::core::internal {
         if (count == 0) {
             return;
         }
-        LFS_ASSERT_MSG(input.dtype == DataType::Float32 &&
-                           output.dtype == DataType::Float32 &&
-                           minimum.kind == ScalarKind::Float &&
-                           maximum.kind == ScalarKind::Float,
-                       "Vulkan floating clamp requires Float32 operands");
-        const std::array constants{0u, 0u, 0u, 5u, 0u, 0u};
+        const bool integer = input.dtype == DataType::Int32;
+        LFS_ASSERT_MSG(input.dtype == output.dtype &&
+                           ((integer && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32) ||
+                            (input.dtype == DataType::Float32 && minimum.kind == ScalarKind::Float && maximum.kind == ScalarKind::Float)),
+                       "Vulkan clamp requires matching Float32 or Int32 operands");
+        const uint32_t type = integer ? 2u : 0u;
+        const std::array constants{0u, type, type, 5u, 0u, 0u};
+        const uint64_t bounds = integer
+                                    ? static_cast<uint32_t>(minimum.value.int32_value) | (uint64_t(static_cast<uint32_t>(maximum.value.int32_value)) << 32)
+                                    : std::bit_cast<uint32_t>(maximum.value.float_value);
         const auto context = acquire_vulkan_context();
         const VulkanPipeline& pipeline =
             context->pipelines().specialized("pointwise", sizeof(PointwisePush), constants);
         const PointwisePush push{
             .lhs_address = address(input),
             .output_address = address(output),
-            .scalar_int64 = std::bit_cast<uint32_t>(maximum.value.float_value),
-            .scalar_float = minimum.value.float_value,
+            .scalar_int64 = bounds,
+            .scalar_float = integer ? 0.0f : minimum.value.float_value,
             .count = checked_u32(count, "Vulkan clamp count exceeds uint32"),
         };
         const std::array reads{input};
@@ -475,44 +490,15 @@ namespace lfs::core::internal {
                                    VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(push), &push);
                 vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
-            });
+            },
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, count * sizeof(uint32_t));
     }
 
     void VulkanBackendOps::clamp_scalar_int(
         const StorageRef data, const ScalarOperand minimum,
         const ScalarOperand maximum, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(clamp_scalar_int);
-        if (count == 0) {
-            return;
-        }
-        LFS_ASSERT_MSG(data.dtype == DataType::Int32 &&
-                           minimum.kind == ScalarKind::Int32 &&
-                           maximum.kind == ScalarKind::Int32,
-                       "Vulkan integer clamp requires Int32 operands");
-        const std::array constants{0u, 2u, 2u, 5u, 0u, 0u};
-        const auto context = acquire_vulkan_context();
-        const VulkanPipeline& pipeline =
-            context->pipelines().specialized("pointwise", sizeof(PointwisePush), constants);
-        const uint64_t bounds =
-            static_cast<uint32_t>(minimum.value.int32_value) |
-            (static_cast<uint64_t>(static_cast<uint32_t>(maximum.value.int32_value)) << 32);
-        const PointwisePush push{
-            .lhs_address = address(data),
-            .output_address = address(data),
-            .scalar_int64 = bounds,
-            .count = checked_u32(count, "Vulkan integer clamp count exceeds uint32"),
-        };
-        const std::array reads{data};
-        const std::array writes{data};
-        context->recorders().record(
-            reads, writes, [&](const VkCommandBuffer command) {
-                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  pipeline.pipeline);
-                vkCmdPushConstants(command, pipeline.layout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                   sizeof(push), &push);
-                vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
-            });
+        clamp_fused(data, data, minimum, maximum, count, {});
     }
 
     void VulkanBackendOps::convert_type(const StorageRef input,
@@ -523,7 +509,7 @@ namespace lfs::core::internal {
             return;
         }
         LFS_ASSERT_MSG(conversion_supported(input.dtype, output.dtype),
-                       "Vulkan dtype conversion pair has no CUDA instantiation");
+                       "Vulkan dtype conversion pair is unsupported");
         const std::array constants{static_cast<uint32_t>(input.dtype),
                                    static_cast<uint32_t>(output.dtype)};
         const auto context = acquire_vulkan_context();

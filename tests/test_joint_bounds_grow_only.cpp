@@ -9,6 +9,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 
 #include <array>
@@ -18,7 +19,9 @@
 using namespace lfs::core;
 using namespace lfs::training;
 
-TEST(JointBoundsGrowOnly, EnsureWithinCapacityIsAllocFree) {
+class JointBoundsGrowOnly : public lfs::test::CudaBackendTest {};
+
+TEST_F(JointBoundsGrowOnly, EnsureWithinCapacityIsAllocFree) {
     Tensor bounds;
     // First call may allocate (capacity for 1024 prims = 4 bounds rows).
     ensure_joint_bounds_capacity(bounds, /*n_prims=*/256, /*capacity_prims=*/1024,
@@ -40,7 +43,7 @@ TEST(JointBoundsGrowOnly, EnsureWithinCapacityIsAllocFree) {
     EXPECT_EQ(delta, 0u) << "grow-only joint_bounds must not driver-alloc within capacity";
 }
 
-TEST(JointBoundsGrowOnly, MultiParamCompactZeroReusesCapacity) {
+TEST_F(JointBoundsGrowOnly, MultiParamCompactZeroReusesCapacity) {
     // Six joint parameter groups each retain a bounds table. zero_all must reuse
     // those allocations after the initial reservation.
     std::array<Tensor, 6> bounds{};

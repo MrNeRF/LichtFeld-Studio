@@ -3,7 +3,6 @@
   "projects.sort.iteration": "반복 횟수",
   "projects.sort.ascending": "오름차순",
   "projects.sort.descending": "내림차순",
-  "toolbar.asset_manager": "프로젝트",
   "main_panel.color_exposure": "스플랫 노출",
   "projects.action.open": "열기",
   "projects.action.resume_training": "학습 재개",
@@ -845,7 +844,6 @@
     "tensor_validation_sync": "Synchronization validation",
     "tensor_fp32_half": "Compute half precision in FP32",
     "tensor_no_atomic_float": "Use deterministic float accumulation",
-    "tensor_viewer_inputs": "Copy viewer inputs to Vulkan",
     "projects": "프로젝트",
     "project_location": "프로젝트 위치",
     "project_location_hint": "새 프로젝트 및 기본 폴더: {path}",
@@ -1035,6 +1033,7 @@
     "align": "정렬"
   },
   "toolbar": {
+    "asset_manager": "프로젝트",
     "selection": "선택",
     "translate": "이동",
     "rotate": "회전",
@@ -2029,6 +2028,7 @@
     "primary_view": "기본 보기",
     "secondary_view": "보조 보기",
     "gpu": "GPU",
+    "gpu_budget": "GPU 메모리 예산",
     "strategy_default": "기본값",
     "split": "분할:",
     "ui_fps": "UI FPS"

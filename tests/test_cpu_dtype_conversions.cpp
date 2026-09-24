@@ -3,7 +3,6 @@
 
 #include "core/tensor.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -41,11 +40,6 @@ namespace {
 
     std::vector<float> values_as_float(const Tensor& tensor) {
         return tensor.to(DataType::Float32).to_vector();
-    }
-
-    bool has_cuda_device() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
     }
 
     DataType expected_promotion(const DataType lhs, const DataType rhs) {
@@ -110,10 +104,6 @@ TEST(CPUDtypeConversionTest, EverySupportedPairHasExactSemantics) {
 }
 
 TEST(CPUDtypeConversionTest, EveryDtypeRoundTripsThroughCuda) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     constexpr std::array dtypes = {
         DataType::Float32, DataType::Float16, DataType::Int32, DataType::Int64,
         DataType::UInt8, DataType::Bool};
@@ -199,10 +189,6 @@ TEST(CPUDtypeConversionTest, Float16ToBoolHasExactValues) {
 }
 
 TEST(CPUDtypeConversionTest, ProductionMuralPointCloudWorkflow) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     constexpr size_t num_points = 4'042'850;
     const auto means_cpu = Tensor::zeros({num_points, 3}, Device::CPU);
     std::vector<uint8_t> color_data(num_points * 3);

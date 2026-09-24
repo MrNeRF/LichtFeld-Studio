@@ -13,7 +13,6 @@
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
@@ -773,7 +772,6 @@ namespace lfs::vis {
             SDL_Quit();
             return false;
         }
-        lfs::rendering::setExpectedVulkanDeviceUuid(vulkan_context_->deviceUUID());
         adoptTensorBackendDevice();
         if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
             std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
@@ -1859,8 +1857,11 @@ namespace lfs::vis {
             .device = vulkan_context_->device(),
             .queue = device.queue,
             .queue_family = device.queue_family,
+            .sharing_queue_families = {vulkan_context_->graphicsQueueFamily(), vulkan_context_->computeQueueFamily(), device.queue_family},
+            .sharing_queue_family_count = 3,
             .shader_atomic_float = device.shader_atomic_float,
             .memory_budget = false,
+            .shader_float64 = device.shader_float64,
             .shader_float16 = device.shader_float16,
             .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
             .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),

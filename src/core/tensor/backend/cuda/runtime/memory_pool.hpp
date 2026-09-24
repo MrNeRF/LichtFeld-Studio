@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/cuda_error.hpp"
@@ -9,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/internal/allocation_profiler.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -38,19 +40,6 @@ namespace lfs::core {
                                        Async,
                                        Direct };
 
-    enum class CudaStorageMode : uint8_t {
-        Pooled,
-        ExactAsync,
-        Direct,
-    };
-
-    LFS_CORE_API void* allocate_cuda_storage(
-        size_t bytes,
-        cudaStream_t stream = nullptr,
-        CudaStorageMode mode = CudaStorageMode::Pooled,
-        const char* label = "tensor.storage",
-        const char* operation = "tensor.allocate");
-
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
     class LFS_CORE_API CudaMemoryPool;
 
@@ -61,8 +50,7 @@ namespace lfs::core {
     // safe_cuda_pool_deallocate in shared_ptr deleters so static/TLS Tensor
     // destruction after ordered teardown is a no-op instead of re-entering a
     // destroyed Meyers singleton (SIGSEGV / exit 139).
-    [[nodiscard]] LFS_CORE_API CudaMemoryPool* try_live_cuda_memory_pool() noexcept;
-    LFS_CORE_API void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream = nullptr) noexcept;
+    [[nodiscard]] LFS_LOCAL_SYMBOL CudaMemoryPool* try_live_cuda_memory_pool() noexcept;
 
     class LFS_CORE_API CudaMemoryPool {
     public:

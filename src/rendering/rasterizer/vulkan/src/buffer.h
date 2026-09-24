@@ -157,7 +157,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> scaling_raw; // (N, 3), log-scale
     Buffer<float> opacity_raw; // (N, 1), logits
 
-    // Canonical quantized LOD pool (lod_pool_quant.hpp). When quant_pool is
+    // Canonical quantized LOD pool (core/rad_pool_quant.hpp). When quant_pool is
     // set, sh0/shN/rotations/scaling_raw/opacity_raw hold the packed formats
     // (f16 / s8 slots) and projection uses the *_quant pipeline with the
     // per-page dequant frames bound last.

@@ -37,23 +37,13 @@ namespace lfs::core::internal {
 
         thread_local ThreadRecorderToken tls_recorder;
 
-        void global_barrier(const VkCommandBuffer command) {
-            VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dependency.memoryBarrierCount = 1;
-            dependency.pMemoryBarriers = &barrier;
-            vkCmdPipelineBarrier2(command, &dependency);
-        }
     } // namespace
 
     struct VulkanRecorderRegistry::Recorder {
         struct Submitted {
             VkCommandBuffer command = VK_NULL_HANDLE;
             uint64_t value = 0;
+            std::vector<std::shared_ptr<void>> lifetimes;
         };
 
         uint64_t id = 0;
@@ -63,10 +53,12 @@ namespace lfs::core::internal {
         // oldest first. Recording continues while they run; the host waits
         // only when kInFlightLimit batches are outstanding.
         std::deque<Submitted> in_flight;
+        std::vector<VkCommandBuffer> available_commands;
         uint64_t reserved_value = 0;
         uint64_t submitted_value = 0;
         uint32_t command_count = 0;
         bool owner_alive = true;
+        std::vector<std::shared_ptr<void>> lifetimes;
     };
 
     namespace {
@@ -76,14 +68,8 @@ namespace lfs::core::internal {
     void VulkanRecorderRegistry::retire_completed_locked(Recorder& recorder,
                                                          const uint64_t completed) {
         while (!recorder.in_flight.empty() && recorder.in_flight.front().value <= completed) {
-            vkFreeCommandBuffers(context_.device(), recorder.pool, 1,
-                                 &recorder.in_flight.front().command);
+            recorder.available_commands.push_back(recorder.in_flight.front().command);
             recorder.in_flight.pop_front();
-        }
-        if (recorder.in_flight.empty() && recorder.command == VK_NULL_HANDLE &&
-            recorder.submitted_value != 0) {
-            vk_check(&context_, vkResetCommandPool(context_.device(), recorder.pool, 0),
-                     "vkResetCommandPool");
         }
     }
 
@@ -126,13 +112,18 @@ namespace lfs::core::internal {
             context_.wait(recorder.in_flight.front().value);
             retire_completed_locked(recorder, context_.completed_timeline());
         }
-        VkCommandBufferAllocateInfo allocate_info{
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocate_info.commandPool = recorder.pool;
-        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocate_info.commandBufferCount = 1;
-        vk_check(&context_, vkAllocateCommandBuffers(context_.device(), &allocate_info, &recorder.command),
-                 "vkAllocateCommandBuffers");
+        if (recorder.available_commands.empty()) {
+            VkCommandBufferAllocateInfo allocate_info{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            allocate_info.commandPool = recorder.pool;
+            allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate_info.commandBufferCount = 1;
+            vk_check(&context_, vkAllocateCommandBuffers(context_.device(), &allocate_info, &recorder.command),
+                     "vkAllocateCommandBuffers");
+        } else {
+            recorder.command = recorder.available_commands.back();
+            recorder.available_commands.pop_back();
+        }
         VkCommandBufferBeginInfo begin_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vk_check(&context_, vkBeginCommandBuffer(recorder.command, &begin_info),
@@ -172,31 +163,27 @@ namespace lfs::core::internal {
     uint64_t VulkanRecorderRegistry::record(
         const std::span<const StorageRef> reads,
         const std::span<const StorageRef> writes,
-        const std::function<void(VkCommandBuffer)>& command) {
+        const std::function<void(VkCommandBuffer)>& command,
+        const VkPipelineStageFlags2 stage, const VkDeviceSize bytes,
+        std::shared_ptr<void> lifetime) {
         std::lock_guard lock(mutex_);
         collect_completed_locked(context_.completed_timeline());
         Recorder& recorder = current_locked();
-        const auto flush_foreign_producer = [&](const StorageRef storage) {
-            if (storage.meta != nullptr &&
-                storage.meta->pending_recorder.load(std::memory_order_acquire) != recorder.id) {
-                ensure_submitted_locked(storage);
-            }
-        };
-        for (const StorageRef storage : reads) {
-            flush_foreign_producer(storage);
-        }
-        for (const StorageRef storage : writes) {
-            flush_foreign_producer(storage);
+        const uint64_t foreign = context_.memory().foreign_use(reads, writes, recorder.reserved_value);
+        if (foreign != 0) {
+            flush_through_locked(foreign);
         }
         begin_locked(recorder);
-        global_barrier(recorder.command);
+        context_.memory().prepare_accesses(recorder.command, reads, writes,
+                                           recorder.reserved_value, stage, bytes);
         command(recorder.command);
+        if (lifetime)
+            recorder.lifetimes.push_back(std::move(lifetime));
         ++recorder.command_count;
         for (const StorageRef storage : writes) {
             stamp(storage, recorder.id, recorder.reserved_value);
         }
         const uint64_t value = recorder.reserved_value;
-        context_.memory().mark_used(reads, writes, value);
         if (recorder.command_count >= kCommandLimit) {
             flush_through_locked(value);
         }
@@ -213,7 +200,7 @@ namespace lfs::core::internal {
         vk_check(&context_, vkEndCommandBuffer(command), "vkEndCommandBuffer");
         context_.submit(command, value);
         recorder.submitted_value = value;
-        recorder.in_flight.push_back({command, value});
+        recorder.in_flight.push_back({command, value, std::move(recorder.lifetimes)});
     }
 
     uint64_t VulkanRecorderRegistry::flush_through_locked(const uint64_t value) {
@@ -246,6 +233,30 @@ namespace lfs::core::internal {
         });
     }
 
+    uint64_t VulkanRecorderRegistry::flush_storages(std::span<const StorageRef> storage) {
+        std::lock_guard lock(mutex_);
+        uint64_t pending = 0;
+        for (const auto& tensor : storage)
+            pending = std::max(pending, pending_value(tensor));
+        if (pending)
+            flush_through_locked(pending);
+        return pending;
+    }
+
+    uint64_t VulkanRecorderRegistry::wait_external(std::span<const StorageRef> storage,
+                                                   VkSemaphore semaphore, uint64_t value, std::shared_ptr<void> keep_alive) {
+        std::lock_guard lock(mutex_);
+        flush_through_locked(std::numeric_limits<uint64_t>::max());
+        const uint64_t signal = context_.reserve_timeline_value();
+        context_.submit_external_wait(semaphore, value, signal);
+        for (const auto& tensor : storage)
+            stamp(tensor, 0, signal);
+        const auto completed = context_.completed_timeline();
+        std::erase_if(external_owners_, [completed](const auto& owner) { return owner.first <= completed; });
+        external_owners_.emplace_back(signal, std::move(keep_alive));
+        return signal;
+    }
+
     void VulkanRecorderRegistry::flush_storage(const StorageRef storage) {
         std::lock_guard lock(mutex_);
         ensure_submitted_locked(storage);
@@ -271,6 +282,8 @@ namespace lfs::core::internal {
             (void)id;
             submitted = std::max(submitted, recorder->submitted_value);
         }
+        if (!external_owners_.empty())
+            submitted = std::max(submitted, external_owners_.back().first);
         collect_completed_locked(context_.completed_timeline());
         return submitted;
     }
@@ -352,6 +365,9 @@ namespace lfs::core::internal {
                 vkDestroyCommandPool(context_.device(), recorder->pool, nullptr);
             }
         }
+        if (!external_owners_.empty() && !context_.dead())
+            context_.wait(external_owners_.back().first);
+        external_owners_.clear();
         recorders_.clear();
         if (tls_recorder.context_id == context_.context_id()) {
             tls_recorder = {};

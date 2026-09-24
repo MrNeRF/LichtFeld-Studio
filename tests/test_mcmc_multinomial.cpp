@@ -10,6 +10,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
 
@@ -56,9 +57,10 @@ namespace {
 
 } // namespace
 
-class McmcMultinomialTest : public ::testing::Test {
+class McmcMultinomialTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     }
 };

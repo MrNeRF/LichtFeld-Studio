@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
@@ -233,16 +234,11 @@ namespace {
 
 } // namespace
 
-class NnOpsTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int devices = 0;
-        ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
-        ASSERT_GT(devices, 0);
-    }
-};
+class NnOpsTest : public lfs::test::CudaDeviceTest {};
 
-TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
+class NnOpsCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(NnOpsCudaTest, ConvWaitsForPrecomputedWeightTaps) {
     using namespace lfs::core;
     struct Streams {
         cudaStream_t producer = nullptr, consumer = nullptr;

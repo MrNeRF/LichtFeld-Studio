@@ -2,9 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -13,9 +14,10 @@ using namespace lfs::core;
 
 namespace {
 
-    class CudaPoolStreamTeardownTest : public ::testing::Test {
+    class CudaPoolStreamTeardownTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
             ASSERT_EQ(cudaFree(nullptr), cudaSuccess);
         }

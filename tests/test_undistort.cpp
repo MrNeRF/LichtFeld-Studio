@@ -2,12 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/formats/colmap.hpp"
+#include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 
 using namespace lfs::core;
 
@@ -742,4 +746,118 @@ TEST(UndistortScale, ScaleUndistortParams) {
 
     run_image_undistort(scaled);
     run_mask_undistort(scaled);
+}
+
+namespace {
+    void expectImageNear(const Tensor& actual, const Tensor& expected, const float tolerance) {
+        const auto a = actual.cpu().contiguous();
+        const auto e = expected.cpu().contiguous();
+        ASSERT_EQ(a.shape(), e.shape());
+        for (size_t i = 0; i < a.numel(); ++i) {
+            ASSERT_TRUE(std::isfinite(a.ptr<float>()[i])) << i;
+            ASSERT_NEAR(a.ptr<float>()[i], e.ptr<float>()[i], tolerance) << i;
+        }
+    }
+} // namespace
+
+TEST(ImageTensorBackends, UndistortionMatchesCudaAcrossBandsAndCameraModels) {
+    if (!gpu_backend_available(GpuBackend::CUDA) || !gpu_backend_available(GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "Both tensor backends required";
+    }
+    constexpr int width = 513, height = 131;
+    auto cpu = Tensor::empty({3, height, width}, Device::CPU);
+    for (size_t i = 0; i < cpu.numel(); ++i) {
+        cpu.ptr<float>()[i] = std::sin(static_cast<float>(i) * 0.003f) * 0.4f + 0.5f;
+    }
+    for (const auto model : {CameraModelType::PINHOLE, CameraModelType::FISHEYE, CameraModelType::THIN_PRISM_FISHEYE}) {
+        SCOPED_TRACE(static_cast<int>(model));
+        UndistortParams p{};
+        p.src_width = p.dst_width = width;
+        p.src_height = p.dst_height = height;
+        p.src_fx = 320.0f;
+        p.src_fy = 319.0f;
+        p.dst_fx = 300.0f;
+        p.dst_fy = 290.0f;
+        p.src_cx = 257.2f;
+        p.src_cy = 67.1f;
+        p.dst_cx = 258.0f;
+        p.dst_cy = 64.0f;
+        p.model_type = model;
+        p.num_distortion = 10;
+        const float coefficients[] = {-0.15f, 0.01f, 0.002f, -0.001f, 0.003f, -0.002f, 0.001f, 0.0002f, -0.001f, -0.0002f};
+        std::copy(std::begin(coefficients), std::end(coefficients), p.distortion);
+        Tensor expected_image, expected_mask;
+        {
+            GpuBackendScope scope(GpuBackend::CUDA);
+            const auto source = cpu.gpu();
+            expected_image = undistort_image(source, p, nullptr).cpu();
+            expected_mask = undistort_mask(source.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr).cpu();
+        }
+        expectImageNear(undistort_image(cpu, p, nullptr), expected_image, 0.00015f);
+        expectImageNear(undistort_mask(cpu.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr), expected_mask, 0.00015f);
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const auto source = cpu.gpu();
+        // Factory selection on the calling thread must not move resident data.
+        GpuBackendScope other_default(GpuBackend::CUDA);
+        auto image = undistort_image(source, p, nullptr);
+        EXPECT_EQ(gpu_backend_of(image), GpuBackend::Vulkan);
+        expectImageNear(image, expected_image, 0.00015f);
+        expectImageNear(undistort_mask(source.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr), expected_mask, 0.00015f);
+    }
+}
+
+TEST(ImageTensorBackends, PriorResizePreservesInvalidPixelsAndNormalDirections) {
+    if (!gpu_backend_available(GpuBackend::CUDA) || !gpu_backend_available(GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "Both tensor backends required";
+    }
+    constexpr size_t width = 7, height = 5, plane = width * height;
+    auto depth = Tensor::empty({height, width}, Device::CPU);
+    auto normal = Tensor::empty({3, height, width}, Device::CPU);
+    for (size_t i = 0; i < plane; ++i) {
+        depth.ptr<float>()[i] = static_cast<float>(i) * 0.15f;
+        normal.ptr<float>()[i] = 0.4f;
+        normal.ptr<float>()[plane + i] = 0.5f;
+        normal.ptr<float>()[2 * plane + i] = 0.7f;
+    }
+    const float invalid[] = {0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+    for (size_t i = 0; i < 4; ++i) {
+        depth.ptr<float>()[i * 5] = invalid[i];
+        normal.ptr<float>()[i * 5] = i < 2 ? 0.001f : invalid[i];
+        normal.ptr<float>()[plane + i * 5] = 0.002f;
+        normal.ptr<float>()[2 * plane + i * 5] = 0.003f;
+    }
+    for (auto size : {std::pair{13, 9}, std::pair{3, 2}, std::pair{7, 5}}) {
+        SCOPED_TRACE(size.first);
+        Tensor expected_depth, expected_normal;
+        {
+            GpuBackendScope scope(GpuBackend::CUDA);
+            expected_depth = resize_depth_prior(depth.gpu(), size.second, size.first).cpu();
+            expected_normal = resize_normal_prior(normal.gpu(), size.second, size.first).cpu();
+        }
+        expectImageNear(resize_depth_prior(depth, size.second, size.first), expected_depth, 0.00001f);
+        expectImageNear(resize_normal_prior(normal, size.second, size.first), expected_normal, 0.00001f);
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        expectImageNear(resize_depth_prior(depth.gpu(), size.second, size.first), expected_depth, 0.00001f);
+        expectImageNear(resize_normal_prior(normal.gpu(), size.second, size.first), expected_normal, 0.00001f);
+    }
+}
+
+TEST(ImageTensorBackends, LargePhotoKeepsAdjacentPixelIndicesDistinct) {
+    constexpr int width = 6001, height = 3001;
+    auto mask = Tensor::zeros({height, width}, Device::CPU);
+    mask.ptr<float>()[static_cast<size_t>(height - 1) * width + width - 2] = 0.75f;
+    UndistortParams params{};
+    params.model_type = CameraModelType::PINHOLE;
+    params.src_width = width;
+    params.src_height = height;
+    params.dst_width = params.dst_height = 1;
+    params.src_fx = params.src_fy = params.dst_fx = params.dst_fy = 1.0f;
+    params.dst_cx = params.dst_cy = 0.5f;
+    params.src_cx = width - 1.5f;
+    params.src_cy = height - 0.5f;
+    EXPECT_FLOAT_EQ(undistort_mask(mask, params, nullptr).cpu().ptr<float>()[0], 0.75f);
+    if (gpu_backend_available(GpuBackend::Vulkan)) {
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        EXPECT_FLOAT_EQ(undistort_mask(mask.gpu(), params, nullptr).cpu().ptr<float>()[0], 0.75f);
+    }
 }

@@ -4,6 +4,7 @@
 #include "app/gpu_preflight.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_readback.hpp"
 #include "rendering/selection_ops.hpp"
 
 #include <array>
@@ -39,7 +40,7 @@ TEST(ViewerNoCuda, PreflightTrainingCudaUnusableIsFatal) {
     EXPECT_EQ(decide_gpu_preflight(true, false, false), GpuPreflightDecision::Fatal);
 }
 
-TEST(ViewerNoCuda, HoverGroupCountTensorProgramMatchesCpu) {
+TEST(ViewerNoCuda, HoverGroupCountMatchesCpu) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
@@ -65,18 +66,19 @@ TEST(ViewerNoCuda, HoverGroupCountTensorProgramMatchesCpu) {
 
     Tensor scratch;
     lfs::rendering::count_selection_groups_async(mask, scratch);
-    const auto gpu_counts = lfs::rendering::read_selection_group_counts(scratch);
-    for (size_t group = 0; group < 256; ++group) {
-        EXPECT_EQ(gpu_counts[group], cpu_counts[group]) << "group " << group;
-    }
-
-    std::array<int, 257> host_counts{};
-    lfs::rendering::SelectionCountTicket ticket;
-    lfs::rendering::enqueue_selection_group_count_read(
-        scratch, host_counts.data(), nullptr, &ticket);
-    while (!lfs::rendering::poll_selection_group_count_readback(ticket, host_counts.data())) {
-    }
+    std::array<int, 256> host_counts{};
+    TensorReadback readback;
+    readback.enqueue(scratch);
+    while (!readback.poll(std::as_writable_bytes(std::span(host_counts)))) {}
     for (size_t group = 0; group < 256; ++group) {
         EXPECT_EQ(static_cast<size_t>(host_counts[group]), cpu_counts[group]) << "group " << group;
     }
+}
+
+TEST(ViewerNoCuda, CameraPathRenderDoesNotRequireTrainerOrCuda) {
+    lfs::core::param::TrainingParameters params;
+    params.optimization.headless = true;
+    EXPECT_FALSE(lfs::app::training_params_are_viewer_only(params));
+    params.render_path.emplace();
+    EXPECT_TRUE(lfs::app::training_params_are_viewer_only(params));
 }

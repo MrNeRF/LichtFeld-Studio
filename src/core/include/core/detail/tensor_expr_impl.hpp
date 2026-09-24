@@ -1,0 +1,1019 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+// This file contains template method implementations that require the full Tensor definition
+// It should be included at the END of tensor.hpp, after Tensor class is fully defined
+
+#include "core/tensor_cuda_interop.hpp"
+#include "lazy_config.hpp"
+#include "lazy_executor.hpp"
+#include "lazy_ir.hpp"
+#include "tensor_expr.hpp"
+#include "tensor_functors.hpp" // For ops::compose
+#include <cuda_fp16.h>
+#include <limits>
+#include <optional>
+#include <typeinfo>
+
+namespace lfs::core {
+
+    template <typename Derived>
+    Tensor TensorExpr<Derived>::eval() const {
+        return derived().eval_impl();
+    }
+
+    template <typename Derived>
+    TensorExpr<Derived>::operator Tensor() const {
+        auto expr = derived();
+        const TensorShape shape = expr.shape_impl();
+        const Device device = expr.device_impl();
+        const DataType dtype = expr.dtype_impl();
+
+        const size_t bytes = shape.elements() * dtype_size(dtype);
+        if (!internal::lazy_size_heuristic_should_defer(bytes)) {
+            return expr.eval();
+        }
+
+        expr = expr.snapshot();
+        const cudaStream_t stream_hint = expr.stream_hint_impl();
+        const GpuBackend backend = expr.gpu_backend().value_or(GpuBackend::CUDA);
+        Tensor deferred = Tensor::make_deferred_expr_tensor(
+            shape, device, dtype, backend,
+            [expr = std::move(expr)]() mutable { return expr.eval(); });
+        deferred.set_stream(stream_hint);
+        return deferred;
+    }
+
+    // ============================================================================
+    // UnaryExpr::eval_impl() - Needs Tensor::empty() and Tensor methods
+    // ============================================================================
+
+    // Helper struct for eval_impl dispatch based on operation return type
+    namespace detail {
+        inline void validate_permutation_indices(const Tensor& input, const Tensor& indices) {
+            if (indices.numel() == 0) {
+                return;
+            }
+            if (input.numel() == 0) {
+                throw std::runtime_error("PermutationExpr: cannot index an empty tensor");
+            }
+            if (input.numel() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                throw std::runtime_error("PermutationExpr: input exceeds Int32 index range");
+            }
+
+            const auto cpu_indices = indices.device() == Device::CPU
+                                         ? indices.contiguous()
+                                         : indices.cpu().contiguous();
+            const auto* values = cpu_indices.ptr<int32_t>();
+            const auto lower = -static_cast<int64_t>(input.numel());
+            const auto upper = static_cast<int64_t>(input.numel());
+            for (size_t i = 0; i < cpu_indices.numel(); ++i) {
+                const auto value = static_cast<int64_t>(values[i]);
+                if (value < lower || value >= upper) {
+                    throw std::runtime_error("PermutationExpr: index is out of bounds");
+                }
+            }
+        }
+
+        // Default implementation: float -> float or Int32 -> Int32 operations
+        template <typename InputExpr, typename UnaryOp, bool ReturnsBool>
+        struct UnaryExprEvaluator {
+            static Tensor eval(const UnaryExpr<InputExpr, UnaryOp>& /* expr */,
+                               const InputExpr& input, const UnaryOp& op,
+                               const TensorShape& shape, Device device, DataType dtype) {
+                // Recursively evaluate input expression
+                Tensor input_tensor = input.eval();
+
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device == Device::GPU) {
+                    execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
+                }
+
+                // Create result tensor (needs Tensor::empty)
+                Tensor result = internal::allocate_like(input_tensor, shape, dtype);
+
+                // Check dtype to determine correct template instantiation.
+                // Important: keep integer-only instantiations out of float-only ops to avoid
+                // MSVC template blow-ups (and pointless double->int warning floods).
+                if (input_tensor.dtype() == DataType::Int32) {
+                    if constexpr (ops::supports_int32_v<UnaryOp>) {
+                        // Int32 -> Int32 operations (abs, neg, sign, etc.)
+                        if (device == Device::GPU) {
+                            internal::run_pointwise_unary(
+                                input_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            // CPU fallback
+                            const int* in_ptr = input_tensor.template ptr<int>();
+                            int* out_ptr = result.template ptr<int>();
+                            const size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(in_ptr[i]);
+                            }
+                        }
+                    } else {
+                        // Float-only op on Int32 input: evaluate in Float32 and cast if needed.
+                        if (device == Device::GPU) {
+                            Tensor input_f = input_tensor.to(DataType::Float32);
+
+                            if (dtype == DataType::Int32) {
+                                Tensor tmp_f = internal::allocate_like(
+                                    input_f, shape, DataType::Float32);
+                                internal::run_pointwise_unary(
+                                    input_f, tmp_f, op,
+                                    internal::ExecContext{tmp_f.stream()});
+                                result = tmp_f.to(DataType::Int32);
+                            } else {
+                                // Expected Float32 output.
+                                internal::run_pointwise_unary(
+                                    input_f, result, op,
+                                    internal::ExecContext{result.stream()});
+                            }
+                        } else {
+                            // CPU fallback: cast element-wise to avoid instantiating op(int).
+                            const int* in_ptr = input_tensor.template ptr<int>();
+                            const size_t n = result.numel();
+                            if (dtype == DataType::Int32) {
+                                int* out_ptr = result.template ptr<int>();
+                                for (size_t i = 0; i < n; ++i) {
+                                    out_ptr[i] = static_cast<int>(op(static_cast<float>(in_ptr[i])));
+                                }
+                            } else {
+                                float* out_ptr = result.template ptr<float>();
+                                for (size_t i = 0; i < n; ++i) {
+                                    out_ptr[i] = op(static_cast<float>(in_ptr[i]));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Float -> Float operations (default case)
+                    if (device == Device::GPU) {
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
+                    } else {
+                        // CPU fallback: apply operation element-wise
+                        const float* in_ptr = input_tensor.template ptr<float>();
+                        float* out_ptr = result.template ptr<float>();
+                        const size_t n = result.numel();
+                        for (size_t i = 0; i < n; ++i) {
+                            out_ptr[i] = op(in_ptr[i]);
+                        }
+                    }
+                }
+
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_unary(input_tensor, result, typeid(UnaryOp).name());
+                }
+                return result;
+            }
+        };
+
+        // Specialized implementation: Bool-returning operations
+        template <typename InputExpr, typename UnaryOp>
+        struct UnaryExprEvaluator<InputExpr, UnaryOp, true> {
+            static Tensor eval(const UnaryExpr<InputExpr, UnaryOp>& /* expr */,
+                               const InputExpr& input, const UnaryOp& op,
+                               const TensorShape& shape, Device device, DataType dtype) {
+                // Recursively evaluate input expression
+                Tensor input_tensor = input.eval();
+
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device == Device::GPU) {
+                    execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
+                }
+
+                // Create result tensor (Bool dtype)
+                Tensor result = internal::allocate_like(input_tensor, shape, dtype);
+
+                // Check input dtype to determine correct template instantiation
+                if (input_tensor.dtype() == DataType::Bool) {
+                    // Bool input -> Bool output (e.g., logical_not on Bool tensor)
+                    if (device == Device::GPU) {
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
+                    } else {
+                        // CPU fallback
+                        const unsigned char* in_ptr = input_tensor.template ptr<unsigned char>();
+                        unsigned char* out_ptr = result.template ptr<unsigned char>();
+                        size_t n = result.numel();
+                        for (size_t i = 0; i < n; ++i) {
+                            out_ptr[i] = op(in_ptr[i]);
+                        }
+                    }
+                } else if (input_tensor.dtype() == DataType::UInt8) {
+                    // UInt8 input -> Bool output (e.g., comparisons on UInt8 tensor)
+                    if (device == Device::GPU) {
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
+                    } else {
+                        const uint8_t* in_ptr = input_tensor.template ptr<uint8_t>();
+                        unsigned char* out_ptr = result.template ptr<unsigned char>();
+                        const size_t n = result.numel();
+                        for (size_t i = 0; i < n; ++i) {
+                            out_ptr[i] = op(in_ptr[i]);
+                        }
+                    }
+                } else if (input_tensor.dtype() == DataType::Int32) {
+                    // Int32 input -> Bool output (e.g., comparisons on Int32 tensor)
+                    if (device == Device::GPU) {
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
+                    } else {
+                        const int* in_ptr = input_tensor.template ptr<int>();
+                        unsigned char* out_ptr = result.template ptr<unsigned char>();
+                        const size_t n = result.numel();
+                        for (size_t i = 0; i < n; ++i) {
+                            out_ptr[i] = op(in_ptr[i]);
+                        }
+                    }
+                } else {
+                    // Float input -> Bool output (e.g., isnan, isinf, isfinite)
+                    if (device == Device::GPU) {
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
+                    } else {
+                        // CPU fallback
+                        const float* in_ptr = input_tensor.template ptr<float>();
+                        unsigned char* out_ptr = result.template ptr<unsigned char>();
+                        size_t n = result.numel();
+                        for (size_t i = 0; i < n; ++i) {
+                            out_ptr[i] = op(in_ptr[i]);
+                        }
+                    }
+                }
+
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_unary(input_tensor, result, typeid(UnaryOp).name());
+                }
+                return result;
+            }
+        };
+    } // namespace detail
+
+    template <typename InputExpr, typename UnaryOp>
+    Tensor UnaryExpr<InputExpr, UnaryOp>::eval_impl() const {
+        // Dispatch to appropriate evaluator based on whether op returns Bool
+        return detail::UnaryExprEvaluator<InputExpr, UnaryOp, ops::returns_bool_v<UnaryOp>>::eval(
+            *this, input_, op_, shape_, device_, dtype_);
+    }
+
+    // ============================================================================
+    // UnaryExpr specialization for fusion - Needs Tensor::empty()
+    // ============================================================================
+
+    template <typename InnerInput, typename InnerOp, typename OuterOp>
+    Tensor UnaryExpr<UnaryExpr<InnerInput, InnerOp>, OuterOp>::eval_impl() const {
+        // Get the innermost input and operations
+        const auto& innermost_input = inner_expr_.input_;
+        const auto& inner_op = inner_expr_.op_;
+
+        // Compose the operations: outer(inner(x)) - AUTOMATIC FUSION!
+        auto fused_op = ops::compose(inner_op, outer_op_);
+
+        // Evaluate the innermost expression only
+        Tensor base = innermost_input.eval();
+
+        std::optional<CUDAStreamGuard> execution_guard;
+        if (device_ == Device::GPU) {
+            execution_guard.emplace(prepare_inputs_for_stream({&base}));
+        }
+
+        // Create result tensor
+        Tensor result = internal::allocate_like(base, shape_, dtype_);
+
+        // Apply fused operation in a single pass!
+        if (device_ == Device::GPU) {
+            if constexpr (internal::pointwise_composition_is_fused_v<InnerOp, OuterOp>) {
+                internal::run_pointwise_unary(
+                    base, result, fused_op,
+                    internal::ExecContext{result.stream()});
+            } else {
+                Tensor intermediate = internal::allocate_like(
+                    base, shape_, DataType::Float32);
+                internal::run_pointwise_unary(
+                    base, intermediate, inner_op,
+                    internal::ExecContext{intermediate.stream()});
+                internal::run_pointwise_unary(
+                    intermediate, result, outer_op_,
+                    internal::ExecContext{result.stream()});
+            }
+        } else {
+            // CPU fallback: apply fused operation element-wise
+            const float* in_ptr = base.template ptr<float>();
+            float* out_ptr = result.template ptr<float>();
+            size_t n = result.numel();
+            for (size_t i = 0; i < n; ++i) {
+                out_ptr[i] = fused_op(in_ptr[i]);
+            }
+        }
+
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_unary(base, result, typeid(OuterOp).name());
+        }
+        return result;
+    }
+
+    // ============================================================================
+    // BinaryExpr::eval_impl() - Needs Tensor::empty() and methods
+    // ============================================================================
+
+    namespace detail {
+        // Default implementation: float,float -> float or Int32,Int32 -> Int32 operations
+        template <typename LeftExpr, typename RightExpr, typename BinaryOp, bool ReturnsBool>
+        struct BinaryExprEvaluator {
+            static Tensor eval(const BinaryExpr<LeftExpr, RightExpr, BinaryOp>& /* expr */,
+                               const LeftExpr& left, const RightExpr& right, const BinaryOp& op,
+                               const TensorShape& shape, Device device, DataType dtype) {
+                // Evaluate both sides
+                Tensor left_tensor = left.eval();
+                Tensor right_tensor = right.eval();
+                internal::require_same_gpu_backend(
+                    left_tensor, right_tensor, "binary expression evaluation");
+
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device == Device::GPU) {
+                    execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
+                }
+
+                // Create result tensor
+                Tensor result = internal::allocate_like(left_tensor, shape, dtype);
+
+                // Determine if broadcasting is needed
+                bool needs_broadcast = (left_tensor.shape() != shape) ||
+                                       (right_tensor.shape() != shape);
+
+                // Check input dtypes to determine correct template instantiation
+                if (left_tensor.dtype() == DataType::Float16 && right_tensor.dtype() == DataType::Float16) {
+                    // Float16,Float16 -> Float16 operations
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const __half* left_ptr = left_tensor.template ptr<__half>();
+                            const __half* right_ptr = right_tensor.template ptr<__half>();
+                            __half* out_ptr = result.template ptr<__half>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                float l = __half2float(left_ptr[i]);
+                                float r = __half2float(right_ptr[i]);
+                                out_ptr[i] = __float2half(op(l, r));
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const __half* left_ptr = left_broadcast.template ptr<__half>();
+                            const __half* right_ptr = right_broadcast.template ptr<__half>();
+                            __half* out_ptr = result.template ptr<__half>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                float l = __half2float(left_ptr[i]);
+                                float r = __half2float(right_ptr[i]);
+                                out_ptr[i] = __float2half(op(l, r));
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::Int64 && right_tensor.dtype() == DataType::Int64) {
+                    // Int64,Int64 -> Int64 operations
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
+                            const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
+                            int64_t* out_ptr = result.template ptr<int64_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
+                            const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
+                            int64_t* out_ptr = result.template ptr<int64_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::UInt8 && right_tensor.dtype() == DataType::UInt8) {
+                    // UInt8,UInt8 -> UInt8 operations
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
+                            const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
+                            uint8_t* out_ptr = result.template ptr<uint8_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
+                            const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
+                            uint8_t* out_ptr = result.template ptr<uint8_t>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::Int32 && right_tensor.dtype() == DataType::Int32) {
+                    // Int32,Int32 -> Int32 operations (add, sub, mul, div, etc.)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const int* left_ptr = left_tensor.template ptr<int>();
+                            const int* right_ptr = right_tensor.template ptr<int>();
+                            int* out_ptr = result.template ptr<int>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const int* left_ptr = left_broadcast.template ptr<int>();
+                            const int* right_ptr = right_broadcast.template ptr<int>();
+                            int* out_ptr = result.template ptr<int>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else {
+                    // Float32,Float32 -> Float32 operations (default case)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            // Use broadcast binary kernel
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            // Element-wise binary operation (no broadcasting)
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback: apply operation element-wise
+                        if (!needs_broadcast) {
+                            // Simple element-wise operation
+                            pin_operands({&left_tensor, &right_tensor});
+                            const float* left_ptr = left_tensor.template ptr<float>();
+                            const float* right_ptr = right_tensor.template ptr<float>();
+                            float* out_ptr = result.template ptr<float>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            // Broadcasting required - fallback to CPU broadcast logic
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const float* left_ptr = left_broadcast.template ptr<float>();
+                            const float* right_ptr = right_broadcast.template ptr<float>();
+                            float* out_ptr = result.template ptr<float>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                }
+
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_binary(left_tensor, right_tensor, result, typeid(BinaryOp).name());
+                }
+                return result;
+            }
+        };
+
+        // Specialized implementation: Bool-returning binary operations
+        template <typename LeftExpr, typename RightExpr, typename BinaryOp>
+        struct BinaryExprEvaluator<LeftExpr, RightExpr, BinaryOp, true> {
+            static Tensor eval(const BinaryExpr<LeftExpr, RightExpr, BinaryOp>& /* expr */,
+                               const LeftExpr& left, const RightExpr& right, const BinaryOp& op,
+                               const TensorShape& shape, Device device, DataType dtype) {
+                // Evaluate both sides
+                Tensor left_tensor = left.eval();
+                Tensor right_tensor = right.eval();
+                internal::require_same_gpu_backend(
+                    left_tensor, right_tensor, "binary expression evaluation");
+
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device == Device::GPU) {
+                    execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
+                }
+
+                // Create result tensor (Bool dtype)
+                Tensor result = internal::allocate_like(left_tensor, shape, dtype);
+
+                // Determine if broadcasting is needed
+                bool needs_broadcast = (left_tensor.shape() != shape) ||
+                                       (right_tensor.shape() != shape);
+
+                // Check input dtypes to determine correct template instantiation
+                if (left_tensor.dtype() == DataType::Bool && right_tensor.dtype() == DataType::Bool) {
+                    // Bool,Bool -> Bool (logical operations: logical_and, logical_or, logical_xor)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const unsigned char* left_ptr = left_tensor.template ptr<unsigned char>();
+                            const unsigned char* right_ptr = right_tensor.template ptr<unsigned char>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const unsigned char* left_ptr = left_broadcast.template ptr<unsigned char>();
+                            const unsigned char* right_ptr = right_broadcast.template ptr<unsigned char>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::Float16 && right_tensor.dtype() == DataType::Float16) {
+                    // Float16,Float16 -> Bool (comparison operations on Float16 tensors)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const __half* left_ptr = left_tensor.template ptr<__half>();
+                            const __half* right_ptr = right_tensor.template ptr<__half>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                float l = __half2float(left_ptr[i]);
+                                float r = __half2float(right_ptr[i]);
+                                out_ptr[i] = op(l, r);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const __half* left_ptr = left_broadcast.template ptr<__half>();
+                            const __half* right_ptr = right_broadcast.template ptr<__half>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                float l = __half2float(left_ptr[i]);
+                                float r = __half2float(right_ptr[i]);
+                                out_ptr[i] = op(l, r);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::Int64 && right_tensor.dtype() == DataType::Int64) {
+                    // Int64,Int64 -> Bool (comparison operations on Int64 tensors)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
+                            const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
+                            const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::Int32 && right_tensor.dtype() == DataType::Int32) {
+                    // Int32,Int32 -> Bool (comparison operations on Int32 tensors)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const int* left_ptr = left_tensor.template ptr<int>();
+                            const int* right_ptr = right_tensor.template ptr<int>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const int* left_ptr = left_broadcast.template ptr<int>();
+                            const int* right_ptr = right_broadcast.template ptr<int>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else if (left_tensor.dtype() == DataType::UInt8 && right_tensor.dtype() == DataType::UInt8) {
+                    // UInt8,UInt8 -> Bool (comparison operations on UInt8 tensors)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
+                            const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
+                            const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                } else {
+                    // Float32,Float32 -> Bool (comparison operations: eq, ne, lt, le, gt, ge)
+                    if (device == Device::GPU) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
+                        }
+                    } else {
+                        // CPU fallback
+                        if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            const float* left_ptr = left_tensor.template ptr<float>();
+                            const float* right_ptr = right_tensor.template ptr<float>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        } else {
+                            Tensor left_broadcast = left_tensor;
+                            Tensor right_broadcast = right_tensor;
+                            if (left_tensor.shape() != shape) {
+                                left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            }
+                            if (right_tensor.shape() != shape) {
+                                right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                            }
+                            pin_operands({&left_broadcast, &right_broadcast});
+                            const float* left_ptr = left_broadcast.template ptr<float>();
+                            const float* right_ptr = right_broadcast.template ptr<float>();
+                            unsigned char* out_ptr = result.template ptr<unsigned char>();
+                            size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                            }
+                        }
+                    }
+                }
+
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_binary(left_tensor, right_tensor, result, typeid(BinaryOp).name());
+                }
+                return result;
+            }
+        };
+    } // namespace detail
+
+    template <typename LeftExpr, typename RightExpr, typename BinaryOp>
+    Tensor BinaryExpr<LeftExpr, RightExpr, BinaryOp>::eval_impl() const {
+        // Dispatch to appropriate evaluator based on whether op returns Bool
+        return detail::BinaryExprEvaluator<LeftExpr, RightExpr, BinaryOp, ops::returns_bool_v<BinaryOp>>::eval(
+            *this, left_, right_, op_, shape_, device_, dtype_);
+    }
+
+    // ============================================================================
+    // ScalarUnaryExpr::eval_impl() - Needs Tensor::empty()
+    // ============================================================================
+
+    template <typename InputExpr, typename ScalarUnaryOp>
+    Tensor ScalarUnaryExpr<InputExpr, ScalarUnaryOp>::eval_impl() const {
+        Tensor input_tensor = input_.eval();
+
+        std::optional<CUDAStreamGuard> execution_guard;
+        if (device_ == Device::GPU) {
+            execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
+        }
+
+        Tensor result = internal::allocate_like(input_tensor, shape_, dtype_);
+
+        if (device_ == Device::GPU) {
+            internal::run_pointwise_unary(
+                input_tensor, result, op_,
+                internal::ExecContext{result.stream()});
+        } else {
+            // CPU fallback: apply scalar operation element-wise
+            const float* in_ptr = input_tensor.template ptr<float>();
+            float* out_ptr = result.template ptr<float>();
+            size_t n = result.numel();
+            for (size_t i = 0; i < n; ++i) {
+                out_ptr[i] = op_(in_ptr[i]);
+            }
+        }
+
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_scalar_unary(input_tensor, result, typeid(ScalarUnaryOp).name());
+        }
+        return result;
+    }
+
+    // ============================================================================
+    // PermutationExpr::eval_impl() - Lazy gather operation
+    // ============================================================================
+
+    template <typename InputExpr, typename IndexExpr>
+    Tensor PermutationExpr<InputExpr, IndexExpr>::eval_impl() const {
+        // Evaluate input and indices
+        Tensor input_tensor = input_.eval();
+        Tensor indices_tensor = indices_.eval();
+
+        // Ensure indices are Int32
+        if (indices_tensor.dtype() != DataType::Int32) {
+            throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
+        }
+
+        // Use existing take() implementation (already optimized with thrust::gather)
+        Tensor result = input_tensor.flatten().take(indices_tensor).reshape(shape_);
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_permutation(input_tensor, indices_tensor, result, "permutation");
+        }
+        return result;
+    }
+
+    // ============================================================================
+    // UnaryExpr<PermutationExpr, UnaryOp>::eval_impl() - FUSED gather + unary!
+    // ============================================================================
+
+    template <typename InputExpr, typename IndexExpr, typename UnaryOp>
+    Tensor UnaryExpr<PermutationExpr<InputExpr, IndexExpr>, UnaryOp>::eval_impl() const {
+        // Evaluate the input data and indices from permutation
+        Tensor input_tensor = perm_expr_.input_.eval();
+        Tensor indices_tensor = perm_expr_.indices_.eval();
+
+        if (indices_tensor.dtype() != DataType::Int32) {
+            throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
+        }
+
+        detail::validate_permutation_indices(input_tensor, indices_tensor);
+        internal::require_same_gpu_backend(
+            input_tensor, indices_tensor, "permutation expression evaluation");
+
+        // Flatten input for gather
+        Tensor flat_input = input_tensor.flatten();
+
+        std::optional<CUDAStreamGuard> execution_guard;
+        if (device_ == Device::GPU) {
+            execution_guard.emplace(prepare_inputs_for_stream({&flat_input, &indices_tensor}));
+        }
+
+        // Create result tensor
+        Tensor result = internal::allocate_like(flat_input, shape_, dtype_);
+
+        // OPTIMIZATION: Use fused gather+unary kernel!
+        if (device_ == Device::GPU) {
+            pin_operands({&flat_input, &indices_tensor});
+            internal::backend_ops_for(flat_input).gather_fused_unary(internal::storage_ref(flat_input), internal::storage_ref(indices_tensor), internal::storage_ref(result), internal::pointwise_op_of<std::remove_cvref_t<UnaryOp>>::value, internal::IndexProgram{
+                                                                                                                                                                                                                                                  .input_size = flat_input.numel(),
+                                                                                                                                                                                                                                                  .index_size = indices_tensor.numel(),
+                                                                                                                                                                                                                                              },
+                                                                     internal::ExecContext{result.stream()});
+        } else {
+            // CPU fallback: gather then apply operation
+            pin_operands({&flat_input, &indices_tensor});
+            const float* src = flat_input.template ptr<float>();
+            const int* idx = indices_tensor.template ptr<int>();
+            float* dst = result.template ptr<float>();
+            size_t total = flat_input.numel();
+
+            for (size_t i = 0; i < indices_tensor.numel(); ++i) {
+                int pos = idx[i];
+                if (pos < 0)
+                    pos += total;
+                dst[i] = (pos >= 0 && pos < static_cast<int>(total)) ? op_(src[pos]) : 0.0f;
+            }
+        }
+
+        Tensor reshaped = result.reshape(shape_);
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_permutation(input_tensor, indices_tensor, reshaped, typeid(UnaryOp).name());
+        }
+        return reshaped;
+    }
+
+} // namespace lfs::core

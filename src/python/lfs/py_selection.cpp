@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_selection.hpp"
-#include "core/cuda/selection_ops.hpp"
+#include "core/selection_ops.hpp"
 #include "core/tensor.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "py_tensor.hpp"
@@ -490,7 +490,7 @@ namespace lfs::python {
                     return;
                 if (static_cast<size_t>(index) >= stroke->numel())
                     return;
-                rendering::set_selection_element(stroke->ptr<bool>(), index, add);
+                rendering::set_selection_element(*stroke, index, add);
             },
             nb::arg("index"), nb::arg("add") = true, "Select/deselect a single gaussian by index (for ring selection mode).");
 
@@ -950,7 +950,7 @@ namespace lfs::python {
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+                    current = core::selection_grow(current, model->means(), radius, group_id);
                 apply_selection_state_with_undo(
                     *sm, "selection.grow",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
@@ -959,7 +959,7 @@ namespace lfs::python {
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
-            nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units). Uses spatial hashing, O(N).");
+            nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units) on the scene's tensor backend.");
 
         sel.def(
             "shrink", [](float radius, int iterations) {
@@ -975,7 +975,7 @@ namespace lfs::python {
                     return;
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
-                    current = core::cuda::selection_shrink(current, model->means(), radius);
+                    current = core::selection_shrink(current, model->means(), radius);
                 apply_selection_state_with_undo(
                     *sm, "selection.shrink",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
@@ -984,7 +984,7 @@ namespace lfs::python {
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
-            nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units). Uses spatial hashing, O(N).");
+            nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units) on the scene's tensor backend.");
 
         sel.def(
             "by_opacity", [](float min_opacity, float max_opacity) {
@@ -996,7 +996,7 @@ namespace lfs::python {
                 if (!model)
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
-                auto mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
+                auto mask = core::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
                 apply_selection_state_with_undo(
                     *sm, "selection.by_opacity",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {
@@ -1017,7 +1017,7 @@ namespace lfs::python {
                 if (!model)
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
-                auto mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
+                auto mask = core::select_by_scale(model->scaling_raw(), max_scale, group_id);
                 apply_selection_state_with_undo(
                     *sm, "selection.by_scale",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {
@@ -1058,8 +1058,8 @@ namespace lfs::python {
                 const float ref_b = std::clamp(0.5f + sh0_data[2] * SH_C0, 0.0f, 1.0f);
 
                 const auto group_id = scene.getActiveSelectionGroup();
-                auto mask = core::cuda::select_by_color(sh0, ref_r, ref_g, ref_b,
-                                                        std::clamp(threshold, 0.0f, 1.0f), group_id);
+                auto mask = core::select_by_color(sh0, ref_r, ref_g, ref_b,
+                                                  std::clamp(threshold, 0.0f, 1.0f), group_id);
                 apply_selection_state_with_undo(
                     *sm, "selection.by_color",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {

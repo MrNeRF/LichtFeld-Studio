@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -16,13 +17,17 @@ static cudaError_t sync_and_check() {
     return cudaGetLastError();
 }
 
-class StridedFillTest : public ::testing::Test {
+class StridedFillTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         cudaGetLastError(); // clear stale errors
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         cudaError_t err = sync_and_check();
         EXPECT_EQ(err, cudaSuccess)
             << "Residual CUDA error: " << cudaGetErrorString(err);

@@ -601,7 +601,6 @@ namespace lfs::vis {
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},
             {"force_no_atomic_float", state.options.force_no_atomic_float},
-            {"viewer_vulkan_inputs", state.options.viewer_vulkan_inputs},
         };
         impl_->saveLocked();
     }
@@ -630,7 +629,6 @@ namespace lfs::vis {
         };
         read_bool("force_fp32_half", result.options.force_fp32_half);
         read_bool("force_no_atomic_float", result.options.force_no_atomic_float);
-        read_bool("viewer_vulkan_inputs", result.options.viewer_vulkan_inputs);
         return result;
     }
 

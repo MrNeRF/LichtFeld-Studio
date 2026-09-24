@@ -10,6 +10,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/losses/regularization.hpp"
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
@@ -17,9 +18,10 @@
 using namespace lfs::core;
 using namespace lfs::training::losses;
 
-class GradientAccumulationTest : public ::testing::Test {
+class GradientAccumulationTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         spdlog::set_level(spdlog::level::info);
         Tensor::manual_seed(42);
     }

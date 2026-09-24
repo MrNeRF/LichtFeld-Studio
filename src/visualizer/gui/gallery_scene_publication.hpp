@@ -18,6 +18,10 @@
 #include <string_view>
 #include <vector>
 
+namespace lfs::core {
+    class TensorCompletion;
+}
+
 namespace lfs::vis::gui {
 
     struct GalleryEncodedAsset {
@@ -31,7 +35,8 @@ namespace lfs::vis::gui {
         std::optional<GalleryEncodedAsset> encoded;
         // An isolated document can supply tensors lazily on the export worker.
         // Empty for the live path, which already owns a SplatSnapshot.
-        std::function<std::shared_ptr<core::SplatData>()> load_payload = {};
+        // Register GPU decoding before submission, including partial failure.
+        std::function<std::shared_ptr<core::SplatData>(core::TensorCompletion&)> load_payload = {};
         bool metadata_known = true;
     };
 

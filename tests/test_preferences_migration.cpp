@@ -237,7 +237,7 @@ TEST(PreferencesMigration, TensorBackendOptionsPersistWithoutChangingTheRunningB
     const auto active_backend = lfs::core::default_gpu_backend();
     const lfs::vis::TensorPreferenceState selected{
         .backend = lfs::core::GpuBackend::Vulkan,
-        .options = {.vulkan_device = "0", .vulkan_validation = 2, .force_fp32_half = true, .force_no_atomic_float = true, .viewer_vulkan_inputs = true},
+        .options = {.vulkan_device = "0", .vulkan_validation = 2, .force_fp32_half = true, .force_no_atomic_float = true},
     };
     preferences.setTensorBackend(selected);
     const auto saved = readPreferences(*paths).at("tensor_backend");
@@ -246,7 +246,6 @@ TEST(PreferencesMigration, TensorBackendOptionsPersistWithoutChangingTheRunningB
     EXPECT_EQ(saved.at("vulkan_validation"), 2);
     EXPECT_TRUE(saved.at("force_fp32_half").get<bool>());
     EXPECT_TRUE(saved.at("force_no_atomic_float").get<bool>());
-    EXPECT_TRUE(saved.at("viewer_vulkan_inputs").get<bool>());
     EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
     EXPECT_EQ(lfs::core::default_gpu_backend(), active_backend);
 }
@@ -263,7 +262,6 @@ TEST(PreferencesMigration, MalformedTensorPreferencesKeepSafeDefaults) {
                                                      {"vulkan_validation", -8},
                                                      {"force_fp32_half", "yes"},
                                                      {"force_no_atomic_float", 1},
-                                                     {"viewer_vulkan_inputs", nullptr},
                                                  }}});
     const auto state = lfs::vis::UserPreferences::instance().tensorBackend();
     EXPECT_EQ(state.backend, lfs::core::GpuBackend::CUDA);
@@ -271,7 +269,6 @@ TEST(PreferencesMigration, MalformedTensorPreferencesKeepSafeDefaults) {
     EXPECT_EQ(state.options.vulkan_validation, 0);
     EXPECT_FALSE(state.options.force_fp32_half);
     EXPECT_FALSE(state.options.force_no_atomic_float);
-    EXPECT_FALSE(state.options.viewer_vulkan_inputs);
 }
 
 TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInIsolation) {

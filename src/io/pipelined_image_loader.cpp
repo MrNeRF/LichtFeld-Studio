@@ -9,8 +9,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -622,13 +621,13 @@ namespace lfs::io {
 
         cudaDeviceSynchronize();
         if (decode_stream_) {
-            lfs::core::CudaMemoryPool::instance().release_stream(decode_stream_);
+            lfs::core::release_cuda_stream(decode_stream_);
             cudaStreamDestroy(decode_stream_);
             decode_stream_ = nullptr;
         }
         for (auto& stream : sidecar_streams_) {
             if (stream) {
-                lfs::core::CudaMemoryPool::instance().release_stream(stream);
+                lfs::core::release_cuda_stream(stream);
                 cudaStreamDestroy(stream);
                 stream = nullptr;
             }
@@ -988,6 +987,7 @@ namespace lfs::io {
 
     lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
         const std::filesystem::path& path, const LoadParams& params) {
+        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         const auto cache_key = make_cache_key(path, params);
         const bool is_original_jpeg = is_jpeg_file_signature(path);
         const bool needs_requested_processing = load_params_need_processing(params);
@@ -1996,6 +1996,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::prefetch_thread_func() {
+        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         while (running_) {
             ImageRequest request;
             try {
@@ -2176,7 +2177,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing && is_nvcodec_available()) {
                         // An unchanged JPEG is already a usable encoded cache
                         // entry. Avoid a decode/re-encode and its quality loss.
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
@@ -2257,6 +2258,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::gpu_batch_decode_thread_func() {
+        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         LFS_VRAM_SCOPE("io.image_loader");
         // Tensor ops on this thread (decode targets, format conversion) home
         // onto the decode stream so they order with the explicit-stream kernels.
@@ -2651,6 +2653,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::cold_process_thread_func(const size_t worker_index) {
+        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         const cudaStream_t sidecar_stream =
             worker_index < sidecar_streams_.size() ? sidecar_streams_[worker_index] : nullptr;
         while (running_) {

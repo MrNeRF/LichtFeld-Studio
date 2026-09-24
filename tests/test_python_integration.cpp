@@ -8,6 +8,7 @@
 
 #include "core/camera.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/event_bridge/event_bridge.hpp"
@@ -15,6 +16,8 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "io/loader.hpp"
 #include "operation/undo_history.hpp"
 #include "python/gil.hpp"
@@ -22,7 +25,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "training/control/command_api.hpp"
+#include "tensor_test_support.hpp"
 #include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/depth_window_state.hpp"
@@ -1293,6 +1296,40 @@ result_values = (
     EXPECT_FLOAT_EQ(result.values[index++], 4.0f);
     EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
     EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
+}
+
+TEST_F(PythonIntegrationTest, PyTensorSyncWaitsForItsVulkanBackendWithCudaDefault) {
+    using namespace lfs::core;
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP();
+    GpuBackendScope vulkan(GpuBackend::Vulkan);
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals.get(), nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    execPythonInGlobals(globals.get(), R"PY(
+import lichtfeld as lf
+t = lf.Tensor.ones([257], device="gpu")
+assert t.backend == "vulkan", t.backend
+)PY");
+    auto sentinel = Tensor::zeros({257}, Device::GPU);
+    sentinel.fill_(7.f, nullptr);
+    const auto pending = lfs::test::vulkan_pending_value(sentinel);
+    ASSERT_GT(pending, lfs::test::vulkan_completed_value());
+    {
+        GpuBackendScope opposite(GpuBackend::CUDA);
+        execPythonInGlobals(globals.get(), "t.sync()\n");
+    }
+    EXPECT_GE(lfs::test::vulkan_completed_value(), pending);
+    // Drain even on a failed expectation, so the test leaves no queued work.
+    TensorCompletion completion;
+    completion.include(GpuBackend::Vulkan);
+    completion.wait();
+    EXPECT_EQ(sentinel.cpu().to_vector(), std::vector<float>(257, 7.f));
+    for (const auto& message : lfs::test::vulkan_validation_messages()) {
+        ADD_FAILURE() << message;
+    }
 }
 
 TEST_F(PythonIntegrationTest, PyTensorBooleanRowMaskIndexingMatchesTorch) {

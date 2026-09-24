@@ -6,6 +6,7 @@
 #include "components/ppisp_file.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "ppisp_fixture.hpp"
 #include <chrono>
 #include <cmath>
@@ -87,7 +88,7 @@ namespace {
         return true;
     }
 
-    class PPISPSidecarTest : public ::testing::Test {
+    class PPISPSidecarTest : public lfs::test::CudaBackendTest {
     protected:
         std::filesystem::path make_temp_path(std::string_view stem) {
             const auto now = std::chrono::steady_clock::now().time_since_epoch().count();

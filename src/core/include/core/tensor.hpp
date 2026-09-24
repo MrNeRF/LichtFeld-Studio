@@ -57,5 +57,5 @@
  * @endcode
  */
 
-#include <core/tensor/internal/tensor_impl.hpp>
-#include <core/tensor/internal/tensor_serialization.hpp>
+#include "core/detail/tensor_impl.hpp"
+#include <core/tensor_serialization.hpp>

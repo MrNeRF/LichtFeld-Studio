@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -77,8 +78,7 @@ namespace lfs::core::internal {
             uint32_t dim;
             uint32_t inner;
             uint32_t lines;
-            uint32_t pad0;
-            uint32_t pad1;
+            uint64_t totals_address;
         };
         static_assert(sizeof(ScanPush) == 32);
 
@@ -431,7 +431,7 @@ namespace lfs::core::internal {
                     vkCmdPushConstants(command, pipeline.layout,
                                        VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(push), &push);
-                    vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
+                    vkCmdDispatch(command, std::min(256u, dispatch_groups(*context, count)), 1, 1);
                 });
             uint32_t value = 0;
             context->memory().read_readback(scratch, &value, sizeof(value));
@@ -600,34 +600,53 @@ namespace lfs::core::internal {
             return;
         }
         const auto context = acquire_vulkan_context();
-        // Short lines scan one per thread; any longer line gets a workgroup and
-        // scans in chunks with a carried total (the line loop covers any count).
-        const uint32_t mode = size <= 32 ? 0u : 1u;
-        const std::array constants{shader_dtype(data.dtype), mode};
-        const VulkanPipeline& pipeline =
-            context->pipelines().specialized("scan", sizeof(ScanPush), constants);
+        const size_t blocks = (size + kLocalSize - 1) / kLocalSize;
+        const uint32_t mode = size <= 32 ? 0u : blocks == 1 ? 1u
+                                                            : 2u;
+        std::optional<vk::ScopedAllocation> totals_block;
+        StorageRef totals{};
+        if (mode == 2) {
+            totals_block.emplace(*context, lines * blocks * sizeof(uint32_t));
+            totals = totals_block->storage();
+            totals.dtype = data.dtype;
+        }
         const ScanPush push{
             .data_address = address(data),
             .outer = checked_u32(outer, "Vulkan cumsum outer size exceeds uint32"),
             .dim = checked_u32(size, "Vulkan cumsum size exceeds uint32"),
             .inner = checked_u32(inner, "Vulkan cumsum inner size exceeds uint32"),
             .lines = checked_u32(lines, "Vulkan cumsum line count exceeds uint32"),
+            .totals_address = mode == 2 ? address(totals) : 0,
         };
-        const uint32_t groups =
-            mode == 0 ? dispatch_groups(*context, lines)
-                      : static_cast<uint32_t>(std::min<size_t>(
-                            lines, context->caps().max_workgroup_count[0]));
-        const std::array reads{data};
-        const std::array writes{data};
-        context->recorders().record(
-            reads, writes, [&](const VkCommandBuffer command) {
-                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  pipeline.pipeline);
-                vkCmdPushConstants(command, pipeline.layout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                   sizeof(push), &push);
+        const auto dispatch = [&](const uint32_t pass, const uint32_t groups,
+                                  const std::span<const StorageRef> reads,
+                                  const std::span<const StorageRef> writes) {
+            const std::array constants{shader_dtype(data.dtype), pass};
+            const VulkanPipeline& pipeline = context->pipelines().specialized("scan", sizeof(ScanPush), constants);
+            context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
                 vkCmdDispatch(command, groups, 1, 1);
             });
+        };
+        const uint32_t groups = mode == 0 ? dispatch_groups(*context, lines)
+                                          : static_cast<uint32_t>(std::min<size_t>(lines * blocks, context->caps().max_workgroup_count[0]));
+        const std::array reads{data};
+        const std::array writes{data, totals};
+        dispatch(mode, groups, reads, std::span(writes).first(mode == 2 ? 2 : 1));
+        if (mode == 2) {
+            StridedLayout totals_layout{};
+            totals_layout.rank = 2;
+            totals_layout.dims[0] = lines;
+            totals_layout.dims[1] = blocks;
+            totals_layout.strides[0] = blocks;
+            totals_layout.strides[1] = 1;
+            totals_layout.element_count = lines * blocks;
+            cumsum(totals, totals_layout, 1, {});
+            const std::array add_reads{data, totals};
+            const std::array add_writes{data};
+            dispatch(3, dispatch_groups(*context, layout.element_count), add_reads, add_writes);
+        }
     }
 
 } // namespace lfs::core::internal

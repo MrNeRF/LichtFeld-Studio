@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "../descriptors.hpp"
 
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace lfs::core::internal {
@@ -26,8 +28,14 @@ namespace lfs::core::internal {
 
         uint64_t record(std::span<const StorageRef> reads,
                         std::span<const StorageRef> writes,
-                        const std::function<void(VkCommandBuffer)>& command);
+                        const std::function<void(VkCommandBuffer)>& command,
+                        VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VkDeviceSize bytes = VK_WHOLE_SIZE,
+                        std::shared_ptr<void> lifetime = {});
         void flush_storage(StorageRef storage);
+        uint64_t flush_storages(std::span<const StorageRef> storage);
+        uint64_t wait_external(std::span<const StorageRef> storage, VkSemaphore semaphore,
+                               uint64_t value, std::shared_ptr<void> keep_alive);
         uint64_t flush_current();
         uint64_t flush_all();
         void wait_all();
@@ -57,6 +65,7 @@ namespace lfs::core::internal {
         std::unordered_map<uint64_t, std::unique_ptr<Recorder>> recorders_;
         uint64_t next_recorder_id_ = 1;
         bool shutting_down_ = false;
+        std::vector<std::pair<uint64_t, std::shared_ptr<void>>> external_owners_;
     };
 
 } // namespace lfs::core::internal

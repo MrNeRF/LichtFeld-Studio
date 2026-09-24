@@ -5,10 +5,10 @@
 #pragma once
 
 #include "camera_interaction_service.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_image.hpp"
 #include "depth_window_state.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
@@ -863,7 +863,6 @@ namespace lfs::vis {
                 lfs::rendering::DepthVisualizationMode::Palette;
             glm::vec3 background_color{0.0f};
             std::shared_ptr<lfs::core::Camera> camera;
-            std::shared_ptr<lfs::io::PipelinedImageLoader> image_loader;
             std::chrono::steady_clock::time_point queued_at{};
         };
 
@@ -1011,7 +1010,6 @@ namespace lfs::vis {
         int split_left_source_camera_uid_ = -1;
         bool split_left_source_undistorted_ = false;
         glm::ivec2 split_right_source_size_{0, 0};
-        cudaStream_t gt_comparison_worker_stream_ = nullptr;
         const lfs::core::Scene* gt_camera_index_scene_ = nullptr;
         std::uint64_t gt_camera_index_generation_ = 0;
         std::vector<std::shared_ptr<lfs::core::Camera>> gt_camera_index_cameras_;

@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
@@ -170,9 +171,10 @@ namespace {
 
 } // namespace
 
-class WarpCullBwdTest : public ::testing::Test {
+class WarpCullBwdTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         cleanup_arena();
         set_warp_cull_mode_for_testing(0);
         set_blend_batch_size_for_testing(0);
@@ -180,6 +182,9 @@ protected:
         bg_ = Tensor::zeros({3}, Device::GPU);
     }
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         set_warp_cull_mode_for_testing(0);
         set_blend_batch_size_for_testing(0);
         cleanup_arena();

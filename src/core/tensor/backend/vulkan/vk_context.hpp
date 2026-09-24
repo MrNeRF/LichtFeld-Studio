@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/error.hpp"
 #include "core/export.hpp"
@@ -37,6 +38,7 @@ namespace lfs::core::internal {
         uint32_t max_workgroup_invocations = 0;
         uint32_t shared_memory_size = 0;
         float timestamp_period = 0.0f;
+        bool shader_float64 = false;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
         bool float_controls_fp16 = false;
@@ -55,8 +57,11 @@ namespace lfs::core::internal {
         VkDevice device = VK_NULL_HANDLE;
         VkQueue queue = VK_NULL_HANDLE;
         uint32_t queue_family = 0;
+        std::array<uint32_t, 3> sharing_queue_families{};
+        uint32_t sharing_queue_family_count = 0;
         bool shader_atomic_float = false;
         bool memory_budget = false;
+        bool shader_float64 = false;
         bool shader_float16 = false;
         bool external_memory = false;
         bool external_semaphore = false;
@@ -78,6 +83,7 @@ namespace lfs::core::internal {
         [[nodiscard]] VkDevice device() const noexcept { return device_; }
         [[nodiscard]] VkQueue queue() const noexcept { return queue_; }
         [[nodiscard]] uint32_t queue_family() const noexcept { return queue_family_; }
+        [[nodiscard]] const std::vector<uint32_t>& sharing_queue_families() const noexcept { return sharing_queue_families_; }
         [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
         [[nodiscard]] bool timeline_exportable() const noexcept { return timeline_exportable_; }
         [[nodiscard]] VkPipelineCache pipeline_cache() const noexcept {
@@ -112,6 +118,7 @@ namespace lfs::core::internal {
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
+        void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
         void check_fault_buffer();
@@ -146,6 +153,7 @@ namespace lfs::core::internal {
         VkDevice device_ = VK_NULL_HANDLE;
         VkQueue queue_ = VK_NULL_HANDLE;
         uint32_t queue_family_ = 0;
+        std::vector<uint32_t> sharing_queue_families_;
         uint32_t device_index_ = 0;
         uint64_t context_id_ = 0;
         VkSemaphore timeline_ = VK_NULL_HANDLE;

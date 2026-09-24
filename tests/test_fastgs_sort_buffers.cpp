@@ -8,6 +8,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
@@ -67,15 +68,18 @@ namespace {
 
 } // namespace
 
-class FastGSSortBufferTest : public ::testing::Test {
+class FastGSSortBufferTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         bg_ = Tensor::zeros({3}, Device::GPU);
         camera_ = std::make_unique<Camera>(make_camera(64, 64));
         splat_ = make_splat(32);
     }
 
     void TearDown() override {
+        if (IsSkipped())
+            return;
         splat_.reset();
         camera_.reset();
         release_fastgs_sort_workspace_buffers();
@@ -187,11 +191,9 @@ TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
 // release the remaining renderer caches, then join.
 // cudaMemGetInfo free must return near the pre-spawn baseline.
 // ---------------------------------------------------------------------------
-TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class FastGSThreadLocalCacheTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
 
     // Warm primary thread caches so first-touch noise is outside the measurement.
     {
@@ -215,6 +217,7 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
     std::atomic<int> failures{0};
 
     auto worker = [&]() {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         if (cudaSetDevice(0) != cudaSuccess) {
             failures.fetch_add(1);
             return;

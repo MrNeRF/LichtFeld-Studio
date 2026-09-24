@@ -24,6 +24,7 @@
 
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
+#include "cuda_backend_test.hpp"
 #include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/vksplat_shared_scratch_install.hpp"
 
@@ -129,9 +130,10 @@ namespace {
     };
 } // namespace
 
-class ArenaMetricsContentionTest : public ::testing::Test {
+class ArenaMetricsContentionTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     }
 };

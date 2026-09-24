@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -170,12 +171,6 @@ namespace {
         return camera;
     }
 
-    bool cuda_device_available() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess &&
-               count > 0;
-    }
-
     class ScopedEnvironmentVariable {
     public:
         ScopedEnvironmentVariable(const char* name, const std::string& value)
@@ -227,12 +222,10 @@ namespace {
             std::invalid_argument);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         ExplicitSavesUseRelaxedHostMemoryGate) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    class TrainingSnapshotServiceTest : public lfs::test::CudaBackendTest {};
 
+    TEST_F(TrainingSnapshotServiceTest,
+           ExplicitSavesUseRelaxedHostMemoryGate) {
         constexpr std::size_t GAUSSIAN_COUNT = 8192;
         constexpr std::uint64_t GIB = 1024ull * 1024 * 1024;
         constexpr std::uint64_t MIB = 1024ull * 1024;
@@ -285,11 +278,8 @@ namespace {
             std::string::npos);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CapturesByteExactLfkpAndOwnsPostResumeBytes) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(TrainingSnapshotServiceTest,
+           CapturesByteExactLfkpAndOwnsPostResumeBytes) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));
@@ -531,12 +521,8 @@ namespace {
                 target_strategy.get_optimizer());
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-
+    TEST_F(TrainingSnapshotServiceTest,
+           Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
         struct QuantGuard {
@@ -653,11 +639,8 @@ namespace {
         EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(TrainingSnapshotServiceTest,
+           CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));
@@ -870,11 +853,8 @@ namespace {
                 .pause_within_rig_gate);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CapturesRepresentativeSceneValuesInSafePoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(TrainingSnapshotServiceTest,
+           CapturesRepresentativeSceneValuesInSafePoint) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));

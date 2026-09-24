@@ -7,17 +7,15 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
-#include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/sh_value_quant_kernels.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization_sink.hpp"
+#include "core/tensor_sh.hpp"
 #include "nanoflann.hpp"
 
 #include <algorithm>
@@ -34,10 +32,6 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vector>
-
-#ifdef __linux__
-#include <sys/mman.h>
-#endif
 
 namespace {
     constexpr int MAX_SUPPORTED_SH_DEGREE = 3;
@@ -298,11 +292,6 @@ namespace {
     // primitive-row slots reserved. Zero-initialised so dead lanes & inactive coefficient
     // slots contribute nothing in Adam updates.
     //
-    // The swizzled layout is intrinsically CUDA-only: every reader / writer
-    // (reorder_sh_to_swizzled, undo_reorder_sh_from_swizzled, shN_swizzled_gather_self,
-    // the rasterizer's load_shN_coeffs, the fused Adam path) is a CUDA kernel. There is no
-    // CPU swizzle path, so this buffer always lives on Device::GPU regardless of where
-    // the other SplatData tensors live.
     lfs::core::Tensor allocate_param_tensor(const lfs::core::TensorShape& shape,
                                             size_t capacity,
                                             const lfs::core::SplatTensorAllocator& allocator,
@@ -460,20 +449,11 @@ namespace {
         return 0;
     }
 
-    [[nodiscard]] lfs::core::Tensor unpack_swizzled_floats_to_canonical_cpu(
-        const float* src, size_t src_floats, size_t n, size_t k);
-
     void unpack_swizzled_into(const lfs::core::Tensor& source,
                               lfs::core::Tensor& destination,
                               size_t n, uint32_t rest) {
         using namespace lfs::core;
-        if (gpu_backend_of(source) == GpuBackend::CUDA &&
-            gpu_backend_of(destination) == GpuBackend::CUDA) {
-            undo_reorder_sh_from_swizzled(source.ptr<float>(), destination.ptr<float>(), n, rest, rest);
-            return;
-        }
-        const Tensor host = source.cpu().contiguous();
-        destination.copy_from(unpack_swizzled_floats_to_canonical_cpu(host.ptr<float>(), host.numel(), n, rest));
+        sh_codec(source, destination, {.destination_format = ShFormat::Canonical, .source_rows = n, .destination_rows = n, .count = n, .source_rest = rest, .destination_rest = rest});
     }
 
     // Reorder a canonical-layout shN tensor into the swizzled `dst` buffer.
@@ -509,48 +489,9 @@ namespace {
                             .contiguous();
             src = truncated;
         }
-        if (gpu_backend_of(src) == GpuBackend::Vulkan ||
-            gpu_backend_of(dst_swizzled) != GpuBackend::CUDA) {
-            const Tensor host = src.cpu().contiguous();
-            Tensor packed = Tensor::zeros(dst_swizzled.shape(), Device::CPU);
-            const float* values = host.ptr<float>();
-            float* output = packed.ptr<float>();
-            tbb::parallel_for(tbb::blocked_range<size_t>(0, n_primitives),
-                              [&](const tbb::blocked_range<size_t>& range) {
-                                  for (size_t p = range.begin(); p != range.end(); ++p)
-                                      for (uint32_t c = 0; c < src_coeffs_rest * SH_CHANNELS; ++c)
-                                          output[sh_swizzled_index(p, c / 4, layout_coeffs_rest) * 4 + c % 4] =
-                                              values[p * src_coeffs_rest * SH_CHANNELS + c];
-                              });
-            dst_swizzled.copy_from(packed.to(dst_swizzled.dtype()));
-            return;
-        }
-        const GpuBackendScope cuda_scope(GpuBackend::CUDA);
-        Tensor src_cuda = src.device() == Device::GPU ? src : src.gpu();
-        if (!src_cuda.is_contiguous()) {
-            src_cuda = src_cuda.contiguous();
-        }
-        const size_t n_floats = sh_swizzled_float_count(n_primitives, layout_coeffs_rest);
-        if (dst_swizzled.dtype() == DataType::Float32) {
-            reorder_sh_to_swizzled(src_cuda.ptr<float>(),
-                                   dst_swizzled.ptr<float>(),
-                                   n_primitives,
-                                   src_coeffs_rest,
-                                   layout_coeffs_rest);
-            return;
-        }
-        // IEEE f16 float4-swizzle destination.
-        Tensor staging = Tensor::zeros({n_floats}, Device::GPU, DataType::Float32);
-        reorder_sh_to_swizzled(src_cuda.ptr<float>(),
-                               staging.ptr<float>(),
-                               n_primitives,
-                               src_coeffs_rest,
-                               layout_coeffs_rest);
-        Tensor half = staging.to(DataType::Float16);
-        const size_t nbytes = std::min(static_cast<size_t>(dst_swizzled.numel()), n_floats) *
-                              sizeof(std::uint16_t);
-        cudaMemcpyAsync(dst_swizzled.data_ptr(), half.data_ptr(), nbytes,
-                        cudaMemcpyDeviceToDevice, dst_swizzled.stream());
+        const GpuBackendScope scope(gpu_backend_of(dst_swizzled).value_or(default_gpu_backend()));
+        const Tensor input = (src.device() == dst_swizzled.device() ? src : src.to(dst_swizzled.device())).contiguous();
+        sh_codec(input, dst_swizzled, {.source_format = ShFormat::Canonical, .destination_format = sh_storage_format(dst_swizzled, Tensor{}), .source_rows = n_primitives, .destination_rows = n_primitives, .count = n_primitives, .source_rest = src_coeffs_rest, .destination_rest = layout_coeffs_rest});
     }
 
     // The shN representation is DECLARED by SplatData state (dtype + bounds validity),
@@ -674,232 +615,6 @@ namespace {
                                             layout_coeffs_rest);
         }
         shN = std::move(resized);
-    }
-
-    // Host deswizzle of a 1D float4-packed buffer into canonical [N, K, 3].
-    // Shared by the fp32 shN_canonical_cpu path and IEEE-f16 host decode.
-    [[nodiscard]] lfs::core::Tensor unpack_swizzled_floats_to_canonical_cpu(
-        const float* src,
-        const size_t src_floats,
-        const size_t n,
-        const size_t k) {
-        using namespace lfs::core;
-        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-        auto* const dst = out.ptr<float>();
-        const size_t active_floats = k * SH_CHANNELS;
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, n),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t p = range.begin(); p != range.end(); ++p) {
-                    float* const dst_row = dst + p * active_floats;
-                    for (size_t offset = 0; offset < active_floats; ++offset) {
-                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
-                        const auto component = static_cast<std::uint32_t>(offset % 4u);
-                        const size_t src_offset =
-                            static_cast<size_t>(sh_swizzled_index(
-                                static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) *
-                                4u +
-                            component;
-                        dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
-                    }
-                }
-            });
-        return out;
-    }
-
-    // Host q16 dequant into canonical [N, K, 3]. Math matches the previous
-    // single-threaded loop in shN_canonical() (lo/hi/kInvQ + cell-linear index).
-    [[nodiscard]] lfs::core::Tensor dequant_q16_to_canonical_cpu(
-        const std::uint16_t* codes,
-        const float* bounds,
-        const size_t n,
-        const size_t k) {
-        using namespace lfs::core;
-        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-        out.zero_();
-        auto* const dst = out.ptr<float>();
-        const std::uint32_t n_cells =
-            sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-        constexpr float kInvQ = 1.0f / 65535.0f;
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, n),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t p = range.begin(); p != range.end(); ++p) {
-                    const size_t bidx = p / 256u;
-                    const float lo = bounds[bidx * 2 + 0];
-                    const float hi = bounds[bidx * 2 + 1];
-                    float* row = dst + p * k * SH_CHANNELS;
-                    for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
-                        // cell-linear swizzle: block * (n_cells * R) + c * R + lane
-                        const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
-                        const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
-                        const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
-                                           static_cast<size_t>(c) * kShReorderSize + lane;
-                        const auto q = codes[idx];
-                        row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
-                    }
-                }
-            });
-        return out;
-    }
-
-    // Host-only Float16 → canonical [N, K, 3]. D2H of the compact codes is the
-    // only device traffic; no GPU destination is allocated here.
-    [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_cpu(
-        const lfs::core::Tensor& shN,
-        const lfs::core::Tensor& bounds,
-        const size_t n,
-        const size_t k) {
-        using namespace lfs::core;
-        if (n == 0 || k == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-            out.zero_();
-            return out;
-        }
-        const Tensor codes_cpu = shN.to_pageable_host().contiguous();
-        if (bounds.is_valid() && bounds.numel() > 0) {
-            const Tensor bounds_cpu = bounds.to_pageable_host().contiguous();
-            return dequant_q16_to_canonical_cpu(
-                reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr()),
-                bounds_cpu.ptr<float>(),
-                n,
-                k);
-        }
-        Tensor fp32_swizzled = Tensor::empty_pageable_host(codes_cpu.shape(), DataType::Float32);
-        const auto* const codes = codes_cpu.ptr<__half>();
-        auto* const fp32 = fp32_swizzled.ptr<float>();
-        for (size_t i = 0; i < static_cast<size_t>(codes_cpu.numel()); ++i) {
-            fp32[i] = static_cast<float>(codes[i]);
-        }
-        if (!fp32_swizzled.is_valid() || fp32_swizzled.numel() == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-            out.zero_();
-            return out;
-        }
-        return unpack_swizzled_floats_to_canonical_cpu(
-            fp32_swizzled.ptr<float>(),
-            static_cast<size_t>(fp32_swizzled.numel()),
-            n,
-            k);
-    }
-
-    // CUDA decode into canonical [N, K, 3] host output. This is the SPZ counterpart
-    // to the PLY banded decoder; SPZ does not need PLY's channel-major permutation.
-    [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_gpu(
-        const lfs::core::Tensor& shN,
-        const lfs::core::Tensor& bounds,
-        const size_t n,
-        const size_t k) {
-        using namespace lfs::core;
-        const GpuBackendScope cuda_scope(GpuBackend::CUDA);
-        constexpr size_t kStagingBudgetBytes = size_t{128} * 1024 * 1024;
-        constexpr size_t kDecodeBuffers = 1;
-        const bool quantized = bounds.is_valid() && bounds.numel() > 0;
-        const size_t floats_per_row = k * SH_CHANNELS;
-        const size_t bytes_per_row = floats_per_row * sizeof(float);
-        size_t band_prims = kStagingBudgetBytes /
-                            (kDecodeBuffers * std::max<size_t>(bytes_per_row, 1));
-        band_prims = (band_prims / kShReorderSize) * kShReorderSize;
-        band_prims = std::max<size_t>(band_prims, 1);
-        band_prims = std::min(band_prims, n);
-
-        struct StreamOwner {
-            cudaStream_t stream = nullptr;
-
-            StreamOwner() {
-                const cudaError_t status =
-                    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-                if (status != cudaSuccess) {
-                    throw TensorError(std::format(
-                        "Failed to create SPZ SH decode stream: {}",
-                        cudaGetErrorString(status)));
-                }
-            }
-
-            ~StreamOwner() noexcept {
-                if (stream) {
-                    CudaMemoryPool::instance().release_stream(stream);
-                    (void)cudaStreamDestroy(stream);
-                }
-            }
-
-            StreamOwner(const StreamOwner&) = delete;
-            StreamOwner& operator=(const StreamOwner&) = delete;
-        } stream_owner;
-
-        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-#ifdef __linux__
-        (void)::madvise(out.data_ptr(), out.numel() * sizeof(float), MADV_HUGEPAGE);
-#endif
-        prefault_pageable_host_memory(out.data_ptr(), out.bytes());
-
-        Tensor device_staging = Tensor::empty(
-            {band_prims, k, SH_CHANNELS}, Device::GPU, DataType::Float32);
-        Tensor host_staging = Tensor::empty(
-            {band_prims, k, SH_CHANNELS}, Device::CPU, DataType::Float32, true);
-        if (!PinnedMemoryAllocator::instance().is_cuda_host_allocation(
-                host_staging.data_ptr())) {
-            throw TensorError(
-                "SPZ SH decode requires cudaHostAlloc-backed host staging memory");
-        }
-
-        shN.sync_to_stream(stream_owner.stream);
-        if (quantized)
-            bounds.sync_to_stream(stream_owner.stream);
-        device_staging.record_stream(stream_owner.stream);
-        host_staging.record_stream(stream_owner.stream);
-
-        const auto* const source = reinterpret_cast<const std::uint16_t*>(
-            resolve_exportable_device_ptr(shN));
-        const auto* const bounds_ptr = quantized
-                                           ? static_cast<const float*>(
-                                                 resolve_exportable_device_ptr(bounds))
-                                           : nullptr;
-        const size_t band_count = (n + band_prims - 1) / band_prims;
-        for (size_t band = 0; band < band_count; ++band) {
-            const size_t begin = band * band_prims;
-            const size_t count = std::min(band_prims, n - begin);
-            const size_t band_bytes = count * bytes_per_row;
-
-            if (quantized) {
-                sh_value_quant::decode_shN_u16_range_to_canonical(
-                    source,
-                    bounds_ptr,
-                    device_staging.ptr<float>(),
-                    static_cast<std::uint64_t>(begin * floats_per_row),
-                    static_cast<std::uint64_t>(count * floats_per_row),
-                    n,
-                    static_cast<std::uint32_t>(k),
-                    static_cast<std::uint32_t>(k),
-                    stream_owner.stream);
-            } else {
-                sh_value_quant::decode_shN_f16_range_to_canonical(
-                    source,
-                    device_staging.ptr<float>(),
-                    static_cast<std::uint64_t>(begin * floats_per_row),
-                    static_cast<std::uint64_t>(count * floats_per_row),
-                    n,
-                    static_cast<std::uint32_t>(k),
-                    static_cast<std::uint32_t>(k),
-                    stream_owner.stream);
-            }
-            LFS_CUDA_CHECK_MSG_STREAM(
-                cudaMemcpyAsync(host_staging.data_ptr(),
-                                device_staging.data_ptr(),
-                                band_bytes,
-                                cudaMemcpyDeviceToHost,
-                                stream_owner.stream),
-                stream_owner.stream,
-                "while copying SPZ SH decode band to host");
-            LFS_CUDA_CHECK_MSG_STREAM(
-                cudaStreamSynchronize(stream_owner.stream),
-                stream_owner.stream,
-                "while completing SPZ SH decode band");
-            std::memcpy(out.ptr<float>() + begin * floats_per_row,
-                        host_staging.ptr<float>(),
-                        band_bytes);
-        }
-        return out;
     }
 
 } // anonymous namespace
@@ -1240,21 +955,15 @@ namespace lfs::core {
         const GpuBackendScope backend_scope(gpu_backend_of(_shN).value_or(default_gpu_backend()));
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
-        // The swizzled buffer is CUDA-only (see allocate_swizzled_shN); align the canonical
-        // output device with where the source data actually lives.
+        // Keep canonical output on the resident buffer's backend.
         const Device dst_device = _shN.is_valid() ? _shN.device() : Device::GPU;
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
-        // Float16 resident SH (q16 codes + bounds, or IEEE-f16 swizzle) decodes on the
-        // host. Device cost is only the returned canonical tensor when dst is GPU.
         if (_shN.dtype() == DataType::Float16) {
-            // q16 and IEEE-f16 decode on the host (parallel), then upload the
-            // canonical tensor once when the resident buffer lives on GPU.
-            Tensor out = canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
-            if (dst_device == Device::GPU) {
-                return out.to(Device::GPU);
-            }
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
+            sh_codec(_shN, out, {.source_format = sh_storage_format(_shN, _shN_value_bounds), .destination_format = ShFormat::Canonical, .source_rows = n, .destination_rows = n, .count = n, .source_rest = uint32_t(k), .destination_rest = uint32_t(k)},
+                     nullptr, shN_value_quantized() ? &_shN_value_bounds : nullptr);
             return out;
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
@@ -1276,334 +985,50 @@ namespace lfs::core {
     Tensor SplatData::shN_canonical_cpu() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
-        if (n == 0 || k == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+        if (n == 0 || k == 0 || !_shN.is_valid() || _shN.numel() == 0) {
             out.zero_();
             return out;
         }
-
-        // Quantized / IEEE-f16 path: host dequant to [N,K,3] on CPU (export/checkpoint
-        // bit-compat). Must not allocate a CUDA destination.
-        if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
-            return canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
-        }
-
-        if (!_shN.is_valid() || _shN.numel() == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-            out.zero_();
-            return out;
-        }
-
-        const Tensor shN_cpu = _shN.to_pageable_host().contiguous();
-        return unpack_swizzled_floats_to_canonical_cpu(
-            shN_cpu.ptr<float>(),
-            static_cast<size_t>(shN_cpu.numel()),
-            n,
-            k);
-    }
-
-    Tensor SplatData::shN_canonical_cpu_gpu_decoded() const {
-        const size_t n = static_cast<size_t>(size());
-        const size_t k = max_sh_coeffs_rest();
-        if (n == 0 || k == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
-            out.zero_();
-            return out;
-        }
-
-        const bool bounds_are_gpu_compatible =
-            !_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0 ||
-            gpu_backend_of(_shN_value_bounds) == GpuBackend::CUDA;
-        if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
-            gpu_backend_of(_shN) == GpuBackend::CUDA && bounds_are_gpu_compatible) {
-            return canonical_shN_from_f16_gpu(_shN, _shN_value_bounds, n, k);
-        }
-        return shN_canonical_cpu();
+        const Tensor values = _shN.to_pageable_host().contiguous();
+        const Tensor bounds = shN_value_quantized() ? _shN_value_bounds.to_pageable_host().contiguous() : Tensor{};
+        sh_codec(values, out,
+                 {.source_format = sh_storage_format(values, bounds), .destination_format = ShFormat::Canonical, .source_rows = n, .destination_rows = n, .count = n, .source_rest = uint32_t(k), .destination_rest = uint32_t(k)},
+                 nullptr, shN_value_quantized() ? &bounds : nullptr);
+        return out;
     }
 
     Tensor SplatData::shN_ply_rest_cpu() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
-        if (n == 0 || k == 0) {
-            auto out = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
-            out.zero_();
-            return out;
+        if (n == 0 || k == 0 || !_shN.is_valid() || _shN.numel() == 0)
+            return Tensor::zeros({n, k * SH_CHANNELS}, Device::CPU);
+        if (_shN.device() == Device::CPU)
+            return shN_canonical_cpu().permute({0, 2, 1}).contiguous().reshape({static_cast<int>(n), static_cast<int>(k * SH_CHANNELS)});
+        // f_rest is channel-major. Decode on the resident device in bounded row chunks so the
+        // transient device buffers stay small, and download each chunk in that layout.
+        const GpuBackendScope backend_scope(gpu_backend_of(_shN).value_or(default_gpu_backend()));
+        constexpr size_t kChunkRows = size_t{1} << 18; // multiple of the q16 bounds block and the swizzle tile
+        const bool half = _shN.dtype() == DataType::Float16;
+        const ShFormat format = half ? sh_storage_format(_shN, _shN_value_bounds) : ShFormat::Float32;
+        const Tensor* bounds = half && shN_value_quantized() ? &_shN_value_bounds : nullptr;
+        Tensor ply = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
+        Tensor chunk = Tensor::empty({std::min(n, kChunkRows), k, SH_CHANNELS}, Device::GPU);
+        for (size_t row = 0; row < n; row += kChunkRows) {
+            const size_t rows = std::min(kChunkRows, n - row);
+            Tensor decoded = chunk.slice(0, 0, rows);
+            sh_codec(_shN, decoded,
+                     {.source_format = format, .destination_format = ShFormat::Canonical, .source_rows = n, .destination_rows = rows, .count = rows, .source_rest = uint32_t(k), .destination_rest = uint32_t(k), .source_offset = row},
+                     nullptr, bounds);
+            ply.slice(0, row, row + rows)
+                .copy_from(decoded.permute({0, 2, 1}).contiguous().reshape({static_cast<int>(rows), static_cast<int>(k * SH_CHANNELS)}));
         }
-
-        if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
-            _shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0 &&
-            gpu_backend_of(_shN) == GpuBackend::CUDA && gpu_backend_of(_shN_value_bounds) == GpuBackend::CUDA) {
-            const GpuBackendScope cuda_scope(GpuBackend::CUDA);
-            // Keep the device staging buffer at most 128 MiB. Rounding to the q16
-            // block size also
-            // keeps every full band aligned with its source bounds table.
-            constexpr size_t kStagingBudgetBytes = size_t{128} * 1024 * 1024;
-            // GPU wait was effectively zero with the old two-buffer pipeline;
-            // one 128 MiB staging buffer is enough and matches the pre-warmed
-            // pinned-cache bucket.
-            constexpr size_t kDecodeBuffers = 1;
-            const size_t floats_per_row = k * SH_CHANNELS;
-            const size_t bytes_per_row = floats_per_row * sizeof(float);
-            size_t band_prims = kStagingBudgetBytes /
-                                (kDecodeBuffers * std::max<size_t>(bytes_per_row, 1));
-            band_prims = (band_prims / kShReorderSize) * kShReorderSize;
-            band_prims = std::max<size_t>(band_prims, 1);
-            band_prims = std::min(band_prims, n);
-
-            struct StreamOwner {
-                cudaStream_t stream = nullptr;
-
-                StreamOwner() {
-                    const cudaError_t status =
-                        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-                    if (status != cudaSuccess) {
-                        throw TensorError(std::format(
-                            "Failed to create PLY q16 decode stream: {}",
-                            cudaGetErrorString(status)));
-                    }
-                }
-
-                ~StreamOwner() noexcept {
-                    if (stream) {
-                        // Tensor destruction records both staging allocations against this
-                        // stream. Retire those allocator references while the handle is still
-                        // live; destroying the raw CUDA stream first leaves dangling handles in
-                        // the CUDA/pinned-memory pools on the exceptional path.
-                        CudaMemoryPool::instance().release_stream(stream);
-                        (void)cudaStreamDestroy(stream);
-                    }
-                }
-
-                StreamOwner(const StreamOwner&) = delete;
-                StreamOwner& operator=(const StreamOwner&) = delete;
-            } streams[1];
-
-            Tensor out;
-            Tensor device_staging[1];
-            Tensor host_staging[1];
-            {
-                LOG_TIMER_DEBUG("PLY q16 decode: staging alloc");
-                out = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
-#ifdef __linux__
-                (void)::madvise(out.data_ptr(), out.numel() * sizeof(float), MADV_HUGEPAGE);
-#endif
-                {
-                    LOG_TIMER_DEBUG("PLY export: prefault");
-                    prefault_pageable_host_memory(out.data_ptr(), out.bytes());
-                }
-                device_staging[0] = Tensor::empty(
-                    {band_prims, k, SH_CHANNELS}, Device::GPU, DataType::Float32);
-                host_staging[0] = Tensor::empty(
-                    {band_prims, k, SH_CHANNELS}, Device::CPU, DataType::Float32, true);
-                for (size_t slot = 0; slot < 1; ++slot) {
-                    if (!PinnedMemoryAllocator::instance().is_cuda_host_allocation(
-                            host_staging[slot].data_ptr())) {
-                        throw TensorError(
-                            "PLY q16 decode requires cudaHostAlloc-backed host staging memory");
-                    }
-                }
-            }
-
-            for (size_t slot = 0; slot < 1; ++slot) {
-                _shN.sync_to_stream(streams[slot].stream);
-                _shN_value_bounds.sync_to_stream(streams[slot].stream);
-                device_staging[slot].record_stream(streams[slot].stream);
-                host_staging[slot].record_stream(streams[slot].stream);
-            }
-            const auto* const codes = reinterpret_cast<const std::uint16_t*>(
-                resolve_exportable_device_ptr(_shN));
-            const auto* const bounds = static_cast<const float*>(
-                resolve_exportable_device_ptr(_shN_value_bounds));
-
-            const auto enqueue_band = [&](const size_t band_index) {
-                const size_t begin = band_index * band_prims;
-                const size_t count = std::min(band_prims, n - begin);
-                const size_t slot = 0;
-                const cudaStream_t stream = streams[slot].stream;
-                const size_t band_bytes = count * bytes_per_row;
-
-                sh_value_quant::decode_shN_u16_range_to_canonical(
-                    codes,
-                    bounds,
-                    device_staging[slot].ptr<float>(),
-                    static_cast<std::uint64_t>(begin * floats_per_row),
-                    static_cast<std::uint64_t>(count * floats_per_row),
-                    n,
-                    static_cast<std::uint32_t>(k),
-                    static_cast<std::uint32_t>(k),
-                    stream);
-                LFS_CUDA_CHECK_MSG_STREAM(
-                    cudaMemcpyAsync(host_staging[slot].data_ptr(),
-                                    device_staging[slot].data_ptr(),
-                                    band_bytes,
-                                    cudaMemcpyDeviceToHost,
-                                    stream),
-                    stream,
-                    "while copying PLY q16 decode band to host");
-            };
-
-            const size_t band_count = (n + band_prims - 1) / band_prims;
-            LOG_DEBUG("PLY q16 decode: bands band_prims={} band_count={} bytes={}",
-                      band_prims, band_count, n * bytes_per_row);
-            const size_t initial = std::min<size_t>(1, band_count);
-            for (size_t band = 0; band < initial; ++band)
-                enqueue_band(band);
-
-            auto* const dst = out.ptr<float>();
-            double gpu_wait_ms = 0.0;
-            double permute_ms = 0.0;
-            for (size_t completed = 0; completed < band_count; ++completed) {
-                const size_t slot = 0;
-                const cudaStream_t stream = streams[slot].stream;
-                const auto wait_start = std::chrono::high_resolution_clock::now();
-                {
-                    LOG_TIMER_DEBUG("PLY q16 decode: gpu wait");
-                    LFS_CUDA_CHECK_MSG_STREAM(
-                        cudaStreamSynchronize(stream),
-                        stream,
-                        "while completing PLY q16 decode band");
-                }
-                gpu_wait_ms += std::chrono::duration<double, std::milli>(
-                                   std::chrono::high_resolution_clock::now() - wait_start)
-                                   .count();
-
-                const size_t begin = completed * band_prims;
-                const size_t count = std::min(band_prims, n - begin);
-                const float* const src = host_staging[slot].ptr<float>();
-                const auto permute_start = std::chrono::high_resolution_clock::now();
-                {
-                    LOG_TIMER_DEBUG("PLY q16 decode: permute");
-                    tbb::parallel_for(
-                        tbb::blocked_range<size_t>(0, count, 256),
-                        [&](const tbb::blocked_range<size_t>& range) {
-                            for (size_t local = range.begin(); local != range.end(); ++local) {
-                                const float* const src_row = src + local * floats_per_row;
-                                float* const dst_row = dst + (begin + local) * floats_per_row;
-                                for (size_t c = 0; c < SH_CHANNELS; ++c) {
-                                    for (size_t coeff = 0; coeff < k; ++coeff) {
-                                        dst_row[c * k + coeff] =
-                                            src_row[coeff * SH_CHANNELS + c];
-                                    }
-                                }
-                            }
-                        });
-                }
-                permute_ms += std::chrono::duration<double, std::milli>(
-                                  std::chrono::high_resolution_clock::now() - permute_start)
-                                  .count();
-
-                const size_t next = completed + initial;
-                if (next < band_count)
-                    enqueue_band(next);
-            }
-            LOG_DEBUG("PLY q16 decode: gpu wait took {:.2f}ms", gpu_wait_ms);
-            LOG_DEBUG("PLY q16 decode: permute took {:.2f}ms", permute_ms);
-            return out;
-        }
-
-        if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
-            const Tensor shN_cpu = _shN.to_pageable_host();
-            Tensor out = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
-            {
-                LOG_TIMER_DEBUG("PLY export: prefault");
-                prefault_pageable_host_memory(out.data_ptr(), out.bytes());
-            }
-            auto* const dst = out.ptr<float>();
-
-            if (_shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0) {
-                const Tensor bounds_cpu = _shN_value_bounds.to_pageable_host();
-                const auto* const codes = reinterpret_cast<const std::uint16_t*>(shN_cpu.data_ptr());
-                const float* const bounds = bounds_cpu.ptr<float>();
-                const std::uint32_t n_cells =
-                    sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-                constexpr float kInvQ = 1.0f / 65535.0f;
-                tbb::parallel_for(
-                    tbb::blocked_range<size_t>(0, n),
-                    [&](const tbb::blocked_range<size_t>& range) {
-                        for (size_t p = range.begin(); p != range.end(); ++p) {
-                            const size_t bidx = p / 256u;
-                            const float lo = bounds[bidx * 2 + 0];
-                            const float hi = bounds[bidx * 2 + 1];
-                            float* const row = dst + p * k * SH_CHANNELS;
-                            const std::uint32_t block =
-                                static_cast<std::uint32_t>(p) / kShReorderSize;
-                            const std::uint32_t lane =
-                                static_cast<std::uint32_t>(p) % kShReorderSize;
-                            for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
-                                const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
-                                                   static_cast<size_t>(c) * kShReorderSize + lane;
-                                row[(c % SH_CHANNELS) * k + c / SH_CHANNELS] =
-                                    lo + (hi - lo) * (static_cast<float>(codes[idx]) * kInvQ);
-                            }
-                        }
-                    });
-                return out;
-            }
-
-            const auto* const src = shN_cpu.ptr<__half>();
-            const size_t src_values = static_cast<size_t>(shN_cpu.numel());
-            tbb::parallel_for(
-                tbb::blocked_range<size_t>(0, n),
-                [&](const tbb::blocked_range<size_t>& range) {
-                    for (size_t p = range.begin(); p != range.end(); ++p) {
-                        float* const row = dst + p * k * SH_CHANNELS;
-                        for (size_t offset = 0; offset < k * SH_CHANNELS; ++offset) {
-                            const auto slot = static_cast<std::uint32_t>(offset / 4u);
-                            const auto component = static_cast<std::uint32_t>(offset % 4u);
-                            const size_t src_offset =
-                                static_cast<size_t>(sh_swizzled_index(
-                                    static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) *
-                                    4u +
-                                component;
-                            row[(offset % SH_CHANNELS) * k + offset / SH_CHANNELS] =
-                                src_offset < src_values ? static_cast<float>(src[src_offset]) : 0.0f;
-                        }
-                    }
-                });
-            return out;
-        }
-
-        if (!_shN.is_valid() || _shN.numel() == 0) {
-            Tensor out = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
-            {
-                LOG_TIMER_DEBUG("PLY export: prefault");
-                prefault_pageable_host_memory(out.data_ptr(), out.bytes());
-            }
-            out.zero_();
-            return out;
-        }
-
-        const Tensor shN_cpu = _shN.to_pageable_host();
-        Tensor out = Tensor::empty_pageable_host({n, k * SH_CHANNELS}, DataType::Float32);
-        {
-            LOG_TIMER_DEBUG("PLY export: prefault");
-            prefault_pageable_host_memory(out.data_ptr(), out.bytes());
-        }
-        auto* const dst = out.ptr<float>();
-        const float* const src = shN_cpu.ptr<float>();
-        const size_t src_floats = static_cast<size_t>(shN_cpu.numel());
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, n),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t p = range.begin(); p != range.end(); ++p) {
-                    float* const row = dst + p * k * SH_CHANNELS;
-                    for (size_t offset = 0; offset < k * SH_CHANNELS; ++offset) {
-                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
-                        const auto component = static_cast<std::uint32_t>(offset % 4u);
-                        const size_t src_offset =
-                            static_cast<size_t>(sh_swizzled_index(
-                                static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) *
-                                4u +
-                            component;
-                        row[(offset % SH_CHANNELS) * k + offset / SH_CHANNELS] =
-                            src_offset < src_floats ? src[src_offset] : 0.0f;
-                    }
-                }
-            });
-        return out;
+        return ply;
     }
 
     void SplatData::shN_set_from_canonical(const Tensor& canonical, size_t capacity) {
+        const GpuBackendScope backend_scope(
+            gpu_backend_of(_shN).value_or(gpu_backend_of(_means).value_or(default_gpu_backend())));
         const size_t n = static_cast<size_t>(size());
         const size_t cap = std::max<size_t>(capacity, n);
         const uint32_t layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
@@ -1762,15 +1187,12 @@ namespace lfs::core {
             return;
         }
 
-        // Changing MAX degree changes the swizzled topology. q16 / IEEE f16 residents
-        // cannot be relayouted byte-wise — run the documented safe sequence here:
-        // decode to canonical fp32 (old layout), drop the compact form, relayout as
-        // fp32 at the new topology. The model leaves this call UNQUANTIZED; the
-        // training codec re-applies q16 at the next quant entry point. Cold path
-        // (scene setup / degree change UI), so the host-side dequant is fine.
+        // Changing the maximum degree changes the swizzled topology. Compact
+        // residents must be decoded before relayout; quantization resumes at
+        // the next quantization entry point.
         if (shN_value_quantized() || shN_ieee_f16()) {
             const size_t n_now = static_cast<size_t>(size());
-            Tensor canonical = shN_canonical(); // decodes q16 / casts ieee-f16, old max rest
+            Tensor canonical = shN_canonical();
             _shN = Tensor{};
             _shN_value_bounds = Tensor{};
             _max_sh_degree = target_degree;
@@ -1846,12 +1268,12 @@ namespace lfs::core {
                           kind);
                 return;
             }
+            const GpuBackendScope scope(gpu_backend_of(t).value_or(default_gpu_backend()));
             auto grown = Tensor::zeros_direct(t.shape(), cap_rows, t.device(), t.dtype());
             if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
                 const size_t elem_bytes = dtype_size(t.dtype());
                 if (elem_bytes > 0) {
-                    cudaMemcpy(grown.data_ptr(), t.data_ptr(),
-                               t.numel() * elem_bytes, cudaMemcpyDeviceToDevice);
+                    grown.copy_from(t);
                 }
             }
             if (!t.name().empty())
@@ -2125,20 +1547,15 @@ namespace lfs::core {
             Tensor gathered_shN;
             const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
             if (_shN.is_valid() && _shN.numel() > 0 && layout_rest > 0) {
-                if (_shN.dtype() != DataType::Float32 || shN_value_quantized() || shN_ieee_f16()) {
-                    Tensor canon = shN_canonical();
-                    if (canon.device() != _means.device()) {
-                        canon = canon.to(_means.device());
-                    }
-                    Tensor kept_canon = canon.index_select(0, kept_indices).contiguous();
-                    gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
-                    reorder_canonical_into_swizzled(kept_canon, gathered_shN, new_size,
-                                                    layout_rest, layout_rest);
-                } else {
-                    gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
-                    shN_swizzled_gather_self(_shN.ptr<float>(), gathered_shN.ptr<float>(),
-                                             kept_indices.ptr<int>(), new_size, 0, layout_rest);
-                }
+                gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
+                sh_codec(_shN, gathered_shN,
+                         {.source_format = sh_storage_format(_shN, _shN_value_bounds),
+                          .source_rows = old_size,
+                          .destination_rows = new_size,
+                          .count = new_size,
+                          .source_rest = layout_rest,
+                          .destination_rest = layout_rest},
+                         &kept_indices, shN_value_quantized() ? &_shN_value_bounds : nullptr);
             }
 
             Tensor new_means = home_param_tensor(gathered_means, _means, _tensor_allocator,
@@ -2250,8 +1667,7 @@ namespace lfs::core {
                                 SH_CHANNELS,
                             },
                         .dtype = DataType::Float32,
-                        // Preserve the exact legacy LFKP header emitted by
-                        // shN_canonical_cpu().
+                        // Serialized SH tensors declare CPU placement.
                         .serialized_device = Device::CPU,
                         .encoding =
                             quantized
@@ -2299,11 +1715,12 @@ namespace lfs::core {
     }
 
     void SplatData::deserialize(std::istream& is, SplatTensorAllocator tensor_allocator) {
+        TensorArchiveReader archive(is);
         const auto deserialize_started =
             std::chrono::steady_clock::now();
         uint32_t magic = 0, version = 0;
-        serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
-        serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
+        archive.read_exact(&magic, sizeof(magic), "SplatData magic");
+        archive.read_exact(&version, sizeof(version), "SplatData version");
 
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
@@ -2314,9 +1731,9 @@ namespace lfs::core {
 
         int32_t active_sh = 0, max_sh = 0;
         float scene_scale = 0.0f;
-        serialization_detail::read_exact(is, &active_sh, sizeof(active_sh), "SplatData active SH degree");
-        serialization_detail::read_exact(is, &max_sh, sizeof(max_sh), "SplatData maximum SH degree");
-        serialization_detail::read_exact(is, &scene_scale, sizeof(scene_scale), "SplatData scene scale");
+        archive.read_exact(&active_sh, sizeof(active_sh), "SplatData active SH degree");
+        archive.read_exact(&max_sh, sizeof(max_sh), "SplatData maximum SH degree");
+        archive.read_exact(&scene_scale, sizeof(scene_scale), "SplatData scene scale");
 
         if (max_sh < 0 || max_sh > MAX_SUPPORTED_SH_DEGREE || active_sh < 0 || active_sh > max_sh) {
             throw std::runtime_error("Invalid SplatData: unsupported SH degree range");
@@ -2330,27 +1747,21 @@ namespace lfs::core {
 
         Tensor means, sh0, scaling, rotation, opacity;
         Tensor shN_canon;
-        serialization_detail::TensorLoadTiming tensor_load_timing;
-        {
-            serialization_detail::TensorLoadTimingScope tensor_load_scope(
-                tensor_load_timing);
-            const auto load_device = [&](Tensor& tensor) {
-                serialization_detail::read_serialized_tensor_device_from_span_or_host(
-                    is, tensor, upload_stream);
-            };
-            load_device(means);
-            load_device(sh0);
-            load_device(scaling);
-            load_device(rotation);
-            load_device(opacity);
-            if (max_sh > 0) {
-                load_device(shN_canon);
-            }
+        const auto load_device = [&](Tensor& tensor) {
+            archive.read_tensor(tensor);
+        };
+        load_device(means);
+        load_device(sh0);
+        load_device(scaling);
+        load_device(rotation);
+        load_device(opacity);
+        if (max_sh > 0) {
+            load_device(shN_canon);
         }
 
         const auto flags_started = std::chrono::steady_clock::now();
         uint8_t has_deleted = 0;
-        serialization_detail::read_exact(is, &has_deleted, sizeof(has_deleted), "SplatData deleted flag");
+        archive.read_exact(&has_deleted, sizeof(has_deleted), "SplatData deleted flag");
         if (has_deleted > 1)
             throw std::runtime_error("Invalid SplatData: deleted flag must be boolean");
         Tensor deleted;
@@ -2358,8 +1769,7 @@ namespace lfs::core {
             is >> deleted;
 
         uint8_t has_densification = 0;
-        serialization_detail::read_exact(
-            is, &has_densification, sizeof(has_densification), "SplatData densification flag");
+        archive.read_exact(&has_densification, sizeof(has_densification), "SplatData densification flag");
         if (has_densification > 1)
             throw std::runtime_error("Invalid SplatData: densification flag must be boolean");
         Tensor densification;
@@ -2369,25 +1779,23 @@ namespace lfs::core {
         std::vector<FrozenRange> loaded_frozen_ranges;
         if (version >= SPLAT_DATA_MIN_VERSION_FROZEN_RANGES) {
             uint8_t has_frozen_ranges = 0;
-            serialization_detail::read_exact(
-                is, &has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
+            archive.read_exact(&has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
             if (has_frozen_ranges > 1)
                 throw std::runtime_error("Invalid SplatData: frozen-ranges flag must be boolean");
             if (has_frozen_ranges) {
                 uint64_t range_count = 0;
-                serialization_detail::read_exact(
-                    is, &range_count, sizeof(range_count), "SplatData frozen-range count");
+                archive.read_exact(&range_count, sizeof(range_count), "SplatData frozen-range count");
                 if (range_count == 0)
                     throw std::runtime_error("Invalid SplatData: frozen-range count must be positive");
                 if (range_count > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("Invalid SplatData: frozen-range count exceeds supported range");
-                serialization_detail::require_remaining_bytes(
-                    is, range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
+                archive.require_remaining_bytes(
+                    range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
                 loaded_frozen_ranges.reserve(range_count);
                 for (uint64_t i = 0; i < range_count; ++i) {
                     uint64_t start = 0, count = 0;
-                    serialization_detail::read_exact(is, &start, sizeof(start), "SplatData frozen-range start");
-                    serialization_detail::read_exact(is, &count, sizeof(count), "SplatData frozen-range count");
+                    archive.read_exact(&start, sizeof(start), "SplatData frozen-range start");
+                    archive.read_exact(&count, sizeof(count), "SplatData frozen-range count");
                     loaded_frozen_ranges.push_back({static_cast<std::size_t>(start),
                                                     static_cast<std::size_t>(count)});
                 }
@@ -2570,10 +1978,9 @@ namespace lfs::core {
             loaded_densification = densification.to(Device::GPU, upload_stream);
         }
 
-        LFS_CUDA_CHECK_MSG_STREAM(
-            cudaStreamSynchronize(upload_stream),
-            upload_stream,
-            "while completing SplatData GPU upload");
+        TensorCompletion upload_completion;
+        upload_completion.include(loaded_means);
+        upload_completion.wait();
 
         if (uploaded_shN_canon.is_valid()) {
             reorder_canonical_into_swizzled(uploaded_shN_canon,
@@ -2611,8 +2018,8 @@ namespace lfs::core {
             "Splat deserialize stages: gaussians={} header={:.3f} ms tensor_alloc={:.3f} ms tensor_read={:.3f} ms flags={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
             n,
             milliseconds(deserialize_started, header_finished),
-            tensor_load_timing.alloc_ms,
-            tensor_load_timing.read_ms,
+            archive.timing().allocation_ms,
+            archive.timing().read_ms,
             milliseconds(flags_started, gpu_upload_started),
             milliseconds(gpu_upload_started, gpu_upload_finished),
             milliseconds(deserialize_started, gpu_upload_finished));
@@ -2621,10 +2028,11 @@ namespace lfs::core {
     }
 
     void SplatData::skip_serialized(std::istream& is) {
+        TensorArchiveReader archive(is);
         const auto skip_started = std::chrono::steady_clock::now();
         uint32_t magic = 0, version = 0;
-        serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
-        serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
+        archive.read_exact(&magic, sizeof(magic), "SplatData magic");
+        archive.read_exact(&version, sizeof(version), "SplatData version");
 
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
@@ -2635,9 +2043,9 @@ namespace lfs::core {
 
         int32_t active_sh = 0, max_sh = 0;
         float scene_scale = 0.0f;
-        serialization_detail::read_exact(is, &active_sh, sizeof(active_sh), "SplatData active SH degree");
-        serialization_detail::read_exact(is, &max_sh, sizeof(max_sh), "SplatData maximum SH degree");
-        serialization_detail::read_exact(is, &scene_scale, sizeof(scene_scale), "SplatData scene scale");
+        archive.read_exact(&active_sh, sizeof(active_sh), "SplatData active SH degree");
+        archive.read_exact(&max_sh, sizeof(max_sh), "SplatData maximum SH degree");
+        archive.read_exact(&scene_scale, sizeof(scene_scale), "SplatData scene scale");
 
         if (max_sh < 0 || max_sh > MAX_SUPPORTED_SH_DEGREE || active_sh < 0 || active_sh > max_sh) {
             throw std::runtime_error("Invalid SplatData: unsupported SH degree range");
@@ -2646,46 +2054,43 @@ namespace lfs::core {
             throw std::runtime_error("Invalid SplatData: scene scale must be finite and positive");
         }
 
-        serialization_detail::skip_serialized_tensor(is); // means
-        serialization_detail::skip_serialized_tensor(is); // sh0
-        serialization_detail::skip_serialized_tensor(is); // scaling
-        serialization_detail::skip_serialized_tensor(is); // rotation
-        serialization_detail::skip_serialized_tensor(is); // opacity
+        archive.skip_tensor(); // means
+        archive.skip_tensor(); // sh0
+        archive.skip_tensor(); // scaling
+        archive.skip_tensor(); // rotation
+        archive.skip_tensor(); // opacity
         if (max_sh > 0) {
-            serialization_detail::skip_serialized_tensor(is); // shN
+            archive.skip_tensor(); // shN
         }
 
         uint8_t has_deleted = 0;
-        serialization_detail::read_exact(is, &has_deleted, sizeof(has_deleted), "SplatData deleted flag");
+        archive.read_exact(&has_deleted, sizeof(has_deleted), "SplatData deleted flag");
         if (has_deleted > 1)
             throw std::runtime_error("Invalid SplatData: deleted flag must be boolean");
         if (has_deleted)
-            serialization_detail::skip_serialized_tensor(is);
+            archive.skip_tensor();
 
         uint8_t has_densification = 0;
-        serialization_detail::read_exact(
-            is, &has_densification, sizeof(has_densification), "SplatData densification flag");
+        archive.read_exact(&has_densification, sizeof(has_densification), "SplatData densification flag");
         if (has_densification > 1)
             throw std::runtime_error("Invalid SplatData: densification flag must be boolean");
         if (has_densification)
-            serialization_detail::skip_serialized_tensor(is);
+            archive.skip_tensor();
 
         if (version >= SPLAT_DATA_MIN_VERSION_FROZEN_RANGES) {
             uint8_t has_frozen_ranges = 0;
-            serialization_detail::read_exact(
-                is, &has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
+            archive.read_exact(&has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
             if (has_frozen_ranges > 1)
                 throw std::runtime_error("Invalid SplatData: frozen-ranges flag must be boolean");
             if (has_frozen_ranges) {
                 uint64_t range_count = 0;
-                serialization_detail::read_exact(
-                    is, &range_count, sizeof(range_count), "SplatData frozen-range count");
+                archive.read_exact(&range_count, sizeof(range_count), "SplatData frozen-range count");
                 if (range_count == 0)
                     throw std::runtime_error("Invalid SplatData: frozen-range count must be positive");
                 if (range_count > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("Invalid SplatData: frozen-range count exceeds supported range");
-                serialization_detail::require_remaining_bytes(
-                    is, range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
+                archive.require_remaining_bytes(
+                    range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
                 const auto skip_bytes = range_count * 2 * sizeof(uint64_t);
                 if (skip_bytes > static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
                     throw std::runtime_error("SplatData frozen ranges exceed streamoff");
@@ -2983,10 +2388,7 @@ namespace lfs::core {
                           sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()),
                           sh0_.shape().str(), sh0_.numel());
 
-                // Build SH-rest directly in the resident vksplat-swizzled layout.
-                // The old path allocated a canonical GPU tensor and then the final
-                // swizzled tensor, briefly holding both. At SH3/max-cap that transient
-                // is large enough to show up in the VRAM profile.
+                // SH-rest uses the resident float4-swizzled layout.
                 shN_ = allocate_swizzled_shN(num_points,
                                              static_cast<size_t>(capacity),
                                              static_cast<uint32_t>(feature_shape - 1),
@@ -3317,6 +2719,7 @@ namespace lfs::core {
     }
 
     bool SplatData::apply_shN_value_quant() {
+        const GpuBackendScope backend_scope(gpu_backend_of(_shN).value_or(default_gpu_backend()));
         if (!sh_value_quant::enabled()) {
             return false;
         }
@@ -3343,34 +2746,11 @@ namespace lfs::core {
         const auto n_bounds_cap = sh_value_quant::n_bounds_for_prims(cap);
 
         Tensor float_src = shN;
-        if (float_src.dtype() == DataType::Float16) {
-            float_src = float_src.to(DataType::Float32);
-        }
         if (float_src.device() != Device::GPU) {
             float_src = float_src.gpu();
         }
         if (!float_src.is_contiguous()) {
             float_src = float_src.contiguous();
-        }
-
-        if (gpu_backend_of(float_src) == GpuBackend::Vulkan) {
-            Tensor encoded_codes;
-            Tensor encoded_bounds;
-            sh_value_quant::encode_shN_float4_to_u16_tensor(
-                float_src,
-                n,
-                sh_float4_slots_for_rest(rest),
-                sh_value_quant::n_value_cells_per_prim(rest),
-                encoded_codes,
-                encoded_bounds);
-            shN = encoded_codes.contiguous().reshape(TensorShape({n_cells}));
-            shN.set_name("splat.shN");
-            shN_value_bounds() =
-                encoded_bounds.contiguous().reshape(TensorShape({n_bounds * 2}));
-            shN_value_bounds().set_name("splat.shN_value_bounds");
-            LOG_DEBUG("SH value quant applied: N={} cap={} rest={} cells={} bounds={}",
-                      n, cap, rest, n_cells, n_bounds);
-            return true;
         }
 
         Tensor u16 = allocate_named_param(
@@ -3386,25 +2766,11 @@ namespace lfs::core {
         u16.set_name("splat.shN");
         bounds.set_name("splat.shN_value_bounds");
 
-        const cudaStream_t stream = getCurrentCUDAStream();
-        if (u16.stream() != stream) {
-            u16.set_stream(stream);
-        }
-        if (bounds.stream() != stream) {
-            bounds.set_stream(stream);
-        }
-        if (float_src.stream() != stream) {
-            float_src.set_stream(stream);
-        }
-
-        sh_value_quant::encode_shN_float4_to_u16(
-            float_src.ptr<float>(),
-            reinterpret_cast<std::uint16_t*>(resolve_exportable_device_ptr(u16)),
-            static_cast<float*>(resolve_exportable_device_ptr(bounds)),
-            n,
-            rest,
-            stream);
-        LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "sh_value quant codec device barrier");
+        sh_codec(float_src, u16, {.source_format = sh_storage_format(float_src, Tensor{}), .destination_format = ShFormat::Q16, .source_rows = n, .destination_rows = n, .count = n, .source_rest = rest, .destination_rest = rest},
+                 nullptr, nullptr, &bounds);
+        TensorCompletion completion;
+        completion.include(u16);
+        completion.wait();
 
         shN = std::move(u16);
         shN_value_bounds() = std::move(bounds);

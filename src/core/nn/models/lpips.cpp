@@ -5,10 +5,10 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
 
 #include <algorithm>
@@ -53,9 +53,9 @@ namespace lfs::core::nn::models {
         std::size_t fast_activation_bytes(const std::size_t height, const std::size_t width,
                                           const bool tiled) {
             const auto pixels = height * width;
-            return 4 * SizeBucketedPool::get_bucket_size(64 * pixels * sizeof(uint16_t)) +
-                   (tiled ? 2 * SizeBucketedPool::get_bucket_size(3 * pixels * sizeof(float)) : 0) +
-                   SizeBucketedPool::get_bucket_size(kBlocks * sizeof(float));
+            return 4 * cuda_allocation_size(64 * pixels * sizeof(uint16_t)) +
+                   (tiled ? 2 * cuda_allocation_size(3 * pixels * sizeof(float)) : 0) +
+                   cuda_allocation_size(kBlocks * sizeof(float));
         }
 
         lfs::Error lpips_error(const lfs::ErrorCode code, std::string detail) {
@@ -205,18 +205,18 @@ namespace lfs::core::nn::models {
         const auto feature_elems = 64 * crop_h * crop_w;
         for (const auto& buffer : fast_features_) {
             if (!buffer.is_valid() || buffer.numel() < feature_elems)
-                bytes += SizeBucketedPool::get_bucket_size(feature_elems * sizeof(uint16_t));
+                bytes += cuda_allocation_size(feature_elems * sizeof(uint16_t));
         }
         if (tile < static_cast<std::size_t>(std::max(height, width)))
-            bytes += 2 * SizeBucketedPool::get_bucket_size(3 * crop_h * crop_w * sizeof(float));
+            bytes += 2 * cuda_allocation_size(3 * crop_h * crop_w * sizeof(float));
         if (!fast_scores_.is_valid())
-            bytes += SizeBucketedPool::get_bucket_size(kBlocks * sizeof(float));
+            bytes += cuda_allocation_size(kBlocks * sizeof(float));
         if (!fast_weight_taps_.is_valid()) {
             std::size_t taps_bytes = 0;
             for (std::size_t i = 1; i < kLayers.size(); ++i)
                 taps_bytes += kernels::conv2d_weight_scratch_bytes(kLayers[i].cout, kLayers[i].cin, compute_);
             if (taps_bytes > 0)
-                bytes += SizeBucketedPool::get_bucket_size(taps_bytes);
+                bytes += cuda_allocation_size(taps_bytes);
         }
         return bytes;
     }
@@ -707,9 +707,9 @@ namespace lfs::core::nn::models {
                     normalized_y = Tensor{};
                     arena_.rewind(feature_mark);
 
-                    auto diff = normalized_x_hold_.sub(normalized_y_hold_);
+                    auto diff = normalized_x_hold_.to(DataType::Float32).sub(normalized_y_hold_.to(DataType::Float32));
                     diff = diff.mul(diff);
-                    auto score = conv(diff, std::format("lin{}.weight", layer));
+                    auto score = conv(diff, w(std::format("lin{}.weight", layer)).to(DataType::Float32));
                     values[static_cast<std::size_t>(layer)] =
                         score.mean().to(DataType::Float32).item<float>();
                     if (taps) {
@@ -746,8 +746,11 @@ namespace lfs::core::nn::models {
         float total = 0.0f;
         for (const float value : values)
             total += value;
-        if (taps)
-            internal::backend_ops_for(pred).synchronize_device();
+        if (taps) {
+            TensorCompletion completion;
+            completion.include(*gpu_backend_of(pred));
+            completion.wait();
+        }
         if (!std::isfinite(total))
             return lpips_error(lfs::ErrorCode::Internal, "LPIPS produced a non-finite value");
         return total;

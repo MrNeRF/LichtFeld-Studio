@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_status_bar.hpp"
+#include "core/camera_metrics.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -23,8 +24,10 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
@@ -437,6 +440,7 @@ namespace lfs::vis::gui {
         ctor.Bind("zoom_sep_color", &model_.zoom_sep_color);
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
+        ctor.Bind("show_lfs_memory", &model_.show_lfs_memory);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
         ctor.Bind("gpu_panel_active", &model_.gpu_panel_active);
         ctor.Bind("gpu_model_text", &model_.gpu_model_text);
@@ -1257,8 +1261,12 @@ namespace lfs::vis::gui {
                                             : "default";
             const auto* trainer = tm ? tm->getTrainer() : nullptr;
             const auto method = trainingBackendStatusLabel(
+#if LFS_BUILD_TRAINER
                 trainer ? std::optional{trainer->getParams().optimization.raster_backend()}
                         : std::nullopt,
+#else
+                std::nullopt,
+#endif
                 stored_backend);
             std::string strat_name;
             const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
@@ -1556,8 +1564,8 @@ namespace lfs::vis::gui {
         const auto mem = cached_gpu_mem_;
         constexpr float gib = 1024.0f * 1024.0f * 1024.0f;
         float app_gib = mem.process_used / gib;
-        float used_gib = mem.total_used / gib;
-        float total_gib = mem.total / gib;
+        float used_gib = (mem.uses_process_budget ? mem.process_budget_used : mem.total_used) / gib;
+        float total_gib = (mem.uses_process_budget ? mem.process_budget : mem.total) / gib;
         float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
 
         ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
@@ -1565,10 +1573,15 @@ namespace lfs::vis::gui {
                      lfs::vis::app_store().perf_hud.get().visible);
         setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+        setModelBool("show_lfs_memory", model_.show_lfs_memory, !mem.uses_process_budget);
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
-                       std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
+                       total_gib > 0.0f
+                           ? std::format("{} {:.2f}/{:.2f} GiB",
+                                         mem.uses_process_budget ? LOC("status_bar.gpu_budget") : LOC("status_bar.gpu"),
+                                         used_gib, total_gib)
+                           : std::format("{} —", LOC("status_bar.gpu")));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
 
         // FPS: prefer scene-render rate when scene frames are in the measurement

@@ -29,11 +29,11 @@ namespace lfs::app {
 
     [[nodiscard]] inline bool training_params_are_viewer_only(
         const lfs::core::param::TrainingParameters& params) {
-        return !params.optimization.headless &&
-               !params.render_path.has_value() &&
-               params.dataset.data_path.empty() &&
-               !params.resume_checkpoint.has_value() &&
-               !params.resume_project.has_value();
+        return params.render_path.has_value() ||
+               (!params.optimization.headless &&
+                params.dataset.data_path.empty() &&
+                !params.resume_checkpoint.has_value() &&
+                !params.resume_project.has_value());
     }
 
 } // namespace lfs::app

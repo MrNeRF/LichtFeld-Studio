@@ -4,6 +4,7 @@
 #include "core/failure_report.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/pipelined_image_loader.hpp"
 
 #include <cuda_runtime.h>
@@ -190,7 +191,7 @@ namespace {
 // FailureReport dedup fingerprints on {domain, code, detection site, operation}; two tests
 // tripping the same report site in one binary run collide unless each resets the window
 // (same requirement as PlyErrorTaxonomyTest).
-class PipelinedLoaderLedger : public ::testing::Test {
+class PipelinedLoaderLedger : public lfs::test::CudaBackendTest {
 protected:
     static void SetUpTestSuite() {
         create_generated_mask();
@@ -202,6 +203,7 @@ protected:
     }
 
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         lfs::core::reset_failure_report_dedup_for_testing();
         ASSERT_TRUE(std::filesystem::is_regular_file(mask_path())) << mask_path();
     }

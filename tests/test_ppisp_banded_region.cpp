@@ -10,6 +10,7 @@
 #include <torch/torch.h>
 #include <vector>
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
 
 namespace {
@@ -74,7 +75,7 @@ namespace {
         return rgb_out;
     }
 
-    class PPISPBandedRegionTest : public ::testing::Test {};
+    class PPISPBandedRegionTest : public lfs::test::CudaBackendTest {};
 
     TEST_F(PPISPBandedRegionTest, EvenBandsMatchFullImageBitExact) {
         const auto params = createParams(DEFAULT_SEED);

@@ -5,6 +5,8 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_spatial.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -81,14 +83,20 @@ namespace {
         }
     }
 
-    class TensorBackendParity : public testing::Test {
+    class TensorBackendParity : public lfs::test::CudaDeviceTest {
     protected:
         void SetUp() override {
-            ASSERT_TRUE(gpu_backend_available(GpuBackend::CUDA));
+            CudaDeviceTest::SetUp();
+            if (IsSkipped()) {
+                return;
+            }
             ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             const auto status = shutdown_gpu_backend(GpuBackend::Vulkan);
             EXPECT_TRUE(status.has_value());
             for (const std::string& message :
@@ -265,4 +273,42 @@ namespace {
             EXPECT_NEAR(vulkan[i], cuda[i], 1.0e-3f) << "index=" << i;
         }
     }
+    TEST(TensorGeneralOps, OneSidedIntegerClampPreservesDtypeAndLargeValues) {
+        const std::vector<int> values{std::numeric_limits<int>::min(), -16777217, -3, 0, 16777217, std::numeric_limits<int>::max()};
+        const Tensor host = Tensor::from_vector(values, {values.size()}, Device::CPU);
+        for (const auto backend : {GpuBackend::CUDA, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            const GpuBackendScope scope(backend);
+            for (const auto device : {Device::CPU, Device::GPU}) {
+                const Tensor source = host.to(device);
+                const auto minimum = source.clamp_min(-3).cpu();
+                const auto maximum = source.clamp_max(3).cpu();
+                ASSERT_EQ(minimum.dtype(), DataType::Int32);
+                ASSERT_EQ(maximum.dtype(), DataType::Int32);
+                for (size_t i = 0; i < values.size(); ++i) {
+                    EXPECT_EQ(minimum.ptr<int>()[i], std::max(values[i], -3));
+                    EXPECT_EQ(maximum.ptr<int>()[i], std::min(values[i], 3));
+                }
+            }
+        }
+    }
+
+    TEST(TensorGeneralOps, WherePreservesInt64BitsWithBroadcastAndStrides) {
+        std::vector<int64_t> values{INT64_C(9007199254740993), INT64_C(-9007199254740997), INT64_MAX, INT64_MIN};
+        const Tensor host = Tensor::from_blob(values.data(), {2, 2}, Device::CPU, DataType::Int64).transpose(0, 1);
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{true, false}, {2, 1}, Device::CPU);
+        const Tensor expected = Tensor::where(condition, host, host.slice(1, 0, 1)).contiguous();
+        for (const auto backend : {GpuBackend::CUDA, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            const GpuBackendScope scope(backend);
+            const Tensor source = host.contiguous().to(Device::GPU).transpose(0, 1).contiguous().transpose(0, 1);
+            const Tensor actual = Tensor::where(condition.to(Device::GPU), source, source.slice(1, 0, 1)).cpu();
+            ASSERT_EQ(actual.dtype(), DataType::Int64);
+            ASSERT_EQ(actual.bytes(), expected.bytes());
+            EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+        }
+    }
+
 } // namespace

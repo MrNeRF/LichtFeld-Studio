@@ -18,7 +18,20 @@ namespace {
 
     using namespace lfs::core;
 
-    TEST(TensorBackendSelection, AProcessDefaultFreezesAfterFirstResolution) {
+    class TensorBackendSelection : public testing::Test {
+    protected:
+        void SetUp() override {
+            original_backend = default_gpu_backend();
+            internal::gpu_backend_reset_for_testing();
+        }
+        void TearDown() override {
+            internal::gpu_backend_reset_for_testing();
+            EXPECT_TRUE(set_default_gpu_backend(original_backend));
+        }
+        GpuBackend original_backend;
+    };
+
+    TEST_F(TensorBackendSelection, AProcessDefaultFreezesAfterFirstResolution) {
         internal::gpu_backend_reset_for_testing();
 
         // Catches a missing CUDA fallback when no selector is set.
@@ -46,7 +59,7 @@ namespace {
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
     }
 
-    TEST(TensorBackendSelection, ConfiguredDefaultCanChangeBeforeResolution) {
+    TEST_F(TensorBackendSelection, ConfiguredDefaultCanChangeBeforeResolution) {
         internal::gpu_backend_reset_for_testing();
         ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
 
@@ -58,7 +71,9 @@ namespace {
         internal::gpu_backend_reset_for_testing();
     }
 
-    TEST(TensorBackendSelection, ScopeNestsRestoresAndIsThreadLocal) {
+    TEST_F(TensorBackendSelection, ScopeNestsRestoresAndIsThreadLocal) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
         // Catches a scope implemented as a process-global mutable selector.
         if (!gpu_backend_available(GpuBackend::Vulkan)) {
             GTEST_SKIP() << "Vulkan backend unavailable";
@@ -90,7 +105,9 @@ namespace {
         EXPECT_EQ(gpu_backend_of(after_scope), GpuBackend::CUDA);
     }
 
-    TEST(TensorBackendSelection, StorageIdentityCoversCpuGpuAndViews) {
+    TEST_F(TensorBackendSelection, StorageIdentityCoversCpuGpuAndViews) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
         // Catches backend identity stored on tensor handles instead of shared storage.
         const Tensor cpu = Tensor::zeros({2, 2}, Device::CPU);
         EXPECT_EQ(gpu_backend_of(cpu), std::nullopt);
@@ -102,7 +119,9 @@ namespace {
         EXPECT_EQ(gpu_backend_of(view), gpu_backend_of(gpu));
     }
 
-    TEST(TensorBackendSelection, CudaFromBlobIgnoresVulkanScope) {
+    TEST_F(TensorBackendSelection, CudaFromBlobIgnoresVulkanScope) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
         // Catches from_blob incorrectly consulting the no-input factory selector.
         void* pointer = nullptr;
         ASSERT_EQ(cudaMalloc(&pointer, sizeof(float)), cudaSuccess);
@@ -115,7 +134,7 @@ namespace {
         ASSERT_EQ(cudaFree(pointer), cudaSuccess);
     }
 
-    TEST(TensorBackendSelection, VulkanFactorySucceedsWithoutChangingDefault) {
+    TEST_F(TensorBackendSelection, VulkanFactorySucceedsWithoutChangingDefault) {
         // Catches a Vulkan scope falling through to a CUDA allocation.
         if (!gpu_backend_available(GpuBackend::Vulkan)) {
             GTEST_SKIP() << "Vulkan backend unavailable";
@@ -129,7 +148,9 @@ namespace {
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
     }
 
-    TEST(TensorBackendSelection, OperationsInheritInputBackendAgainstScope) {
+    TEST_F(TensorBackendSelection, OperationsInheritInputBackendAgainstScope) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
         // Catches output, reduction, and lazy allocations that consult the active scope.
         const Tensor a = Tensor::full({8}, 2.0f, Device::GPU);
         const Tensor b = Tensor::full({8}, 3.0f, Device::GPU);
@@ -154,10 +175,12 @@ namespace {
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
     }
 
-    TEST(TensorBackendSelection, CopyToBackendClonesAndConvertsCleanly) {
+    TEST_F(TensorBackendSelection, CopyToBackendClonesAndConvertsCleanly) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
         // Catches same-backend aliasing and cross-backend CUDA fallthrough.
         const Tensor source = Tensor::full({4}, 7.0f, Device::GPU);
-        const Tensor clone = internal::copy_to_backend(source, GpuBackend::CUDA);
+        const Tensor clone = source.to(GpuBackend::CUDA);
         ASSERT_EQ(gpu_backend_of(clone), GpuBackend::CUDA);
         EXPECT_NE(clone.data_ptr(), source.data_ptr());
         EXPECT_EQ(clone.to_vector(), source.to_vector());
@@ -166,14 +189,15 @@ namespace {
             return;
         }
         const Tensor vulkan =
-            internal::copy_to_backend(source, GpuBackend::Vulkan);
+            source.to(GpuBackend::Vulkan);
         EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
         EXPECT_EQ(vulkan.to_vector(), source.to_vector());
     }
 
-    TEST(TensorBackendSelection, BackendMemoryAndShutdownAreDefinedForBothBackends) {
+    TEST_F(TensorBackendSelection, BackendMemoryAndShutdownAreDefinedForBothBackends) {
         // Catches placeholder Vulkan services leaking CUDA statistics or errors.
-        EXPECT_TRUE(gpu_backend_available(GpuBackend::CUDA));
+        if (gpu_backend_available(GpuBackend::CUDA))
+            EXPECT_GT(gpu_backend_memory_info(GpuBackend::CUDA).total_bytes, 0u);
         const MemoryInfo vulkan = gpu_backend_memory_info(GpuBackend::Vulkan);
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             EXPECT_GT(vulkan.total_bytes, 0u);

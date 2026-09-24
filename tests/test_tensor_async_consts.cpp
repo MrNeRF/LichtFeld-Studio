@@ -3,6 +3,7 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_readback.hpp"
 #include "rendering/selection_ops.hpp"
 
 #include <gtest/gtest.h>
@@ -146,7 +147,7 @@ namespace {
 } // namespace
 
 TEST(TensorAsyncConsts, FullMatchesCpuOnDefaultBackend) {
-    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::CUDA);
     GpuBackendScope scope(GpuBackend::CUDA);
     run_full_suite();
 }
@@ -158,7 +159,7 @@ TEST(TensorAsyncConsts, FullMatchesCpuOnVulkan) {
 }
 
 TEST(TensorAsyncConsts, ArangeMatchesCpuOnDefaultBackend) {
-    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::CUDA);
     GpuBackendScope scope(GpuBackend::CUDA);
     run_arange_suite();
 }
@@ -170,7 +171,7 @@ TEST(TensorAsyncConsts, ArangeMatchesCpuOnVulkan) {
 }
 
 TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadable) {
-    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::CUDA);
     GpuBackendScope scope(GpuBackend::CUDA);
     Tensor live = Tensor::full({4096}, 3.5f, Device::GPU, DataType::Float32);
     Tensor::trim_memory_pool();
@@ -187,22 +188,22 @@ TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadableOnVulkan) {
                        "vulkan trim live");
 }
 
-TEST(SelectionGroupCount, AsyncReadbackMatchesCountSelectionGroupsOnVulkan) {
+TEST(SelectionGroupCount, AsyncReadbackMatchesCpuOnVulkan) {
     SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     constexpr size_t n = 87040;
     Tensor mask = random_group_mask(n, 20260906);
-    Tensor sync_scratch;
-    const auto expected = lfs::rendering::count_selection_groups(mask, sync_scratch);
+    std::array<size_t, 256> expected{};
+    for (const auto value : mask.cpu().to_vector_uint8())
+        if (value)
+            ++expected[value];
 
     Tensor scratch;
     lfs::rendering::count_selection_groups_async(mask, scratch);
-    std::array<int, 257> host{};
-    lfs::rendering::SelectionCountTicket ticket;
-    lfs::rendering::enqueue_selection_group_count_read(
-        scratch, host.data(), nullptr, &ticket);
-    while (!lfs::rendering::poll_selection_group_count_readback(ticket, host.data())) {
-    }
+    std::array<int, 256> host{};
+    TensorReadback readback;
+    readback.enqueue(scratch);
+    while (!readback.poll(std::as_writable_bytes(std::span(host)))) {}
     for (size_t group = 0; group < 256; ++group) {
         EXPECT_EQ(static_cast<size_t>(std::max(host[group], 0)), expected[group])
             << "group " << group;

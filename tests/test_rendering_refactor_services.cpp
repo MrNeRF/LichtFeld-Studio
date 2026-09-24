@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
@@ -42,7 +43,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -195,10 +195,6 @@ namespace lfs::vis {
             initialized = true;
         }
 
-        bool has_cuda_device() {
-            int device_count = 0;
-            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-        }
     } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
@@ -329,10 +325,6 @@ namespace lfs::vis {
     }
 
     TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -2621,6 +2613,49 @@ namespace lfs::vis {
         service.resetModelTracking();
         EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
     }
+
+    enum class DepthStorage { CPU,
+                              CUDA,
+                              Vulkan };
+    class ViewportDepthBackendTest : public ::testing::TestWithParam<DepthStorage> {};
+
+    TEST_P(ViewportDepthBackendTest, SamplesStridedDepthOnTheStorageBackend) {
+        const bool on_cpu = GetParam() == DepthStorage::CPU;
+        const auto backend = GetParam() == DepthStorage::Vulkan ? core::GpuBackend::Vulkan
+                                                                : core::GpuBackend::CUDA;
+        if (!on_cpu && !core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << "Requested GPU backend unavailable";
+        }
+        core::GpuBackendScope scope(backend);
+        auto depth = core::Tensor::from_vector(
+            {99.0f, 2.0f, 3.0f, 99.0f, 99.0f, 4.0f, 5.0f, 99.0f},
+            {1, 2, 4}, core::Device::CPU);
+        if (!on_cpu) {
+            depth = depth.gpu();
+        }
+        depth = depth.slice(2, 1, 3);
+        ASSERT_FALSE(depth.is_contiguous());
+        const auto original_backend = core::gpu_backend_of(depth);
+
+        lfs::rendering::FrameMetadata metadata{};
+        metadata.valid = true;
+        metadata.depth_panel_count = 1;
+        metadata.depth_panels[0].depth = std::make_shared<core::Tensor>(std::move(depth));
+        ViewportArtifactService artifacts;
+        artifacts.updateFromImageOutput({}, metadata, {4, 4}, true);
+
+        // The selected default is independent of the storage being sampled.
+        core::GpuBackendScope other(backend == core::GpuBackend::CUDA ? core::GpuBackend::Vulkan
+                                                                      : core::GpuBackend::CUDA);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {4, 4}), 2.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 0, {4, 4}), 3.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 3, {4, 4}), 4.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 3, {4, 4}), 5.0f);
+        EXPECT_EQ(core::gpu_backend_of(*metadata.depth_panels[0].depth), original_backend);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(StorageBackends, ViewportDepthBackendTest,
+                             ::testing::Values(DepthStorage::CPU, DepthStorage::CUDA, DepthStorage::Vulkan));
 
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {
         ViewportArtifactService artifacts;

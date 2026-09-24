@@ -4,6 +4,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/training_setup.hpp"
@@ -89,7 +90,9 @@ namespace {
     };
 } // namespace
 
-TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
+class SplatDataCloneTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(SplatDataCloneTest, Q16CloneCarriesBounds) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
@@ -116,7 +119,7 @@ TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
     EXPECT_FLOAT_EQ(model.means_raw().cpu().ptr<float>()[0], src_mean0);
 }
 
-TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
+TEST_F(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     const ShValueQuantGuard quant_guard{false};
     auto model = make_random_sh3(kN);
     ASSERT_FALSE(model.shN_value_quantized());
@@ -131,7 +134,7 @@ TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
 }
 
-TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
+TEST_F(SplatDataCloneTest, CloneCarriesDeletedMask) {
     auto model = make_random_sh3(64);
     std::vector<bool> deleted(64, false);
     deleted[1] = true;
@@ -149,7 +152,7 @@ TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
     EXPECT_EQ(copy.deleted().cpu().to_vector_bool(), model.deleted().cpu().to_vector_bool());
 }
 
-TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
+TEST_F(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
@@ -174,7 +177,7 @@ TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
 }
 
-TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
+TEST_F(SplatDataCloneTest, WritebackClearsQ16Pair) {
     const ShValueQuantGuard quant_guard{true};
 
     // Degree 2: q16 cell count equals ieee-f16 swizzle count. Degree 3 does not.
@@ -199,7 +202,7 @@ TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
     }
 }
 
-TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
+TEST_F(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     const size_t n = 64;
     auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::GPU, DataType::Float32);
     auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::GPU, DataType::Float32);
@@ -229,7 +232,7 @@ TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
 }
 
-TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
+TEST_F(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));

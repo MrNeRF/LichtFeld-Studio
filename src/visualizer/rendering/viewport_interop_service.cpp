@@ -8,6 +8,7 @@
 #include "core/tensor_backend.hpp"
 #include "output_image_pool.hpp"
 #include "passes/vulkan_viewport_pass.hpp"
+#include "rendering/image_tensor.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <algorithm>
@@ -32,13 +33,29 @@ namespace lfs::vis {
         }
     } // namespace
 
-    // Pooled unit: image + CUDA import + timeline ride together. Reuse skips re-import.
     struct ViewportInteropService::PooledInteropUnit {
-        VulkanContext::ExternalImage image;
-        VulkanContext::ExternalSemaphore semaphore;
-        lfs::rendering::CudaVulkanInterop interop;
+        struct Image {
+            VkImage image = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkDeviceSize allocation_size = 0;
+        } image;
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        std::uint64_t timeline_value = 0;
+        lfs::core::Tensor snapshot;
+        lfs::core::TensorVulkanBuffer storage;
+        lfs::core::TensorCompletion ready;
+
+        void destroy(VulkanContext& context) {
+            if (image.view)
+                vkDestroyImageView(context.device(), image.view, nullptr);
+            if (image.image)
+                vmaDestroyImage(context.allocator(), image.image, image.allocation);
+            image = {};
+            snapshot = {};
+            storage = {};
+            ready = {};
+        }
     };
 
     // Per-slot binding into the shared interop pool (payload stays pool-owned).
@@ -91,9 +108,8 @@ namespace lfs::vis {
             return ChannelPolicy{
                 .id = ChannelId::Scene,
                 .vk_format = VK_FORMAT_R8G8B8A8_UNORM,
-                .cuda_format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
                 .debug_name_prefix = "scene",
-                .failure_log_prefix = "Required Vulkan/CUDA viewport interop failed",
+                .failure_log_prefix = "Required Vulkan/tensor viewport interop failed",
                 .external_handle_early_out = true,
                 .publishes_published = false,
                 .log_timer_perf = true,
@@ -102,9 +118,8 @@ namespace lfs::vis {
             return ChannelPolicy{
                 .id = ChannelId::SplitRight,
                 .vk_format = VK_FORMAT_R8G8B8A8_UNORM,
-                .cuda_format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
                 .debug_name_prefix = "split_right",
-                .failure_log_prefix = "Required Vulkan/CUDA split-view interop failed",
+                .failure_log_prefix = "Required Vulkan/tensor split-view interop failed",
                 .external_handle_early_out = false,
                 .publishes_published = true,
                 .log_timer_perf = false,
@@ -113,9 +128,8 @@ namespace lfs::vis {
             return ChannelPolicy{
                 .id = ChannelId::DepthBlit,
                 .vk_format = VK_FORMAT_R32_SFLOAT,
-                .cuda_format = lfs::rendering::CudaVulkanImageFormat::R32Sfloat,
                 .debug_name_prefix = "depth_blit",
-                .failure_log_prefix = "Required Vulkan/CUDA depth-blit interop failed",
+                .failure_log_prefix = "Required Vulkan/tensor depth-blit interop failed",
                 .external_handle_early_out = false,
                 .publishes_published = true,
                 .log_timer_perf = false,
@@ -134,20 +148,6 @@ namespace lfs::vis {
 
     ViewportInteropService::~ViewportInteropService() {
         shutdown();
-    }
-
-    void ViewportInteropService::ensureUploadStream() {
-        if (upload_stream_init_attempted_) {
-            return;
-        }
-        upload_stream_init_attempted_ = true;
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            return;
-        }
-        if (!upload_stream_.init()) {
-            LOG_WARN("Could not create the non-blocking CUDA/Vulkan GUI upload stream: {}",
-                     upload_stream_.lastError());
-        }
     }
 
     void ViewportInteropService::clearPublished(Channel& channel) {
@@ -178,7 +178,6 @@ namespace lfs::vis {
     bool ViewportInteropService::sourceOk(const Channel& channel) const {
         return channel.source_image &&
                channel.source_image->is_valid() &&
-               channel.source_image->device() == lfs::core::Device::GPU &&
                channel.source_size.x > 0 &&
                channel.source_size.y > 0;
     }
@@ -187,33 +186,8 @@ namespace lfs::vis {
         if (!interop_pool_) {
             return;
         }
-        const auto destroy_fn = [&context](PooledInteropUnit& unit) {
-            // Same sequence as the former VulkanSceneInteropTarget::destroy: rare path
-            // (trim/shutdown/force). Includes waitForImmediateSubmits.
-            if (!context.waitForImmediateSubmits()) {
-                LOG_ERROR("Could not drain Vulkan interop transitions before pooled unit destruction: {}",
-                          context.lastError());
-            }
-            unit.interop.reset();
-            context.destroyExternalSemaphore(unit.semaphore);
-            context.destroyExternalImage(unit.image);
-            unit.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            unit.timeline_value = 0;
-        };
-        auto producer_pred = [&context](const PooledInteropUnit& unit, const std::uint64_t value) {
-            if (value == 0) {
-                return true;
-            }
-            if (unit.semaphore.semaphore == VK_NULL_HANDLE) {
-                return true;
-            }
-            std::uint64_t counter = 0;
-            if (!context.getTimelineSemaphoreCounterValue(unit.semaphore.semaphore, counter)) {
-                // Non-blocking drain: treat query failure as not-yet-done.
-                return false;
-            }
-            return counter >= value;
-        };
+        const auto destroy_fn = [&context](PooledInteropUnit& unit) { unit.destroy(context); };
+        const auto producer_pred = [](const PooledInteropUnit&, std::uint64_t) { return true; };
         const std::uint64_t retired_serial = context.retiredFrameSubmitSerial();
         auto consumer_pred = [retired_serial](const std::uint64_t serial) {
             return serial <= retired_serial;
@@ -234,8 +208,7 @@ namespace lfs::vis {
             return;
         }
         // Layout + timeline live on the pooled unit (already up to date).
-        const std::uint64_t producer =
-            target.unit != nullptr ? target.unit->timeline_value : 0;
+        const std::uint64_t producer = 0;
         const std::uint64_t consumer = context.lastFrameSubmitSerial();
         interop_pool_->pool.release(target.pool_serial, producer, consumer);
         target = {};
@@ -365,13 +338,6 @@ namespace lfs::vis {
             }
             // Force-drain retired/free units (destroy path includes waitForImmediateSubmits).
             drainInteropPool(*teardown_context_, /*force=*/true);
-        } else {
-            // No context: drop CUDA side only; Vulkan objects orphaned (same as prior interop.reset).
-            for (auto& target : channel.targets) {
-                if (target && target->unit) {
-                    target->unit->interop.reset();
-                }
-            }
         }
         channel.targets.clear();
     }
@@ -404,7 +370,7 @@ namespace lfs::vis {
             inputs.target_valid_size_matches =
                 target_ptr && target_ptr->valid_size == channel.source_size;
             inputs.target_interop_valid =
-                target_ptr && target_ptr->unit && target_ptr->unit->interop.valid();
+                target_ptr && target_ptr->unit && (target_ptr->unit->image.image != VK_NULL_HANDLE);
             inputs.target_layout_read_only =
                 target_ptr && target_ptr->unit &&
                 target_ptr->unit->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -415,20 +381,12 @@ namespace lfs::vis {
 
         const auto fail_required_interop = [this, &channel](std::string message) -> void {
             channel.disabled = true;
-            if (!upload_stream_.synchronize()) {
-                message += std::format("; CUDA upload drain failed: {}",
-                                       upload_stream_.lastError());
-            }
             resetChannel(channel);
             LOG_ERROR("{}: {}", channel.policy.failure_log_prefix, message);
             throw std::runtime_error(std::move(message));
         };
 
-        // Cache-HIT fast path: when nothing about the source image changed since the last
-        // upload into THIS slot's interop target, there's no work to do — and crucially no
-        // need to vkWaitForFences this slot. The previous unconditional wait was costing
-        // ~kFrameDuration ms per frame (10–12 ms with kFramesInFlight=1) for no reason on
-        // every renderer cache-HIT frame, which dominated gui_render time.
+        // An unchanged image can be sampled again without rewriting its slot.
         const ViewportInteropDecision decision = decideViewportInteropEarly(inputs);
         if (decision.action == ViewportInteropAction::Disabled ||
             decision.action == ViewportInteropAction::ExternalSkip) {
@@ -442,12 +400,6 @@ namespace lfs::vis {
                 clearPublished(channel);
             }
             return;
-        }
-
-        // Original order: stream validity is checked after the disabled / external / invalid-source
-        // early outs and before cache-HIT, defer and slow-path work.
-        if (!upload_stream_.valid()) {
-            fail_required_interop("non-blocking CUDA upload stream is unavailable");
         }
 
         if (decision.action == ViewportInteropAction::CacheHit) {
@@ -473,7 +425,7 @@ namespace lfs::vis {
 
         // Slow path: we will write to the interop image (recreate, transition, or copy).
         // waitForCurrentFrameSlot protects the CURRENT unit about to be mutated (layout
-        // transition + CUDA write) while a prior GUI frame may still sample this FIF slot.
+        // transition + tensor write) while a prior GUI frame may still sample this FIF slot.
         // Pool retirement covers OLD units released on bucket change — not the live unit.
         // Keep the wait: it is not redundant with retirement.
         {
@@ -505,7 +457,7 @@ namespace lfs::vis {
         const bool recreate =
             target_ptr->unit == nullptr ||
             target_ptr->alloc_size != alloc_size ||
-            !target_ptr->unit->interop.valid();
+            !(target_ptr->unit->image.image != VK_NULL_HANDLE);
         if (channel.policy.log_timer_perf) {
             LOG_PERF("interop slot={} recreate={} cur_gen={} uploaded_gen={} layout={} valid={}x{} alloc={}x{}",
                      frame_slot, recreate,
@@ -529,119 +481,55 @@ namespace lfs::vis {
                 .format = channel.policy.vk_format,
                 .extent = extent,
                 .usage = kInteropExternalImageUsage,
-                .external = true,
+                .external = false,
             };
 
             if (auto hit = interop_pool_->pool.acquire(key)) {
-                // Pool hit: reuse unit — no create, no UNDEFINED→GENERAL, no wait, no re-import.
                 target_ptr->pool_serial = hit->acquisition_serial;
                 target_ptr->unit = hit->payload;
-                // Timeline continues from the stored unit (strictly monotonic — never reset).
-                // Layout continues from the stored layout; per-frame path transitions tracked→GENERAL.
-                // NEVER emit UNDEFINED-source transition for a reused unit.
             } else {
-                // Cold path: create + one-shot init + CUDA import, then register as Live.
                 PooledInteropUnit created{};
-                if (!context.createExternalImage(extent,
-                                                 channel.policy.vk_format,
-                                                 created.image,
-                                                 "vulkan.gui.interop_image",
-                                                 std::format("{}.frame{}",
-                                                             channel.policy.debug_name_prefix,
-                                                             frame_slot)) ||
-                    !context.createExternalTimelineSemaphore(0, created.semaphore,
-                                                             "vulkan.gui.interop_semaphore")) {
-                    const std::string error = std::format("target creation failed: {}", context.lastError());
-                    if (created.image.image != VK_NULL_HANDLE ||
-                        created.semaphore.semaphore != VK_NULL_HANDLE) {
-                        if (!context.waitForImmediateSubmits()) {
-                            LOG_ERROR("Could not drain before interop create-fail cleanup: {}",
-                                      context.lastError());
-                        }
-                        created.interop.reset();
-                        context.destroyExternalSemaphore(created.semaphore);
-                        context.destroyExternalImage(created.image);
-                    }
-                    fail_required_interop(error);
+                VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                image.imageType = VK_IMAGE_TYPE_2D;
+                image.format = channel.policy.vk_format;
+                image.extent = {extent.width, extent.height, 1};
+                image.mipLevels = image.arrayLayers = 1;
+                image.samples = VK_SAMPLE_COUNT_1_BIT;
+                image.tiling = VK_IMAGE_TILING_OPTIMAL;
+                image.usage = kInteropExternalImageUsage;
+                image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VmaAllocationCreateInfo allocation{};
+                allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                VmaAllocationInfo allocated{};
+                if (vmaCreateImage(context.allocator(), &image, &allocation, &created.image.image,
+                                   &created.image.allocation, &allocated) != VK_SUCCESS)
+                    fail_required_interop("Viewport image allocation failed");
+                created.image.allocation_size = allocated.size;
+                created.image.format = image.format;
+                VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                view.image = created.image.image;
+                view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                view.format = image.format;
+                view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                if (vkCreateImageView(context.device(), &view, nullptr, &created.image.view) != VK_SUCCESS) {
+                    created.destroy(context);
+                    fail_required_interop("Viewport image view creation failed");
                 }
-                const std::uint64_t vulkan_ready_value = ++created.timeline_value;
-                if (!context.transitionImageLayoutImmediate(
-                        created.image.image,
-                        VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        VulkanContext::ImmediateTransitionOptions::signalAt(
-                            {created.semaphore.semaphore, vulkan_ready_value}))) {
-                    const std::string error =
-                        std::format("image initialization failed: {}", context.lastError());
-                    if (!context.waitForImmediateSubmits()) {
-                        LOG_ERROR("Could not drain before interop init-fail cleanup: {}",
-                                  context.lastError());
-                    }
-                    created.interop.reset();
-                    context.destroyExternalSemaphore(created.semaphore);
-                    context.destroyExternalImage(created.image);
-                    fail_required_interop(error);
-                }
-                // Complete the one-time Vulkan initialization before exporting the
-                // timeline to CUDA. Later handoffs remain asynchronous, but no
-                // external producer may advance this semaphore past the pending
-                // Vulkan signal that establishes its initial image ownership.
-                if (!context.waitForImmediateSubmits()) {
-                    const std::string error = std::format(
-                        "image initialization handoff failed: {}", context.lastError());
-                    created.interop.reset();
-                    context.destroyExternalSemaphore(created.semaphore);
-                    context.destroyExternalImage(created.image);
-                    fail_required_interop(error);
-                }
-
-                // Handle rule: release native handles exactly once per physical unit (first import).
-                const auto memory_handle = context.releaseExternalImageNativeHandle(created.image);
-                const auto semaphore_handle =
-                    context.releaseExternalSemaphoreNativeHandle(created.semaphore);
-                // Windows allocation-info rule: allocation_size + dedicated flag are captured
-                // at import time and ride with the unit; reuse skips re-import so they stay
-                // coherent by construction.
-                lfs::rendering::CudaVulkanExternalImageImport image_import{
-                    .memory_handle = memory_handle,
-                    .allocation_size = static_cast<std::size_t>(created.image.allocation_size),
-                    .extent = {.width = extent.width, .height = extent.height},
-                    .format = channel.policy.cuda_format,
-                    .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
-                };
-                lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
-                    .semaphore_handle = semaphore_handle,
-                    .initial_value = 0,
-                };
-                if (!created.interop.init(image_import, semaphore_import)) {
-                    const std::string error =
-                        std::format("CUDA import failed: {}", created.interop.lastError());
-                    if (!context.waitForImmediateSubmits()) {
-                        LOG_ERROR("Could not drain before interop import-fail cleanup: {}",
-                                  context.lastError());
-                    }
-                    created.interop.reset();
-                    context.destroyExternalSemaphore(created.semaphore);
-                    context.destroyExternalImage(created.image);
-                    fail_required_interop(error);
-                }
-                created.layout = VK_IMAGE_LAYOUT_GENERAL;
-
                 auto reg = interop_pool_->pool.registerCreated(key, std::move(created));
                 target_ptr->pool_serial = reg.acquisition_serial;
                 target_ptr->unit = reg.payload;
 
                 switch (channel.policy.id) {
                 case ChannelId::Scene:
-                    LOG_INFO("Vulkan/CUDA viewport interop target initialized for frame slot {}: valid {}x{} alloc {}x{}",
+                    LOG_INFO("Vulkan/tensor viewport interop target initialized for frame slot {}: valid {}x{} alloc {}x{}",
                              frame_slot, valid_size.x, valid_size.y, alloc_size.x, alloc_size.y);
                     break;
                 case ChannelId::SplitRight:
-                    LOG_INFO("Vulkan/CUDA split-view right-panel interop initialized for slot {}: valid {}x{} alloc {}x{}",
+                    LOG_INFO("Vulkan/tensor split-view right-panel interop initialized for slot {}: valid {}x{} alloc {}x{}",
                              frame_slot, valid_size.x, valid_size.y, alloc_size.x, alloc_size.y);
                     break;
                 case ChannelId::DepthBlit:
-                    LOG_INFO("Vulkan/CUDA depth-blit interop initialized for slot {}: valid {}x{} alloc {}x{}",
+                    LOG_INFO("Vulkan/tensor depth-blit interop initialized for slot {}: valid {}x{} alloc {}x{}",
                              frame_slot, valid_size.x, valid_size.y, alloc_size.x, alloc_size.y);
                     break;
                 }
@@ -672,8 +560,7 @@ namespace lfs::vis {
             return;
         }
 
-        // Defer transition and upload work to prepareFrame so transitions to
-        // GENERAL can be coalesced.
+        // Conversion and upload recording share the frame preparation boundary.
         pending_uploads_.push_back(ChannelUploadPlan{
             .channel = &channel,
             .target = &target,
@@ -682,14 +569,16 @@ namespace lfs::vis {
 
     void ViewportInteropService::rollbackUnsubmittedLayoutCommits(VulkanContext& context) {
         // If endFrame never successfully submitted after recordFrameBarriers, the
-        // GENERAL→READ_ONLY barrier never ran on-device; restore tracked layout.
+        // upload barriers never ran on-device; restore the tracked layout.
         const std::uint64_t successful = context.lastSuccessfulFrameSubmitSerial();
         for (const auto& commit : pending_layout_commits_) {
             if (commit.unit == nullptr) {
                 continue;
             }
             if (successful <= commit.frame_submit_marker) {
-                commit.unit->layout = VK_IMAGE_LAYOUT_GENERAL;
+                commit.unit->layout = commit.old_layout;
+                if (commit.target)
+                    commit.target->uploaded_source_generation = 0;
                 if (commit.channel != nullptr && commit.channel->policy.publishes_published) {
                     clearPublished(*commit.channel);
                 }
@@ -700,227 +589,92 @@ namespace lfs::vis {
 
     void ViewportInteropService::syncUnsubmittedLayoutCommits(VulkanContext& context) {
         teardown_context_ = &context;
-        // Prior frame: unrecorded barriers (beginFrame failed) leave layout GENERAL.
+        // Unrecorded barriers leave the image layout unchanged.
         pending_frame_barriers_.clear();
         rollbackUnsubmittedLayoutCommits(context);
     }
 
     void ViewportInteropService::prepareFrame(VulkanContext& context, const bool resize_deferring) {
         teardown_context_ = &context;
-        // Frame accounting starts here (prepare runs before beginFrame).
         context.resetImmediateSubmitsThisFrame();
-        ensureUploadStream();
-        // Non-blocking drain once per prepareFrame (retired → free when safe).
-        drainInteropPool(context, /*force=*/false);
-
+        drainInteropPool(context, false);
         syncUnsubmittedLayoutCommits(context);
-
         pending_uploads_.clear();
         prepareChannel(context, channels_->scene, resize_deferring);
         prepareChannel(context, channels_->split_right, resize_deferring);
         prepareChannel(context, channels_->depth_blit, resize_deferring);
-
-        // Submit one coalesced pre-frame transition to GENERAL for every unit
-        // that needs it.
-        std::vector<VulkanContext::ImmediateLayoutTransition> general_transitions;
-        general_transitions.reserve(pending_uploads_.size());
-        std::vector<PooledInteropUnit*> units_transitioned_to_general;
-        units_transitioned_to_general.reserve(pending_uploads_.size());
-        {
-            std::optional<lfs::core::ScopedTimer> timer;
-            // Scene-channel timer name retained when any scene upload is present.
-            for (const auto& plan : pending_uploads_) {
-                if (plan.channel != nullptr && plan.channel->policy.log_timer_perf) {
-                    timer.emplace("interop.transition_to_GENERAL",
-                                  lfs::core::LogLevel::Performance,
-                                  LFS_SOURCE_SITE_CURRENT());
-                    break;
-                }
-            }
-            for (const auto& plan : pending_uploads_) {
-                assert(plan.channel != nullptr && plan.target != nullptr && plan.target->unit != nullptr);
-                auto& unit = *plan.target->unit;
-                if (unit.layout == VK_IMAGE_LAYOUT_GENERAL) {
-                    continue;
-                }
-                // Reused units start from a defined tracked layout (typically READ_ONLY).
-                // Never transition from UNDEFINED here — only cold create uses UNDEFINED→GENERAL.
-                const std::uint64_t vulkan_ready_value = ++unit.timeline_value;
-                general_transitions.push_back(VulkanContext::ImmediateLayoutTransition{
-                    .image = unit.image.image,
-                    .old_layout = unit.layout,
-                    .new_layout = VK_IMAGE_LAYOUT_GENERAL,
-                    .options = VulkanContext::ImmediateTransitionOptions::signalAt(
-                        {unit.semaphore.semaphore, vulkan_ready_value}),
-                });
-                units_transitioned_to_general.push_back(&unit);
-            }
-            if (!general_transitions.empty()) {
-                if (!context.transitionImageLayoutsImmediate(general_transitions)) {
-                    // Timeline values were advanced for the batch before submit; on failure
-                    // those values never signal. Reset every planned channel so units (and
-                    // their counters) are destroyed rather than left waiting forever.
-                    const std::string message = std::format(
-                        "batched image transition to GENERAL failed: {}", context.lastError());
-                    if (!upload_stream_.synchronize()) {
-                        // best-effort
-                    }
-                    for (const auto& plan : pending_uploads_) {
-                        if (plan.channel == nullptr) {
-                            continue;
-                        }
-                        plan.channel->disabled = true;
-                        resetChannel(*plan.channel);
-                        LOG_ERROR("{}: {}", plan.channel->policy.failure_log_prefix, message);
-                    }
-                    pending_uploads_.clear();
-                    throw std::runtime_error(message);
-                }
-                for (auto* unit : units_transitioned_to_general) {
-                    unit->layout = VK_IMAGE_LAYOUT_GENERAL;
-                }
-            }
-        }
-
-        // CUDA wait/copy/signal per channel (shared upload stream, unchanged order).
         for (const auto& plan : pending_uploads_) {
             auto& channel = *plan.channel;
-            auto& target = *plan.target;
-            auto& unit = *target.unit;
-
-            const auto fail_required_interop = [this, &channel](std::string message) -> void {
-                channel.disabled = true;
-                if (!upload_stream_.synchronize()) {
-                    message += std::format("; CUDA upload drain failed: {}",
-                                           upload_stream_.lastError());
-                }
-                resetChannel(channel);
-                LOG_ERROR("{}: {}", channel.policy.failure_log_prefix, message);
-                throw std::runtime_error(std::move(message));
-            };
-
-            assert(unit.layout == VK_IMAGE_LAYOUT_GENERAL &&
-                   "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
-            {
-                std::optional<lfs::core::ScopedTimer> timer;
-                if (channel.policy.log_timer_perf) {
-                    timer.emplace("interop.copyTensorToSurface",
-                                  lfs::core::LogLevel::Performance,
-                                  LFS_SOURCE_SITE_CURRENT());
-                }
-                if (!unit.interop.wait(unit.timeline_value, upload_stream_.stream())) {
-                    fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
-                                                      unit.interop.lastError()));
-                }
-                if (!unit.interop.copyTensorToSurface(*channel.source_image, upload_stream_.stream())) {
-                    fail_required_interop(std::format("CUDA copy failed: {}", unit.interop.lastError()));
-                }
-            }
-            const std::uint64_t signal_value = ++unit.timeline_value;
-            {
-                std::optional<lfs::core::ScopedTimer> timer;
-                if (channel.policy.log_timer_perf) {
-                    timer.emplace("interop.cuda_signal",
-                                  lfs::core::LogLevel::Performance,
-                                  LFS_SOURCE_SITE_CURRENT());
-                }
-                if (!unit.interop.signal(signal_value, upload_stream_.stream())) {
-                    fail_required_interop(std::format("CUDA signal failed: {}", unit.interop.lastError()));
-                }
-            }
-            // GENERAL→READ_ONLY + publish move to recordFrameBarriers (frame CB).
-            pending_frame_barriers_.push_back(PendingFrameBarrier{
-                .unit = &unit,
-                .target = &target,
-                .channel = &channel,
-                .cuda_signal_value = signal_value,
-                .source_generation = channel.source_generation,
-            });
+            auto& unit = *plan.target->unit;
+            const auto backend = lfs::core::gpu_backend_of(*channel.source_image).value_or(lfs::core::default_gpu_backend());
+            const auto scope = context.tensorInterop().execution_scope(backend);
+            auto prepared = channel.policy.vk_format == VK_FORMAT_R32_SFLOAT
+                                ? channel.source_image->to(lfs::core::DataType::Float32).contiguous()
+                                : lfs::rendering::prepareImageRgba8(*channel.source_image);
+            const auto bytes = std::size_t(channel.source_size.x) * channel.source_size.y * 4;
+            if (!prepared.is_valid() || prepared.bytes() != bytes)
+                throw std::runtime_error("Viewport image dimensions do not match the source tensor");
+            if (!unit.snapshot.is_valid() || unit.snapshot.shape() != prepared.shape() ||
+                unit.snapshot.dtype() != prepared.dtype() || lfs::core::gpu_backend_of(unit.snapshot) != backend)
+                unit.snapshot = context.tensorInterop().empty(prepared.shape(), prepared.dtype(), backend);
+            unit.snapshot.copy_from(prepared);
+            const auto storage = context.tensorInterop().buffer(unit.snapshot);
+            if (!storage)
+                throw std::runtime_error("Viewport image upload requires Vulkan-visible tensor storage");
+            unit.storage = *storage;
+            const lfs::core::Tensor* input = &unit.snapshot;
+            unit.ready = context.tensorInterop().ready({&input, 1});
+            pending_frame_barriers_.push_back({&unit, plan.target, &channel, channel.source_generation});
         }
         pending_uploads_.clear();
     }
 
-    void ViewportInteropService::recordFrameBarriers(VkCommandBuffer frame_cb,
-                                                     VulkanContext& context) {
-        if (pending_frame_barriers_.empty()) {
-            return;
-        }
+    void ViewportInteropService::recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context) {
         if (frame_cb == VK_NULL_HANDLE) {
-            LOG_ERROR("recordFrameBarriers requires a non-null frame command buffer");
             pending_frame_barriers_.clear();
             return;
         }
-
-        std::vector<VkImageMemoryBarrier2> barriers;
-        barriers.reserve(pending_frame_barriers_.size());
+        const auto commit_marker = context.lastSuccessfulFrameSubmitSerial();
         for (const auto& pending : pending_frame_barriers_) {
-            if (pending.unit == nullptr) {
-                continue;
-            }
-            // Explicit scopes from layoutAccess; unit.layout is source of truth (no tracker map).
+            auto& unit = *pending.unit;
+            if (unit.ready.timeline().value && !context.addFrameTimelineWait(static_cast<VkSemaphore>(unit.ready.timeline().semaphore),
+                                                                             unit.ready.timeline().value, VK_PIPELINE_STAGE_TRANSFER_BIT))
+                throw std::runtime_error(context.lastError());
             const auto source = VulkanImageBarrierTracker::layoutAccess(
-                VK_IMAGE_LAYOUT_GENERAL, VulkanImageBarrierTracker::AccessDirection::Source);
-            const auto destination = VulkanImageBarrierTracker::layoutAccess(
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VulkanImageBarrierTracker::AccessDirection::Destination);
-            VkImageMemoryBarrier2 barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                unit.layout, VulkanImageBarrierTracker::AccessDirection::Source);
+            VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             barrier.srcStageMask = source.stage;
             barrier.srcAccessMask = source.access;
-            barrier.dstStageMask = destination.stage |
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier.dstAccessMask = destination.access;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = pending.unit->image.image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barriers.push_back(barrier);
-        }
-        if (!barriers.empty()) {
-            VkDependencyInfo dependency{};
-            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
-            dependency.pImageMemoryBarriers = barriers.data();
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.oldLayout = unit.layout;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = unit.image.image;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dependency.imageMemoryBarrierCount = 1;
+            dependency.pImageMemoryBarriers = &barrier;
             vkCmdPipelineBarrier2(frame_cb, &dependency);
-        }
-
-        // Marker: last successful submit serial at record time. Next prepareFrame
-        // (or export-locked syncUnsubmittedLayoutCommits) rolls back if no newer
-        // successful endFrame submit occurred.
-        const std::uint64_t commit_marker = context.lastSuccessfulFrameSubmitSerial();
-        for (const auto& pending : pending_frame_barriers_) {
-            if (pending.unit == nullptr || pending.target == nullptr || pending.channel == nullptr) {
-                continue;
-            }
-            // Only commit layout and publish when the frame wait is accepted.
-            // A rejected wait marks the frame invalid for submit; leaving layout
-            // GENERAL keeps CacheHit/bind from sampling a still-GENERAL GPU image.
-            if (!context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
-                                              pending.cuda_signal_value,
-                                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
-                LOG_ERROR(
-                    "recordFrameBarriers: addFrameTimelineWait failed; leaving layout GENERAL: {}",
-                    context.lastError());
-                continue;
-            }
-            pending.unit->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = unit.storage.offset;
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {std::uint32_t(pending.target->valid_size.x), std::uint32_t(pending.target->valid_size.y), 1};
+            vkCmdCopyBufferToImage(frame_cb, static_cast<VkBuffer>(unit.storage.buffer), unit.image.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier2(frame_cb, &dependency);
+            pending_layout_commits_.push_back({&unit, pending.channel, commit_marker, pending.target, unit.layout});
+            unit.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             pending.target->uploaded_source_generation = pending.source_generation;
             ++pending.target->generation;
-            if (pending.channel->policy.publishes_published) {
+            if (pending.channel->policy.publishes_published)
                 publishFromTarget(*pending.channel, *pending.target);
-            }
-            pending_layout_commits_.push_back(PendingLayoutCommit{
-                .unit = pending.unit,
-                .channel = pending.channel,
-                .frame_submit_marker = commit_marker,
-            });
         }
         pending_frame_barriers_.clear();
     }
@@ -963,7 +717,7 @@ namespace lfs::vis {
             const auto& target = scene.targets[slot];
             if (!target ||
                 !target->unit ||
-                !target->unit->interop.valid() ||
+                !(target->unit->image.image != VK_NULL_HANDLE) ||
                 target->unit->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
                 target->valid_size != params.scene_image_size ||
                 scene.source_generation == 0 ||
@@ -982,7 +736,7 @@ namespace lfs::vis {
         if (params.external_scene_image == VK_NULL_HANDLE) {
             const bool bound_current_slot = bind_cached_interop_slot(frame_slot);
             if (!bound_current_slot && export_locked) {
-                // Export mode freezes the viewport and skips new CUDA/Vulkan interop uploads.
+                // Export mode freezes the viewport and skips new Vulkan interop uploads.
                 // Reuse any already-prepared slot so multi-buffered frames keep the same image.
                 for (std::size_t slot = 0; slot < scene.targets.size(); ++slot) {
                     if (slot != frame_slot && bind_cached_interop_slot(slot)) {
@@ -1014,7 +768,7 @@ namespace lfs::vis {
             params.depth_blit.uv_clamp_max = outputUvClampMax(d_valid, d_alloc);
         }
 
-        // Stitch in CUDA/Vulkan interop views: left reuses the existing scene
+        // Split-view left samples the scene
         // interop slot; right has its own parallel slot. When set, the split-view
         // pass binds these directly and skips the CPU staging upload.
         if (params.split_view.enabled) {
@@ -1060,28 +814,15 @@ namespace lfs::vis {
         pending_uploads_.clear();
         pending_frame_barriers_.clear();
         pending_layout_commits_.clear();
-        if (!upload_stream_.synchronize()) {
-            LOG_WARN("CUDA/Vulkan GUI upload stream synchronization failed during shutdown: {}",
-                     upload_stream_.lastError());
-        }
         resetChannel(channels_->scene);
         resetChannel(channels_->split_right);
         resetChannel(channels_->depth_blit);
         if (teardown_context_ && interop_pool_) {
             drainInteropPool(*teardown_context_, /*force=*/true);
             interop_pool_->pool.trimIdle([&](PooledInteropUnit& unit) {
-                if (!teardown_context_->waitForImmediateSubmits()) {
-                    LOG_ERROR("Could not drain before interop trimIdle destroy: {}",
-                              teardown_context_->lastError());
-                }
-                unit.interop.reset();
-                teardown_context_->destroyExternalSemaphore(unit.semaphore);
-                teardown_context_->destroyExternalImage(unit.image);
-                unit.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-                unit.timeline_value = 0;
+                unit.destroy(*teardown_context_);
             });
         }
-        upload_stream_.reset();
         channels_->scene.source_image.reset();
         channels_->split_right.source_image.reset();
         channels_->depth_blit.source_image.reset();

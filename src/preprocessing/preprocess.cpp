@@ -13,7 +13,9 @@
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_BUILD_TRAINER
 #include "depth_anchor_cache.hpp"
+#endif
 
 #include "io/loader.hpp"
 #include <cuda_runtime.h>
@@ -949,6 +951,7 @@ namespace {
     // writes a sidecar next to the depth maps, so depth-loss training skips the
     // per-camera anchor fit at startup. Requires a COLMAP scene; a bare image
     // folder is skipped (the trainer fits and caches it on first run instead).
+#if LFS_BUILD_TRAINER
     void precompute_depth_anchors(const lfs::core::param::PreprocessParameters& params) {
         if (!needs_depth(params.mode)) {
             return;
@@ -1021,6 +1024,8 @@ namespace {
             LOG_WARN("Depth anchors: precompute failed: {}", e.what());
         }
     }
+
+#endif
 
     bool should_write_output(bool output_requested,
                              bool overwrite,
@@ -1281,7 +1286,9 @@ namespace {
                     print_plan_summary(params, plan, nullptr);
                     std::cout << "No outputs need preprocessing; model inference skipped.\n";
                 }
+#if LFS_BUILD_TRAINER
                 precompute_depth_anchors(params);
+#endif
                 if (!progress)
                     std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
                 return result;
@@ -1296,7 +1303,9 @@ namespace {
 
             process_dataset(params, model_path, plan, progress);
             result.processed = plan.jobs.size();
+#if LFS_BUILD_TRAINER
             precompute_depth_anchors(params);
+#endif
             return result;
         } catch (const std::exception& e) {
             result.ok = false;

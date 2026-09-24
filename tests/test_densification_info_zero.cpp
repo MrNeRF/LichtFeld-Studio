@@ -6,6 +6,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/mcmc_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 
@@ -33,7 +34,9 @@ namespace {
 
 } // namespace
 
-TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
+class DensificationInfoZeroTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
     constexpr size_t N = 8;
     auto vis = Tensor::zeros({N}, Device::GPU);
     auto refine_max = Tensor::zeros({N}, Device::GPU);
@@ -87,7 +90,7 @@ TEST(DensificationInfoZeroTest, MrnfFoldMatchesMultiStepReference) {
     }
 }
 
-TEST(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
+TEST_F(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
     constexpr size_t N = 6;
     auto err_max = Tensor::zeros({N}, Device::GPU);
     auto err_ref = Tensor::zeros({N}, Device::GPU);

@@ -9,6 +9,7 @@ class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/strategies/mrnf.hpp"
 
@@ -18,6 +19,8 @@ class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 
 using namespace lfs::core;
 using namespace lfs::training;
+
+class MRNFStrategyTest : public lfs::test::CudaBackendTest {};
 
 namespace {
 
@@ -76,7 +79,9 @@ namespace {
 
 } // namespace
 
-TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
+class CompactSplatPeakPattern : public lfs::test::CudaBackendTest {};
+
+TEST_F(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
     constexpr size_t cols = 3;
     constexpr size_t max_cap = 256 * 1024;
     constexpr size_t new_n = max_cap / 2;
@@ -106,7 +111,7 @@ TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
     }
 }
 
-TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
+TEST_F(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     constexpr size_t old_n = 64;
     constexpr size_t max_cap = 128;
     constexpr size_t keep_n = 32;
@@ -197,7 +202,7 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     }
 }
 
-TEST(MRNFStrategyTest, CompactSplatsFusedPathLeavesGradsEmpty) {
+TEST_F(MRNFStrategyTest, CompactSplatsFusedPathLeavesGradsEmpty) {
     constexpr size_t old_n = 64;
     constexpr size_t max_cap = 128;
     constexpr size_t keep_n = 32;

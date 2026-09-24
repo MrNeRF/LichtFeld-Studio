@@ -160,7 +160,7 @@ namespace lfs::core {
                                   MemoryDomain domain = MemoryDomain::CudaDevice) const;
 
         // LFS_VRAM_RESERVE_MB, default 512 MiB, clamped to [128 MiB, device VRAM/4].
-        size_t reserve_bytes() const noexcept;
+        size_t reserve_bytes(MemoryDomain domain) const noexcept;
 
         // Pressure lease: true while the last episode has not been observed to
         // recover. Degradation clients stay degraded while active.

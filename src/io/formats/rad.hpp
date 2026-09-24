@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include "core/rad_packed_page.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
-#include "rad_packed_page.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -66,10 +66,10 @@ namespace lfs::io {
     // Inflate-only chunk decode for the GPU dequant path: property planes land
     // in `dst` (an upload staging slot) still quantized, dimension-major, with
     // delta variants normalized away; the chunk's sidecar bounds/links planes
-    // and dequant frame ride along. The returned descriptor drives the CUDA
-    // page-dequant kernel. Streaming-profile only — per-component property
+    // and dequant frame ride along. The returned descriptor drives tensorlib
+    // page dequantization. Streaming-profile only — per-component property
     // layouts and unknown encodings are hard errors, never fallbacks.
-    [[nodiscard]] std::expected<RadPagePackedDesc, std::string> decode_rad_chunk_packed(
+    [[nodiscard]] std::expected<lfs::core::RadPagePackedDesc, std::string> decode_rad_chunk_packed(
         std::span<const std::uint8_t> data,
         int fallback_max_sh,
         bool lod_opacity_encoded,
@@ -103,7 +103,7 @@ namespace lfs::io {
         bool lod_opacity_encoded);
 
     // True when a chunked RAD should keep its leaf tensors on the host and
-    // stream pages to the GPU instead of migrating everything to CUDA at load.
+    // stream pages to the GPU instead of migrating everything at load.
     [[nodiscard]] bool rad_paged_load_recommended(const SplatData& data);
 
     // ------------------------------------------------------------------------

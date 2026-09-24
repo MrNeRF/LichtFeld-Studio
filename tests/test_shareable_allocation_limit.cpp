@@ -5,6 +5,7 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 
@@ -58,13 +59,6 @@ namespace {
 
         std::optional<std::string> previous_;
     };
-
-    void require_cuda() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-    }
 
     Tensor retag_external(Tensor tensor, std::string kind) {
         const TensorShape shape = tensor.shape();
@@ -202,8 +196,9 @@ TEST(ShareableAllocationLimitTest, ViolationMessageIncludesNumbers) {
     EXPECT_TRUE(is_shareable_allocation_limit_message(*message));
 }
 
-TEST(ShareableAllocationLimitTest, MigrateEncodesQ16ShNUnderShareableLimit) {
-    require_cuda();
+class ShareableAllocationMigrationTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ShareableAllocationMigrationTest, MigrateEncodesQ16ShNUnderShareableLimit) {
     const auto ply_path = std::filesystem::path(PROJECT_ROOT_PATH) / "gd.ply";
     if (!std::filesystem::exists(ply_path)) {
         GTEST_SKIP() << "Missing test asset: " << ply_path;
@@ -232,8 +227,7 @@ TEST(ShareableAllocationLimitTest, MigrateEncodesQ16ShNUnderShareableLimit) {
     EXPECT_TRUE(lfs::io::splatTensorsRendererReady(model));
 }
 
-TEST(ShareableAllocationLimitTest, MigrateEncodesQ16ShNWithoutLimit) {
-    require_cuda();
+TEST_F(ShareableAllocationMigrationTest, MigrateEncodesQ16ShNWithoutLimit) {
     const auto ply_path = std::filesystem::path(PROJECT_ROOT_PATH) / "gd.ply";
     if (!std::filesystem::exists(ply_path)) {
         GTEST_SKIP() << "Missing test asset: " << ply_path;

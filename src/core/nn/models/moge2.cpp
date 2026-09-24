@@ -6,10 +6,9 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
 #include "nn_nvtx.hpp"
 

@@ -10,7 +10,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
 #include <vector>
@@ -20,11 +19,9 @@ namespace {
     using lfs::core::Device;
     using lfs::core::GpuBackend;
     using lfs::core::GpuBackendScope;
+    using lfs::core::PointProjectionModel;
     using lfs::core::Tensor;
-    using lfs::rendering::ScreenWindowCameraModel;
 
-    constexpr std::size_t kLockedWords = 8;
-    constexpr std::size_t kScratchWords = 257;
     constexpr std::size_t kN = 5003;
 
     Tensor uploadU8(const std::vector<uint8_t>& values, const GpuBackend backend) {
@@ -58,29 +55,12 @@ namespace {
         return Tensor::empty({n}, Device::GPU, DataType::UInt8);
     }
 
-    Tensor emptyScratch(const GpuBackend backend) {
-        GpuBackendScope scope(backend);
-        return Tensor::zeros({kScratchWords}, Device::GPU, DataType::Int32);
-    }
-
-    std::array<uint32_t, kLockedWords> lockedHost(const std::vector<uint8_t>& groups) {
-        std::array<uint32_t, kLockedWords> words{};
-        for (const auto group : groups) {
-            words[group / 32] |= (1u << (group % 32));
-        }
-        return words;
-    }
-
-    uint32_t* lockedDevice(const std::array<uint32_t, kLockedWords>& host) {
-        uint32_t* ptr = nullptr;
-        if (cudaMalloc(&ptr, sizeof(host)) != cudaSuccess) {
-            return nullptr;
-        }
-        if (cudaMemcpy(ptr, host.data(), sizeof(host), cudaMemcpyHostToDevice) != cudaSuccess) {
-            cudaFree(ptr);
-            return nullptr;
-        }
-        return ptr;
+    Tensor lockedGroups(const std::vector<uint8_t>& groups, const GpuBackend backend) {
+        std::vector<bool> flags(256, false);
+        for (const auto group : groups)
+            flags[group] = true;
+        const GpuBackendScope scope(backend);
+        return Tensor::from_vector(flags, {flags.size()}, Device::GPU);
     }
 
     std::vector<uint8_t> toU8(const Tensor& tensor) {
@@ -91,10 +71,6 @@ namespace {
         return tensor.cpu().to_vector_bool();
     }
 
-    std::vector<int> toI32(const Tensor& tensor) {
-        return tensor.cpu().to_vector_int();
-    }
-
     void expectU8Equal(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, const char* tag) {
         ASSERT_EQ(a.size(), b.size()) << tag;
         for (std::size_t i = 0; i < a.size(); ++i) {
@@ -103,13 +79,6 @@ namespace {
     }
 
     void expectBoolEqual(const std::vector<bool>& a, const std::vector<bool>& b, const char* tag) {
-        ASSERT_EQ(a.size(), b.size()) << tag;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            EXPECT_EQ(a[i], b[i]) << tag << " index=" << i;
-        }
-    }
-
-    void expectI32Equal(const std::vector<int>& a, const std::vector<int>& b, const char* tag) {
         ASSERT_EQ(a.size(), b.size()) << tag;
         for (std::size_t i = 0; i < a.size(); ++i) {
             EXPECT_EQ(a[i], b[i]) << tag << " index=" << i;
@@ -160,11 +129,10 @@ protected:
     }
 };
 
-TEST_F(SelectionMaskOpsTest, ApplyGroupMatchesKernelOnRandomInputs) {
+TEST_F(SelectionMaskOpsTest, ApplyGroupMatchesAcrossBackendsOnRandomInputs) {
     const auto data = makeRandomMasks(kN, 20260906);
-    const auto host_locked = lockedHost(data.locked_groups);
-    uint32_t* d_locked = lockedDevice(host_locked);
-    ASSERT_NE(d_locked, nullptr);
+    const Tensor cuda_locked = lockedGroups(data.locked_groups, GpuBackend::CUDA);
+    const Tensor vk_locked = lockedGroups(data.locked_groups, GpuBackend::Vulkan);
     const std::vector<bool> empty_nodes;
     const struct Case {
         bool add;
@@ -186,7 +154,6 @@ TEST_F(SelectionMaskOpsTest, ApplyGroupMatchesKernelOnRandomInputs) {
         Tensor cuda_sel = uploadBool(data.selected, GpuBackend::CUDA);
         Tensor cuda_exist = uploadU8(data.existing, GpuBackend::CUDA);
         Tensor cuda_out = emptyU8(kN, GpuBackend::CUDA);
-        Tensor cuda_scratch = emptyScratch(GpuBackend::CUDA);
         Tensor cuda_nodes;
         const Tensor* cuda_nodes_ptr = nullptr;
         if (nodes) {
@@ -194,15 +161,13 @@ TEST_F(SelectionMaskOpsTest, ApplyGroupMatchesKernelOnRandomInputs) {
             cuda_nodes_ptr = &cuda_nodes;
         }
         lfs::rendering::apply_selection_group_tensor_mask(
-            cuda_sel, cuda_exist, cuda_out, 3, d_locked, test_case.add, cuda_nodes_ptr, valid,
-            test_case.replace, &cuda_scratch);
+            cuda_sel, cuda_exist, cuda_out, 3, cuda_locked, test_case.add, cuda_nodes_ptr, valid,
+            test_case.replace);
         const auto cuda_words = toU8(cuda_out);
-        const auto cuda_scratch_words = toI32(cuda_scratch);
 
         Tensor vk_sel = uploadBool(data.selected, GpuBackend::Vulkan);
         Tensor vk_exist = uploadU8(data.existing, GpuBackend::Vulkan);
         Tensor vk_out = emptyU8(kN, GpuBackend::Vulkan);
-        Tensor vk_scratch = emptyScratch(GpuBackend::Vulkan);
         Tensor vk_nodes;
         const Tensor* vk_nodes_ptr = nullptr;
         if (nodes) {
@@ -210,49 +175,26 @@ TEST_F(SelectionMaskOpsTest, ApplyGroupMatchesKernelOnRandomInputs) {
             vk_nodes_ptr = &vk_nodes;
         }
         lfs::rendering::apply_selection_group_tensor_mask(
-            vk_sel, vk_exist, vk_out, 3, host_locked.data(), test_case.add, vk_nodes_ptr, valid,
-            test_case.replace, &vk_scratch);
+            vk_sel, vk_exist, vk_out, 3, vk_locked, test_case.add, vk_nodes_ptr, valid,
+            test_case.replace);
         expectU8Equal(cuda_words, toU8(vk_out), "vulkan");
-        expectI32Equal(cuda_scratch_words, toI32(vk_scratch), "vulkan_scratch");
-
-        Tensor prog_sel = uploadBool(data.selected, GpuBackend::CUDA);
-        Tensor prog_exist = uploadU8(data.existing, GpuBackend::CUDA);
-        Tensor prog_out = emptyU8(kN, GpuBackend::CUDA);
-        Tensor prog_scratch = emptyScratch(GpuBackend::CUDA);
-        Tensor prog_nodes;
-        const Tensor* prog_nodes_ptr = nullptr;
-        if (nodes) {
-            prog_nodes = uploadI32(*nodes, GpuBackend::CUDA);
-            prog_nodes_ptr = &prog_nodes;
-        }
-        {
-            GpuBackendScope cuda_scope(GpuBackend::CUDA);
-            lfs::rendering::apply_selection_group_tensor_mask_program(
-                prog_sel, prog_exist, prog_out, 3, host_locked.data(), test_case.add, prog_nodes_ptr,
-                valid, test_case.replace, &prog_scratch);
-        }
-        expectU8Equal(cuda_words, toU8(prog_out), "cuda_program");
-        expectI32Equal(cuda_scratch_words, toI32(prog_scratch), "cuda_program_scratch");
     }
-    ASSERT_EQ(cudaFree(d_locked), cudaSuccess);
 }
 
 TEST_F(SelectionMaskOpsTest, ApplyGroupEmptyAllLockedAndSingleNode) {
-    const auto host_locked = lockedHost({1, 2, 3, 4, 5, 6, 7});
-    uint32_t* d_locked = lockedDevice(host_locked);
-    ASSERT_NE(d_locked, nullptr);
+    const Tensor cuda_locked = lockedGroups({1, 2, 3, 4, 5, 6, 7}, GpuBackend::CUDA);
+    const Tensor vk_locked = lockedGroups({1, 2, 3, 4, 5, 6, 7}, GpuBackend::Vulkan);
 
     Tensor empty_sel = uploadBool({}, GpuBackend::CUDA);
     Tensor empty_exist = uploadU8({}, GpuBackend::CUDA);
     Tensor empty_out = emptyU8(0, GpuBackend::CUDA);
     lfs::rendering::apply_selection_group_tensor_mask(
-        empty_sel, empty_exist, empty_out, 1, d_locked, true, nullptr, {}, false, nullptr);
+        empty_sel, empty_exist, empty_out, 1, cuda_locked, true, nullptr, {}, false);
     Tensor empty_vk_sel = uploadBool({}, GpuBackend::Vulkan);
     Tensor empty_vk_exist = uploadU8({}, GpuBackend::Vulkan);
     Tensor empty_vk_out = emptyU8(0, GpuBackend::Vulkan);
     lfs::rendering::apply_selection_group_tensor_mask(
-        empty_vk_sel, empty_vk_exist, empty_vk_out, 1, host_locked.data(), true, nullptr, {}, false,
-        nullptr);
+        empty_vk_sel, empty_vk_exist, empty_vk_out, 1, vk_locked, true, nullptr, {}, false);
 
     const std::vector<uint8_t> selected{1};
     const std::vector<uint8_t> existing{2};
@@ -262,12 +204,12 @@ TEST_F(SelectionMaskOpsTest, ApplyGroupEmptyAllLockedAndSingleNode) {
     Tensor cuda_nodes = uploadI32(nodes, GpuBackend::CUDA);
     lfs::rendering::apply_selection_group_tensor_mask(
         uploadBool(selected, GpuBackend::CUDA), uploadU8(existing, GpuBackend::CUDA), cuda_out, 1,
-        d_locked, true, &cuda_nodes, valid, false, nullptr);
+        cuda_locked, true, &cuda_nodes, valid, false);
     Tensor vk_out = emptyU8(1, GpuBackend::Vulkan);
     Tensor vk_nodes = uploadI32(nodes, GpuBackend::Vulkan);
     lfs::rendering::apply_selection_group_tensor_mask(
         uploadBool(selected, GpuBackend::Vulkan), uploadU8(existing, GpuBackend::Vulkan), vk_out, 1,
-        host_locked.data(), true, &vk_nodes, valid, false, nullptr);
+        vk_locked, true, &vk_nodes, valid, false);
     expectU8Equal(toU8(cuda_out), toU8(vk_out), "single");
     EXPECT_EQ(toU8(cuda_out), (std::vector<uint8_t>{2}));
 
@@ -279,16 +221,15 @@ TEST_F(SelectionMaskOpsTest, ApplyGroupEmptyAllLockedAndSingleNode) {
     Tensor cuda_all = emptyU8(all_sel.size(), GpuBackend::CUDA);
     lfs::rendering::apply_selection_group_tensor_mask(
         uploadBool(all_sel, GpuBackend::CUDA), uploadU8(all_exist, GpuBackend::CUDA), cuda_all, 1,
-        d_locked, true, nullptr, {}, false, nullptr);
+        cuda_locked, true, nullptr, {}, false);
     Tensor vk_all = emptyU8(all_sel.size(), GpuBackend::Vulkan);
     lfs::rendering::apply_selection_group_tensor_mask(
         uploadBool(all_sel, GpuBackend::Vulkan), uploadU8(all_exist, GpuBackend::Vulkan), vk_all, 1,
-        host_locked.data(), true, nullptr, {}, false, nullptr);
+        vk_locked, true, nullptr, {}, false);
     expectU8Equal(toU8(cuda_all), toU8(vk_all), "all_locked");
-    ASSERT_EQ(cudaFree(d_locked), cudaSuccess);
 }
 
-TEST_F(SelectionMaskOpsTest, IndexedApplyMatchesKernelOnRandomInputs) {
+TEST_F(SelectionMaskOpsTest, IndexedApplyMatchesAcrossBackendsOnRandomInputs) {
     const auto data = makeRandomMasks(kN, 42);
     std::vector<int> visible;
     std::vector<uint8_t> vis_sel;
@@ -304,9 +245,8 @@ TEST_F(SelectionMaskOpsTest, IndexedApplyMatchesKernelOnRandomInputs) {
     for (std::size_t i = 0; i < visible.size(); ++i) {
         vis_nodes[i] = data.nodes[static_cast<std::size_t>(std::max(visible[i], 0)) % kN];
     }
-    const auto host_locked = lockedHost(data.locked_groups);
-    uint32_t* d_locked = lockedDevice(host_locked);
-    ASSERT_NE(d_locked, nullptr);
+    const Tensor cuda_locked = lockedGroups(data.locked_groups, GpuBackend::CUDA);
+    const Tensor vk_locked = lockedGroups(data.locked_groups, GpuBackend::Vulkan);
     const struct Case {
         bool add;
         bool replace;
@@ -318,7 +258,7 @@ TEST_F(SelectionMaskOpsTest, IndexedApplyMatchesKernelOnRandomInputs) {
         Tensor cuda_nodes = uploadI32(vis_nodes, GpuBackend::CUDA);
         lfs::rendering::apply_selection_group_indexed_tensor_mask(
             uploadBool(vis_sel, GpuBackend::CUDA), uploadI32(visible, GpuBackend::CUDA),
-            uploadU8(data.existing, GpuBackend::CUDA), cuda_out, 4, d_locked, test_case.add,
+            uploadU8(data.existing, GpuBackend::CUDA), cuda_out, 4, cuda_locked, test_case.add,
             &cuda_nodes, data.valid_nodes, test_case.replace);
         const auto cuda_words = toU8(cuda_out);
 
@@ -326,25 +266,13 @@ TEST_F(SelectionMaskOpsTest, IndexedApplyMatchesKernelOnRandomInputs) {
         Tensor vk_nodes = uploadI32(vis_nodes, GpuBackend::Vulkan);
         lfs::rendering::apply_selection_group_indexed_tensor_mask(
             uploadBool(vis_sel, GpuBackend::Vulkan), uploadI32(visible, GpuBackend::Vulkan),
-            uploadU8(data.existing, GpuBackend::Vulkan), vk_out, 4, host_locked.data(),
+            uploadU8(data.existing, GpuBackend::Vulkan), vk_out, 4, vk_locked,
             test_case.add, &vk_nodes, data.valid_nodes, test_case.replace);
         expectU8Equal(cuda_words, toU8(vk_out), "vulkan");
-
-        Tensor prog_out = emptyU8(kN, GpuBackend::CUDA);
-        Tensor prog_nodes = uploadI32(vis_nodes, GpuBackend::CUDA);
-        {
-            GpuBackendScope cuda_scope(GpuBackend::CUDA);
-            lfs::rendering::apply_selection_group_indexed_tensor_mask_program(
-                uploadBool(vis_sel, GpuBackend::CUDA), uploadI32(visible, GpuBackend::CUDA),
-                uploadU8(data.existing, GpuBackend::CUDA), prog_out, 4, host_locked.data(),
-                test_case.add, &prog_nodes, data.valid_nodes, test_case.replace);
-        }
-        expectU8Equal(cuda_words, toU8(prog_out), "cuda_program");
     }
-    ASSERT_EQ(cudaFree(d_locked), cudaSuccess);
 }
 
-TEST_F(SelectionMaskOpsTest, MergeOrMatchesKernel) {
+TEST_F(SelectionMaskOpsTest, MergeOrMatchesAcrossBackends) {
     std::mt19937 rng(7);
     std::uniform_int_distribution<int> bit(0, 1);
     std::vector<uint8_t> acc(kN);
@@ -360,16 +288,9 @@ TEST_F(SelectionMaskOpsTest, MergeOrMatchesKernel) {
     Tensor vk_acc = uploadBool(acc, GpuBackend::Vulkan);
     lfs::rendering::merge_selection_mask_or(vk_acc, uploadBool(delta, GpuBackend::Vulkan));
     expectBoolEqual(cuda_words, toBool(vk_acc), "vulkan");
-
-    Tensor prog_acc = uploadBool(acc, GpuBackend::CUDA);
-    {
-        GpuBackendScope cuda_scope(GpuBackend::CUDA);
-        lfs::rendering::merge_selection_mask_or_program(prog_acc, uploadBool(delta, GpuBackend::CUDA));
-    }
-    expectBoolEqual(cuda_words, toBool(prog_acc), "cuda_program");
 }
 
-TEST_F(SelectionMaskOpsTest, NodeFilterMatchesKernel) {
+TEST_F(SelectionMaskOpsTest, NodeFilterMatchesAcrossBackends) {
     const auto data = makeRandomMasks(kN, 99);
     Tensor cuda_sel = uploadBool(data.selected, GpuBackend::CUDA);
     lfs::rendering::filter_selection_by_node_mask(
@@ -380,17 +301,9 @@ TEST_F(SelectionMaskOpsTest, NodeFilterMatchesKernel) {
     lfs::rendering::filter_selection_by_node_mask(
         vk_sel, uploadI32(data.nodes, GpuBackend::Vulkan), data.valid_nodes);
     expectBoolEqual(cuda_words, toBool(vk_sel), "vulkan");
-
-    Tensor prog_sel = uploadBool(data.selected, GpuBackend::CUDA);
-    {
-        GpuBackendScope cuda_scope(GpuBackend::CUDA);
-        lfs::rendering::filter_selection_by_node_mask_program(
-            prog_sel, uploadI32(data.nodes, GpuBackend::CUDA), data.valid_nodes);
-    }
-    expectBoolEqual(cuda_words, toBool(prog_sel), "cuda_program");
 }
 
-TEST_F(SelectionMaskOpsTest, CropFilterMatchesKernel) {
+TEST_F(SelectionMaskOpsTest, CropFilterMatchesAcrossBackends) {
     std::mt19937 rng(123);
     std::uniform_real_distribution<float> pos(-2.0f, 2.0f);
     std::vector<float> means(kN * 3);
@@ -435,7 +348,7 @@ TEST_F(SelectionMaskOpsTest, CropFilterMatchesKernel) {
     };
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
-        auto run = [&](const GpuBackend backend, const bool program) {
+        auto run = [&](const GpuBackend backend) {
             Tensor sel = uploadBool(selected, backend);
             Tensor m = uploadF32(means, {kN, std::size_t{3}}, backend);
             Tensor crop_t = uploadF32(identity, {4, 4}, backend);
@@ -447,25 +360,19 @@ TEST_F(SelectionMaskOpsTest, CropFilterMatchesKernel) {
             Tensor idx = uploadI32(nodes, backend);
             const Tensor* model_ptr = test_case.models ? &model_t : nullptr;
             const Tensor* idx_ptr = test_case.models ? &idx : nullptr;
-            if (program) {
-                GpuBackendScope scope(backend);
-                lfs::rendering::filter_selection_by_crop_program(
-                    sel, m, &crop_t, &cmin, &cmax, test_case.crop_inv, &ell_t, &ell_r,
-                    test_case.ellip_inv, model_ptr, idx_ptr);
-            } else {
-                lfs::rendering::filter_selection_by_crop(
-                    sel, m, &crop_t, &cmin, &cmax, test_case.crop_inv, &ell_t, &ell_r,
-                    test_case.ellip_inv, model_ptr, idx_ptr);
-            }
+
+            lfs::rendering::filter_selection_by_crop(
+                sel, m, &crop_t, &cmin, &cmax, test_case.crop_inv, &ell_t, &ell_r,
+                test_case.ellip_inv, model_ptr, idx_ptr);
+
             return toBool(sel);
         };
-        const auto cuda_words = run(GpuBackend::CUDA, false);
-        expectBoolEqual(cuda_words, run(GpuBackend::Vulkan, false), "vulkan");
-        expectBoolEqual(cuda_words, run(GpuBackend::CUDA, true), "cuda_program");
+        const auto cuda_words = run(GpuBackend::CUDA);
+        expectBoolEqual(cuda_words, run(GpuBackend::Vulkan), "vulkan");
     }
 }
 
-TEST_F(SelectionMaskOpsTest, ScreenWindowMatchesKernel) {
+TEST_F(SelectionMaskOpsTest, ScreenWindowMatchesAcrossBackends) {
     std::mt19937 rng(2026);
     std::uniform_real_distribution<float> pos(-4.0f, 4.0f);
     std::vector<float> means(kN * 3);
@@ -495,42 +402,35 @@ TEST_F(SelectionMaskOpsTest, ScreenWindowMatchesKernel) {
         0, 0, 1, 0,
         0, 0, 0, 1};
     const struct Case {
-        ScreenWindowCameraModel model;
+        lfs::core::PointProjectionModel model;
         bool with_models;
         const char* name;
     } cases[] = {
-        {ScreenWindowCameraModel::Pinhole, false, "pinhole"},
-        {ScreenWindowCameraModel::Orthographic, false, "ortho"},
-        {ScreenWindowCameraModel::Equirectangular, false, "equirect"},
-        {ScreenWindowCameraModel::Pinhole, true, "pinhole_models"},
-        {ScreenWindowCameraModel::Equirectangular, true, "equirect_models"},
+        {lfs::core::PointProjectionModel::Pinhole, false, "pinhole"},
+        {lfs::core::PointProjectionModel::Orthographic, false, "ortho"},
+        {lfs::core::PointProjectionModel::Equirectangular, false, "equirect"},
+        {lfs::core::PointProjectionModel::Pinhole, true, "pinhole_models"},
+        {lfs::core::PointProjectionModel::Equirectangular, true, "equirect_models"},
     };
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
-        auto run = [&](const GpuBackend backend, const bool program) {
+        auto run = [&](const GpuBackend backend) {
             Tensor sel = uploadBool(selected, backend);
             Tensor m = uploadF32(means, {kN, std::size_t{3}}, backend);
             Tensor model_t = uploadF32(models, {2, 4, 4}, backend);
             Tensor idx = uploadI32(nodes, backend);
             const Tensor* model_ptr = test_case.with_models ? &model_t : nullptr;
             const Tensor* idx_ptr = test_case.with_models ? &idx : nullptr;
-            if (program) {
-                GpuBackendScope scope(backend);
-                lfs::rendering::filter_selection_by_screen_window_program(
-                    sel, m, view, translation, test_case.model, 1280, 720, 910.0f, 900.0f,
-                    640.0f, 360.0f, 42.0f, 0.25f, 20.0f, 0.35f, 0.35f, 0.1f, -0.05f,
-                    model_ptr, idx_ptr);
-            } else {
-                lfs::rendering::filter_selection_by_screen_window(
-                    sel, m, view, translation, test_case.model, 1280, 720, 910.0f, 900.0f,
-                    640.0f, 360.0f, 42.0f, 0.25f, 20.0f, 0.35f, 0.35f, 0.1f, -0.05f,
-                    model_ptr, idx_ptr);
-            }
+
+            lfs::rendering::filter_selection_by_screen_window(
+                sel, m, view, translation, test_case.model, 1280, 720, 910.0f, 900.0f,
+                640.0f, 360.0f, 42.0f, 0.25f, 20.0f, 0.35f, 0.35f, 0.1f, -0.05f,
+                model_ptr, idx_ptr);
+
             return toBool(sel);
         };
-        const auto cuda_words = run(GpuBackend::CUDA, false);
-        expectBoolEqual(cuda_words, run(GpuBackend::Vulkan, false), "vulkan");
-        expectBoolEqual(cuda_words, run(GpuBackend::CUDA, true), "cuda_program");
+        const auto cuda_words = run(GpuBackend::CUDA);
+        expectBoolEqual(cuda_words, run(GpuBackend::Vulkan), "vulkan");
     }
 }
 

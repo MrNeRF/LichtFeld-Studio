@@ -416,7 +416,7 @@ namespace lfs::core::internal {
             if (!recipe.source) {
                 return false;
             }
-            Tensor source = *recipe.source;
+            const Tensor source = *recipe.source;
             // ptr<> materializes deferred sources.
             const float* in_probe = source.is_valid() ? source.ptr<float>() : nullptr;
             if (!source.is_valid() || in_probe == nullptr ||
@@ -444,7 +444,7 @@ namespace lfs::core::internal {
                 }
                 internal::require_same_gpu_backend(
                     source, rhs, "lazy pointwise fusion");
-                const float* rhs_probe = rhs.ptr<float>();
+                const float* rhs_probe = std::as_const(rhs).ptr<float>();
                 if (rhs_probe == nullptr) {
                     return false;
                 }
@@ -463,7 +463,7 @@ namespace lfs::core::internal {
                         rhs_storage[rhs_i].device() == Device::GPU
                             ? internal::chain_operand_address(
                                   internal::storage_ref(rhs_storage[rhs_i]))
-                            : rhs_storage[rhs_i].ptr<float>();
+                            : std::as_const(rhs_storage[rhs_i]).ptr<float>();
                     ++rhs_i;
                 } else {
                     chain.ops[i].rhs = nullptr;
@@ -509,7 +509,7 @@ namespace lfs::core::internal {
                 for (int j = 0; j < chain.num_ops; ++j) {
                     const float* rhs_ptr = nullptr;
                     if (is_tensor_binary_kind(recipe.ops[j].kind)) {
-                        rhs_ptr = rhs_storage[rhs_i].ptr<float>();
+                        rhs_ptr = std::as_const(rhs_storage[rhs_i]).ptr<float>();
                         ++rhs_i;
                     }
                     val = apply_pointwise_op_cpu(val, recipe.ops[j].kind, recipe.ops[j].scalar,

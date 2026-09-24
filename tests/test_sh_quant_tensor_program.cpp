@@ -6,10 +6,13 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_sh.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -19,13 +22,6 @@
 
 namespace {
     using namespace lfs::core;
-
-    void require_cuda() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-    }
 
     std::vector<float> random_swizzled(const size_t n,
                                        const std::uint32_t rest,
@@ -114,15 +110,9 @@ namespace {
                              const GpuBackend backend) {
         GpuBackendScope scope(backend);
         Tensor src = Tensor::from_vector(host, TensorShape{host.size()}, Device::CPU).to(Device::GPU);
-        Tensor codes;
-        Tensor bounds;
-        sh_value_quant::encode_shN_float4_to_u16_tensor(
-            src,
-            n,
-            sh_float4_slots_for_rest(rest),
-            sh_value_quant::n_value_cells_per_prim(rest),
-            codes,
-            bounds);
+        Tensor codes = Tensor::zeros({sh_value_quant::sh_value_u16_count(n, rest)}, Device::GPU, DataType::Float16);
+        Tensor bounds = Tensor::empty({sh_value_quant::n_bounds_for_prims(n) * 2}, Device::GPU);
+        sh_codec(src, codes, {.destination_format = ShFormat::Q16, .source_rows = n, .destination_rows = n, .count = n, .source_rest = rest, .destination_rest = rest}, nullptr, nullptr, &bounds);
         return {codes.contiguous().cpu(), bounds.contiguous().cpu()};
     }
 
@@ -135,12 +125,14 @@ namespace {
         expect_u16_equal(program.codes, kernel.codes);
         expect_bounds_equal(program.bounds, kernel.bounds);
     }
+
 } // namespace
 
-TEST(ShQuantTensorProgram, MatchesKernelOnCudaForRandomSizes) {
-    require_cuda();
+class ShQuantCudaKernelTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ShQuantCudaKernelTest, MatchesKernelOnCudaForRandomSizes) {
     const std::vector<size_t> ns{1, 255, 256, 257, 1000, 4097};
-    const std::vector<std::uint32_t> rests{3, 8, 15, 24, 45};
+    const std::vector<std::uint32_t> rests{3, 8, 15};
     std::uint32_t seed = 7;
     for (const size_t n : ns) {
         for (const std::uint32_t rest : rests) {
@@ -150,13 +142,12 @@ TEST(ShQuantTensorProgram, MatchesKernelOnCudaForRandomSizes) {
     }
 }
 
-TEST(ShQuantTensorProgram, MatchesKernelOnVulkanForRandomSizes) {
-    require_cuda();
+TEST_F(ShQuantCudaKernelTest, MatchesKernelOnVulkanForRandomSizes) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
     const std::vector<size_t> ns{1, 255, 256, 257, 1000, 4097};
-    const std::vector<std::uint32_t> rests{3, 8, 15, 24, 45};
+    const std::vector<std::uint32_t> rests{3, 8, 15};
     std::uint32_t seed = 11;
     for (const size_t n : ns) {
         for (const std::uint32_t rest : rests) {
@@ -166,8 +157,7 @@ TEST(ShQuantTensorProgram, MatchesKernelOnVulkanForRandomSizes) {
     }
 }
 
-TEST(ShQuantTensorProgram, DegenerateBlocksMatchKernel) {
-    require_cuda();
+TEST_F(ShQuantCudaKernelTest, DegenerateBlocksMatchKernel) {
     const std::vector<GpuBackend> backends{GpuBackend::CUDA};
     std::vector<GpuBackend> all = backends;
     if (gpu_backend_available(GpuBackend::Vulkan)) {

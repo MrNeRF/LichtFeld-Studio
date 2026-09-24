@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
@@ -19,10 +20,16 @@ static void assert_cuda_ok(const char* step) {
     ASSERT_EQ(err, cudaSuccess) << step << ": " << cudaGetErrorString(err);
 }
 
-class ExpandedTensorOpsTest : public ::testing::Test {
+class ExpandedTensorOpsTest : public lfs::test::CudaDeviceTest {
 protected:
-    void SetUp() override { cudaGetLastError(); }
+    void SetUp() override {
+        CudaDeviceTest::SetUp();
+        cudaGetLastError();
+    }
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         cudaError_t err = sync_and_check();
         EXPECT_EQ(err, cudaSuccess) << "Residual: " << cudaGetErrorString(err);
     }
@@ -277,7 +284,9 @@ TEST(ExpandedTensorOps, EmptyZeroDimTensorPtrIsSafe) {
 // A CPU-tagged handle whose storage is CUDA device
 // memory must be rejected at raw-pointer escape (would produce cudaMemcpy
 // invalid argument with src/dst in the same address region).
-TEST(ExpandedTensorOps, CpuTaggedDeviceStorageRejectedOnPtr) {
+class ExpandedTensorOpsCuda : public lfs::test::CudaBackendTest {};
+
+TEST_F(ExpandedTensorOpsCuda, CpuTaggedDeviceStorageRejectedOnPtr) {
     using namespace lfs::core;
     auto device_src = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f, 4.f},
                                           TensorShape({4}), Device::GPU);

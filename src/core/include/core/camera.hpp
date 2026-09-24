@@ -132,6 +132,8 @@ namespace lfs::core {
         const Tensor& R() const { return _R; }
         const Tensor& T() const { return _T; }
 
+        void to_backend(GpuBackend backend);
+
         Tensor K() const;
 
         std::tuple<float, float, float, float> get_intrinsics() const;

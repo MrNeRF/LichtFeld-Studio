@@ -9,6 +9,7 @@
 
 set(LFS_TENSOR_CUDA_SOURCES
     backend/cuda/kernels/tensor_ops.cu
+    backend/cuda/kernels/tensor_uint32.cu
     backend/cuda/kernels/tensor_warp_reduce.cu
     backend/cuda/kernels/tensor_matrix_ops.cu
     backend/cuda/kernels/tensor_broadcast_ops.cu
@@ -19,6 +20,14 @@ set(LFS_TENSOR_CUDA_SOURCES
     backend/cuda/kernels/tensor_dot_optimized.cu
     backend/cuda/kernels/tensor_nn_ops.cu
     backend/cuda/kernels/tensor_fused_pointwise.cu
+    backend/cuda/kernels/tensor_spatial.cu
+    backend/cuda/kernels/tensor_histogram.cu
+    backend/cuda/kernels/tensor_ppisp.cu
+    backend/cuda/kernels/tensor_environment.cu
+    backend/cuda/kernels/tensor_labels.cu
+    backend/cuda/kernels/tensor_projection.cu
+    backend/cuda/kernels/tensor_point_region.cu
+    backend/cuda/kernels/tensor_filters.cu
 )
 
 if(LFS_TENSOR_CUDA_SOURCES)
@@ -57,7 +66,7 @@ if(LFS_TENSOR_CUDA_SOURCES)
             $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
     )
 
-    target_compile_definitions(lfs_tensor_kernels PRIVATE LFS_CORE_EXPORTS)
+    target_compile_definitions(lfs_tensor_kernels PRIVATE LFS_CORE_EXPORTS LFS_TENSOR_PRIVATE_ACCESS)
 
     if(MSVC)
         target_compile_definitions(lfs_tensor_kernels PRIVATE
@@ -65,8 +74,8 @@ if(LFS_TENSOR_CUDA_SOURCES)
         )
     endif()
 
-    # Windows nvcc 12.8 ICE workarounds: tensor_broadcast_ops.cu keeps the legacy
-    # -O0 pin; tensor_ops.cu ICEs at -O0 (aggregate codegen) and must build at -O3.
+    # Windows nvcc 12.8 requires -O0 for tensor_broadcast_ops.cu;
+    # tensor_ops.cu requires -O3 to avoid an aggregate-codegen ICE.
     if(WIN32)
         set_source_files_properties(
             backend/cuda/kernels/tensor_broadcast_ops.cu

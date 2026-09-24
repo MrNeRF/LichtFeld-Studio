@@ -7,6 +7,7 @@
 #include "core/tensor/backend/pointwise_lowering.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,11 +23,6 @@ namespace {
 
     using namespace lfs::core;
     using namespace lfs::core::internal;
-
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-    }
 
     std::string exception_message(const auto& operation) {
         try {
@@ -69,7 +65,9 @@ namespace {
         }
     };
 
-    TEST(TensorBackendFacade, RegistryReturnsVulkanAndRejectsCpuStorage) {
+    class TensorBackendFacade : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TensorBackendFacade, RegistryReturnsVulkanAndRejectsCpuStorage) {
         // Catches the Vulkan registry entry silently returning the CUDA singleton.
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             GpuBackendScope scope(GpuBackend::Vulkan);
@@ -87,11 +85,7 @@ namespace {
         EXPECT_NE(cpu_error.find("GPU storage"), std::string::npos);
     }
 
-    TEST(TensorBackendFacade, PointwiseEntriesPreserveCudaResultsAndBackend) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacade, PointwiseEntriesPreserveCudaResultsAndBackend) {
         const Tensor input = Tensor::from_vector(
             std::vector<float>{-1.0f, 0.0f, 1.0f, 2.0f}, {2, 2}, Device::GPU);
 
@@ -144,11 +138,7 @@ namespace {
         expect_cuda_backend(filled);
     }
 
-    TEST(TensorBackendFacade, ClampEntriesPreserveFloatAndIntPolicies) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacade, ClampEntriesPreserveFloatAndIntPolicies) {
         // Catches out-of-place clamp failing to preserve IEEE NaN behavior.
         const float nan = std::numeric_limits<float>::quiet_NaN();
         const Tensor source = Tensor::from_vector(
@@ -180,11 +170,7 @@ namespace {
         expect_cuda_backend(integers);
     }
 
-    TEST(TensorBackendFacade, LazyFusedChainUsesUnifiedPointwiseIds) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacade, LazyFusedChainUsesUnifiedPointwiseIds) {
         LazyOverrideGuard guard;
         const Tensor input = Tensor::full({4096}, 2.0f, Device::GPU);
 
@@ -195,11 +181,9 @@ namespace {
         EXPECT_GT(internal::lazy_executor_diagnostics_snapshot_for_testing().fused_launches, 0u);
     }
 
-    TEST(TensorBackendFacadeB, ReductionsPreserveCudaResultsBackendAndSyncBoundaries) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
+    class TensorBackendFacadeB : public lfs::test::CudaBackendTest {};
 
+    TEST_F(TensorBackendFacadeB, ReductionsPreserveCudaResultsBackendAndSyncBoundaries) {
         const Tensor values = Tensor::from_vector(
             std::vector<float>{1.0f, -2.0f, 3.0f, 4.0f, 0.0f, -6.0f},
             {2, 3}, Device::GPU);
@@ -247,11 +231,7 @@ namespace {
         EXPECT_FALSE(values.has_inf());
     }
 
-    TEST(TensorBackendFacadeB, FusedTransformReductionsPreserveChainsAndSegments) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacadeB, FusedTransformReductionsPreserveChainsAndSegments) {
         LazyOverrideGuard guard;
 
         // Catches the full fused transform-reduce adapter dropping the pointwise chain.
@@ -269,11 +249,7 @@ namespace {
                   2u);
     }
 
-    TEST(TensorBackendFacadeB, ScanAndSortPreserveLayoutsIndicesAndBackend) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacadeB, ScanAndSortPreserveLayoutsIndicesAndBackend) {
         // Catches cumsum losing rank, dimension, or dtype from its layout descriptor.
         const Tensor matrix = Tensor::from_vector(
             std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
@@ -300,11 +276,7 @@ namespace {
         expect_cuda_backend(indices_2d);
     }
 
-    TEST(TensorBackendFacadeB, MatrixEntriesPreserveDimensionsEpiloguesAndBackend) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacadeB, MatrixEntriesPreserveDimensionsEpiloguesAndBackend) {
         const Tensor lhs = Tensor::from_vector(
             std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
             {2, 3}, Device::GPU);
@@ -372,11 +344,7 @@ namespace {
         expect_cuda_backend(conv_output);
     }
 
-    TEST(TensorBackendFacadeB, NnEntriesPreservePoolingBiasReluAndBackend) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacadeB, NnEntriesPreservePoolingBiasReluAndBackend) {
         const Tensor image = Tensor::from_vector(
             std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f},
             {1, 1, 2, 2}, Device::GPU);
@@ -419,11 +387,7 @@ namespace {
         expect_cuda_backend(relu_output);
     }
 
-    TEST(TensorBackendFacadeB, RandomEntriesPreserveContractsAndBackend) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
+    TEST_F(TensorBackendFacadeB, RandomEntriesPreserveContractsAndBackend) {
         // Catches uniform dropping its bounds or output descriptor.
         Tensor uniform = Tensor::zeros({2048}, Device::GPU);
         uniform.uniform_(2.0f, 4.0f);

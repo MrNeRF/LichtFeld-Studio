@@ -75,8 +75,7 @@ def preferences_panel_module(monkeypatch):
     )
 
     tensor_defaults = dict(backend="cuda", vulkan_device="", vulkan_validation=0,
-                           force_fp32_half=False, force_no_atomic_float=False,
-                           viewer_vulkan_inputs=False)
+                           force_fp32_half=False, force_no_atomic_float=False)
     state.tensor_preferences = dict(tensor_defaults)
 
     def set_tensor_backend_preferences(**values):
@@ -1048,4 +1047,3 @@ def test_tensor_setting_preserves_other_pending_preferences(preferences_panel_mo
     assert state.tensor_preferences["backend"] == "vulkan"
     assert state.tensor_preferences["vulkan_validation"] == 2
     assert state.tensor_preferences["force_fp32_half"] is True
-    assert state.tensor_preferences["viewer_vulkan_inputs"] is False

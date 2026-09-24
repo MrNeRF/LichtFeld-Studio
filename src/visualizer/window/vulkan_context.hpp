@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/exportable_storage.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "gpu_object_census.hpp"
 #include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
@@ -60,6 +61,7 @@ namespace lfs::vis {
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
 
+        LFS_VIS_API bool initHeadless();
         bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
         void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
@@ -121,7 +123,6 @@ namespace lfs::vis {
             VkDeviceSize allocation_size = 0;
             std::string diagnostic_scope;
             std::string diagnostic_label;
-            ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
             // #1488: true only after census onCreate; fail-path destroy must not onDestroy.
             bool census_counted = false;
         };
@@ -149,7 +150,6 @@ namespace lfs::vis {
             VkSemaphore semaphore = VK_NULL_HANDLE;
             std::uint64_t initial_value = 0;
             std::string diagnostic_scope;
-            ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
             bool census_counted = false;
         };
 
@@ -255,10 +255,12 @@ namespace lfs::vis {
             VkQueue queue = VK_NULL_HANDLE;
             uint32_t queue_family = 0;
             bool shader_atomic_float = false;
+            bool shader_float64 = false;
             bool shader_float16 = false;
             bool complete = false;
         };
         [[nodiscard]] const TensorBackendDevice& tensorBackendDevice() const { return tensor_backend_device_; }
+        [[nodiscard]] LFS_VIS_API lfs::core::TensorVulkanInterop& tensorInterop();
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -340,7 +342,6 @@ namespace lfs::vis {
                                                std::string_view diagnostic_scope = "vulkan.external.image",
                                                std::string_view diagnostic_label = {});
         void destroyExternalImage(ExternalImage& image);
-        [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
         void destroyExternalBuffer(ExternalBuffer& buffer);
         // Import a foreign-allocated external memory handle (e.g. from CUDA's
         // cuMemExportToShareableHandle) into Vulkan. The exporter retains ownership
@@ -370,7 +371,6 @@ namespace lfs::vis {
             ExternalSemaphore& out,
             std::string_view diagnostic_scope = "vulkan.external.semaphore");
         void destroyExternalSemaphore(ExternalSemaphore& semaphore);
-        [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;
         [[nodiscard]] static bool externalNativeHandleValid(ExternalNativeHandle handle);
         void closeExternalNativeHandle(ExternalNativeHandle& handle) const;
         [[nodiscard]] bool transitionImageLayoutImmediate(VkImage image,
@@ -600,6 +600,8 @@ namespace lfs::vis {
         bool sparse_binding_enabled_ = false;
         bool buffer_device_address_enabled_ = false;
         std::mutex graphics_queue_mutex_;
+        std::mutex tensor_interop_mutex_;
+        std::unique_ptr<lfs::core::TensorVulkanInterop> tensor_interop_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

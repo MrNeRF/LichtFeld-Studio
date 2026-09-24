@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -9,7 +11,6 @@
 #include "io/loader.hpp"
 #include "io/splat_chapter.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -74,13 +75,8 @@ namespace {
         return file.path;
     }
 
-    class ViewerVulkanLoad : public ::testing::Test {
-        void SetUp() override {
-            int device_count = 0;
-            if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
-                GTEST_SKIP() << "CUDA device unavailable";
-        }
-    };
+    class ViewerVulkanLoad : public lfs::test::CudaDeviceTest {};
+    class ViewerCudaLoad : public lfs::test::CudaBackendTest {};
 
     lfs::io::SplatTensorAllocator plain_splat_allocator() {
         return [](TensorShape shape,
@@ -231,7 +227,7 @@ TEST_F(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     expect_means_match_cpu_ply(**hydrated);
 }
 
-TEST_F(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
+TEST_F(ViewerCudaLoad, PlyCudaDefaultKeepsQ16) {
     ASSERT_TRUE(sh_value_quant::enabled());
 
     GpuBackendScope scope(GpuBackend::CUDA);

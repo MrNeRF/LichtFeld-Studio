@@ -3,6 +3,7 @@
 
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -28,7 +29,7 @@ using namespace lfs::io;
 
 namespace {
 
-    class PipelinedImageLoaderTest : public ::testing::Test {
+    class PipelinedImageLoaderTest : public lfs::test::CudaBackendTest {
     protected:
         static std::uint64_t process_id() {
 #ifdef _WIN32
@@ -39,6 +40,9 @@ namespace {
         }
 
         static void SetUpTestSuite() {
+            if (!gpu_backend_available(GpuBackend::CUDA)) {
+                GTEST_SKIP() << "Image decoding requires an available CUDA device";
+            }
             image_path_ = std::filesystem::path(TEST_DATA_DIR) /
                           "bicycle/images_4/_DSC8744.JPG";
             ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
@@ -76,6 +80,7 @@ namespace {
         }
 
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
             ASSERT_TRUE(std::filesystem::is_regular_file(mask_path_)) << mask_path_;
         }
@@ -131,6 +136,7 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_TRUE(ready.error.empty()) << ready.error;
     EXPECT_EQ(ready.sequence_id, 7u);
     ASSERT_TRUE(ready.tensor.is_valid());
+    EXPECT_EQ(gpu_backend_of(ready.tensor), GpuBackend::CUDA);
     EXPECT_EQ(ready.tensor.device(), Device::GPU);
     EXPECT_EQ(ready.tensor.dtype(), DataType::Float32);
     ASSERT_EQ(ready.tensor.shape().rank(), 3u);
@@ -293,7 +299,8 @@ TEST_F(PipelinedImageLoaderTest, MultipleRequestsPreserveIdsAndOptionalMask) {
               (std::map<size_t, bool>{{11u, false}, {12u, true}}));
 }
 
-class PipelinedMaskUndistortTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
+class PipelinedMaskUndistortTest : public lfs::test::CudaBackendTest,
+                                   public ::testing::WithParamInterface<std::tuple<bool, bool>> {};
 
 TEST_P(PipelinedMaskUndistortTest, ProcessesEntireOutputMaskOnColdAndRepeatedLoad) {
     const auto [alpha_mask, enlarge] = GetParam();

@@ -7,12 +7,14 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 namespace {
 
-    class PPISPControllerTest : public ::testing::Test {
+    class PPISPControllerTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             // Preallocate shared buffers for the largest test image size
             lfs::training::PPISPController::preallocate_shared_buffers(256, 256);
         }

@@ -6,6 +6,7 @@
 #include "app/headless_recovery_document.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
@@ -1547,8 +1548,10 @@ namespace {
         EXPECT_EQ(witness_scene(live), before);
     }
 
-    TEST(ProjectDocumentTest,
-         CheckpointWindowPastStoredPayloadRefusesHydrationBeforeSceneMutation) {
+    class ProjectDocumentCudaTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(ProjectDocumentCudaTest,
+           CheckpointWindowPastStoredPayloadRefusesHydrationBeforeSceneMutation) {
         const auto training_uuid = fixed_uuid(926);
         const auto checkpoint_uuid = fixed_uuid(927);
         auto model = make_splat(2);
@@ -3197,8 +3200,8 @@ namespace {
                   << " partial_save_ms=" << partial_save_ms << '\n';
     }
 
-    TEST(ProjectDocumentTest,
-         RepresentativeEditedSceneRoundTripsAndCleanRowsReuseSpans) {
+    TEST_F(ProjectDocumentCudaTest,
+           RepresentativeEditedSceneRoundTripsAndCleanRowsReuseSpans) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "representative.licht";
 
@@ -4034,8 +4037,8 @@ namespace {
                 checkpoint_uuid)));
     }
 
-    TEST(ProjectDocumentTest,
-         AutosaveRejectsMismatchedSnapshotWhenCheckpointPresent) {
+    TEST_F(ProjectDocumentCudaTest,
+           AutosaveRejectsMismatchedSnapshotWhenCheckpointPresent) {
         TemporaryDirectory temporary;
         const fs::path master =
             temporary.path / "ckpt-mismatch.licht";
@@ -4078,8 +4081,8 @@ namespace {
             << formatted;
     }
 
-    TEST(ProjectDocumentTest,
-         AutosaveAdoptsCheckpointSnapshotWhenSnapshotUuidNil) {
+    TEST_F(ProjectDocumentCudaTest,
+           AutosaveAdoptsCheckpointSnapshotWhenSnapshotUuidNil) {
         TemporaryDirectory temporary;
         const fs::path master =
             temporary.path / "ckpt-adopt.licht";
@@ -4167,8 +4170,8 @@ namespace {
             overlay.commit().snapshot_uuid);
     }
 
-    TEST(ProjectDocumentTest,
-         UnboundCheckpointRemainsLiveWhenCapturedSceneHasNoBinding) {
+    TEST_F(ProjectDocumentCudaTest,
+           UnboundCheckpointRemainsLiveWhenCapturedSceneHasNoBinding) {
         const auto training_uuid = fixed_uuid(9970);
         const auto checkpoint_uuid = fixed_uuid(9971);
         auto document = make_empty_document(fixed_uuid(9972), 100);
@@ -4214,8 +4217,8 @@ namespace {
         EXPECT_FALSE(*reopened_bound);
     }
 
-    TEST(ProjectDocumentTest,
-         BoundCheckpointSurvivesWhenCapturedSceneStillBindsIt) {
+    TEST_F(ProjectDocumentCudaTest,
+           BoundCheckpointSurvivesWhenCapturedSceneStillBindsIt) {
         const auto training_uuid = fixed_uuid(9974);
         const auto checkpoint_uuid = fixed_uuid(9975);
         auto document = make_empty_document(fixed_uuid(9976), 100);
@@ -4256,8 +4259,8 @@ namespace {
         EXPECT_EQ(document->checkpoint_uuids().front(), checkpoint_uuid);
     }
 
-    TEST(ProjectDocumentTest,
-         CheckpointHistorySurvivesSaveAsAndCompaction) {
+    TEST_F(ProjectDocumentCudaTest,
+           CheckpointHistorySurvivesSaveAsAndCompaction) {
         TemporaryDirectory temporary;
         const auto master = temporary.path / "history-master.licht";
         const auto copy = temporary.path / "history-copy.licht";
@@ -4317,8 +4320,8 @@ namespace {
             std::optional(current_uuid));
     }
 
-    TEST(ProjectDocumentTest,
-         CheckpointHistoryRetentionEvictsOldestUnboundEntry) {
+    TEST_F(ProjectDocumentCudaTest,
+           CheckpointHistoryRetentionEvictsOldestUnboundEntry) {
         auto document = make_empty_document(fixed_uuid(9988), 100);
         for (int iteration = 1;
              iteration <= static_cast<int>(CHECKPOINT_HISTORY_LIMIT) + 2;
@@ -4335,8 +4338,8 @@ namespace {
         EXPECT_NE(document->find_checkpoint(fixed_uuid(9991)), nullptr);
     }
 
-    TEST(ProjectDocumentTest,
-         LightweightAutosaveRefreshDoesNotGrowCheckpointHistory) {
+    TEST_F(ProjectDocumentCudaTest,
+           LightweightAutosaveRefreshDoesNotGrowCheckpointHistory) {
         TemporaryDirectory temporary;
         const auto master = temporary.path / "autosave-master.licht";
         write_phase_a_fixture(master);
@@ -4401,8 +4404,8 @@ namespace {
         EXPECT_EQ(saved.error().code(), lfs::ErrorCode::DataLoss);
     }
 
-    TEST(ProjectDocumentTest,
-         TrainingNodeWithoutBoundCheckpointWithHistoryIsRejected) {
+    TEST_F(ProjectDocumentCudaTest,
+           TrainingNodeWithoutBoundCheckpointWithHistoryIsRejected) {
         auto document = make_empty_document(fixed_uuid(10002), 100);
         const Uuid training_uuid = fixed_uuid(10003);
         const Uuid checkpoint_uuid = fixed_uuid(10004);
@@ -4459,8 +4462,8 @@ namespace {
         EXPECT_FALSE(*bound);
     }
 
-    TEST(ProjectDocumentTest,
-         SaveAsDropsCheckpointRemovedBeforeRebind) {
+    TEST_F(ProjectDocumentCudaTest,
+           SaveAsDropsCheckpointRemovedBeforeRebind) {
         TemporaryDirectory temporary;
         const fs::path master =
             temporary.path / "ckpt-saveas-master.licht";
@@ -4520,8 +4523,8 @@ namespace {
             ProjectDocument::open(destination)));
     }
 
-    TEST(ProjectDocumentTest,
-         SaveAsToExistingForeignProjectSucceedsWithLazyCheckpoint) {
+    TEST_F(ProjectDocumentCudaTest,
+           SaveAsToExistingForeignProjectSucceedsWithLazyCheckpoint) {
         TemporaryDirectory temporary;
         const fs::path source =
             temporary.path / "saveas-handles-source.licht";
@@ -4596,8 +4599,8 @@ namespace {
             << lfs::format_for_developer(appended.error());
     }
 
-    TEST(ProjectDocumentTest,
-         SaveAsToExistingForeignProjectSucceedsWithDirtyCheckpoint) {
+    TEST_F(ProjectDocumentCudaTest,
+           SaveAsToExistingForeignProjectSucceedsWithDirtyCheckpoint) {
         TemporaryDirectory temporary;
         const fs::path source =
             temporary.path / "saveas-dirty-ckpt-source.licht";
@@ -5334,8 +5337,8 @@ namespace {
             ppisp_reference);
     }
 
-    TEST(ProjectDocumentTest,
-         TrainingAutosaveCarryForwardCkptRecoversNewestLightAndSpecifiedCkpt) {
+    TEST_F(ProjectDocumentCudaTest,
+           TrainingAutosaveCarryForwardCkptRecoversNewestLightAndSpecifiedCkpt) {
         TemporaryDirectory temporary;
         const fs::path master =
             temporary.path / "train-light-ckpt.licht";
@@ -5448,8 +5451,8 @@ namespace {
         EXPECT_EQ(**training, fixed_uuid(9930));
     }
 
-    TEST(ProjectDocumentTest,
-         OpenStreamsCkptWhenDecodedSizeExceedsMaterializeCap) {
+    TEST_F(ProjectDocumentCudaTest,
+           OpenStreamsCkptWhenDecodedSizeExceedsMaterializeCap) {
         TemporaryDirectory temporary;
         const fs::path path =
             temporary.path / "ckpt-stream-cap.licht";
@@ -5831,8 +5834,8 @@ namespace {
                   xxh3_128(raw_bytes));
     }
 
-    TEST(ProjectDocumentTest,
-         SaveCopiesFileBackedCkptVerbatimWhenCleanProofIsLost) {
+    TEST_F(ProjectDocumentCudaTest,
+           SaveCopiesFileBackedCkptVerbatimWhenCleanProofIsLost) {
         TemporaryDirectory temporary;
         const fs::path path =
             temporary.path / "ckpt-verbatim-no-proof.licht";

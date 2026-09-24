@@ -735,9 +735,7 @@ class Tensor:
 
     @property
     def device(self) -> str:
-        """
-        Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend
-        """
+        """Device: 'cpu', 'cuda', or 'vulkan' according to the tensor backend"""
 
     @property
     def backend(self) -> str:
@@ -771,7 +769,7 @@ class Tensor:
         """Make tensor contiguous"""
 
     def sync(self) -> None:
-        """Synchronize CUDA stream"""
+        """Wait for GPU work on this tensor's backend"""
 
     def size(self, dim: int) -> int:
         """Size of dimension"""

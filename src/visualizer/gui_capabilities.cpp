@@ -5,15 +5,14 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "visualizer/gui_capabilities.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_sh.hpp"
 
-#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
-#include "lfs/training/live_model_mutation_guard.hpp"
-#include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -678,14 +677,23 @@ namespace lfs::vis::cap {
                     return result;
             }
             if (sh_f16_storage && rotates_sh) {
-                lfs::training::LiveModelMutationGuard mutation_scope("transform.bake");
-                const bool expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(model);
-                lfs::training::sh_value::ShNCommitGuard commit_guard(model, expanded, "transform.bake");
-                if (!expanded)
-                    return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::FailedPrecondition, "Bake could not expand quantized shN for mutation"));
-                if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
-                    return result;
-                lfs::training::sh_value::commit_shN_after_mutation(model);
+                const auto count = static_cast<size_t>(model.size());
+                const auto rest = static_cast<uint32_t>(model.max_sh_coeffs_rest());
+                const auto format = core::sh_storage_format(model.shN_raw(), model.shN_value_bounds());
+                if (format == core::ShFormat::Float16) {
+                    model.shN_raw() = transformed.shN_raw().clone();
+                    (void)model.apply_shN_value_quant();
+                } else {
+                    core::sh_codec(transformed.shN_raw(), model.shN_raw(),
+                                   {.source_format = core::ShFormat::Float32,
+                                    .destination_format = format,
+                                    .source_rows = count,
+                                    .destination_rows = count,
+                                    .count = count,
+                                    .source_rest = rest,
+                                    .destination_rest = rest},
+                                   nullptr, nullptr, &model.shN_value_bounds());
+                }
                 if (model.has_tensor_allocator() && !lfs::io::splatTensorsRendererReady(model)) {
                     LOG_WARN("transform.bake: shN storage left renderer-degraded after bake");
                 }
@@ -1072,6 +1080,7 @@ namespace lfs::vis::cap {
         if (!node || !node->model)
             return std::unexpected("Gaussian node not found: " + node_name);
 
+        const core::GpuBackendScope backend_scope(core::gpu_backend_of(node->model->means_raw()).value_or(core::default_gpu_backend()));
         const auto canonical_field_name = canonical_gaussian_field_name(field_name);
         if (canonical_field_name.empty())
             return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
@@ -1164,12 +1173,8 @@ namespace lfs::vis::cap {
         const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
         const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
         if (is_shN) {
-            core::shN_swizzled_scatter_linear(
-                field->ptr<float>(),
-                index_tensor.ptr<int>(),
-                src_tensor.ptr<float>(),
-                indices.size(),
-                static_cast<uint32_t>(node->model->max_sh_coeffs_rest()));
+            const auto rest = static_cast<uint32_t>(node->model->max_sh_coeffs_rest());
+            core::sh_codec(src_tensor, *field, {.source_format = core::ShFormat::Canonical, .source_rows = indices.size(), .destination_rows = size_t(node->model->size()), .count = indices.size(), .source_rest = rest, .destination_rest = rest, .scatter = true}, &index_tensor);
         } else {
             field->index_copy_(0, index_tensor, src_tensor);
         }

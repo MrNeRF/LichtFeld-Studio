@@ -3,6 +3,7 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/improved_gs_plus.hpp"
@@ -49,7 +50,9 @@ namespace {
 
 } // namespace
 
-TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
+class MCMCTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MCMCTest, RemoveGaussiansSoftDeletesRows) {
     auto splat_data = create_test_splat_data(50);
     MCMC strategy(splat_data);
 
@@ -99,7 +102,9 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
     }
 }
 
-TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
+class CropDampingStrategyTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     auto splat_data = create_test_splat_data(8);
     MCMC strategy(splat_data);
 
@@ -130,7 +135,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_EQ(unit_scale_weights, unmasked_weights);
 }
 
-TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
+TEST_F(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     auto splat_data = create_test_splat_data(8);
     ImprovedGSPlus strategy(splat_data);
 
@@ -164,7 +169,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     EXPECT_EQ(unit_scale_scores, unmasked_scores);
 }
 
-TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
+TEST_F(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     auto splat_data = create_test_splat_data(12);
     MCMC strategy(splat_data);
 
@@ -197,7 +202,7 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     EXPECT_TRUE(means_state->joint_bounds.is_valid());
 }
 
-TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {
+TEST_F(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {
     auto splat_data = create_test_splat_data(12);
     MCMC strategy(splat_data);
 
@@ -211,7 +216,7 @@ TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {
     EXPECT_EQ(strategy.get_model().visible_count(), 12);
 }
 
-TEST(MCMCTest, AddNewGaussiansExtendsDeletedMask) {
+TEST_F(MCMCTest, AddNewGaussiansExtendsDeletedMask) {
     auto splat_data = create_test_splat_data(8);
     MCMC strategy(splat_data);
 

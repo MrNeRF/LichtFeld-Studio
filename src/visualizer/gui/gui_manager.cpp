@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gui_manager.hpp"
-#include "control/command_api.hpp"
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
@@ -20,6 +20,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/camera_thumbnail_batch.hpp"
@@ -56,6 +57,7 @@
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
 
+#include "core/camera_metrics.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
@@ -74,8 +76,10 @@
 #include "scene/scene_render_state.hpp"
 #include "theme/theme.hpp"
 #include "tools/selection_tool.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -2713,7 +2717,11 @@ namespace lfs::vis::gui {
             const auto* trainer = scene_manager.getTrainerManager()
                                       ? scene_manager.getTrainerManager()->getTrainer()
                                       : nullptr;
+#if LFS_BUILD_TRAINER
             const std::uint64_t loss_generation = trainer ? trainer->cameraLossColorGeneration() : 0;
+#else
+            constexpr std::uint64_t loss_generation = 0;
+#endif
 
             if (camera_data_changed) {
                 const auto& all_cameras = scene.getAllCamerasCached();
@@ -2809,8 +2817,10 @@ namespace lfs::vis::gui {
                 cache.loss_colors.size() != cache.cameras.size() ||
                 cache.training_loss_color_generation != loss_generation) {
                 std::vector<std::array<float, 3>> loss_colors;
+#if LFS_BUILD_TRAINER
                 if (trainer)
                     trainer->fillCameraLossColors(cache.cameras, loss_colors);
+#endif
                 cache.loss_colors.assign(
                     cache.cameras.size(), glm::vec3(std::numeric_limits<float>::quiet_NaN()));
                 for (size_t i = 0; i < loss_colors.size(); ++i)
@@ -3206,7 +3216,7 @@ namespace lfs::vis::gui {
             // KEEP IN SYNC: the screen-window formula lives in four places —
             // this overlay (rect only, no depth test),
             // vertex_shader.slang compute_splat_active_state,
-            // filterSelectionByScreenWindowKernel (selection_ops.cu), and the
+            // core::filter_points, and the
             // CPU reference in tests/test_selection_screen_window.cpp.
             // Contract: the window RECTANGLE is framebuffer-centred in all four
             // copies; the splat projection uses the displayed camera's real
@@ -6225,7 +6235,9 @@ namespace lfs::vis::gui {
                                                LFS_SOURCE_SITE_CURRENT());
         }
 
-        if (!cuda_unavailable_notified_ && lfs::core::cuda_is_unavailable()) {
+        if (!cuda_unavailable_notified_ &&
+            lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
+            lfs::core::cuda_is_unavailable()) {
             cuda_unavailable_notified_ = true;
             lfs::core::events::state::CudaUnavailable{
                 .message = LOC("runtime.cuda_unavailable_message")}

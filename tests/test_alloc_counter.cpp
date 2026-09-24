@@ -3,6 +3,8 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -38,8 +40,11 @@ TEST(AllocCounterTest, SnapshotAndDeltaApiExists) {
     EXPECT_GE(alloc_counter::total(), snap);
 }
 
-TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
+class AllocCounterCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(AllocCounterCudaTest, FreshLargeTensorIncrementsCounter) {
     cuda_warmup();
+    internal::backend_ops(GpuBackend::CUDA).trim();
 
     const auto snap = alloc_counter::snapshot();
     auto t = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
@@ -51,7 +56,7 @@ TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
     EXPECT_GE(delta, 1u) << "fresh large CUDA tensor must issue a real driver alloc";
 }
 
-TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
+TEST_F(AllocCounterCudaTest, PoolCacheHitDoesNotIncrement) {
     cuda_warmup();
 
     // Seed the bucketed cache with a free of this exact size.
@@ -72,7 +77,7 @@ TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
     EXPECT_EQ(delta, 0u) << "re-allocation of a pool-cached size must not call the driver";
 }
 
-TEST(AllocCounterTest, ZerosDirectIncrementsCounter) {
+TEST_F(AllocCounterCudaTest, ZerosDirectIncrementsCounter) {
     cuda_warmup();
 
     // zeros_direct always uses CudaStorageMode::Direct (cudaMalloc), never the pool.

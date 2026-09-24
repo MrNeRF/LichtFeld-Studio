@@ -35,6 +35,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -111,7 +112,9 @@ namespace {
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(invalid, 1));
     }
 
-    TEST(TrainerRetrySemantics, InvalidDimensionsAreNotResourceExhaustion) {
+    class TrainerRetryCudaTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerRetryCudaTest, InvalidDimensionsAreNotResourceExhaustion) {
         const auto context = fast_lfs::rasterization::forward_raw(
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr, nullptr,
@@ -125,7 +128,7 @@ namespace {
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(typed, 1));
     }
 
-    TEST(TrainerRetrySemantics, UninitializedTrainErrorCarriesCompleteMutationStamp) {
+    TEST_F(TrainerRetryCudaTest, UninitializedTrainErrorCarriesCompleteMutationStamp) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -154,7 +157,7 @@ namespace {
         EXPECT_FALSE(std::get<bool>(find_field(frame, "persistent_commit")->value));
     }
 
-    TEST(TrainerRetrySemantics, GlobalArenaCanBeReconfiguredForCapacityInjection) {
+    TEST_F(TrainerRetryCudaTest, GlobalArenaCanBeReconfiguredForCapacityInjection) {
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
         config.max_physical = 64ULL << 20;
@@ -167,7 +170,7 @@ namespace {
         manager.reset();
     }
 
-    TEST(TrainerRetrySemantics, CapacityFailureIsRetryableOnlyOnFirstAttempt) {
+    TEST_F(TrainerRetryCudaTest, CapacityFailureIsRetryableOnlyOnFirstAttempt) {
         void* storage = nullptr;
         ASSERT_EQ(cudaMalloc(&storage, 4096), cudaSuccess);
 
@@ -206,7 +209,7 @@ namespace {
         EXPECT_EQ(cudaFree(storage), cudaSuccess);
     }
 
-    TEST(TrainerRetrySemantics, RecoveryAsyncFailureKeepsExactlyOneSuppressedOom) {
+    TEST_F(TrainerRetryCudaTest, RecoveryAsyncFailureKeepsExactlyOneSuppressedOom) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -230,7 +233,7 @@ namespace {
                   lfs::ErrorCode::ResourceExhausted);
     }
 
-    TEST(TrainerRetrySemantics, RecoverySuccessCompletesTheForwardRetryPreparation) {
+    TEST_F(TrainerRetryCudaTest, RecoverySuccessCompletesTheForwardRetryPreparation) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -488,7 +491,9 @@ namespace {
         ASSERT_FALSE(result.has_value());
         EXPECT_NE(result.error().find("unknown feature flags"), std::string::npos);
     }
-    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
+    class TrainingSetupRegressionTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
         constexpr size_t initial_points = 12;
 
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_training_setup_full_init_regression";
@@ -523,7 +528,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
+    TEST_F(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
         constexpr size_t initial_splats = 8;
 
         const auto temp_dir =
@@ -571,7 +576,9 @@ namespace {
 
     // joint Adam + optional q16 shN must survive save→load resume with both
     // codec modes. Round-trips moments (joint_bits/packed) and dequantised shN.
-    TEST(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
+    class CheckpointResumeRoundtripTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
         namespace sh_value = lfs::training::sh_value;
 
         sh_value::set_sh_value_quant_enabled_for_testing(true);
@@ -738,7 +745,9 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
+    class CheckpointInputValidationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_tensor_dtype";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -780,7 +789,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsLateStrategyCorruptionWithoutPartialCommit) {
+    TEST_F(CheckpointInputValidationTest, RejectsLateStrategyCorruptionWithoutPartialCommit) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_late_corruption";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -826,7 +835,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsJsonRangeOutsideFileBeforeStateMutation) {
+    TEST_F(CheckpointInputValidationTest, RejectsJsonRangeOutsideFileBeforeStateMutation) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_json_range";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -910,7 +919,8 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    class CheckpointStrategyStateRoundTripTest : public ::testing::TestWithParam<std::string> {};
+    class CheckpointStrategyStateRoundTripTest : public lfs::test::CudaBackendTest,
+                                                 public ::testing::WithParamInterface<std::string> {};
 
     TEST_P(CheckpointStrategyStateRoundTripTest, ModelOptimizerAndStrategyState) {
         const auto& strategy_name = GetParam();
@@ -1062,7 +1072,9 @@ namespace {
         return params;
     }
 
-    TEST(TrainerBilateralGridTest, PreservesSparseCameraSlotsAcrossFilteringAndCheckpoint) {
+    class TrainerBilateralGridTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerBilateralGridTest, PreservesSparseCameraSlotsAcrossFilteringAndCheckpoint) {
         using lfs::core::Camera;
         using lfs::core::DataType;
         using lfs::core::Device;
@@ -1177,7 +1189,9 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainerCheckpointFrozenMaskTest, LoadedRangesReplacePreexistingOptimizerMask) {
+    class TrainerCheckpointFrozenMaskTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerCheckpointFrozenMaskTest, LoadedRangesReplacePreexistingOptimizerMask) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_frozen_mask";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -1219,7 +1233,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainerCheckpointFrozenMaskTest, EmptyLoadedRangesClearPreexistingOptimizerMask) {
+    TEST_F(TrainerCheckpointFrozenMaskTest, EmptyLoadedRangesClearPreexistingOptimizerMask) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_empty_frozen_mask";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -1531,9 +1545,11 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    class CheckpointResumeTest : public ::testing::TestWithParam<std::tuple<std::string, int, int, int>> {
+    class CheckpointResumeTest : public lfs::test::CudaBackendTest,
+                                 public ::testing::WithParamInterface<std::tuple<std::string, int, int, int>> {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             const auto& [strategy, sh_degree, checkpoint_iteration, total_iterations] = GetParam();
             strategy_ = strategy;
             sh_degree_ = sh_degree;
@@ -1864,7 +1880,7 @@ namespace {
     }
 
     class ProjectCheckpointTrainerInstall
-        : public ::testing::Test {
+        : public lfs::test::CudaBackendTest {
     protected:
         void TearDown() override {
             lfs::training::TrainingSnapshotService::
@@ -2555,11 +2571,6 @@ namespace {
 
     TEST_F(ProjectCheckpointTrainerInstall,
            HeadlessRedirectPreservesEmbeddedDatasetForDatasetAndResume) {
-        int device_count = 0;
-        const auto cuda_status = cudaGetDeviceCount(&device_count);
-        if (cuda_status != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "Requires CUDA: " << cudaGetErrorString(cuda_status);
-        }
         using namespace lfs::io::project;
         using namespace lfs::test::licht;
         TemporaryDirectory temporary;

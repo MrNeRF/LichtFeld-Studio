@@ -5,6 +5,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "training/dataset.hpp"
@@ -49,7 +50,22 @@ namespace {
 
 } // namespace
 
-TEST(CompressedBlobTier, HostCacheHit) {
+TEST(PipelinedImageLoaderAvailability, UnavailableDecoderCompletesOriginalJpegRequest) {
+    if (lfs::io::NvCodecImageLoader::is_available()) {
+        GTEST_SKIP() << "nvImageCodec is available";
+    }
+    const auto path = bicycle_image("_DSC8739.JPG");
+    if (!std::filesystem::is_regular_file(path)) {
+        GTEST_SKIP() << "bicycle dataset is absent: " << path;
+    }
+    lfs::io::PipelinedImageLoader loader;
+    EXPECT_THROW(load_one(loader, 1, path), std::runtime_error);
+    EXPECT_EQ(loader.in_flight_count(), 0u);
+}
+
+class CompressedBlobTier : public lfs::test::CudaBackendTest {};
+
+TEST_F(CompressedBlobTier, HostCacheHit) {
     const auto path = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -66,7 +82,7 @@ TEST(CompressedBlobTier, HostCacheHit) {
     EXPECT_GT(stats.jpeg_cache_entries, 0u);
 }
 
-TEST(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
+TEST_F(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
     const auto source = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(source))
         GTEST_SKIP() << "bicycle dataset is absent: " << source;
@@ -86,14 +102,22 @@ TEST(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
     config.use_16bit_color = true;
     lfs::io::PipelinedImageLoader loader(config);
 
-    const auto cold = load_one(loader, 1, cached_source);
+    lfs::io::ImageRequest request;
+    request.sequence_id = 1;
+    request.path = cached_source;
+    request.params.resize_factor = 2;
+    request.params.output_uint8 = false;
+    loader.prefetch({request});
+    const auto cold = loader.get();
     ASSERT_TRUE(cold.error.empty()) << cold.error;
     ASSERT_TRUE(cold.tensor.is_valid());
     ASSERT_EQ(cold.tensor.dtype(), lfs::core::DataType::Float32);
     ASSERT_GT(loader.get_stats().jpeg_cache_entries, 0u);
 
     ASSERT_NO_THROW(std::filesystem::resize_file(cached_source, 0));
-    const auto hot = load_one(loader, 2, cached_source);
+    request.sequence_id = 2;
+    loader.prefetch({request});
+    const auto hot = loader.get();
     EXPECT_TRUE(hot.error.empty()) << hot.error;
     ASSERT_TRUE(hot.tensor.is_valid());
     EXPECT_EQ(hot.tensor.dtype(), lfs::core::DataType::Float32);
@@ -105,7 +129,7 @@ TEST(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
     ASSERT_TRUE(std::filesystem::remove(cached_source));
 }
 
-TEST(CompressedBlobTier, CacheHitMatchesProcessedReferenceWithResizeAndUndistort) {
+TEST_F(CompressedBlobTier, CacheHitMatchesProcessedReferenceWithResizeAndUndistort) {
     const auto path = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -163,7 +187,7 @@ TEST(CompressedBlobTier, CacheHitMatchesProcessedReferenceWithResizeAndUndistort
     EXPECT_LT(mean_abs_error, 0.02);
 }
 
-TEST(CompressedBlobTier, AdaptiveControllerUsesRealDataLoaderAndSlowConsumer) {
+TEST_F(CompressedBlobTier, AdaptiveControllerUsesRealDataLoaderAndSlowConsumer) {
     const auto path = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -195,7 +219,7 @@ TEST(CompressedBlobTier, AdaptiveControllerUsesRealDataLoaderAndSlowConsumer) {
     EXPECT_LE(fast_target, 12u);
 }
 
-TEST(CompressedBlobTier, AdaptiveControllerWaitGrowthArmsShrinkCooldown) {
+TEST_F(CompressedBlobTier, AdaptiveControllerWaitGrowthArmsShrinkCooldown) {
     const auto path = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -225,7 +249,7 @@ TEST(CompressedBlobTier, AdaptiveControllerWaitGrowthArmsShrinkCooldown) {
     EXPECT_EQ(loader->get_loader()->adaptive_prefetch_target(), grown_target);
 }
 
-TEST(CompressedBlobTier, HeldCameraExampleKeepsRingFrameStable) {
+TEST_F(CompressedBlobTier, HeldCameraExampleKeepsRingFrameStable) {
     const auto path = bicycle_image("_DSC8739.JPG");
     if (!std::filesystem::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;

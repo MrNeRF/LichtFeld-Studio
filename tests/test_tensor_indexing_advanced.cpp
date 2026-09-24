@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <array>
 #include <gtest/gtest.h>
 #include <numeric>
@@ -9,73 +10,7 @@
 
 using namespace lfs::core;
 
-// Helper functions to convert between custom Tensor and torch::Tensor
 namespace {
-
-    torch::Tensor to_torch(const Tensor& t) {
-        auto options = torch::TensorOptions()
-                           .dtype([&]() {
-                               switch (t.dtype()) {
-                               case DataType::Float32: return torch::kFloat32;
-                               case DataType::Float16: return torch::kFloat16;
-                               case DataType::Int32: return torch::kInt32;
-                               case DataType::Int64: return torch::kInt64;
-                               case DataType::UInt8: return torch::kUInt8;
-                               case DataType::Bool: return torch::kBool;
-                               default: return torch::kFloat32;
-                               }
-                           }())
-                           .device(t.device() == Device::CPU ? torch::kCPU : torch::kCUDA);
-
-        std::vector<int64_t> shape;
-        for (size_t i = 0; i < t.ndim(); ++i) {
-            shape.push_back(static_cast<int64_t>(t.size(i)));
-        }
-
-        torch::Tensor result = torch::empty(shape, options);
-
-        if (t.device() == Device::CPU) {
-            std::memcpy(result.data_ptr(), t.data_ptr(), t.bytes());
-        } else {
-            cudaMemcpy(result.data_ptr(), t.data_ptr(), t.bytes(), cudaMemcpyDeviceToDevice);
-        }
-
-        return result;
-    }
-
-    Tensor from_torch(const torch::Tensor& t, Device device = Device::CPU) {
-        auto t_cont = t.contiguous();
-
-        DataType dtype;
-        switch (t_cont.scalar_type()) {
-        case torch::kFloat32: dtype = DataType::Float32; break;
-        case torch::kFloat16: dtype = DataType::Float16; break;
-        case torch::kInt32: dtype = DataType::Int32; break;
-        case torch::kInt64: dtype = DataType::Int64; break;
-        case torch::kUInt8: dtype = DataType::UInt8; break;
-        case torch::kBool: dtype = DataType::Bool; break;
-        default: dtype = DataType::Float32; break;
-        }
-
-        std::vector<size_t> shape;
-        for (int64_t i = 0; i < t_cont.dim(); ++i) {
-            shape.push_back(static_cast<size_t>(t_cont.size(i)));
-        }
-
-        Tensor result = Tensor::empty(TensorShape(shape), device, dtype);
-
-        if (device == Device::CPU) {
-            std::memcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes());
-        } else {
-            if (t_cont.is_cpu()) {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyHostToDevice);
-            } else {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyDeviceToDevice);
-            }
-        }
-
-        return result;
-    }
 
     void compare_tensors(const Tensor& custom, const torch::Tensor& reference,
                          float rtol = 1e-5f, float atol = 1e-7f, const std::string& msg = "") {
@@ -133,9 +68,13 @@ namespace {
 
 } // anonymous namespace
 
-class TensorIndexingAdvancedTest : public ::testing::Test {
+class TensorIndexingAdvancedTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         Tensor::manual_seed(42);
         torch::manual_seed(42);
     }

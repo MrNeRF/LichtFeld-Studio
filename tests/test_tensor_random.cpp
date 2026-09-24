@@ -147,7 +147,6 @@ namespace {
 class TensorRandomTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
         // Only seed our library
         Tensor::manual_seed(42);
     }
@@ -770,3 +769,35 @@ TEST_F(TensorRandomTest, SlicePreservesData) {
         EXPECT_FLOAT_EQ(slice_vec[i], original_vec[i + 10]);
     }
 }
+
+class TensorCpuRandomTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(TensorCpuRandomTest, SeedReplaysIndependentHostDraws) {
+    const auto draw = [&] {
+        return GetParam() ? Tensor::randn({17}, Device::CPU)
+                          : Tensor::rand({17}, Device::CPU);
+    };
+    for (const uint64_t seed : {42ULL, 0x123456789abcdef0ULL}) {
+        Tensor::manual_seed(seed);
+        const auto first = draw().to_vector();
+        const auto second = draw().to_vector();
+        EXPECT_NE(first, second);
+        Tensor::manual_seed(seed);
+        EXPECT_EQ(draw().to_vector(), first);
+        EXPECT_EQ(draw().to_vector(), second);
+        for (const float value : first) {
+            EXPECT_TRUE(std::isfinite(value));
+            if (!GetParam()) {
+                EXPECT_GE(value, 0.0f);
+                EXPECT_LT(value, 1.0f);
+            }
+        }
+        auto host = Tensor::from_vector(first, {17}, Device::CPU);
+        auto copied = Tensor::empty_pageable_host({17});
+        copied.copy_from(host);
+        EXPECT_EQ(copied.clone().to_vector(), first);
+        EXPECT_EQ((host > 0.0f).to_vector_bool(), (copied > 0.0f).to_vector_bool());
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(Host, TensorCpuRandomTest, ::testing::Bool());

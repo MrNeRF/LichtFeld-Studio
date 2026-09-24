@@ -9,6 +9,7 @@
 #include "core/cuda_error_typed.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/tensor_functors.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -19,9 +20,10 @@
 
 namespace {
 
-    class TensorLaunchCheckDeathTest : public ::testing::Test {
+    class TensorLaunchCheckDeathTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             // The subprocess needs a WORKING CUDA context (malloc + real launch),
             // which fork() cannot guarantee once the parent holds a context.
             // threadsafe style re-execs the binary, so the child initializes

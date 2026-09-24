@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <deque>
 #include <iterator>
@@ -239,8 +240,25 @@ namespace lfs::diagnostics {
             return join_scope_stack();
         }
 
+        bool cuda_context_live() {
+            static const auto get_state = [] {
+                void* entry = nullptr;
+                if (cudaGetDriverEntryPointByVersion("cuDevicePrimaryCtxGetState", &entry, 7000,
+                                                     cudaEnableDefault) != cudaSuccess)
+                    return decltype(&cuDevicePrimaryCtxGetState){};
+                return reinterpret_cast<decltype(&cuDevicePrimaryCtxGetState)>(entry);
+            }();
+            int device = 0;
+            unsigned flags = 0;
+            int active = 0;
+            return get_state && cudaGetDevice(&device) == cudaSuccess &&
+                   get_state(device, &flags, &active) == CUDA_SUCCESS && active != 0;
+        }
+
         [[nodiscard]] bool sample_cuda_used_bytes(std::size_t& used_bytes,
                                                   std::size_t* total_bytes = nullptr) {
+            if (!cuda_context_live())
+                return false;
             std::size_t free_bytes = 0;
             std::size_t total = 0;
             if (cudaMemGetInfo(&free_bytes, &total) != cudaSuccess || total < free_bytes) {
@@ -823,7 +841,7 @@ namespace lfs::diagnostics {
     }
 
     std::int32_t VramProfiler::acquireGpuEventPair(std::string_view scope, void* stream) {
-        if (!enabled()) {
+        if (!enabled() || !cuda_context_live()) {
             return -1;
         }
         std::lock_guard lock(impl_->mutex);
@@ -1105,7 +1123,8 @@ namespace lfs::diagnostics {
 
         std::size_t free_bytes = 0;
         std::size_t total_bytes = 0;
-        if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && total_bytes >= free_bytes) {
+        const bool cuda_live = cuda_context_live();
+        if (cuda_live && cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess && total_bytes >= free_bytes) {
             process.cuda_used = total_bytes - free_bytes;
             process.cuda_total = total_bytes;
             process.cuda_memory_valid = true;
@@ -1113,7 +1132,7 @@ namespace lfs::diagnostics {
 
 #if CUDART_VERSION >= 12080
         int device = 0;
-        if (cudaGetDevice(&device) == cudaSuccess) {
+        if (cuda_live && cudaGetDevice(&device) == cudaSuccess) {
             cudaMemPool_t pool = nullptr;
             if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
                 std::uint64_t used = 0;

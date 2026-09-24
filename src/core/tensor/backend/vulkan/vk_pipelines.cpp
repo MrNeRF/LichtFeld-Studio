@@ -27,6 +27,8 @@ namespace lfs::core::internal {
             if (capability == "SignedZeroInfNanPreserve") {
                 return true;
             }
+            if (capability == "Float64")
+                return caps.shader_float64;
             if (capability == "Float16") {
                 return caps.shader_float16;
             }
@@ -150,6 +152,7 @@ namespace lfs::core::internal {
             return;
         }
         shutting_down_ = true;
+        expressions_.clear();
         for (auto& [name, pipeline] : pipelines_) {
             (void)name;
             if (pipeline.pipeline != VK_NULL_HANDLE) {

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/app_store.hpp"
-#include "visualizer/training/training_progress_publisher.hpp"
+#include "visualizer/core/training_progress_publisher.hpp"
 
 #include <atomic>
 #include <chrono>

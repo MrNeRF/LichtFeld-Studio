@@ -7,6 +7,7 @@
 
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 namespace {
 
@@ -104,9 +105,10 @@ namespace {
         return torch::where(abs_x < beta, 0.5f * x * x / beta, abs_x - 0.5f * beta);
     }
 
-    class PPISPRegularizationTest : public ::testing::Test {
+    class PPISPRegularizationTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             torch::manual_seed(42);
         }
 

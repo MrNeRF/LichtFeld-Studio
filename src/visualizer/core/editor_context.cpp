@@ -1,10 +1,11 @@
+#include "core/logger.hpp"
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/editor_context.hpp"
+#include "core/training_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 

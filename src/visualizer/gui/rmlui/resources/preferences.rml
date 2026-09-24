@@ -50,10 +50,6 @@
             <span class="preferences-label">@tr:preferences.tensor_no_atomic_float</span>
             <input type="checkbox" data-checked="tensor_force_no_atomic_float" />
           </div>
-          <div class="preferences-row preferences-checkbox-row">
-            <span class="preferences-label">@tr:preferences.tensor_viewer_inputs</span>
-            <input type="checkbox" data-checked="tensor_viewer_vulkan_inputs" />
-          </div>
         </div>
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>

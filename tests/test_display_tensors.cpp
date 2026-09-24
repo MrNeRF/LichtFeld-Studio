@@ -6,6 +6,8 @@
 // CPU; each is checked against the per-pixel arithmetic it replaced.
 
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 #include "rendering/display_tensors.hpp"
 #include <gtest/gtest.h>
 
@@ -144,4 +146,36 @@ TEST(DisplayTensors, NormalDisplayNormalizesAndGraysDegenerateNormalsInBothLayou
         expect_close(image->to_vector(), expected, 2.0e-6f);
     }
     EXPECT_FALSE(lfs::vis::makeNormalDisplayTensor(Tensor{}));
+}
+
+class DisplayTensorsCuda : public lfs::test::CudaBackendTest {};
+
+TEST_F(DisplayTensorsCuda, DepthDisplayOnAWorkerStreamMatchesItsCameraInput) {
+    const auto values = depth_pattern();
+    const auto expected = reference_depth(values, DepthVisualizationMode::Palette, {0.1f, 0.2f, 0.3f});
+    cudaStream_t camera_stream = nullptr, worker_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&camera_stream, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&worker_stream, cudaStreamNonBlocking), cudaSuccess);
+    {
+        const auto cpu = Tensor::from_vector(values, {kHeight, kWidth}, Device::CPU);
+        auto input = cpu.to(Device::GPU, camera_stream);
+        ASSERT_EQ(cudaStreamSynchronize(camera_stream), cudaSuccess);
+        CUDAStreamGuard worker(worker_stream);
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            const auto image = lfs::vis::makeDepthDisplayTensor(input, DepthVisualizationMode::Palette, {0.1f, 0.2f, 0.3f});
+            ASSERT_TRUE(image);
+            const auto output = image->to_vector();
+            ASSERT_EQ(output.size(), expected.size());
+            float error = 0;
+            for (size_t i = 0; i < output.size(); ++i) {
+                ASSERT_TRUE(std::isfinite(output[i])) << i;
+                error = std::max(error, std::abs(output[i] - expected[i]));
+            }
+            EXPECT_LE(error, 0.000002f) << "iteration " << iteration;
+        }
+    }
+    release_cuda_stream(camera_stream);
+    release_cuda_stream(worker_stream);
+    EXPECT_EQ(cudaStreamDestroy(camera_stream), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(worker_stream), cudaSuccess);
 }

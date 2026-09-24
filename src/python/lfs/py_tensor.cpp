@@ -5,8 +5,9 @@
 #include "py_tensor.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstring>
@@ -25,10 +26,6 @@ namespace lfs::python {
     using lfs::core::TensorShape;
 
     namespace {
-
-        constexpr DLDeviceType to_dl_device(const Device d) {
-            return d == Device::GPU ? kDLCUDA : kDLCPU;
-        }
 
         Device from_dl_device(const DLDeviceType t) {
             if (t == kDLCUDA || t == kDLCUDAManaged)
@@ -219,7 +216,7 @@ namespace lfs::python {
     }
 
     std::string PyTensor::device() const {
-        return tensor_.device() == Device::GPU ? "cuda" : "cpu";
+        return backend();
     }
 
     std::string PyTensor::backend() const {
@@ -250,7 +247,7 @@ namespace lfs::python {
     }
 
     bool PyTensor::is_cuda() const {
-        return tensor_.is_gpu();
+        return lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::CUDA;
     }
 
     size_t PyTensor::size(int dim) const {
@@ -293,7 +290,9 @@ namespace lfs::python {
 
     void PyTensor::sync() const {
         if (tensor_.device() == Device::GPU) {
-            cudaDeviceSynchronize();
+            core::TensorCompletion completion;
+            completion.include(*core::gpu_backend_of(tensor_));
+            completion.wait();
         }
     }
 
@@ -1361,6 +1360,11 @@ namespace lfs::python {
     }
 
     nb::tuple PyTensor::dlpack_device() const {
+        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan &&
+            !lfs::core::vulkan_backend_exports_memory()) {
+            throw std::runtime_error(
+                "DLPack export of a Vulkan tensor requires CUDA external memory; call .cpu() first");
+        }
         const int32_t device_type = tensor_.device() == Device::GPU ? kDLCUDA : kDLCPU;
         return nb::make_tuple(device_type, 0);
     }
@@ -1426,10 +1430,32 @@ namespace lfs::python {
     } // namespace
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
-        if (tensor_.device() == Device::GPU) {
+        Tensor exported = tensor_;
+        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
+            const cudaStream_t consumer = stream.is_none() ||
+                                                  nb::cast<int64_t>(stream) == kDLPackNoSync
+                                              ? lfs::core::getCurrentCUDAStream()
+                                              : dlpack_stream_to_cuda(nb::cast<int64_t>(stream));
+            auto view = lfs::core::cuda_view_of_vulkan_tensor(tensor_, consumer);
+            if (!view) {
+                throw std::runtime_error(
+                    "DLPack export of a Vulkan tensor requires CUDA external memory: " +
+                    lfs::format_for_developer(view.error()));
+            }
+            exported = std::move(*view);
+            if (stream.is_none()) {
+                if (const auto status = cudaStreamSynchronize(consumer); status != cudaSuccess) {
+                    throw std::runtime_error(std::string("DLPack CUDA synchronization failed: ") +
+                                             cudaGetErrorString(status));
+                }
+            }
+        } else if (tensor_.device() == Device::GPU) {
             const cudaStream_t home = tensor_.stream();
             if (stream.is_none()) {
-                cudaStreamSynchronize(home);
+                if (const auto status = cudaStreamSynchronize(home); status != cudaSuccess) {
+                    throw std::runtime_error(std::string("DLPack CUDA synchronization failed: ") +
+                                             cudaGetErrorString(status));
+                }
             } else if (const int64_t s = nb::cast<int64_t>(stream); s != kDLPackNoSync) {
                 const cudaStream_t consumer = dlpack_stream_to_cuda(s);
                 if (consumer != home) {
@@ -1438,17 +1464,17 @@ namespace lfs::python {
             }
         }
 
-        auto* ctx = new DLPackContext(tensor_);
+        auto* ctx = new DLPackContext(std::move(exported));
         auto* managed = new DLManagedTensor{};
 
         DLTensor& dl = managed->dl_tensor;
-        dl.data = const_cast<void*>(tensor_.data_ptr());
-        dl.device.device_type = to_dl_device(tensor_.device());
+        dl.data = const_cast<void*>(ctx->tensor.data_ptr());
+        dl.device.device_type = ctx->tensor.device() == Device::GPU ? kDLCUDA : kDLCPU;
         dl.device.device_id = 0;
-        dl.ndim = static_cast<int32_t>(tensor_.ndim());
-        dl.dtype = to_dl_dtype(tensor_.dtype());
+        dl.ndim = static_cast<int32_t>(ctx->tensor.ndim());
+        dl.dtype = to_dl_dtype(ctx->tensor.dtype());
         dl.shape = ctx->shape.data();
-        dl.strides = tensor_.is_contiguous() ? nullptr : ctx->strides.data();
+        dl.strides = ctx->tensor.is_contiguous() ? nullptr : ctx->strides.data();
         dl.byte_offset = 0;
 
         managed->manager_ctx = ctx;
@@ -1733,7 +1759,7 @@ namespace lfs::python {
             .def_prop_ro("ndim", &PyTensor::ndim, "Number of dimensions")
             .def_prop_ro("numel", &PyTensor::numel, "Total number of elements")
             .def_prop_ro("device", &PyTensor::device,
-                         "Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend")
+                         "Device: 'cpu', 'cuda', or 'vulkan' according to the tensor backend")
             .def_prop_ro("backend", &PyTensor::backend,
                          "Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors")
             .def_prop_ro("dtype", &PyTensor::dtype, "Data type")
@@ -1746,7 +1772,7 @@ namespace lfs::python {
             .def("cuda", &PyTensor::cuda, "Move tensor to CUDA")
             .def("gpu", &PyTensor::gpu, "Move tensor to GPU")
             .def("contiguous", &PyTensor::contiguous, "Make tensor contiguous")
-            .def("sync", &PyTensor::sync, "Synchronize CUDA stream")
+            .def("sync", &PyTensor::sync, "Wait for GPU work on this tensor's backend")
             .def("size", &PyTensor::size, nb::arg("dim"), "Size of dimension")
 
             // Scalar extraction

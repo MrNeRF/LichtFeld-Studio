@@ -201,7 +201,7 @@ namespace lfs::io {
             }
             if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
                 LOG_TIMER_DEBUG("SPZ export: sh unpack");
-                Tensor decoded = splat.shN_canonical_cpu_gpu_decoded();
+                Tensor decoded = splat.shN_canonical_cpu();
                 if (filter && decoded.is_valid() && decoded.numel() > 0) {
                     Tensor keep_for_sh = keep;
                     if (keep_for_sh.device() != decoded.device())

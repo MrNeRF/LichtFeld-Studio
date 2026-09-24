@@ -44,6 +44,13 @@ namespace lfs::core {
             return static_cast<size_t>(*megabytes) * MIB;
         }
 
+        // Page-locking needs a CUDA context and only speeds up CUDA copies, so a
+        // session on another tensor backend stays context-free until CUDA work starts.
+        bool cuda_host_staging_wanted() {
+            return gpu_backend_available(GpuBackend::CUDA) && !cuda_is_unavailable() &&
+                   (default_gpu_backend() == GpuBackend::CUDA || gpu_backend_live(GpuBackend::CUDA));
+        }
+
     } // namespace
 
     PinnedMemoryAllocator::Block::~Block() {
@@ -189,10 +196,9 @@ namespace lfs::core {
         }
 
         const bool use_pinned =
-            gpu_backend_available(GpuBackend::CUDA) &&
             enabled_.load(std::memory_order_acquire) &&
             !force_fallback_for_testing_.load(std::memory_order_acquire) &&
-            !cuda_is_unavailable();
+            cuda_host_staging_wanted();
         const size_t allocation_size = use_pinned ? round_size(bytes) : bytes;
 
         std::unique_lock lock(mutex_);
@@ -476,7 +482,9 @@ namespace lfs::core {
         }
 
         Block block{ptr, allocation.size, allocation.backend};
-        if (!record_uses(block, allocation.extra_streams)) {
+        // Without a CUDA context, a pageable block cannot have pending CUDA uses.
+        if ((allocation.backend == Backend::CudaHost || gpu_backend_live(GpuBackend::CUDA)) &&
+            !record_uses(block, allocation.extra_streams)) {
             // The CUDA runtime could not establish that all users are finished.
             // Keep the storage out of both the cache and the backend free path.
             block.release_events();

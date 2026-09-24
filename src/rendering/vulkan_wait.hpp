@@ -169,11 +169,12 @@ namespace lfs::rendering {
         [[nodiscard]] static VulkanDispatch real() noexcept;
     };
 
-    // External queue synchronization for the graphics/present queue. Sparse
-    // binds may be issued from the training thread.
+    // External synchronization for window graphics, present and compute queues.
+    // Sparse binds and page uploads may be issued by background workers.
     LFS_RENDERING_API void set_graphics_queue_external_sync(std::mutex* mutex,
                                                             VkQueue graphics,
-                                                            VkQueue present) noexcept;
+                                                            VkQueue present,
+                                                            VkQueue compute = VK_NULL_HANDLE) noexcept;
     LFS_RENDERING_API VkResult vk_queue_submit_synced(VkQueue queue,
                                                       uint32_t submit_count,
                                                       const VkSubmitInfo* submits,

@@ -3,6 +3,7 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
+#include "cuda_backend_test.hpp"
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -67,10 +68,10 @@ namespace {
 
 } // anonymous namespace
 
-class TensorReductionTest : public ::testing::Test {
+class TensorReductionTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
+        LFS_CUDA_BACKEND_OR_RETURN();
         torch::manual_seed(42);
         Tensor::manual_seed(42);
         gen.seed(42);

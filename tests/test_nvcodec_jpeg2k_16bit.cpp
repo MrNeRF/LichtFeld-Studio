@@ -8,6 +8,7 @@
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -320,10 +321,9 @@ namespace {
 
 } // namespace
 
-TEST(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+class NvCodecImageLoaderJpeg2k16Bit : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
 
     std::vector<uint16_t> gray_u16;
     std::vector<uint16_t> rgb_u16;
@@ -397,10 +397,9 @@ TEST(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
     std::cout << "round_trip_bit_exact,yes\n";
 }
 
-TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+class NvCodecImageLoaderJpeg2k8Bit : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
 
     constexpr size_t height = 64;
     constexpr size_t width = 96;
@@ -435,10 +434,7 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
     }
 }
 
-TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+TEST_F(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
 
     auto input = lfs::core::Tensor::zeros(
         {size_t{8}, size_t{8}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
@@ -459,7 +455,9 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
     EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }
 
-TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
+class NvCodecImageLoaderJpeg : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -511,7 +509,7 @@ TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     EXPECT_GE(psnr, 45.0);
 }
 
-TEST(NvCodecImageLoaderJpeg, BatchedDecodeMatchesReferenceWithinTolerance) {
+TEST_F(NvCodecImageLoaderJpeg, BatchedDecodeMatchesReferenceWithinTolerance) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {
         GTEST_SKIP() << "bicycle dataset is absent: " << path;

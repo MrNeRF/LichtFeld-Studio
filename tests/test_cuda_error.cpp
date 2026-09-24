@@ -6,6 +6,7 @@
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <atomic>
 #include <gtest/gtest.h>
@@ -52,9 +53,10 @@ namespace {
         std::vector<std::string> messages_;
     };
 
-    class CudaErrorDiagnostics : public ::testing::Test {
+    class CudaErrorDiagnostics : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             lfs::core::reset_cuda_diagnostics_for_testing();
         }
 

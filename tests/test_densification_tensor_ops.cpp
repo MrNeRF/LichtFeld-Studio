@@ -5,6 +5,7 @@
 // Verified against LibTorch reference implementations
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <random>
 #include <torch/torch.h>
@@ -140,10 +141,10 @@ namespace {
 
 // ============= Test Fixture =============
 
-class DensificationTensorOpsTest : public ::testing::Test {
+class DensificationTensorOpsTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA required";
+        LFS_CUDA_BACKEND_OR_RETURN();
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }

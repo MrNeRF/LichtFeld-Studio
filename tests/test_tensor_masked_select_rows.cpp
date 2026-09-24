@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
@@ -32,9 +33,13 @@ namespace {
 
 } // namespace
 
-class MaskedSelectRowsTest : public ::testing::Test {
+class MaskedSelectRowsTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         Tensor::manual_seed(42);
         torch::manual_seed(42);
     }

@@ -4,6 +4,7 @@
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 #include "../pointwise_lowering.hpp"
+#include "kernels/tensor_clamp.hpp"
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
@@ -112,6 +113,11 @@ namespace lfs::core::internal {
                     cuda_const_pointer<int>(lhs), cuda_const_pointer<int>(rhs),
                     cuda_pointer<int>(output), count, op, context.cuda_stream);
                 return;
+            case DataType::UInt32:
+                tensor_ops::launch_binary_op_generic(
+                    cuda_const_pointer<uint32_t>(lhs), cuda_const_pointer<uint32_t>(rhs),
+                    cuda_pointer<uint32_t>(output), count, op, context.cuda_stream);
+                return;
             case DataType::Int64:
                 tensor_ops::launch_binary_op_generic(
                     cuda_const_pointer<int64_t>(lhs), cuda_const_pointer<int64_t>(rhs),
@@ -148,6 +154,11 @@ namespace lfs::core::internal {
             case DataType::Int32:
                 tensor_ops::launch_binary_op_generic(
                     cuda_const_pointer<int>(lhs), cuda_const_pointer<int>(rhs),
+                    cuda_pointer<unsigned char>(output), count, op, context.cuda_stream);
+                return;
+            case DataType::UInt32:
+                tensor_ops::launch_binary_op_generic(
+                    cuda_const_pointer<uint32_t>(lhs), cuda_const_pointer<uint32_t>(rhs),
                     cuda_pointer<unsigned char>(output), count, op, context.cuda_stream);
                 return;
             case DataType::Int64:
@@ -673,6 +684,13 @@ namespace lfs::core::internal {
         const ScalarOperand minimum, const ScalarOperand maximum,
         const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(clamp_fused);
+        if (input.dtype == DataType::Int32) {
+            LFS_ASSERT_MSG(output.dtype == DataType::Int32 && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32,
+                           "fused integer clamp requires Int32 operands");
+            tensor_ops::launch_clamp_fused(cuda_const_pointer<int>(input), cuda_pointer<int>(output),
+                                           minimum.value.int32_value, maximum.value.int32_value, count, context.cuda_stream);
+            return;
+        }
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 &&
                            output.dtype == DataType::Float32 &&
                            minimum.kind == ScalarKind::Float &&

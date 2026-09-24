@@ -13,8 +13,10 @@
  */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include <gtest/gtest.h>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <torch/torch.h>
 #include <vector>
@@ -24,7 +26,6 @@ using namespace lfs::core;
 class TensorCatReductionBugTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
@@ -58,6 +59,19 @@ protected:
         EXPECT_NEAR(our_min, torch_min, 0.01f) << name << ": Our min != Torch min";
         EXPECT_NEAR(our_max, torch_max, 0.01f) << name << ": Our max != Torch max";
     }
+};
+
+class TensorCatReductionCudaTest : public TensorCatReductionBugTest {
+protected:
+    void SetUp() override {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        backend_scope_.emplace(GpuBackend::CUDA);
+        TensorCatReductionBugTest::SetUp();
+    }
+
+private:
+    std::optional<GpuBackendScope> backend_scope_;
 };
 
 // ============================================================================
@@ -598,7 +612,7 @@ TEST_F(TensorCatReductionBugTest, Mean_Slice_Column) {
 // PART 8: torch comparison (ground truth)
 // ============================================================================
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Cat_1D) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Cat_1D) {
     std::vector<float> d1 = {100.0f, 200.0f, 300.0f};
     std::vector<float> d2 = {1.0f, 2.0f, 3.0f};
 
@@ -613,7 +627,7 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Cat_1D) {
     verifyVsTorch(our_cat, torch_cat, "VsTorch_Cat_1D");
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Cat_2D_SliceColumn) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Cat_2D_SliceColumn) {
     std::vector<float> d1 = {31.0f, 1.0f, 66.0f, 2.0f};  // [2, 2]
     std::vector<float> d2 = {-14.0f, 3.0f, 21.0f, 4.0f}; // [2, 2]
 
@@ -634,7 +648,7 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Cat_2D_SliceColumn) {
     EXPECT_FLOAT_EQ(torch_col0.max().item<float>(), 66.0f);
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Slice_Range) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Slice_Range) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f};
 
     auto our_t = Tensor::from_vector(data, {6}, Device::GPU);
@@ -646,7 +660,7 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Slice_Range) {
     verifyVsTorch(our_slice, torch_slice, "VsTorch_Slice_Range");
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Large_Cat_Column) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Large_Cat_Column) {
     const size_t N = 100000;
     std::vector<float> d1(N * 3), d2(N * 3);
 

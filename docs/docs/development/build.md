@@ -30,6 +30,36 @@ cmake -S . -B build -DENABLE_COMPILER_CACHE=OFF
 cmake --build build -j6
 ```
 
+## Building without training
+
+`LFS_BUILD_TRAINER` defaults to `ON`. Set it to `OFF` to build the full viewer
+and editor without the training engine. Both settings produce the same
+`LichtFeld-Studio` application, including the GUI, Python tools and exports.
+
+The separate preset keeps the normal build directory intact:
+
+```sh
+cmake --preset no-trainer
+cmake --build --preset no-trainer
+```
+
+The option also works with the other presets:
+
+```sh
+cmake --preset build -DLFS_BUILD_TRAINER=OFF
+cmake --build --preset build
+```
+
+Set `-DLFS_BUILD_TRAINER=ON` when reconfiguring that directory to include
+training again. Builds without training hide the training panel and reject
+training commands. Saved models, project metadata, dataset viewing, appearance
+settings and video export still use their shared application code.
+
+The CUDA toolkit and libraries are still required by the current viewer
+dependencies. This flag controls training; it does not yet select a CUDA-free
+application. With `BUILD_TESTS=ON`, the build without training provides
+`lichtfeld_viewer_tests`; the full build retains `lichtfeld_tests`.
+
 ## Release-only dependency profiles
 
 Native x64 Windows and Linux builds can opt into Release-only vcpkg packages.

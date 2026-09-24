@@ -14,6 +14,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "cuda_backend_test.hpp"
 
 using namespace lfs::core;
 
@@ -26,9 +27,10 @@ namespace {
     }
 } // namespace
 
-class TensorStreamTest : public ::testing::Test {
+class TensorStreamTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         cudaSetDevice(0);
     }
 };

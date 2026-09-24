@@ -3,7 +3,7 @@
 
 #include "components/bilateral_grid.hpp"
 #include "core/tensor.hpp"
-#include "tensor_hardening_test_utils.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +17,7 @@ namespace {
     using lfs::training::BilateralGrid;
     using lfs::training::BilateralGridParameterization;
 
-    class BilateralGridExposureChromaTest : public tensor_hardening::CudaTest {};
+    class BilateralGridExposureChromaTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();

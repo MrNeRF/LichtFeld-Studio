@@ -245,10 +245,13 @@ namespace lfs::core {
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::GPU) {
+                const auto stream = internal::gpu_backend_tag(source) == GpuBackend::CUDA
+                                        ? prepare_inputs_for_stream({&sorted, &indices}, sorted.stream())
+                                        : nullptr;
                 internal::backend_ops_for(source).sort_1d(
                     internal::storage_ref(sorted), internal::storage_ref(indices), numel(),
                     internal::SortProgram{.dim_size = numel(), .descending = descending},
-                    internal::ExecContext{nullptr});
+                    internal::ExecContext{stream});
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -293,6 +296,9 @@ namespace lfs::core {
         }
 
         if (device_ == Device::GPU) {
+            const auto stream = internal::gpu_backend_tag(source) == GpuBackend::CUDA
+                                    ? prepare_inputs_for_stream({&sorted, &indices}, sorted.stream())
+                                    : nullptr;
             internal::backend_ops_for(source).sort_2d(
                 internal::storage_ref(sorted), internal::storage_ref(indices),
                 internal::SortProgram{
@@ -302,7 +308,7 @@ namespace lfs::core {
                     .dim = dim,
                     .descending = descending,
                 },
-                internal::ExecContext{nullptr});
+                internal::ExecContext{stream});
             // No sync - returns tensors
         } else {
             // CPU implementation

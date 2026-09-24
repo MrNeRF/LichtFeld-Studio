@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ssog.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/atomic_output.hpp"
 #include "io/splat_decimate.hpp"
 #include "sogs.hpp"
@@ -16,7 +17,6 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
-#include <cuda_runtime.h>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -644,14 +644,16 @@ namespace lfs::io {
                 throw std::runtime_error("Temporary export directory already exists");
             progress(o, 0, "Preparing SSOG");
             std::vector<HostSplats> levels;
-            size_t free_cuda = 0, total_cuda = 0;
-            const bool memory_known = cudaMemGetInfo(&free_cuda, &total_cuda) == cudaSuccess;
+            const auto memory = lfs::core::gpu_backend_memory_info(
+                lfs::core::default_gpu_backend());
+            const size_t free_gpu = memory.free_bytes;
+            const bool memory_known = memory.total_bytes != 0;
             const double level_rows = input.size() * (1.0 - std::pow(double(o.lod_ratio), o.lod_levels)) / (1.0 - o.lod_ratio);
             const double resident_bytes = level_rows * (14 + 3 * input.max_sh_coeffs_rest()) * sizeof(float);
             // Leave most free VRAM for decimation and bounded unit workspaces.
             // Larger resident exports avoid full SH downloads and host gathers.
-            const bool resident = memory_known && resident_bytes < std::min<double>(6.0 * 1024 * 1024 * 1024, free_cuda * 0.45);
-            LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
+            const bool resident = memory_known && resident_bytes < std::min<double>(6.0 * 1024 * 1024 * 1024, free_gpu * 0.45);
+            LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_gpu={}", resident, resident_bytes, free_gpu);
             levels.emplace_back(input, resident);
             if (input.has_deleted_mask())
                 levels[0].filter(input.deleted().logical_not().to_pageable_host());
@@ -840,7 +842,7 @@ namespace lfs::io {
                                                (56.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
                                            128.0 * 1024 * 1024;
             const size_t resident_workers = resident
-                                                ? std::max<size_t>(1, static_cast<size_t>((free_cuda - resident_bytes) / workspace_bytes))
+                                                ? std::max<size_t>(1, static_cast<size_t>((free_gpu - resident_bytes) / workspace_bytes))
                                                 : 1;
             const size_t cpu_workers = units.size() > 6
                                            ? std::clamp<size_t>(std::thread::hardware_concurrency() / 4, 1, 6)

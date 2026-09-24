@@ -12,6 +12,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
 
@@ -77,16 +78,7 @@ namespace {
 
 } // namespace
 
-class LossWorkspaceUnionTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-};
+class LossWorkspaceUnionTest : public lfs::test::CudaBackendTest {};
 
 // Five independent workspaces retain the sum of their allocations, while the
 // production arena keeps only its active variant.

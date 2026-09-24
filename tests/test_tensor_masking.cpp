@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 #include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <optional>
 #include <random>
 #include <string>
 #include <torch/torch.h>
@@ -71,7 +74,16 @@ namespace {
 
 } // anonymous namespace
 
-class TensorMaskingTest : public ::testing::Test {
+class TensorMaskingTest : public lfs::test::CudaBackendTest {
+protected:
+    void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        Tensor::manual_seed(42);
+        torch::manual_seed(42);
+    }
+};
+
+class TensorMaskingNeutralTest : public ::testing::Test {
 protected:
     void SetUp() override {
         Tensor::manual_seed(42);
@@ -229,7 +241,7 @@ TEST_F(TensorMaskingTest, MaskedSelectEmpty) {
     EXPECT_EQ(selected_torch.numel(), 0);
 }
 
-TEST_F(TensorMaskingTest, MaskedSelectInt64PreservesValues) {
+TEST_F(TensorMaskingNeutralTest, MaskedSelectInt64PreservesValues) {
     std::vector<int64_t> data = {
         4'294'967'297LL,
         -8'589'934'590LL,
@@ -327,7 +339,7 @@ TEST_F(TensorMaskingTest, WhereWithBroadcasting) {
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "WhereBroadcast");
 }
 
-TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
+TEST_F(TensorMaskingNeutralTest, WhereDtypeMatrix) {
     const std::vector<DataType> dtypes = {
         DataType::Bool, DataType::Int32, DataType::Int64, DataType::Float16, DataType::Float32};
     const std::vector<bool> cond_values = {true, false, false, true};
@@ -1485,7 +1497,7 @@ TEST_F(TensorMaskingTest, PythonLikeMaskedAssignment) {
     compare_tensors(tensor_custom, tensor_torch, 1e-5f, 1e-7f, "PythonLikeMaskedAssignment");
 }
 
-TEST_F(TensorMaskingTest, MaskedTensorAssignmentSupportsEveryDtype) {
+TEST_F(TensorMaskingNeutralTest, MaskedTensorAssignmentSupportsEveryDtype) {
     const std::array dtypes = {
         DataType::Float32, DataType::Float16, DataType::Int32,
         DataType::Int64, DataType::UInt8, DataType::Bool};
@@ -1720,7 +1732,7 @@ TEST_F(TensorMaskingTest, BroadcastComparisonMaxRank) {
 
 // ============= Stress Tests =============
 
-TEST_F(TensorMaskingTest, StressTestLargeMasking) {
+TEST_F(TensorMaskingNeutralTest, StressTestLargeMasking) {
     const size_t size = 1000;
 
     auto data_custom = Tensor::randn({size, size}, Device::GPU);
@@ -1975,3 +1987,72 @@ TEST_F(TensorMaskingTest, IntegrationCompleteWorkflow) {
 
     compare_tensors(combined_custom, combined_torch, 1e-5f, 1e-7f, "IntegrationCombinedMask");
 }
+
+namespace {
+    using namespace lfs::core;
+
+    class TensorWhereBroadcast : public testing::TestWithParam<GpuBackend> {
+    protected:
+        void SetUp() override {
+            if (!gpu_backend_available(GetParam()))
+                GTEST_SKIP() << "Backend unavailable";
+            scope_.emplace(GetParam());
+        }
+        std::optional<GpuBackendScope> scope_;
+    };
+
+    TEST_P(TensorWhereBroadcast, CompactBroadcastInputsPreserveStridesOffsetsAndPromotion) {
+        std::vector<float> source(24);
+        for (size_t i = 0; i < source.size(); ++i)
+            source[i] = static_cast<float>(i) / 7.0f;
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{false, true, true, false, false, true, true, false, false, true},
+                                                     {5, 2}, Device::GPU)
+                                     .slice(1, 1, 2)
+                                     .unsqueeze(2);
+        const Tensor x = Tensor::from_vector(source, {4, 6}, Device::GPU)
+                             .slice(1, 1, 4)
+                             .transpose(0, 1)
+                             .unsqueeze(0);
+        const std::vector<float> other{-1.5f, 0.25f, 2.0f};
+        const Tensor y = Tensor::from_vector(other, {1, 3, 1}, Device::GPU).to(DataType::Float16);
+        std::vector<float> expected;
+        for (size_t row = 0; row < 5; ++row)
+            for (size_t channel = 0; channel < 3; ++channel)
+                for (size_t column = 0; column < 4; ++column)
+                    expected.push_back(row % 2 == 0 ? source[column * 6 + channel + 1] : other[channel]);
+        const GpuBackendScope opposite(GetParam() == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA);
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.shape(), TensorShape({5, 3, 4}));
+        EXPECT_EQ(result.dtype(), DataType::Float32);
+        EXPECT_EQ(gpu_backend_of(result), GetParam());
+        EXPECT_EQ(result.to_vector(), expected);
+        EXPECT_EQ(y.to(DataType::Float32).to_vector(), other);
+    }
+
+    TEST_P(TensorWhereBroadcast, EqualShapesStillRespectEachInputsStrides) {
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{true, false, false, true, true, false},
+                                                     {3, 2}, Device::GPU)
+                                     .t();
+        const Tensor x = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {3, 2}, Device::GPU).t();
+        const Tensor y = Tensor::from_vector({-1.0f, -2.0f, -3.0f, -4.0f, -5.0f, -6.0f}, {3, 2}, Device::GPU).t();
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.shape(), TensorShape({2, 3}));
+        EXPECT_EQ(result.to_vector(), (std::vector<float>{1.0f, -3.0f, 5.0f, -2.0f, 4.0f, -6.0f}));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, TensorWhereBroadcast,
+                             testing::ValuesIn(kGpuBackends),
+                             [](const testing::TestParamInfo<GpuBackend>& info) {
+                                 return info.param == GpuBackend::CUDA ? "Cuda" : "Vulkan";
+                             });
+
+    TEST(TensorWhereCpu, EqualShapesStillRespectEachInputsStrides) {
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{true, false, false, true, true, false},
+                                                     {3, 2}, Device::CPU)
+                                     .t();
+        const Tensor x = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {3, 2}, Device::CPU).t();
+        const Tensor y = x.neg().contiguous();
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.to_vector(), (std::vector<float>{1.0f, -3.0f, 5.0f, -2.0f, 4.0f, -6.0f}));
+    }
+} // namespace

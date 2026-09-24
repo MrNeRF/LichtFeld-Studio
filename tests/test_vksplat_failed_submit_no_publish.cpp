@@ -37,6 +37,9 @@ namespace {
         VkResult query_result = VK_NOT_READY;
         int query_calls = 0;
         VkQueryResultFlags query_flags = 0;
+        uint32_t wait_count = 0;
+        uint64_t wait_value = 0;
+        VkPipelineStageFlags wait_stages = 0;
 
         static VKAPI_ATTR VkResult VKAPI_CALL query_results(VkDevice, VkQueryPool, uint32_t,
                                                             uint32_t, size_t, void*, VkDeviceSize,
@@ -75,9 +78,15 @@ namespace {
         }
         static VKAPI_ATTR VkResult VKAPI_CALL queue_submit(VkQueue,
                                                            uint32_t,
-                                                           const VkSubmitInfo*,
+                                                           const VkSubmitInfo* info,
                                                            VkFence) {
             EXPECT_NE(active(), nullptr);
+            active()->wait_count = info->waitSemaphoreCount;
+            if (info->waitSemaphoreCount) {
+                const auto* values = static_cast<const VkTimelineSemaphoreSubmitInfo*>(info->pNext);
+                active()->wait_value = values->pWaitSemaphoreValues[0];
+                active()->wait_stages = info->pWaitDstStageMask[0];
+            }
             const int n = active()->submit_calls++;
             if (n == 0) {
                 return active()->first_submit_result;
@@ -216,6 +225,9 @@ TEST(VkSplatFailedSubmitNoPublish, QW6_FailThenSuccessNoFalsePublication) {
     // --- Attempt 1: vkQueueSubmit fails ---
     pipeline.beginCommandBatch();
     EXPECT_TRUE(pipeline.isCommandBatchInProgress());
+    const auto producer = fakeVkHandle<VkSemaphore>(0xABCE);
+    pipeline.addTimelineWait(producer, 10, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    pipeline.addTimelineWait(producer, 7, VK_PIPELINE_STAGE_TRANSFER_BIT);
     // P4 retired _THROW_ERROR: the rejected submit now surfaces as the typed
     // lfs::Exception (DeviceLost/Vulkan with native code and detail).
     EXPECT_THROW(
@@ -228,11 +240,15 @@ TEST(VkSplatFailedSubmitNoPublish, QW6_FailThenSuccessNoFalsePublication) {
     EXPECT_FALSE(pipeline.lastSubmissionState().submit_accepted);
     EXPECT_FALSE(pipeline.lastSubmissionState().timeline_published);
     EXPECT_EQ(script.submit_calls, 1);
+    EXPECT_EQ(script.wait_count, 1u);
+    EXPECT_EQ(script.wait_value, 10u);
+    EXPECT_EQ(script.wait_stages, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
     EXPECT_EQ(script.end_calls, 1);
     EXPECT_GE(script.reset_cb_calls, 1); // cancelCommandBatch resets CB
 
     // --- Attempt 2: same seam, success → exactly one publication ---
     pipeline.beginCommandBatch();
+    pipeline.addTimelineWait(producer, 7, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     EXPECT_NO_THROW(
         pipeline.endCommandBatch(/*use_fence=*/false, semaphore, value_ok));
 
@@ -246,6 +262,8 @@ TEST(VkSplatFailedSubmitNoPublish, QW6_FailThenSuccessNoFalsePublication) {
     EXPECT_TRUE(pipeline.lastSubmissionState().timeline_published);
     EXPECT_EQ(pipeline.lastSubmissionState().candidate_timeline, value_ok);
     EXPECT_EQ(script.submit_calls, 2);
+    EXPECT_EQ(script.wait_count, 1u);
+    EXPECT_EQ(script.wait_value, 7u);
     EXPECT_EQ(script.end_calls, 2);
 
     // Pending slot holds the published completion for ring retirement — not a

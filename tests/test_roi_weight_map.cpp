@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/roi_weight_map.hpp"
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -128,7 +129,9 @@ namespace {
 
 } // namespace
 
-TEST(RoiWeightMapTest, AxisAlignedBoxMatchesCpuSlabReference) {
+class RoiWeightMapTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(RoiWeightMapTest, AxisAlignedBoxMatchesCpuSlabReference) {
     expect_gpu_matches_reference(
         glm::mat4(1.0f),
         {-0.6f, -0.4f, 2.0f},
@@ -136,7 +139,7 @@ TEST(RoiWeightMapTest, AxisAlignedBoxMatchesCpuSlabReference) {
         false);
 }
 
-TEST(RoiWeightMapTest, RotatedObbMatchesCpuSlabReference) {
+TEST_F(RoiWeightMapTest, RotatedObbMatchesCpuSlabReference) {
     const glm::mat4 cropbox_to_world =
         glm::rotate(
             glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 3.0f)),
@@ -149,7 +152,7 @@ TEST(RoiWeightMapTest, RotatedObbMatchesCpuSlabReference) {
         false);
 }
 
-TEST(RoiWeightMapTest, InverseBoxFlipsHitAndMissWeights) {
+TEST_F(RoiWeightMapTest, InverseBoxFlipsHitAndMissWeights) {
     expect_gpu_matches_reference(
         glm::mat4(1.0f),
         {-0.6f, -0.4f, 2.0f},
@@ -157,7 +160,7 @@ TEST(RoiWeightMapTest, InverseBoxFlipsHitAndMissWeights) {
         true);
 }
 
-TEST(RoiWeightMapTest, RotatedTranslatedCameraUsesWorldSpaceRays) {
+TEST_F(RoiWeightMapTest, RotatedTranslatedCameraUsesWorldSpaceRays) {
     const glm::vec3 camera_position{-1.0f, 0.0f, 0.0f};
     const glm::mat4 camera_to_world =
         glm::translate(glm::mat4(1.0f), camera_position) *

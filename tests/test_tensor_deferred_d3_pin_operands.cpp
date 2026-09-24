@@ -11,6 +11,7 @@
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/colmap.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
@@ -32,9 +33,10 @@
 
 namespace {
 
-    class DeferredD3PinTest : public ::testing::Test {
+    class DeferredD3PinTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             using namespace lfs::core;
 
             reset_cuda_diagnostics_for_testing();
@@ -68,6 +70,9 @@ namespace {
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             lfs::core::reset_cuda_diagnostics_for_testing();
             lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
             lfs::core::internal::clear_lazy_ir_for_testing();
@@ -266,6 +271,7 @@ namespace {
         std::exception_ptr worker_error;
 
         std::thread worker([&] {
+            const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
             try {
                 {
                     auto output = lfs::training::gsplat_rasterize(

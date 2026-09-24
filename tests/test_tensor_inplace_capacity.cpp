@@ -38,11 +38,6 @@ protected:
         tensor_3d_.fill_(1.0f);
     }
 
-    void TearDown() override {
-        // Clean up CUDA memory
-        cudaDeviceSynchronize();
-    }
-
     // Helper to verify capacity is preserved after an operation
     void verifyCapacityPreserved(const Tensor& tensor, size_t expected_capacity,
                                  const std::string& operation_name) {

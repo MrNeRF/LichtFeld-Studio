@@ -5,6 +5,8 @@
 #include "core/export.hpp"
 #include "core/tensor_fwd.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -15,8 +17,12 @@ namespace lfs::core {
         Vulkan = 1,
     };
 
+    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
+    inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
+
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);
     LFS_CORE_API std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+    LFS_CORE_API GpuBackend default_gpu_backend();
 
     // Keep scoped factory selection available to CUDA translation units without
     // pulling in the host-only Result/Error declarations from tensor_backend.hpp.

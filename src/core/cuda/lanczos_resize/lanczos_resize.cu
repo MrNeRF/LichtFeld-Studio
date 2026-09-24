@@ -5,8 +5,10 @@
  */
 
 #include "core/cuda_error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
+#include "core/tensor_image.hpp"
 #include "lanczos_resize.hpp"
 
 #include <cmath>
@@ -141,6 +143,7 @@ namespace {
 } // namespace
 
 namespace lfs::core {
+
     namespace detail {
 
         __device__ float sinc(const float x) {
@@ -657,10 +660,20 @@ namespace lfs::core {
     }
 
     Tensor resize_depth_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
+        if (gpu_backend_of(input) != GpuBackend::CUDA) {
+            return internal::resize_image_prior_tensor(input, output_h, output_w, false);
+        }
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
+
         return resize_prior<1>(input, output_h, output_w, stream);
     }
 
     Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
+        if (gpu_backend_of(input) != GpuBackend::CUDA) {
+            return internal::resize_image_prior_tensor(input, output_h, output_w, true);
+        }
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
+
         return resize_prior<3>(input, output_h, output_w, stream);
     }
 

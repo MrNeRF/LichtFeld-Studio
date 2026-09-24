@@ -9,8 +9,10 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
@@ -40,11 +42,13 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
                     lock.emplace(trainer->getRenderMutex());
                 }
             }
+#endif
             return lock;
         }
 
@@ -322,6 +326,7 @@ namespace lfs::vis {
         }
 
         std::optional<std::shared_lock<std::shared_mutex>> render_lock;
+#if LFS_BUILD_TRAINER
         if (const auto* tm = viewport_interaction_context_.scene_manager
                                  ? viewport_interaction_context_.scene_manager->getTrainerManager()
                                  : nullptr) {
@@ -329,6 +334,7 @@ namespace lfs::vis {
                 render_lock.emplace(trainer->getRenderMutex());
             }
         }
+#endif
 
         auto readback_result = engine_->readbackGpuFrameColor(*viewport_artifact_service_.gpuFrame());
         if (!readback_result) {

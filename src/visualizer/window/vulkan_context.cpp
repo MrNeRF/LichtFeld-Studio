@@ -3,13 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_context.hpp"
+#include "core/vulkan_shader_requirements.hpp"
 
 #include "core/crash_handler.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/cuda_vulkan_interop.hpp"
 #include "core/environment.hpp"
 #include "core/exportable_storage.hpp"
+#include "core/gpu_device_info.hpp"
+#include "core/headless_vulkan_device.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/shareable_allocation_limit.hpp"
@@ -22,8 +26,6 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cctype>
-#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -38,7 +40,6 @@
 #include <utility>
 
 #include <SDL3/SDL_vulkan.h>
-#include <cuda_runtime.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -140,43 +141,22 @@ namespace lfs::vis {
             }
         }
 
-        [[nodiscard]] bool isPreVoltaCudaDevice(const std::array<std::uint8_t, VK_UUID_SIZE>& vk_device_uuid) {
-            int device_count = 0;
-            if (cudaGetDeviceCount(&device_count) != cudaSuccess) {
-                return false;
-            }
-            for (int device = 0; device < device_count; ++device) {
-                cudaDeviceProp props{};
-                if (cudaGetDeviceProperties(&props, device) != cudaSuccess) {
-                    continue;
-                }
-                static_assert(sizeof(props.uuid.bytes) == VK_UUID_SIZE);
-                if (std::memcmp(props.uuid.bytes, vk_device_uuid.data(), VK_UUID_SIZE) == 0) {
-                    return props.major < 7;
-                }
-            }
-            return false;
+        [[nodiscard]] std::optional<lfs::core::GpuDeviceInfo> interopCudaDevice() {
+            return lfs::core::gpu_backend_device_info(lfs::core::default_gpu_backend(), 0);
         }
 
-        // True when the given Vulkan physical device is the same physical GPU as
-        // the CUDA device the trainer will use (cuda_device, the current CUDA
-        // ordering's device 0 by default). On multi-GPU machines with identical
-        // cards, Vulkan's enumeration order can differ from CUDA's; matching by
-        // UUID lets pickPhysicalDevice keep the viewer on the same card as the
-        // trainer so CUDA<->Vulkan external-memory interop can import the block.
-        [[nodiscard]] bool vulkanDeviceMatchesCudaDevice(const VkPhysicalDevice device, const int cuda_device) {
-            cudaDeviceProp cuda_props{};
-            if (cudaGetDeviceProperties(&cuda_props, cuda_device) != cudaSuccess) {
-                return false;
-            }
-            VkPhysicalDeviceIDProperties vk_id{};
-            vk_id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
-            VkPhysicalDeviceProperties2 vk_props2{};
-            vk_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        [[nodiscard]] bool isPreVoltaCudaDevice(const std::array<std::uint8_t, VK_UUID_SIZE>& vk_device_uuid) {
+            const auto device = interopCudaDevice();
+            return device && device->uuid == vk_device_uuid && device->compute_capability_major < 7;
+        }
+
+        [[nodiscard]] bool vulkanDeviceMatchesCudaDevice(
+            const VkPhysicalDevice device, const lfs::core::GpuDeviceInfo& cuda_device) {
+            VkPhysicalDeviceIDProperties vk_id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 vk_props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             vk_props2.pNext = &vk_id;
             vkGetPhysicalDeviceProperties2(device, &vk_props2);
-            static_assert(sizeof(cuda_props.uuid.bytes) == VK_UUID_SIZE);
-            return std::memcmp(cuda_props.uuid.bytes, vk_id.deviceUUID, VK_UUID_SIZE) == 0;
+            return std::equal(cuda_device.uuid.begin(), cuda_device.uuid.end(), vk_id.deviceUUID);
         }
 
         [[nodiscard]] std::string vulkanApiVersionString(const uint32_t api_version) {
@@ -291,63 +271,6 @@ namespace lfs::vis {
 #endif
         }
 
-        // CUDA-exported OPAQUE_FD payloads are foreign to Vulkan.
-        // The validation layer keys its "created by Vulkan" OPAQUE_FD map by fd
-        // *number*. After we close a Vulkan-exported or previously-imported fd,
-        // the kernel reuses that number for the next CUDA export (or our dup of
-        // it). VVL then applies VUID-VkMemoryAllocateInfo-allocationSize-01742
-        // against a stale record (often size=0 / type=0) while the driver import
-        // of the real CUDA payload succeeds. Scope-guarded: only suppress this
-        // exact VUID while importExternalBuffer is mid-vkAllocateMemory for a
-        // CUDA foreign import. Every other validation message still surfaces.
-        thread_local bool g_cuda_opaque_fd_import_active = false;
-        thread_local const char* g_cuda_opaque_fd_import_label = "";
-
-        struct CudaOpaqueFdImportScopeGuard {
-            explicit CudaOpaqueFdImportScopeGuard(const char* label) noexcept {
-                g_cuda_opaque_fd_import_active = true;
-                g_cuda_opaque_fd_import_label = label != nullptr ? label : "";
-            }
-            ~CudaOpaqueFdImportScopeGuard() noexcept {
-                g_cuda_opaque_fd_import_active = false;
-                g_cuda_opaque_fd_import_label = "";
-            }
-            CudaOpaqueFdImportScopeGuard(const CudaOpaqueFdImportScopeGuard&) = delete;
-            CudaOpaqueFdImportScopeGuard& operator=(const CudaOpaqueFdImportScopeGuard&) = delete;
-        };
-
-        [[nodiscard]] bool isExpectedCudaOpaqueFdImportVuid01742(
-            const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-            const VkDebugUtilsMessengerCallbackDataEXT* const callback_data) {
-            if (!g_cuda_opaque_fd_import_active) {
-                return false;
-            }
-            if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) == 0) {
-                return false;
-            }
-            if (callback_data == nullptr) {
-                return false;
-            }
-            // VUID string appears in pMessageIdName and/or the message body.
-            constexpr std::string_view kVuid = "VUID-VkMemoryAllocateInfo-allocationSize-01742";
-            constexpr std::string_view kVuidTail = "allocationSize-01742";
-            if (callback_data->pMessageIdName != nullptr) {
-                const std::string_view id = callback_data->pMessageIdName;
-                if (id == kVuid || id.find(kVuidTail) != std::string_view::npos ||
-                    id.find("01742") != std::string_view::npos) {
-                    return true;
-                }
-            }
-            if (callback_data->pMessage != nullptr) {
-                const std::string_view msg = callback_data->pMessage;
-                if (msg.find(kVuid) != std::string_view::npos ||
-                    msg.find("allocationSize-01742") != std::string_view::npos) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
             VkDebugUtilsMessageTypeFlagsEXT message_type,
@@ -357,16 +280,15 @@ namespace lfs::vis {
                                             ? callback_data->pMessage
                                             : "<missing validation message>";
 
-            // targeted suppress of VUID-01742 only inside our CUDA
-            // OPAQUE_FD import scope (see CudaOpaqueFdImportScopeGuard). Not a
-            // blanket severity filter — label is the import diagnostic scope.
-            if (isExpectedCudaOpaqueFdImportVuid01742(message_severity, callback_data)) {
-                LOG_DEBUG(
-                    "Vulkan validation (suppressed CUDA OPAQUE_FD import, label={}): {}",
-                    g_cuda_opaque_fd_import_label != nullptr ? g_cuda_opaque_fd_import_label : "",
-                    message);
+            const auto import_message = [](const char* const text) {
+                return text && std::string_view(text).find(
+                                   "VUID-VkMemoryAllocateInfo-allocationSize-01742") !=
+                                   std::string_view::npos;
+            };
+            if (lfs::core::cuda::ExternalMemoryImportScope::active() &&
+                (import_message(message) ||
+                 (callback_data && import_message(callback_data->pMessageIdName))))
                 return VK_FALSE;
-            }
 
             if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
                 LOG_ERROR("Vulkan validation: {}", message);
@@ -661,6 +583,49 @@ namespace lfs::vis {
         return fail(std::format("{}: {}", detail_on_fail, result.error().detail()));
     }
 
+    bool VulkanContext::initHeadless() {
+        const bool interop = lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA;
+        const auto cuda_device = interop ? interopCudaDevice() : std::nullopt;
+        if (interop && !cuda_device)
+            return fail("Cannot identify CUDA device 0 for off-screen Vulkan interop");
+        auto owner = lfs::core::HeadlessAdoptedDevice::try_create(
+            interop, true, lfs::core::tensor_backend_options().vulkan_device,
+            cuda_device ? std::make_optional(cuda_device->uuid) : std::nullopt);
+        if (!owner)
+            return fail("No Vulkan device supports off-screen rendering");
+        const auto handles = owner->release();
+        instance_ = static_cast<VkInstance>(handles.instance);
+        physical_device_ = static_cast<VkPhysicalDevice>(handles.physical_device);
+        sparse_binding_enabled_ = interop &&
+                                  lfs::core::headless_sparse_binding_supported(physical_device_, handles.queue_family);
+        device_ = static_cast<VkDevice>(handles.device);
+        graphics_queue_ = static_cast<VkQueue>(handles.queue);
+        buffer_device_address_enabled_ = true;
+        vk_cmd_push_descriptor_set_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+            vkGetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
+        has_push_descriptor_ = vk_cmd_push_descriptor_set_ != nullptr;
+        vk_cmd_begin_conditional_rendering_ =
+            reinterpret_cast<PFN_vkCmdBeginConditionalRenderingEXT>(
+                vkGetDeviceProcAddr(device_, "vkCmdBeginConditionalRenderingEXT"));
+        vk_cmd_end_conditional_rendering_ =
+            reinterpret_cast<PFN_vkCmdEndConditionalRenderingEXT>(
+                vkGetDeviceProcAddr(device_, "vkCmdEndConditionalRenderingEXT"));
+        has_conditional_rendering_ = vk_cmd_begin_conditional_rendering_ != nullptr &&
+                                     vk_cmd_end_conditional_rendering_ != nullptr;
+        external_memory_interop_enabled_ = interop;
+        external_semaphore_interop_enabled_ = interop;
+        external_memory_dedicated_allocation_enabled_ = interop;
+        present_queue_ = graphics_queue_;
+        compute_queue_ = graphics_queue_;
+        transfer_queue_ = graphics_queue_;
+        graphics_queue_family_ = present_queue_family_ = compute_queue_family_ = transfer_queue_family_ = handles.queue_family;
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            if (auto result = lfs::core::adopt_vulkan_device(handles); !result)
+                return fail(std::string(result.error().user_message()));
+        }
+        return createAllocator() && createPipelineCache() && createCommandPool();
+    }
+
     bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
@@ -688,6 +653,26 @@ namespace lfs::vis {
                  debugObjectNamingEnabled() ? "active" : "inactive",
                  validation_errors_fatal_ ? "active" : "inactive");
         return initialized;
+    }
+
+    lfs::core::TensorVulkanInterop& VulkanContext::tensorInterop() {
+        std::lock_guard lock(tensor_interop_mutex_);
+        if (!tensor_interop_) {
+            lfs::core::VulkanInteropDevice target{
+                .physical_device = physical_device_,
+                .device = device_,
+                .sparse_queue = graphics_queue_,
+                .queue_mutex = &graphics_queue_mutex_,
+                .sparse_binding = sparse_binding_enabled_,
+                .external_memory = external_memory_interop_enabled_,
+                .external_semaphore = external_semaphore_interop_enabled_};
+            for (const auto family : {graphics_queue_family_, compute_queue_family_, tensor_backend_device_.queue_family}) {
+                if (std::find(target.queue_families.begin(), target.queue_families.begin() + target.queue_family_count, family) == target.queue_families.begin() + target.queue_family_count)
+                    target.queue_families[target.queue_family_count++] = family;
+            }
+            tensor_interop_ = std::make_unique<lfs::core::TensorVulkanInterop>(target);
+        }
+        return *tensor_interop_;
     }
 
     void VulkanContext::shutdown() {
@@ -786,6 +771,7 @@ namespace lfs::vis {
         destroyAllocator();
         if (device_ != VK_NULL_HANDLE) {
             debug_name_writer_.reset();
+            tensor_interop_.reset();
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
         }
@@ -2524,30 +2510,18 @@ namespace lfs::vis {
                                  count);
         devices.resize(count);
 
+        const auto cuda_device = interopCudaDevice();
         const auto requested_device = lfs::core::tensor_backend_options().vulkan_device;
         const auto matches_requested = [&](VkPhysicalDevice device, std::size_t index) {
-            if (requested_device.empty())
-                return true;
-            std::size_t requested_index = 0;
-            const auto [end, error] = std::from_chars(requested_device.data(),
-                                                      requested_device.data() + requested_device.size(), requested_index);
-            if (error == std::errc{} && end == requested_device.data() + requested_device.size())
-                return index == requested_index;
             VkPhysicalDeviceIDProperties id{};
             id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
             VkPhysicalDeviceProperties2 properties{};
             properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             properties.pNext = &id;
             vkGetPhysicalDeviceProperties2(device, &properties);
-            std::string uuid;
-            for (const auto byte : id.deviceUUID)
-                uuid += std::format("{:02x}", byte);
-            std::string requested;
-            for (const unsigned char character : requested_device) {
-                if (character != '-' && character != '{' && character != '}')
-                    requested += static_cast<char>(std::tolower(character));
-            }
-            return uuid == requested;
+            lfs::core::VulkanDeviceUuid uuid;
+            std::memcpy(uuid.data(), id.deviceUUID, uuid.size());
+            return lfs::core::matches_vulkan_device_preference(requested_device, index, uuid);
         };
 
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
@@ -2575,6 +2549,11 @@ namespace lfs::vis {
                 continue;
             }
 
+            const auto missing_shaders = lfs::core::missing_viewer_shader_features(device);
+            if (!missing_shaders.empty()) {
+                LOG_WARN("Skipping Vulkan device '{}': viewer shaders require {}", props.deviceName, missing_shaders);
+                continue;
+            }
             const RequiredFeatureSupport feature_support = queryRequiredFeatureSupport(device);
             if (!hasRequiredFeatures(feature_support)) {
                 LOG_WARN("Skipping Vulkan device '{}' because required Vulkan 1.2/1.3 features are missing: {}",
@@ -2584,9 +2563,8 @@ namespace lfs::vis {
             }
 
             if (!requested_device.empty()) {
-                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
-                    !vulkanDeviceMatchesCudaDevice(device, 0))
-                    return fail("The selected Vulkan device must match CUDA device 0 when using the CUDA tensor backend");
+                if (cuda_device && !vulkanDeviceMatchesCudaDevice(device, *cuda_device))
+                    return fail("The selected Vulkan device must match CUDA device 0 when using CUDA tensors or training");
                 physical_device_ = device;
                 break;
             }
@@ -2604,7 +2582,7 @@ namespace lfs::vis {
                 if (first_discrete == VK_NULL_HANDLE) {
                     first_discrete = device;
                 }
-                if (vulkanDeviceMatchesCudaDevice(device, 0)) {
+                if (cuda_device && vulkanDeviceMatchesCudaDevice(device, *cuda_device)) {
                     physical_device_ = device;
                     break;
                 }
@@ -2971,6 +2949,7 @@ namespace lfs::vis {
             (queue_family_props[graphics_queue_family_].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
         const bool sparse_binding_supported = supported_features2.features.sparseBinding == VK_TRUE;
         features2.features.shaderInt16 = supported_features2.features.shaderInt16;
+        features2.features.shaderFloat64 = supported_features2.features.shaderFloat64;
         features2.features.shaderInt64 = supported_features2.features.shaderInt64;
         features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
         features2.features.wideLines = supported_features2.features.wideLines;
@@ -3024,6 +3003,7 @@ namespace lfs::vis {
             vkGetDeviceQueue(device_, *tensor_queue_family, 1, &tensor_backend_device_.queue);
             tensor_backend_device_.shader_atomic_float =
                 atomic_float_features.shaderBufferFloat32AtomicAdd == VK_TRUE;
+            tensor_backend_device_.shader_float64 = features2.features.shaderFloat64 == VK_TRUE;
             tensor_backend_device_.shader_float16 = features12.shaderFloat16 == VK_TRUE;
             tensor_backend_device_.complete =
                 tensor_backend_device_.queue != VK_NULL_HANDLE &&
@@ -3071,7 +3051,7 @@ namespace lfs::vis {
         sparse_binding_enabled_ = features2.features.sparseBinding == VK_TRUE;
         buffer_device_address_enabled_ = features12.bufferDeviceAddress == VK_TRUE;
         lfs::rendering::set_graphics_queue_external_sync(
-            &graphics_queue_mutex_, graphics_queue_, present_queue_);
+            &graphics_queue_mutex_, graphics_queue_, present_queue_, compute_queue_);
 
         VkPhysicalDeviceMaintenance3Properties maint3{};
         maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
@@ -3130,7 +3110,7 @@ namespace lfs::vis {
         }
 
         VmaAllocatorCreateInfo create_info{};
-        create_info.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        create_info.flags = surface_ == VK_NULL_HANDLE ? 0 : VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.instance = instance_;
@@ -3382,24 +3362,15 @@ namespace lfs::vis {
                                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-        VkPhysicalDeviceExternalImageFormatInfo external_format_info{};
-        external_format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
-        external_format_info.handleType = kExternalMemoryHandleType;
-
         VkPhysicalDeviceImageFormatInfo2 format_info{};
         format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
-        format_info.pNext = &external_format_info;
         format_info.format = format;
         format_info.type = VK_IMAGE_TYPE_2D;
         format_info.tiling = VK_IMAGE_TILING_OPTIMAL;
         format_info.usage = usage;
 
-        VkExternalImageFormatProperties external_format_properties{};
-        external_format_properties.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
-
         VkImageFormatProperties2 format_properties{};
         format_properties.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
-        format_properties.pNext = &external_format_properties;
 
         VkResult result = vkGetPhysicalDeviceImageFormatProperties2(physical_device_, &format_info, &format_properties);
         if (result != VK_SUCCESS) {
@@ -3415,28 +3386,13 @@ namespace lfs::vis {
                 max_extent.height,
                 static_cast<int>(format)));
         }
-        if ((external_format_properties.externalMemoryProperties.externalMemoryFeatures &
-             VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) == 0) {
-            return fail("External Vulkan image format is not exportable");
-        }
-        if ((external_format_properties.externalMemoryProperties.externalMemoryFeatures &
-             VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT) != 0 &&
-            !external_memory_dedicated_allocation_enabled_) {
-            return fail("External Vulkan image format requires dedicated allocation support");
-        }
-
         out.extent = extent;
         out.format = format;
         out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.image" : std::string(diagnostic_scope);
         out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
 
-        VkExternalMemoryImageCreateInfo external_image_info{};
-        external_image_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
-        external_image_info.handleTypes = kExternalMemoryHandleType;
-
         VkImageCreateInfo image_info{};
         image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        image_info.pNext = &external_image_info;
         image_info.imageType = VK_IMAGE_TYPE_2D;
         image_info.extent.width = extent.width;
         image_info.extent.height = extent.height;
@@ -3448,9 +3404,7 @@ namespace lfs::vis {
         image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         image_info.usage = usage;
         image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-        // External images may be produced on compute, sampled on graphics, and
-        // copied on a transfer queue. CONCURRENT with the full family set avoids
-        // QFOT (tracker has no ownership-transfer support; #1574 resolved choice).
+        // Render targets are written on compute and consumed on graphics and transfer queues.
         std::array<uint32_t, 3> external_image_families{};
         uint32_t external_image_family_count = 0;
         const auto push_unique_family = [&](const uint32_t family) {
@@ -3496,20 +3450,8 @@ namespace lfs::vis {
             return fail(*violation);
         }
 
-        VkMemoryDedicatedAllocateInfo dedicated_info{};
-        dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-        dedicated_info.image = out.image;
-
-        VkExportMemoryAllocateInfo export_info{};
-        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
-        export_info.handleTypes = kExternalMemoryHandleType;
-        if (external_memory_dedicated_allocation_enabled_) {
-            export_info.pNext = &dedicated_info;
-        }
-
         VkMemoryAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocate_info.pNext = &export_info;
         allocate_info.allocationSize = memory_requirements.size;
         allocate_info.memoryTypeIndex = findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
@@ -3517,8 +3459,6 @@ namespace lfs::vis {
             return fail("Could not find Vulkan device-local memory for external image");
         }
 
-        // Keep this allocation manual: CUDA interop needs exportable VkDeviceMemory with
-        // the external-memory pNext chain intact so we can export an OS handle below.
         result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
         if (result != VK_SUCCESS) {
             destroyExternalImage(out);
@@ -3535,40 +3475,6 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             destroyExternalImage(out);
             return setVkFailure(std::format("vkBindImageMemory(external image) failed: {}", vkResultToString(result)), result);
-        }
-
-#ifdef _WIN32
-        auto get_memory_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandleKHR"));
-        if (get_memory_handle == nullptr) {
-            destroyExternalImage(out);
-            return fail("vkGetMemoryWin32HandleKHR is unavailable");
-        }
-        VkMemoryGetWin32HandleInfoKHR handle_info{};
-        handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
-        handle_info.memory = out.memory;
-        handle_info.handleType = kExternalMemoryHandleType;
-        HANDLE native_handle = nullptr;
-        result = get_memory_handle(device_, &handle_info, &native_handle);
-        out.native_handle = native_handle;
-#else
-        auto get_memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
-        if (get_memory_fd == nullptr) {
-            destroyExternalImage(out);
-            return fail("vkGetMemoryFdKHR is unavailable");
-        }
-        VkMemoryGetFdInfoKHR fd_info{};
-        fd_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
-        fd_info.memory = out.memory;
-        fd_info.handleType = kExternalMemoryHandleType;
-        int native_handle = -1;
-        result = get_memory_fd(device_, &fd_info, &native_handle);
-        out.native_handle = native_handle;
-#endif
-        if (result != VK_SUCCESS) {
-            destroyExternalImage(out);
-            return setVkFailure(std::format("Exporting external image memory handle failed: {}", vkResultToString(result)), result);
         }
 
         VkImageViewCreateInfo view_info{};
@@ -3614,18 +3520,11 @@ namespace lfs::vis {
                 vkFreeMemory(device_, image.memory, nullptr);
             }
         }
-        closeExternalNativeHandle(image.native_handle);
-        // Fail-path scrubs never reached onCreate — do not under-count census (sweep_b F-B12).
+        // Only successful creation increments the census.
         if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalImage, scope);
         }
         image = {};
-    }
-
-    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalImageNativeHandle(ExternalImage& image) const {
-        const ExternalNativeHandle handle = image.native_handle;
-        image.native_handle = kInvalidExternalNativeHandle;
-        return handle;
     }
 
     bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
@@ -3736,8 +3635,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -3793,15 +3692,10 @@ namespace lfs::vis {
                 compatible_memory_type_bits));
         }
 
-        // mark the CUDA-foreign import scope so the debug callback can
-        // suppress exactly VUID-01742 (layer fd-number aliasing). Label is the
-        // diagnostic scope for audit; not a blanket severity filter.
+        // Foreign opaque descriptors are validated by their exporting allocator.
         {
 #ifndef _WIN32
-            const std::string scope_label =
-                diagnostic_scope.empty() ? std::string("cuda_opaque_fd_import")
-                                         : std::string(diagnostic_scope);
-            const CudaOpaqueFdImportScopeGuard import_scope(scope_label.c_str());
+            const lfs::core::cuda::ExternalMemoryImportScope import_scope;
 #endif
             result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
         }
@@ -4014,13 +3908,12 @@ namespace lfs::vis {
 
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkResult result;
+            {
 #ifndef _WIN32
-            const std::string scope_label = imported.diagnostic_scope.empty()
-                                                ? std::string("cuda_opaque_fd_import")
-                                                : imported.diagnostic_scope;
-            const CudaOpaqueFdImportScopeGuard import_scope(scope_label.c_str());
+                const lfs::core::cuda::ExternalMemoryImportScope import_scope;
 #endif
-            result = vkAllocateMemory(device_, &allocate_info, nullptr, &memory);
+                result = vkAllocateMemory(device_, &allocate_info, nullptr, &memory);
+            }
             if (result != VK_SUCCESS) {
 #ifndef _WIN32
                 ::close(dup_fd);
@@ -4189,39 +4082,6 @@ namespace lfs::vis {
                             "interop.timeline.external[{}]",
                             initial_value);
 
-#ifdef _WIN32
-        auto get_semaphore_handle = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetSemaphoreWin32HandleKHR"));
-        if (get_semaphore_handle == nullptr) {
-            destroyExternalSemaphore(out);
-            return fail("vkGetSemaphoreWin32HandleKHR is unavailable");
-        }
-        VkSemaphoreGetWin32HandleInfoKHR handle_info{};
-        handle_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-        handle_info.semaphore = out.semaphore;
-        handle_info.handleType = kExternalSemaphoreHandleType;
-        HANDLE native_handle = nullptr;
-        result = get_semaphore_handle(device_, &handle_info, &native_handle);
-        out.native_handle = native_handle;
-#else
-        auto get_semaphore_fd = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
-        if (get_semaphore_fd == nullptr) {
-            destroyExternalSemaphore(out);
-            return fail("vkGetSemaphoreFdKHR is unavailable");
-        }
-        VkSemaphoreGetFdInfoKHR fd_info{};
-        fd_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
-        fd_info.semaphore = out.semaphore;
-        fd_info.handleType = kExternalSemaphoreHandleType;
-        int native_handle = -1;
-        result = get_semaphore_fd(device_, &fd_info, &native_handle);
-        out.native_handle = native_handle;
-#endif
-        if (result != VK_SUCCESS) {
-            destroyExternalSemaphore(out);
-            return setVkFailure(std::format("Exporting external timeline semaphore handle failed: {}", vkResultToString(result)), result);
-        }
         gpu_object_census_.onCreate(GpuObjectKind::ExternalSemaphore, out.diagnostic_scope);
         out.census_counted = true;
         return true;
@@ -4240,18 +4100,10 @@ namespace lfs::vis {
                 vkDestroySemaphore(device_, semaphore.semaphore, nullptr);
             }
         }
-        closeExternalNativeHandle(semaphore.native_handle);
         if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalSemaphore, scope);
         }
         semaphore = {};
-    }
-
-    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalSemaphoreNativeHandle(
-        ExternalSemaphore& semaphore) const {
-        const ExternalNativeHandle handle = semaphore.native_handle;
-        semaphore.native_handle = kInvalidExternalNativeHandle;
-        return handle;
     }
 
     bool VulkanContext::drainCompletedImmediateSubmits() {

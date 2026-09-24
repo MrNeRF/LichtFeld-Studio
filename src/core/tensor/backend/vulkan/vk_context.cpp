@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -234,6 +235,7 @@ namespace lfs::core::internal {
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
+                caps->shader_float64 = features.features.shaderFloat64;
                 caps->shader_float16 = features12.shaderFloat16 &&
                                        float_controls.shaderSignedZeroInfNanPreserveFloat16;
                 caps->float_controls_fp16 = float_controls.shaderSignedZeroInfNanPreserveFloat16;
@@ -406,6 +408,14 @@ namespace lfs::core::internal {
         device_ = adopted.device;
         queue_ = adopted.queue;
         queue_family_ = adopted.queue_family;
+        if (adopted.sharing_queue_family_count > adopted.sharing_queue_families.size())
+            throw std::invalid_argument("Too many Vulkan tensor sharing queue families");
+        sharing_queue_families_ = {queue_family_};
+        for (uint32_t i = 0; i < adopted.sharing_queue_family_count; ++i) {
+            const auto family = adopted.sharing_queue_families[i];
+            if (std::find(sharing_queue_families_.begin(), sharing_queue_families_.end(), family) == sharing_queue_families_.end())
+                sharing_queue_families_.push_back(family);
+        }
         uint32_t count = 0;
         vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, nullptr),
                  "vkEnumeratePhysicalDevices(count)");
@@ -433,6 +443,7 @@ namespace lfs::core::internal {
         caps_.device_index = device_index_;
         caps_.memory_budget = adopted.memory_budget;
         caps_.shader_atomic_float = adopted.shader_atomic_float && !force_no_atomic_float();
+        caps_.shader_float64 = caps_.shader_float64 && adopted.shader_float64;
         caps_.shader_float16 = caps_.shader_float16 && adopted.shader_float16;
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
@@ -622,6 +633,7 @@ namespace lfs::core::internal {
         query12.pNext = &query13;
         query13.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
+        caps_.shader_float64 = query.features.shaderFloat64;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
         caps_.shader_atomic_float =
             extensions_available.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME) &&
@@ -637,6 +649,7 @@ namespace lfs::core::internal {
         VkPhysicalDeviceVulkan11Features features11{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        features.features.shaderFloat64 = caps_.shader_float64;
         features.features.shaderInt64 = VK_TRUE;
         features.features.shaderInt16 = VK_TRUE;
         features.pNext = &features11;
@@ -853,6 +866,24 @@ namespace lfs::core::internal {
                  "vkQueueSubmit2");
     }
 
+    void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
+        VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait.semaphore = semaphore;
+        wait.value = value;
+        wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal.semaphore = timeline_;
+        signal.value = signal_value;
+        signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit.waitSemaphoreInfoCount = 1;
+        submit.pWaitSemaphoreInfos = &wait;
+        submit.signalSemaphoreInfoCount = 1;
+        submit.pSignalSemaphoreInfos = &signal;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
+    }
+
     void VulkanContext::wait(const uint64_t value) {
         if (value == 0) {
             return;
@@ -914,20 +945,24 @@ namespace lfs::core::internal {
         if (record[0] == 0) {
             return;
         }
-        // Field names match the CUDA device-fault error so consumers read both.
+        // Code 2 stores the signed index in words 1-2 and the extent in word 3.
+        const bool wide = record[0] == 2;
+        const int64_t value = wide ? std::bit_cast<int64_t>((uint64_t(record[2]) << 32) | record[1])
+                                   : int64_t(static_cast<int32_t>(record[1]));
+        const uint32_t bound = wide ? record[3] : record[2];
+        const uint32_t op_id = wide ? 0 : record[3];
         throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
             .code = ErrorCode::BoundsViolation,
             .domain = lfs::ErrorDomain::Vulkan,
             .user_message = "A tensor index was out of range on the Vulkan backend",
             .detail = std::format("device fault code {}: index {} is outside the extent {} "
                                   "(operation {})",
-                                  record[0], static_cast<int32_t>(record[1]), record[2],
-                                  record[3]),
+                                  record[0], value, bound, op_id),
             .detection = LFS_SOURCE_SITE_CURRENT(),
             .fields = lfs::SmallFields{}
-                          .add("op_id", static_cast<std::int64_t>(record[3]))
-                          .add("value", static_cast<std::int64_t>(static_cast<int32_t>(record[1])))
-                          .add("bound", static_cast<std::int64_t>(record[2]))
+                          .add("op_id", static_cast<std::int64_t>(op_id))
+                          .add("value", value)
+                          .add("bound", static_cast<std::int64_t>(bound))
                           .add("fault_code", static_cast<std::int64_t>(record[0])),
         }));
     }
@@ -938,7 +973,8 @@ namespace lfs::core::internal {
             return record;
         }
         std::memcpy(record.data(), fault_mapped_, sizeof(record));
-        std::memset(fault_mapped_, 0, sizeof(record));
+        if (record[0] != 0)
+            std::memset(fault_mapped_, 0, sizeof(record));
         return record;
     }
 

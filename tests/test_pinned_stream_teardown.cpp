@@ -6,6 +6,7 @@
 // destroyed during teardown.
 
 #include "core/pinned_memory_allocator.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -14,9 +15,10 @@ using lfs::core::PinnedMemoryAllocator;
 
 namespace {
 
-    class PinnedStreamTeardownTest : public ::testing::Test {
+    class PinnedStreamTeardownTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_EQ(cudaFree(nullptr), cudaSuccess); // ensure context
         }
     };

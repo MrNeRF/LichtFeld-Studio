@@ -15,6 +15,7 @@
 
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "mask_loss_reference.hpp"
 #include "training/losses/mask_loss.hpp"
@@ -23,9 +24,10 @@
 
 using namespace lfs::core;
 
-class MaskLossTest : public ::testing::Test {
+class MaskLossTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         Tensor::manual_seed(42);
     }
 

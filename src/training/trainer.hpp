@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/camera_metrics.hpp"
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
@@ -88,41 +89,6 @@ namespace lfs::training {
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
 
-    struct PPISPViewportOverrides {
-        // Exposure
-        float exposure_offset = 0.0f;
-
-        // Vignetting
-        bool vignette_enabled = true;
-        float vignette_strength = 1.0f;
-
-        // Color correction
-        float wb_temperature = 0.0f;
-        float wb_tint = 0.0f;
-        float color_red_x = 0.0f;
-        float color_red_y = 0.0f;
-        float color_green_x = 0.0f;
-        float color_green_y = 0.0f;
-        float color_blue_x = 0.0f;
-        float color_blue_y = 0.0f;
-
-        // CRF
-        float gamma_multiplier = 1.0f;
-        float gamma_red = 0.0f;
-        float gamma_green = 0.0f;
-        float gamma_blue = 0.0f;
-        float crf_toe = 0.0f;
-        float crf_shoulder = 0.0f;
-
-        [[nodiscard]] bool isIdentity() const {
-            return exposure_offset == 0.0f && vignette_enabled && vignette_strength == 1.0f &&
-                   wb_temperature == 0.0f && wb_tint == 0.0f && color_red_x == 0.0f && color_red_y == 0.0f &&
-                   color_green_x == 0.0f && color_green_y == 0.0f && color_blue_x == 0.0f && color_blue_y == 0.0f &&
-                   gamma_multiplier == 1.0f && gamma_red == 0.0f && gamma_green == 0.0f && gamma_blue == 0.0f &&
-                   crf_toe == 0.0f && crf_shoulder == 0.0f;
-        }
-    };
-
     class Trainer {
     public:
         struct GTLoadConfigSnapshot {
@@ -131,17 +97,8 @@ namespace lfs::training {
             bool undistort = false;
         };
 
-        struct CameraMetricsAppearanceConfig {
-            bool enabled = false;
-            PPISPViewportOverrides overrides{};
-            bool use_controller = true;
-        };
-
-        struct CameraMetricsSnapshot {
-            float psnr = 0.0f;
-            std::optional<float> ssim;
-            bool used_mask = false;
-        };
+        using CameraMetricsAppearanceConfig = lfs::training::CameraMetricsAppearanceConfig;
+        using CameraMetricsSnapshot = lfs::training::CameraMetricsSnapshot;
 
         struct CameraMetricsInputCacheEntry {
             int camera_uid = -1;

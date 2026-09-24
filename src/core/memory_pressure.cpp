@@ -8,13 +8,16 @@
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_info.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <format>
@@ -32,9 +35,30 @@ namespace lfs::core {
             return std::format("{:.1f} MiB", static_cast<double>(bytes) / mib);
         }
 
-        // Consumes only a sticky OOM before querying so an unrelated asynchronous
-        // error is preserved for its real handler.
-        size_t query_device_free_bytes() {
+        MemoryInfo query_vulkan_memory() {
+            try {
+                if (const auto device = gpu_backend_device_info(GpuBackend::Vulkan);
+                    device && device->supports_process_memory_budget) {
+                    MemoryInfo result;
+                    result.total_bytes = device->process_memory_budget_bytes;
+                    result.allocated_bytes = device->process_memory_used_bytes;
+                    result.free_bytes = result.total_bytes > result.allocated_bytes
+                                            ? result.total_bytes - result.allocated_bytes
+                                            : 0;
+                    return result;
+                }
+                return gpu_backend_memory_info(GpuBackend::Vulkan);
+            } catch (const std::exception& error) {
+                LOG_WARN("Cannot query Vulkan memory headroom: {}", error.what());
+                return {};
+            }
+        }
+
+        size_t query_device_free_bytes(const MemoryDomain domain) {
+            if (domain == MemoryDomain::VulkanDevice)
+                return query_vulkan_memory().free_bytes;
+            // Consume only a sticky OOM so an unrelated asynchronous CUDA error
+            // is preserved for its real handler.
             const cudaError_t sticky = cudaPeekAtLastError();
             if (sticky == cudaErrorMemoryAllocation) {
                 cudaGetLastError();
@@ -51,7 +75,9 @@ namespace lfs::core {
             return free_bytes;
         }
 
-        size_t query_device_total_bytes() {
+        size_t query_device_total_bytes(const MemoryDomain domain) {
+            if (domain == MemoryDomain::VulkanDevice)
+                return query_vulkan_memory().total_bytes;
             size_t free_bytes = 0;
             size_t total_bytes = 0;
             if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
@@ -160,8 +186,8 @@ namespace lfs::core {
         std::function<bool(MemoryDomain, size_t)> alloc_probe;
         std::function<size_t(MemoryDomain)> free_probe;
 
-        std::once_flag reserve_once;
-        size_t reserve_bytes = 0;
+        std::array<std::once_flag, kGpuBackendCount> reserve_once;
+        std::array<size_t, kGpuBackendCount> reserve_bytes{};
 
         static thread_local bool in_episode;
 
@@ -173,7 +199,7 @@ namespace lfs::core {
                 }
             }
             if (is_device_heap(domain)) {
-                return query_device_free_bytes();
+                return query_device_free_bytes(domain);
             }
             return 0;
         }
@@ -331,8 +357,9 @@ namespace lfs::core {
         return ptr;
     }
 
-    size_t MemoryPressureCoordinator::reserve_bytes() const noexcept {
-        std::call_once(impl_->reserve_once, [this]() {
+    size_t MemoryPressureCoordinator::reserve_bytes(const MemoryDomain domain) const noexcept {
+        const size_t index = domain == MemoryDomain::VulkanDevice ? 1 : 0;
+        std::call_once(impl_->reserve_once[index], [this, domain, index]() {
             size_t reserve = static_cast<size_t>(512) * 1024 * 1024;
             if (const auto mb = environment::unsigned_integer<unsigned long long>("LFS_VRAM_RESERVE_MB");
                 mb && *mb > 0) {
@@ -341,16 +368,16 @@ namespace lfs::core {
                               ? std::numeric_limits<size_t>::max()
                               : static_cast<size_t>(*mb) * MIB;
             }
-            const size_t total = query_device_total_bytes();
+            const size_t total = query_device_total_bytes(domain);
             const size_t floor = static_cast<size_t>(128) * 1024 * 1024;
             const size_t ceiling = total > 0 ? total / 4 : reserve;
             reserve = std::max(reserve, floor);
             if (ceiling > floor) {
                 reserve = std::min(reserve, ceiling);
             }
-            impl_->reserve_bytes = reserve;
+            impl_->reserve_bytes[index] = reserve;
         });
-        return impl_->reserve_bytes;
+        return impl_->reserve_bytes[index];
     }
 
     void MemoryPressureCoordinator::register_client(PressureClient client) {
@@ -376,7 +403,7 @@ namespace lfs::core {
             return 0;
         }
 
-        const size_t reserve = reserve_bytes();
+        const size_t reserve = reserve_bytes(failure.domain);
         const size_t target = saturating_add(failure.requested_bytes, reserve);
         const size_t free_before = impl_->query_free(failure.domain);
 
@@ -468,7 +495,7 @@ namespace lfs::core {
         if (cuda_is_unavailable()) {
             return false;
         }
-        const size_t target = saturating_add(failure.requested_bytes, reserve_bytes());
+        const size_t target = saturating_add(failure.requested_bytes, reserve_bytes(failure.domain));
         const size_t freed = run_episode(failure, context);
         if (freed > 0) {
             return true;
@@ -483,7 +510,7 @@ namespace lfs::core {
     PreflightResult MemoryPressureCoordinator::preflight(const OperationMemoryPlan& plan,
                                                          MemoryDomain domain) const {
         PreflightResult result;
-        result.safety_reserve_bytes = reserve_bytes();
+        result.safety_reserve_bytes = reserve_bytes(domain);
         result.required_peak_bytes = saturating_add(
             saturating_add(
                 saturating_add(plan.persistent_device_bytes, plan.temporary_device_bytes),

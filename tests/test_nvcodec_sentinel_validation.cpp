@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
@@ -26,12 +27,9 @@ namespace {
 
 } // namespace
 
-TEST(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class NvCodecSentinelValidatorTest : public lfs::test::CudaBackendTest {};
 
+TEST_F(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn) {
     const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
                       "data/bicycle/images_4/_DSC8739.JPG";
     if (!std::filesystem::is_regular_file(path)) {

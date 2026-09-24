@@ -1,5 +1,6 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 152;
+#include "byte_word.slangh"
 
 [SpecializationConstant]
 const uint kInputDType = 0;
@@ -7,6 +8,8 @@ const uint kInputDType = 0;
 const uint kOutputDType = 0;
 [SpecializationConstant]
 const uint kScatter = 0;
+[SpecializationConstant]
+const uint kVectorWidth = 0;
 
 struct Parameters
 {
@@ -18,12 +21,7 @@ struct Parameters
     uint count;
 };
 
-uint loadByte(uint64_t address, uint64_t index)
-{
-    const uint64_t byteAddress = address + index;
-    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
-    return (((Ptr<uint, Access.Read>)(byteAddress & ~uint64_t(3)))[0] >> shift) & 255u;
-}
+#include "byte_read.slangh"
 
 void storeByte(uint64_t address, uint64_t index, uint value)
 {
@@ -43,32 +41,18 @@ void storeByte(uint64_t address, uint64_t index, uint value)
     } while (true);
 }
 
-void storeMaskedWord(uint64_t wordAddress, uint packed, uint mask)
-{
-    Ptr<uint, Access.ReadWrite> word =
-        (Ptr<uint, Access.ReadWrite>)wordAddress;
-    uint assumed = word[0];
-    uint observed;
-    do
-    {
-        const uint replacement = (assumed & ~mask) | packed;
-        InterlockedCompareExchange(word[0], assumed, replacement, observed);
-        if (observed == assumed) return;
-        assumed = observed;
-    } while (true);
-}
-
 uint64_t logicalOffset(uint linear, uniform Parameters parameters)
 {
     uint64_t offset = 0;
-    for (uint reverse = 0; reverse < parameters.rank; ++reverse)
+    for (uint reverse = 0; reverse + 1 < parameters.rank; ++reverse)
     {
         const uint dimension = parameters.rank - reverse - 1;
+        if (parameters.dims[dimension] == 1) continue;
         const uint64_t coordinate = uint64_t(linear) % parameters.dims[dimension];
         linear = uint(uint64_t(linear) / parameters.dims[dimension]);
         offset += coordinate * parameters.strides[dimension];
     }
-    return offset;
+    return offset + uint64_t(linear) * parameters.strides[0];
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
@@ -76,6 +60,18 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    if (kVectorWidth != 0)
+    {
+        for (uint index = dispatchThreadId.x; index < parameters.count / kVectorWidth; index += stride)
+        {
+            const uint64_t strided = logicalOffset(index * kVectorWidth, parameters) / kVectorWidth;
+            const uint64_t inputIndex = kScatter != 0 ? uint64_t(index) : strided;
+            const uint64_t outputIndex = kScatter != 0 ? strided : uint64_t(index);
+            ((Ptr<uint4, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<uint4, Access.Read>)parameters.inputAddress)[inputIndex];
+        }
+        return;
+    }
     // UInt8/Bool gather: one invocation owns one aligned output word. A word
     // fully inside the contiguous output range is a direct store; a
     // leading/trailing partial word uses CAS so neighboring bytes stay intact.
@@ -110,12 +106,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
                     mask |= 255u << (lane * 8u);
                 }
             }
-            if (mask == 0u)
-                continue;
-            if (mask == 0xffffffffu)
-                ((Ptr<uint, Access.ReadWrite>)wordAddress)[0] = packed;
-            else
-                storeMaskedWord(wordAddress, packed, mask);
+            storeByteWord(wordAddress, packed, mask);
         }
         return;
     }

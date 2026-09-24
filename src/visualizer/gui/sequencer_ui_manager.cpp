@@ -10,7 +10,6 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
@@ -35,7 +34,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <format>
 #include <fstream>

@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -74,9 +75,10 @@ namespace {
 
 } // namespace
 
-class FusedBgBlendTest : public ::testing::Test {
+class FusedBgBlendTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         black_bg_ = Tensor::zeros({3}, Device::GPU);
         std::vector<float> bg_host = {0.2f, 0.4f, 0.6f};
         color_bg_ = Tensor::from_blob(bg_host.data(), {3}, Device::CPU, DataType::Float32)
@@ -87,6 +89,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         splat_.reset();
         camera_.reset();
         cleanup_arena();

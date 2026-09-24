@@ -7,8 +7,8 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -230,9 +230,10 @@ TEST(FastGSOverflowGuards, RejectsVisibleCountsBeyondPrimitiveCount) {
     EXPECT_THROW(checked_fastgs_visible_count(max_int + 1, max_int + 1), std::overflow_error);
 }
 
-class FastGSKernelTest : public ::testing::Test {
+class FastGSKernelTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         if (!std::filesystem::exists(GARDEN_PATH)) {
             GTEST_SKIP() << "Garden dataset not found";
         }
@@ -254,6 +255,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         splat_.reset();
         camera_.reset();
         GlobalArenaManager::instance().get_arena().full_reset();
@@ -407,11 +411,9 @@ TEST_F(FastGSKernelTest, EdgeWeightedContributionUsesFloatMapInMainBackward) {
                 std::max(1.0e-3f, expected_total_contribution * 1.0e-4f));
 }
 
-TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class FastGSDepthGradientTest : public lfs::test::CudaBackendTest {};
 
+TEST_F(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {
     std::vector<float> means_data{0.0f, 0.0f, 1.0f};
     auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
     auto sh0 = Tensor::zeros({1, 1, 3}, Device::GPU);
@@ -482,11 +484,7 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSpl
     EXPECT_NEAR(mean_grad.ptr<float>()[1], 0.0f, 1.0e-5f);
 }
 
-TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlappingSplats) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
+TEST_F(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlappingSplats) {
     std::vector<float> means_data{
         0.0f, 0.0f, 0.5f,
         0.0f, 0.0f, 1.5f};
@@ -605,7 +603,7 @@ namespace {
     };
 } // namespace
 
-class FastGSVisibilityReadback : public ::testing::Test {
+class FastGSVisibilityReadback : public lfs::test::CudaBackendTest {
 protected:
     static constexpr size_t scratch_bytes = 16 * 1024 * 1024;
     cudaStream_t blocking_stream_ = nullptr;
@@ -620,9 +618,7 @@ protected:
     }
 
     void SetUp() override {
-        if (!torch::cuda::is_available()) {
-            GTEST_SKIP() << "CUDA not available";
-        }
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaStreamCreateWithFlags(&blocking_stream_, cudaStreamDefault), cudaSuccess);
         ASSERT_EQ(cudaStreamCreateWithFlags(&nonblocking_stream_, cudaStreamNonBlocking), cudaSuccess);
         ASSERT_EQ(cudaMalloc(&scratch_, scratch_bytes), cudaSuccess);
@@ -788,11 +784,9 @@ TEST_F(FastGSVisibilityReadback, MixedVisibilityCompactsIndicesWithDirtyScratch)
     }
 }
 
-TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class FastGSNormalChannelTest : public lfs::test::CudaBackendTest {};
 
+TEST_F(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     NormalChannelScene scene;
     const std::vector<float> identity_quat{1.0f, 0.0f, 0.0f, 0.0f};
     auto splat = scene.make_splat(identity_quat);
@@ -822,11 +816,7 @@ TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     forward->second.release_forward_context();
 }
 
-TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDifferences) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
+TEST_F(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDifferences) {
     NormalChannelScene scene;
     // Generic quaternion away from symmetry; keeps the smallest-axis column
     // pointed toward the camera so the orientation sign stays fixed.
@@ -891,11 +881,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
     }
 }
 
-TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIndex) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
+TEST_F(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIndex) {
     NormalChannelScene single_scene;
     NormalChannelScene scene;
     // R is identity and T is world-to-camera translation: depth = world_z + 4.
@@ -1030,11 +1016,9 @@ TEST_F(FastGSKernelTest, Optimizer_AdamStep) {
     EXPECT_GT(diff, 0.0f);
 }
 
-TEST(AdamCropDampingTest, SetterRequiresExactBooleanRowMaskAndCanClearIt) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class AdamCropDampingTest : public lfs::test::CudaBackendTest {};
 
+TEST_F(AdamCropDampingTest, SetterRequiresExactBooleanRowMaskAndCanClearIt) {
     auto splat = make_adam_test_splat(3);
     AdamOptimizer optimizer(splat, AdamConfig{});
 
@@ -1057,11 +1041,7 @@ TEST(AdamCropDampingTest, SetterRequiresExactBooleanRowMaskAndCanClearIt) {
     EXPECT_FALSE(optimizer.crop_damping_mask().is_valid());
 }
 
-TEST(AdamCropDampingTest, RepeatedMaskReplacementIsSafeAcrossStreams) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
+TEST_F(AdamCropDampingTest, RepeatedMaskReplacementIsSafeAcrossStreams) {
     cudaStream_t producer_stream = nullptr;
     cudaStream_t execution_stream = nullptr;
     ASSERT_EQ(cudaStreamCreateWithFlags(&producer_stream, cudaStreamNonBlocking), cudaSuccess);
@@ -1096,17 +1076,15 @@ TEST(AdamCropDampingTest, RepeatedMaskReplacementIsSafeAcrossStreams) {
         EXPECT_TRUE(splat.means().isfinite().all().item<bool>());
     }
 
-    CudaMemoryPool::instance().release_stream(producer_stream);
-    CudaMemoryPool::instance().release_stream(execution_stream);
+    release_cuda_stream(producer_stream);
+    release_cuda_stream(execution_stream);
     ASSERT_EQ(cudaStreamDestroy(producer_stream), cudaSuccess);
     ASSERT_EQ(cudaStreamDestroy(execution_stream), cudaSuccess);
 }
 
-TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrites) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class FastGSCropDampingTest : public lfs::test::CudaBackendTest {};
 
+TEST_F(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrites) {
     struct UpdateResult {
         float opacity_delta = 0.0f;
         float shn_delta = 0.0f;
@@ -1305,9 +1283,10 @@ namespace {
 
 } // namespace
 
-class FastGSGradientTest : public ::testing::Test {
+class FastGSGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Small scene for numerical gradient verification
         n_ = 32;
         std::mt19937 gen(123);
@@ -1335,6 +1314,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         GlobalArenaManager::instance().get_arena().full_reset();
     }
 
@@ -1529,9 +1511,10 @@ TEST_F(FastGSGradientTest, GradientDirection) {
 // many splats contributing to the same pixels.
 // =============================================================================
 
-class FastGSDenseTileGradientTest : public ::testing::Test {
+class FastGSDenseTileGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Create 128 gaussians concentrated in a SINGLE 16x16 tile
         // This ensures many gaussians end up in the same tile.
         n_ = 128;
@@ -1570,6 +1553,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         GlobalArenaManager::instance().get_arena().full_reset();
     }
 
@@ -1827,7 +1813,9 @@ namespace {
 } // namespace
 
 // fails when several threads re-encode the same 256-row block concurrently
-TEST(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
+class JointEncodeZero : public lfs::test::CudaBackendTest {};
+
+TEST_F(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
     constexpr int n_prims = 1024;
     constexpr int n_attr = 3;
     constexpr int bits = 16;
@@ -1937,7 +1925,7 @@ TEST(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
 }
 
 // fails when several threads re-encode the same 256-row block concurrently
-TEST(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
+TEST_F(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
     constexpr int n_prims = 512;
     constexpr int slots = 2;
     constexpr int bits = 8;
@@ -2046,7 +2034,9 @@ namespace {
 
 // Guards direct normal-prior loss and gradients against CPU autograd with optional pixel weights.
 // Invalid pixels and batches below the participation threshold must have zero gradients.
-TEST(NormalLossRegression, PriorAutogradAndInactivePixels) {
+class NormalLossRegression : public lfs::test::CudaBackendTest {};
+
+TEST_F(NormalLossRegression, PriorAutogradAndInactivePixels) {
     torch::manual_seed(2309);
     constexpr int h = 17, w = 19, p = h * w;
     for (bool weighted : {false, true}) {
@@ -2090,7 +2080,7 @@ TEST(NormalLossRegression, PriorAutogradAndInactivePixels) {
 
 // Guards consistency and prior-depth geometry gradients against CPU autograd across depth scales.
 // The reference includes invalid stencils and detached coverage weights and facing decisions.
-TEST(NormalLossRegression, DepthConsistencyAndPriorDepthAutograd) {
+TEST_F(NormalLossRegression, DepthConsistencyAndPriorDepthAutograd) {
     using torch::indexing::Slice;
     torch::manual_seed(2310);
     constexpr int h = 17, w = 19, p = h * w;
@@ -2154,7 +2144,7 @@ TEST(NormalLossRegression, DepthConsistencyAndPriorDepthAutograd) {
 
 // Guards fused normal-channel gradients for means, scales, rotations, and opacity using finite differences.
 // Overlapping off-center splats exercise all minimum axes, facing signs, and near-opaque coverage.
-TEST(NormalLossRegression, OffCenterOverlappingFullFusedGradients) {
+TEST_F(NormalLossRegression, OffCenterOverlappingFullFusedGradients) {
     for (int scenario = 0; scenario < 5; ++scenario) {
         NormalChannelScene scene;
         scene.means_data = {.35f, -.22f, 1.f, -.28f, .3f, 1.3f, .16f, .12f, 1.7f};
@@ -2233,7 +2223,7 @@ TEST(NormalLossRegression, OffCenterOverlappingFullFusedGradients) {
 
 // Guards exact model-row permutation and bounded joint-moment drift through four 50,000-row Morton reorders.
 // Covers means, SH0, scales, rotations, and opacity with distinguishable row payloads.
-TEST(NormalLossRegression, Morton50kFourReordersJointAllParameters) {
+TEST_F(NormalLossRegression, Morton50kFourReordersJointAllParameters) {
     constexpr size_t n = 50000;
     auto splat = make_adam_test_splat(n);
     lfs::core::param::OptimizationParameters params;
@@ -2354,7 +2344,7 @@ TEST(NormalLossRegression, Morton50kFourReordersJointAllParameters) {
 
 // Guards the direct normal-prior cutoff below 64 valid pixels and populated prior-depth statistics.
 // Prior-depth statistics are checked independently of its activation gate.
-TEST(NormalLossRegression, SparsePriorDisablesAndPriorDepthStatsRemainPopulated) {
+TEST_F(NormalLossRegression, SparsePriorDisablesAndPriorDepthStatsRemainPopulated) {
     constexpr int h = 17, w = 19, p = h * w;
     for (int count : {1, 16, 64, 255})
         for (float z : {.01f, 5.f, 500.f}) {
@@ -2393,7 +2383,7 @@ TEST(NormalLossRegression, SparsePriorDisablesAndPriorDepthStatsRemainPopulated)
 }
 
 // Guards deterministic minimum-axis tie selection and the camera-facing sign change across grazing angles.
-TEST(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
+TEST_F(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
     NormalChannelScene scene;
     scene.means_data = {0, 0, 1};
     scene.opacity_value = .8;
@@ -2468,7 +2458,9 @@ TEST(FastGSFusedAdamSettingsTest, BoundsFarMaskCountToLiveRows) {
     EXPECT_FALSE(make_fastgs_fused_adam_settings(settings).per_splat_mean_step);
 }
 
-TEST(NormalLossHunt, JointRotationCodec100kSteps) {
+class NormalLossHunt : public lfs::test::CudaBackendTest {};
+
+TEST_F(NormalLossHunt, JointRotationCodec100kSteps) {
     using C = joint_adam::Codec16;
     constexpr int cells = 256 * 4, steps = 100000;
     for (int mode = 0; mode < 3; ++mode) {
@@ -2518,7 +2510,7 @@ TEST(NormalLossHunt, JointRotationCodec100kSteps) {
     }
 }
 
-TEST(NormalLossHunt, JointRotationCuda100kSteps) {
+TEST_F(NormalLossHunt, JointRotationCuda100kSteps) {
     constexpr int rows = 256, attrs = 4, cells = rows * attrs;
     auto p = Tensor::zeros({size_t{rows}, size_t{attrs}}, Device::GPU);
     auto packed = Tensor::zeros({size_t{rows}, size_t{attrs * 4}}, Device::GPU, DataType::UInt8);
@@ -2557,10 +2549,9 @@ TEST(NormalLossHunt, JointRotationCuda100kSteps) {
     EXPECT_NEAR(resumed.ptr<float>()[8] - pc.ptr<float>()[8], -expected_delta, 1e-8f);
 }
 
-TEST(JointAdamUpdates, ZeroHistoryStaysFixedInOrdinaryAndFusedAllGroups) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
+class JointAdamUpdates : public lfs::test::CudaBackendTest {};
+
+TEST_F(JointAdamUpdates, ZeroHistoryStaysFixedInOrdinaryAndFusedAllGroups) {
     constexpr size_t rows = 256;
     constexpr int steps = 16;
     const std::vector<ParamType> types = {ParamType::Means, ParamType::Scaling,

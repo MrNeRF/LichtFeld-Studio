@@ -1653,6 +1653,13 @@ namespace lfs::core {
             if (numel() == 0)
                 return result;
 
+            if (gpu_backend_of(*this) == GpuBackend::Vulkan) {
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
+                return result;
+            }
+
             if (device_ == Device::GPU) {
                 // Can't use launch_convert_type - need custom != 0 logic
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);

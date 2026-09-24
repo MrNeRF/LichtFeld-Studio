@@ -4,51 +4,35 @@
 
 #include "rendering/export_post_process.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_environment.hpp"
 #include "environment_image.hpp"
-#include "export_post_process_kernels.cuh"
+#include <array>
 #include <cmath>
 #include <cstring>
-#include <cuda_runtime.h>
+#include <exception>
 #include <format>
+#include <limits>
 #include <mutex>
-#include <vector>
 
 namespace lfs::rendering {
 
     namespace {
 
-        [[nodiscard]] cudaStream_t resolveExportStream(const cudaStream_t stream) {
-            if (stream != nullptr) {
-                return stream;
-            }
-            return lfs::core::getCurrentCUDAStream();
-        }
-
-        [[nodiscard]] ExportResult<void> launchStatus(const char* const kernel_name, const cudaError_t status) {
-            if (status != cudaSuccess) {
-                return std::unexpected(std::format("{}: {}", kernel_name, cudaGetErrorString(status)));
-            }
-            return {};
-        }
-
-        struct CudaEnvironmentMapCache {
-            std::mutex mutex;
+        struct EnvironmentMapCache {
             std::filesystem::path path;
-            std::shared_ptr<const CudaEnvironmentMap> map;
+            std::shared_ptr<const EnvironmentMap> map;
         };
 
-        [[nodiscard]] CudaEnvironmentMapCache& cudaEnvironmentMapCache() {
-            static CudaEnvironmentMapCache cache;
-            return cache;
-        }
+        std::mutex environment_cache_mutex;
+        std::array<EnvironmentMapCache, lfs::core::kGpuBackendCount> environment_cache;
 
         [[nodiscard]] ExportResult<void> validateBandU8Hwc(const lfs::core::Tensor& band, const char* const what) {
             if (!band.is_valid() || band.device() != lfs::core::Device::GPU ||
                 band.dtype() != lfs::core::DataType::UInt8 || band.ndim() != 3 || !band.is_contiguous() ||
                 (band.size(2) != 3 && band.size(2) != 4) || band.size(0) <= 0 || band.size(1) <= 0) {
-                return std::unexpected(std::format("{} must be a contiguous CUDA u8 HWC RGB/RGBA tensor", what));
+                return std::unexpected(std::format("{} must be a contiguous GPU u8 HWC RGB/RGBA tensor", what));
             }
             return {};
         }
@@ -57,100 +41,65 @@ namespace lfs::rendering {
             if (!rgb.is_valid() || rgb.device() != lfs::core::Device::GPU ||
                 rgb.dtype() != lfs::core::DataType::Float32 || rgb.ndim() != 3 || !rgb.is_contiguous() ||
                 rgb.size(0) != 3 || rgb.size(1) <= 0 || rgb.size(2) <= 0) {
-                return std::unexpected(std::format("{} must be a contiguous CUDA float [3,H,W] tensor", what));
+                return std::unexpected(std::format("{} must be a contiguous GPU float [3,H,W] tensor", what));
             }
             return {};
         }
 
     } // namespace
 
-    ExportResult<std::shared_ptr<const CudaEnvironmentMap>> getOrLoadCudaEnvironmentMap(
-        const std::filesystem::path& path) {
+    ExportResult<std::shared_ptr<const EnvironmentMap>> getOrLoadEnvironmentMap(
+        const std::filesystem::path& path, const lfs::core::GpuBackend backend) {
         auto image = loadEnvironmentImageShared(path);
         if (!image) {
             return std::unexpected(image.error());
         }
-
-        auto& cache = cudaEnvironmentMapCache();
-        std::lock_guard lock(cache.mutex);
+        std::lock_guard lock(environment_cache_mutex);
+        auto& cache = environment_cache[static_cast<size_t>(backend)];
         if (cache.map && cache.path == (*image)->path) {
             return cache.map;
         }
-
-        auto map = std::make_shared<CudaEnvironmentMap>();
-        map->width = (*image)->width;
-        map->height = (*image)->height;
-        cudaStream_t upload_stream = nullptr;
-        cudaError_t status = cudaStreamCreateWithFlags(&upload_stream, cudaStreamNonBlocking);
-        if (status != cudaSuccess) {
-            return std::unexpected(std::format("failed to create environment upload stream: {} ({})",
-                                               cudaGetErrorName(status),
-                                               cudaGetErrorString(status)));
+        try {
+            const lfs::core::GpuBackendScope scope(backend);
+            auto map = std::make_shared<EnvironmentMap>();
+            map->width = (*image)->width;
+            map->height = (*image)->height;
+            map->pixels = lfs::core::Tensor::from_blob(
+                              const_cast<float*>((*image)->pixels.data()),
+                              {static_cast<size_t>(map->height), static_cast<size_t>(map->width), 3},
+                              lfs::core::Device::CPU, lfs::core::DataType::Float32)
+                              .gpu();
+            if (!map->pixels.is_valid()) {
+                return std::unexpected("failed to allocate GPU environment map");
+            }
+            // The cache becomes visible only after its upload completes.
+            lfs::core::TensorCompletion completion;
+            completion.include(map->pixels);
+            completion.wait();
+            map->pixels.set_stream(nullptr);
+            cache.path = (*image)->path;
+            cache.map = std::move(map);
+            return cache.map;
+        } catch (const std::exception& error) {
+            return std::unexpected(std::format("failed to upload environment map {}: {}",
+                                               lfs::core::path_to_utf8((*image)->path), error.what()));
         }
-        {
-            lfs::core::CUDAStreamGuard stream_guard(upload_stream);
-            map->pixels = lfs::core::Tensor::empty(
-                {static_cast<size_t>((*image)->height),
-                 static_cast<size_t>((*image)->width),
-                 size_t{3}},
-                lfs::core::Device::GPU,
-                lfs::core::DataType::Float32);
-        }
-        if (!map->pixels.is_valid()) {
-            lfs::core::CudaMemoryPool::instance().release_stream(upload_stream);
-            (void)cudaStreamDestroy(upload_stream);
-            return std::unexpected(std::format("failed to allocate CUDA environment map {}",
-                                               lfs::core::path_to_utf8((*image)->path)));
-        }
-
-        if (status == cudaSuccess) {
-            status = cudaMemcpyAsync(map->pixels.data_ptr(),
-                                     (*image)->pixels.data(),
-                                     map->pixels.bytes(),
-                                     cudaMemcpyHostToDevice,
-                                     upload_stream);
-        }
-        if (status == cudaSuccess) {
-            status = cudaStreamSynchronize(upload_stream);
-        }
-        // The cached tensor was allocated on this temporary lane. Sever every
-        // allocator reference before destroying the stream so a later cache
-        // release never dereferences a dead cudaStream_t.
-        lfs::core::CudaMemoryPool::instance().release_stream(upload_stream);
-        const cudaError_t destroy_status = cudaStreamDestroy(upload_stream);
-        if (status != cudaSuccess) {
-            return std::unexpected(std::format("failed to upload environment map {} to CUDA: {} ({})",
-                                               lfs::core::path_to_utf8((*image)->path),
-                                               cudaGetErrorName(status),
-                                               cudaGetErrorString(status)));
-        }
-        if (destroy_status != cudaSuccess) {
-            return std::unexpected(std::format("failed to destroy environment upload stream: {} ({})",
-                                               cudaGetErrorName(destroy_status),
-                                               cudaGetErrorString(destroy_status)));
-        }
-
-        cache.path = (*image)->path;
-        cache.map = map;
-        return cache.map;
-    }
-
-    void releaseCudaEnvironmentMapCache() {
-        auto& cache = cudaEnvironmentMapCache();
-        std::lock_guard lock(cache.mutex);
-        cache.map.reset();
-        cache.path.clear();
     }
 
     void releaseEnvironmentMapCaches() {
-        releaseCudaEnvironmentMapCache();
+        {
+            std::lock_guard lock(environment_cache_mutex);
+            for (auto& cache : environment_cache) {
+                cache.map.reset();
+                cache.path.clear();
+            }
+        }
         releaseEnvironmentImageCache();
     }
 
     ExportResult<void> unpackU8HwcBandToChwFloat(const lfs::core::Tensor& band_u8_hwc,
                                                  lfs::core::Tensor& rgb_chw_out,
-                                                 lfs::core::Tensor* const alpha_out,
-                                                 const cudaStream_t stream) {
+                                                 lfs::core::Tensor* const alpha_out) {
         if (auto valid = validateBandU8Hwc(band_u8_hwc, "unpack source"); !valid) {
             return valid;
         }
@@ -158,19 +107,16 @@ namespace lfs::rendering {
         const auto height = band_u8_hwc.size(0);
         const auto width = band_u8_hwc.size(1);
         const int channels = static_cast<int>(band_u8_hwc.size(2));
-        const cudaStream_t execution_stream = resolveExportStream(stream);
-        lfs::core::CUDAStreamGuard stream_guard(execution_stream);
-        band_u8_hwc.sync_to_stream(execution_stream);
+        const auto backend = *lfs::core::gpu_backend_of(band_u8_hwc);
+        const lfs::core::GpuBackendScope scope(backend);
         const lfs::core::Tensor chw =
             band_u8_hwc.to(lfs::core::DataType::Float32).mul(1.0f / 255.0f).permute({2, 0, 1});
         rgb_chw_out = chw.slice(0, 0, 3).contiguous();
-        rgb_chw_out.sync_to_stream(execution_stream);
         if (alpha_out != nullptr) {
             *alpha_out = lfs::core::Tensor{};
             if (channels == 4) {
                 *alpha_out = chw.slice(0, 3, 4).contiguous().reshape(
                     {static_cast<int>(height), static_cast<int>(width)});
-                alpha_out->sync_to_stream(execution_stream);
             }
         }
         return {};
@@ -178,75 +124,72 @@ namespace lfs::rendering {
 
     ExportResult<void> packChwFloatBandToU8Hwc(const lfs::core::Tensor& rgb_chw,
                                                const lfs::core::Tensor* const alpha,
-                                               lfs::core::Tensor& band_u8_hwc_out,
-                                               const cudaStream_t stream) {
+                                               lfs::core::Tensor& band_u8_hwc_out) {
         if (auto valid = validateRgbChw(rgb_chw, "pack source"); !valid) {
             return valid;
         }
 
+        const auto backend = *lfs::core::gpu_backend_of(rgb_chw);
+        const lfs::core::GpuBackendScope scope(backend);
         const auto height = rgb_chw.size(1);
         const auto width = rgb_chw.size(2);
-        const int num_pixels = static_cast<int>(height * width);
+        const size_t num_pixels = height * width;
         const bool has_alpha = alpha != nullptr && alpha->is_valid();
         if (has_alpha &&
             (alpha->device() != lfs::core::Device::GPU || alpha->dtype() != lfs::core::DataType::Float32 ||
-             !alpha->is_contiguous() || alpha->numel() != static_cast<size_t>(num_pixels))) {
-            return std::unexpected("pack alpha must be a contiguous CUDA float tensor matching the band");
+             !alpha->is_contiguous() || alpha->numel() != num_pixels || lfs::core::gpu_backend_of(*alpha) != backend)) {
+            return std::unexpected("pack alpha must be a contiguous GPU float tensor matching the band");
         }
-        const cudaStream_t execution_stream = resolveExportStream(stream);
-        lfs::core::CUDAStreamGuard stream_guard(execution_stream);
-        rgb_chw.sync_to_stream(execution_stream);
-        std::vector<lfs::core::Tensor> planes{rgb_chw};
+        lfs::core::Tensor planes = rgb_chw;
         if (has_alpha) {
-            alpha->sync_to_stream(execution_stream);
-            planes.push_back(alpha->reshape({1, static_cast<int>(height), static_cast<int>(width)}));
+            planes = lfs::core::Tensor::empty({4, height, width}, rgb_chw.device(), rgb_chw.dtype());
+            planes.slice(0, 0, 3).copy_from(rgb_chw);
+            planes.slice(0, 3, 4).copy_from(alpha->reshape({1, static_cast<int>(height), static_cast<int>(width)}));
         }
-        const lfs::core::Tensor bytes = lfs::core::Tensor::cat(planes, 0)
+        const lfs::core::Tensor bytes = planes
                                             .clamp(0.0f, 1.0f)
                                             .mul(255.0f)
                                             .add(0.5f)
                                             .to(lfs::core::DataType::UInt8);
         band_u8_hwc_out = bytes.permute({1, 2, 0}).contiguous();
-        band_u8_hwc_out.sync_to_stream(execution_stream);
         return {};
     }
 
-    ExportResult<void> compositeEnvironmentBand(const CudaEnvironmentMap& env,
+    ExportResult<void> compositeEnvironmentBand(const EnvironmentMap& env,
                                                 const EnvironmentCompositeBandParams& params,
                                                 const lfs::core::Tensor& rgb_chw,
                                                 const lfs::core::Tensor& alpha,
-                                                lfs::core::Tensor& band_u8_hwc_out,
-                                                const cudaStream_t stream) {
+                                                lfs::core::Tensor& band_u8_hwc_out) {
         if (auto valid = validateRgbChw(rgb_chw, "composite source"); !valid) {
             return valid;
         }
         if (env.width <= 0 || env.height <= 0 || !env.pixels.is_valid() ||
             env.pixels.device() != lfs::core::Device::GPU ||
-            env.pixels.dtype() != lfs::core::DataType::Float32) {
-            return std::unexpected("composite environment map is not resident on CUDA");
+            env.pixels.dtype() != lfs::core::DataType::Float32 || !env.pixels.is_contiguous() ||
+            env.pixels.shape() != lfs::core::TensorShape({static_cast<size_t>(env.height), static_cast<size_t>(env.width), 3}) ||
+            lfs::core::gpu_backend_of(env.pixels) != lfs::core::gpu_backend_of(rgb_chw) ||
+            static_cast<size_t>(env.width) * env.height > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            return std::unexpected("composite environment map is not resident on the image backend");
         }
 
+        const auto backend = *lfs::core::gpu_backend_of(rgb_chw);
+        const lfs::core::GpuBackendScope scope(backend);
         const auto height = rgb_chw.size(1);
         const auto width = rgb_chw.size(2);
-        const int num_pixels = static_cast<int>(height * width);
+        const size_t num_pixels = height * width;
         if (!alpha.is_valid() || alpha.device() != lfs::core::Device::GPU ||
             alpha.dtype() != lfs::core::DataType::Float32 || !alpha.is_contiguous() ||
-            alpha.numel() != static_cast<size_t>(num_pixels)) {
-            return std::unexpected("composite alpha must be a contiguous CUDA float tensor matching the band");
+            alpha.numel() != num_pixels || lfs::core::gpu_backend_of(alpha) != backend) {
+            return std::unexpected("composite alpha must be a contiguous GPU float tensor matching the band");
         }
         if (params.full_size.x != static_cast<int>(width) || params.y_offset < 0 ||
-            params.y_offset + static_cast<int>(height) > params.full_size.y) {
+            params.full_size.y <= 0 || height > static_cast<size_t>(params.full_size.y) ||
+            params.y_offset > params.full_size.y - static_cast<int>(height) ||
+            num_pixels > static_cast<size_t>(std::numeric_limits<int>::max())) {
             return std::unexpected("composite band region does not match the full image size");
         }
 
-        band_u8_hwc_out = lfs::core::Tensor::empty(
-            {static_cast<size_t>(height), static_cast<size_t>(width), size_t{3}},
-            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
-        if (!band_u8_hwc_out.is_valid()) {
-            return std::unexpected("failed to allocate composited u8 band");
-        }
-
-        exportpp::CompositeParams device_params;
+        lfs::core::EnvironmentCompositeParams device_params;
         static_assert(sizeof(device_params.rotation) == sizeof(params.camera_rotation));
         std::memcpy(device_params.rotation, &params.camera_rotation[0][0], sizeof(device_params.rotation));
         device_params.full_width = params.full_size.x;
@@ -264,22 +207,8 @@ namespace lfs::rendering {
         device_params.env_width = env.width;
         device_params.env_height = env.height;
 
-        const cudaStream_t execution_stream = resolveExportStream(stream);
-        // The environment upload is complete before it enters the cache, so
-        // only lifetime tracking is needed here. The band inputs may still be
-        // produced elsewhere and need explicit ordering onto this stream.
-        env.pixels.record_stream(execution_stream);
-        rgb_chw.sync_to_stream(execution_stream);
-        alpha.sync_to_stream(execution_stream);
-        band_u8_hwc_out.set_stream(execution_stream);
-        return launchStatus(
-            "composite_environment_band_kernel",
-            exportpp::launchCompositeEnvironmentBand(device_params,
-                                                     env.pixels.ptr<float>(),
-                                                     rgb_chw.ptr<float>(),
-                                                     alpha.ptr<float>(),
-                                                     band_u8_hwc_out.ptr<unsigned char>(),
-                                                     execution_stream));
+        band_u8_hwc_out = lfs::core::environment_composite(rgb_chw, alpha, env.pixels, device_params);
+        return {};
     }
 
 } // namespace lfs::rendering

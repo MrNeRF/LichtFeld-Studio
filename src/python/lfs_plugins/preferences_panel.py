@@ -139,7 +139,7 @@ class PreferencesPanel(Panel):
                 lambda section=section: section in self._expanded_sections,
             )
         for key in ("backend", "vulkan_device", "vulkan_validation", "force_fp32_half",
-                    "force_no_atomic_float", "viewer_vulkan_inputs"):
+                    "force_no_atomic_float"):
             model.bind(
                 f"tensor_{key}",
                 lambda key=key: lf.ui.get_tensor_backend_preferences()[key],
@@ -311,7 +311,7 @@ class PreferencesPanel(Panel):
         state = dict(lf.ui.get_tensor_backend_preferences())
         if key == "vulkan_validation":
             value = int(value)
-        elif key in ("force_fp32_half", "force_no_atomic_float", "viewer_vulkan_inputs"):
+        elif key in ("force_fp32_half", "force_no_atomic_float"):
             value = bool(value)
         state[key] = value
         lf.ui.set_tensor_backend_preferences(**state)

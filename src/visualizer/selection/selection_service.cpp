@@ -3,15 +3,12 @@
 
 #include "selection_service.hpp"
 #include "core/camera.hpp"
-#include "core/cuda/selection_ops.hpp"
-#include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/selection_ops.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/training_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
@@ -23,7 +20,6 @@
 #include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
@@ -32,7 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <exception>
 #include <expected>
 #include <functional>
@@ -115,7 +110,7 @@ namespace lfs::vis {
             return render_points;
         }
 
-        // CPU inverse/forward of filterSelectionByScreenWindowKernel's equirect
+        // CPU inverse/forward of core::filter_points's equirect
         // branch. Not a fifth KEEP-IN-SYNC copy: used by the GT path and by the
         // CPU fallback of projectGaussianScreenPositions.
         constexpr float kEquirectPi = 3.14159265358979323846f;
@@ -326,11 +321,13 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
                     lock.emplace(trainer->getRenderMutex());
                 }
             }
+#endif
             return lock;
         }
 
@@ -442,38 +439,6 @@ namespace lfs::vis {
             const auto src_backend = lfs::core::gpu_backend_of(source);
             const auto dst_backend = lfs::core::gpu_backend_of(output);
             const bool same_backend = src_backend == dst_backend;
-            if (source.device() == core::Device::GPU &&
-                output.device() == core::Device::GPU &&
-                same_backend &&
-                src_backend != lfs::core::GpuBackend::Vulkan &&
-                source.dtype() == output.dtype() &&
-                source.is_contiguous() &&
-                output.is_contiguous()) {
-                const cudaStream_t source_stream = source.stream();
-                const cudaStream_t output_stream = output.stream();
-
-                // Pooled event edges both ways: copy on the source stream after
-                // the output's pending work, then hand the result back to the
-                // output stream. record_stream keeps the allocator from
-                // recycling the output before the cross-stream write retires.
-                lfs::core::bridgeStreams(output_stream, source_stream);
-
-                if (const cudaError_t status = cudaMemcpyAsync(output.data_ptr(),
-                                                               source.data_ptr(),
-                                                               source.bytes(),
-                                                               cudaMemcpyDeviceToDevice,
-                                                               source_stream);
-                    status != cudaSuccess) {
-                    LOG_WARN("SelectionService: async selection copy failed: {} ({})",
-                             cudaGetErrorName(status),
-                             cudaGetErrorString(status));
-                    return false;
-                }
-                output.record_stream(source_stream);
-
-                lfs::core::bridgeStreams(source_stream, output_stream);
-                return true;
-            }
             if (same_backend ||
                 source.device() == core::Device::CPU ||
                 output.device() == core::Device::CPU) {
@@ -940,10 +905,10 @@ namespace lfs::vis {
                             viewport.translation.z,
                         };
                         const auto camera_model = equirectangular
-                                                      ? rendering::ScreenWindowCameraModel::Equirectangular
+                                                      ? core::PointProjectionModel::Equirectangular
                                                   : viewport.orthographic
-                                                      ? rendering::ScreenWindowCameraModel::Orthographic
-                                                      : rendering::ScreenWindowCameraModel::Pinhole;
+                                                      ? core::PointProjectionModel::Orthographic
+                                                      : core::PointProjectionModel::Pinhole;
 
                         return std::make_shared<core::Tensor>(
                             rendering::project_screen_positions_tensor(
@@ -1117,88 +1082,9 @@ namespace lfs::vis {
           rendering_manager_(rendering_manager) {
         assert(scene_manager_);
         assert(rendering_manager_);
-        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
-        const auto allocate_host_counts = [](int*& host_counts) {
-            host_counts = new int[selection::kSelectionGroupCount + 1]{};
-        };
-        for (auto& pending : pending_selection_counts_) {
-            if (!cuda_usable) {
-                allocate_host_counts(pending.host_counts);
-                continue;
-            }
-            if (cudaHostAlloc(reinterpret_cast<void**>(&pending.host_counts),
-                              (selection::kSelectionGroupCount + 1) * sizeof(int),
-                              cudaHostAllocPortable) != cudaSuccess ||
-                cudaEventCreateWithFlags(&pending.ready_event, cudaEventDisableTiming) != cudaSuccess) {
-                throw std::runtime_error("SelectionService: failed to allocate async count staging");
-            }
-        }
-        if (!cuda_usable) {
-            allocate_host_counts(pending_passive_ring_count_.host_counts);
-            return;
-        }
-        if (cudaHostAlloc(reinterpret_cast<void**>(&pending_passive_ring_count_.host_counts),
-                          (selection::kSelectionGroupCount + 1) * sizeof(int),
-                          cudaHostAllocPortable) != cudaSuccess ||
-            cudaEventCreateWithFlags(&pending_passive_ring_count_.ready_event, cudaEventDisableTiming) != cudaSuccess) {
-            throw std::runtime_error("SelectionService: failed to allocate passive ring staging");
-        }
     }
 
-    SelectionService::~SelectionService() {
-        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
-        const auto release_host_counts = [cuda_usable](int*& host_counts, const char* const what) {
-            if (!host_counts) {
-                return;
-            }
-            if (cuda_usable) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(host_counts), nullptr, what);
-            } else {
-                delete[] host_counts;
-            }
-            host_counts = nullptr;
-        };
-        const auto drain_vulkan = [](PendingSelectionCounts& pending) {
-            if (pending.vulkan_ticket.id == 0 || pending.host_counts == nullptr) {
-                return;
-            }
-            try {
-                lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
-                    .wait_for(lfs::core::internal::SyncToken{
-                        .backend = lfs::core::GpuBackend::Vulkan,
-                        .value = pending.vulkan_ticket.timeline_value,
-                    });
-                rendering::poll_selection_group_count_readback(
-                    pending.vulkan_ticket, pending.host_counts);
-            } catch (const std::exception& error) {
-                LOG_WARN("SelectionService: Vulkan selection count drain failed: {}", error.what());
-            }
-            pending.vulkan_ticket = {};
-        };
-        for (auto& pending : pending_selection_counts_) {
-            drain_vulkan(pending);
-            if (pending.ready_event) {
-                if (pending.pending) {
-                    LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending.ready_event), nullptr,
-                                          "selection count teardown: synchronize ready event");
-                }
-                LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending.ready_event), nullptr,
-                                      "selection count teardown: destroy ready event");
-            }
-            release_host_counts(pending.host_counts, "selection count teardown: free pinned counts");
-        }
-        drain_vulkan(pending_passive_ring_count_);
-        if (pending_passive_ring_count_.ready_event) {
-            if (pending_passive_ring_count_.pending) {
-                LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending_passive_ring_count_.ready_event), nullptr,
-                                      "passive ring teardown: synchronize ready event");
-            }
-            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending_passive_ring_count_.ready_event), nullptr,
-                                  "passive ring teardown: destroy ready event");
-        }
-        release_host_counts(pending_passive_ring_count_.host_counts,
-                            "passive ring teardown: free pinned counts");
-    }
+    SelectionService::~SelectionService() = default;
 
     void SelectionService::completePendingSelectionCount(
         PendingSelectionCounts& pending, const bool wait) const {
@@ -1206,35 +1092,17 @@ namespace lfs::vis {
             return;
         }
 
-        if (pending.vulkan_ticket.id != 0) {
+        try {
+            auto destination = std::as_writable_bytes(std::span(pending.host_counts));
             if (wait) {
-                lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
-                    .wait_for(lfs::core::internal::SyncToken{
-                        .backend = lfs::core::GpuBackend::Vulkan,
-                        .value = pending.vulkan_ticket.timeline_value,
-                    });
-            }
-            if (!rendering::poll_selection_group_count_readback(
-                    pending.vulkan_ticket, pending.host_counts)) {
+                pending.readback.wait(destination);
+            } else if (!pending.readback.poll(destination)) {
                 return;
             }
-            pending.vulkan_ticket = {};
-        } else if (pending.ready_event == nullptr) {
-            // CUDA-less callers that still enqueue a blocking download.
-        } else {
-            const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
-                                            : cudaEventQuery(pending.ready_event);
-            if (status == cudaErrorNotReady) {
-                return;
-            }
-            if (status != cudaSuccess) {
-                LOG_WARN("SelectionService: async selection count failed: {}",
-                         cudaGetErrorString(status));
-                pending.pending = false;
-                pending.mask.reset();
-                pending.undo_entry.reset();
-                return;
-            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Selection count readback failed: {}", error.what());
+            pending = PendingSelectionCounts{};
+            return;
         }
 
         auto completed_mask = std::move(pending.mask);
@@ -1297,13 +1165,13 @@ namespace lfs::vis {
             completePendingSelectionCount(*slot, true);
         }
 
-        rendering::count_selection_groups_async(*mask, slot->scratch);
-        if (core::gpu_backend_of(slot->scratch) == core::GpuBackend::Vulkan) {
-            rendering::enqueue_selection_group_count_read(
-                slot->scratch, slot->host_counts, nullptr, &slot->vulkan_ticket);
-        } else {
-            rendering::enqueue_selection_group_count_read(
-                slot->scratch, slot->host_counts, slot->ready_event);
+        try {
+            rendering::count_selection_groups_async(*mask, slot->scratch);
+            slot->readback.enqueue(slot->scratch);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Selection count enqueue failed: {}", error.what());
+            *slot = PendingSelectionCounts{};
+            return false;
         }
         slot->mask = mask;
         slot->undo_entry = std::move(undo_entry);
@@ -1576,7 +1444,7 @@ namespace lfs::vis {
 
         constexpr float COLOR_THRESHOLD = 0.2f;
         const auto group_id = scene.getActiveSelectionGroup();
-        auto mask = core::cuda::select_by_color(sh0, ref_r, ref_g, ref_b, COLOR_THRESHOLD, group_id);
+        auto mask = core::select_by_color(sh0, ref_r, ref_g, ref_b, COLOR_THRESHOLD, group_id);
 
         return commitSelection(mask,
                                mode,
@@ -2736,24 +2604,18 @@ namespace lfs::vis {
             picked_ring_id = -1;
             hit = false;
         } else {
-            rendering::count_selection_groups_async(selection, pending_passive_ring_count_.scratch);
-            if (core::gpu_backend_of(pending_passive_ring_count_.scratch) ==
-                core::GpuBackend::Vulkan) {
-                rendering::enqueue_selection_group_count_read(
-                    pending_passive_ring_count_.scratch,
-                    pending_passive_ring_count_.host_counts,
-                    nullptr,
-                    &pending_passive_ring_count_.vulkan_ticket);
-            } else {
-                rendering::enqueue_selection_group_count_read(
-                    pending_passive_ring_count_.scratch,
-                    pending_passive_ring_count_.host_counts,
-                    pending_passive_ring_count_.ready_event);
+            try {
+                rendering::count_selection_groups_async(selection, pending_passive_ring_count_.scratch);
+                pending_passive_ring_count_.readback.enqueue(pending_passive_ring_count_.scratch);
+                pending_passive_ring_count_.mask = std::make_shared<core::Tensor>(selection);
+                pending_passive_ring_count_.apply_to_scene = false;
+                pending_passive_ring_count_.sequence = ++selection_count_sequence_;
+                pending_passive_ring_count_.pending = true;
+            } catch (const std::exception& error) {
+                LOG_ERROR("Selection preview count enqueue failed: {}", error.what());
+                pending_passive_ring_count_ = PendingSelectionCounts{};
+                passive_ring_has_hit_ = false;
             }
-            pending_passive_ring_count_.mask = std::make_shared<core::Tensor>(selection);
-            pending_passive_ring_count_.apply_to_scene = false;
-            pending_passive_ring_count_.sequence = ++selection_count_sequence_;
-            pending_passive_ring_count_.pending = true;
             passive_ring_preview_key_ = preview_key;
             passive_ring_preview_key_valid_ = true;
 
@@ -3045,13 +2907,16 @@ namespace lfs::vis {
         }
         const size_t n = use_indexed_commit ? full_count : scene_selection_mask.numel();
 
-        auto locked_groups = [&] {
-            LOG_TIMER_THRESHOLD("SelectionService::commitSelection.upload_locked_group_mask", 1.0);
-            return selection::upload_locked_group_mask(
-                scene, locked_groups_device_mask_, locked_groups_host_mask_, locked_groups_host_mask_valid_);
-        }();
-        if (!locked_groups) {
-            return {false, 0, locked_groups.error()};
+        core::Tensor locked_groups;
+        {
+            LOG_TIMER_THRESHOLD("SelectionService::commitSelection.update_locked_group_mask", 1.0);
+            try {
+                locked_groups = selection::update_locked_group_mask(
+                    scene, selection_mask, locked_groups_device_mask_, locked_groups_host_mask_, locked_groups_host_mask_valid_);
+            } catch (const std::exception& error) {
+                LOG_ERROR("Could not update selection group locks: {}", error.what());
+                return {false, 0, error.what()};
+            }
         }
 
         const core::Tensor empty_mask;
@@ -3068,14 +2933,13 @@ namespace lfs::vis {
         if (use_indexed_commit) {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.apply_selection_group_indexed_tensor_mask", 1.0);
             rendering::apply_selection_group_indexed_tensor_mask(
-                selection_mask, *visible_indices, existing_ref, output_mask_tensor, group_id, *locked_groups,
+                selection_mask, *visible_indices, existing_ref, output_mask_tensor, group_id, locked_groups,
                 add_mode, commit_transform_indices.get(), final_node_mask, replace_mode);
         } else {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.apply_selection_group_tensor_mask", 1.0);
             rendering::apply_selection_group_tensor_mask(
-                scene_selection_mask, existing_ref, output_mask_tensor, group_id, *locked_groups,
-                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode,
-                nullptr);
+                scene_selection_mask, existing_ref, output_mask_tensor, group_id, locked_groups,
+                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode);
         }
 
         std::unique_ptr<op::SceneSnapshot> entry;
@@ -3096,7 +2960,7 @@ namespace lfs::vis {
         auto new_selection = std::move(output_mask);
         {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.install_selection_mask", 1.0);
-            // The mask is installed immediately; its 257-word group histogram
+            // The mask is installed immediately; its 256-word group histogram
             // is copied to pinned host memory and applied by pollPending...
             // once the GPU has completed. No selection command waits for D2H.
             scene.setSelectionMaskDeferred(new_selection, true, scene.selectedCount());
@@ -3995,7 +3859,7 @@ namespace lfs::vis {
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
             // Equirect GT has empty intrinsics by construction (split_view_service.cpp:78-103).
             // Falling through would unproject through the interactive camera — the path the
-            // STOP-3 comment below forbids. Inverse of filterSelectionByScreenWindowKernel.
+            // STOP-3 comment below forbids. Inverse of core::filter_points.
             if (gt->camera.equirectangular) {
                 projection_viewport.camera.R = gt->camera.rotation;
                 projection_viewport.camera.t = gt->camera.translation;
@@ -4093,7 +3957,7 @@ namespace lfs::vis {
         const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
 
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
-            // Forward of filterSelectionByScreenWindowKernel's equirect branch. Must
+            // Forward of core::filter_points's equirect branch. Must
             // not fall through to projectWorldPoint's interactive-camera pinhole.
             if (gt->camera.equirectangular) {
                 const glm::vec3 view =
@@ -4401,10 +4265,10 @@ namespace lfs::vis {
                 viewport.translation.z,
             };
             const auto camera_model = projection_context.equirectangular
-                                          ? rendering::ScreenWindowCameraModel::Equirectangular
+                                          ? core::PointProjectionModel::Equirectangular
                                       : viewport.orthographic
-                                          ? rendering::ScreenWindowCameraModel::Orthographic
-                                          : rendering::ScreenWindowCameraModel::Pinhole;
+                                          ? core::PointProjectionModel::Orthographic
+                                          : core::PointProjectionModel::Pinhole;
             // Same substitution the Vulkan lane applies before handing the scale
             // to the shader (vksplat_viewport_renderer.cpp), so the selection the
             // kernel computes matches the window the viewport draws. The invalid

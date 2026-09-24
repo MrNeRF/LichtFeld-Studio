@@ -24,7 +24,7 @@ import spherical_harmonics;
 #define LFS_PROJECTION_SURVIVORS 0
 #endif
 
-// Canonical quantized LOD pool inputs (lod_pool_quant.hpp): xyz stays f32;
+// Canonical quantized LOD pool inputs (core/rad_pool_quant.hpp): xyz stays f32;
 // sh0/rotation/log-scale are packed f16, opacity f16 two-per-uint, shN s8
 // per swizzled-slot component with per-page band scales from page_frames.
 #ifndef LFS_QUANT_POOL
@@ -318,7 +318,7 @@ SplatActiveState compute_splat_active_state(
     float4 view_window = overlay_params[OVERLAY_PARAM_VIEW_WINDOW];
     if (active && overlay_enabled(view_flags.x)) {
         // KEEP IN SYNC: the screen-window formula lives in four places —
-        // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
+        // this block, core::filter_points,
         // the CPU reference in tests/test_selection_screen_window.cpp, and
         // (rect only, no depth test) the 2D overlay in gui_manager.cpp
         // appendScreenWindowOverlay.
@@ -717,7 +717,7 @@ layout(binding=27) RWStructuredBuffer<uint32_t> out_emit_count;
 layout(binding=28) RWStructuredBuffer<int32_t> out_orig_ids;
 #endif
 #if LFS_QUANT_POOL
-// Per-page dequant frames (lod_pool_quant.hpp PageFrame), bound after every
+// Per-page dequant frames (core/rad_pool_quant.hpp PageFrame), bound after every
 // variant-specific binding so the C++ buffer list just appends it last.
 #if LFS_PROJECTION_SURVIVORS
 layout(binding=29) StructuredBuffer<float4> page_frames;

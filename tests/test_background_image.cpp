@@ -4,6 +4,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -11,10 +12,18 @@
 using namespace lfs::core;
 using namespace lfs::core::param;
 
-class BackgroundImageTest : public ::testing::Test {
+class BackgroundImageTest : public lfs::test::CudaBackendTest {
 protected:
-    void SetUp() override { cudaSetDevice(0); }
-    void TearDown() override { GlobalArenaManager::instance().get_arena().full_reset(); }
+    void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        cudaSetDevice(0);
+    }
+    void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
+        GlobalArenaManager::instance().get_arena().full_reset();
+    }
 
     static Tensor createTestImage(const int c, const int h, const int w, const float value) {
         return Tensor::full({static_cast<size_t>(c), static_cast<size_t>(h), static_cast<size_t>(w)},

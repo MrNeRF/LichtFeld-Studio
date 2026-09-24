@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gpu_memory_query.hpp"
+#include "core/gpu_device_info.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>
 
@@ -261,22 +263,29 @@ namespace lfs::vis::gui {
 
     } // namespace
 
-    GpuMemoryInfo queryGpuMemory() {
+    GpuMemoryInfo queryGpuMemory(const lfs::core::GpuBackend backend) {
         GpuMemoryInfo info;
-
-        int cuda_device = 0;
-        if (cudaGetDevice(&cuda_device) == cudaSuccess) {
-            cudaDeviceProp prop{};
-            if (cudaGetDeviceProperties(&prop, cuda_device) == cudaSuccess)
-                info.device_name = shortenGpuDeviceName(prop.name);
+        const auto device = lfs::core::gpu_backend_device_info(backend);
+        if (device) {
+            info.device_name = shortenGpuDeviceName(device->name);
+            info.total = device->total_memory_bytes;
         }
-
-        size_t free_mem = 0;
-        size_t total_mem = 0;
-        cudaMemGetInfo(&free_mem, &total_mem);
-
-        info.total = total_mem;
-        info.total_used = total_mem - free_mem;
+        if (backend == lfs::core::GpuBackend::Vulkan) {
+            info.uses_process_budget = true;
+            if (device && device->supports_process_memory_budget) {
+                info.process_budget = device->process_memory_budget_bytes;
+                info.process_budget_used = device->process_memory_used_bytes;
+            }
+            return info;
+        }
+        if (!device) {
+            return info;
+        }
+        const auto memory = lfs::core::gpu_backend_memory_info(backend);
+        info.total = memory.total_bytes;
+        info.total_used = memory.total_bytes >= memory.free_bytes
+                              ? memory.total_bytes - memory.free_bytes
+                              : 0;
 #ifdef _WIN32
         info.process_used = dxgiState().getProcessMemory();
 #else
@@ -291,6 +300,9 @@ namespace lfs::vis::gui {
     }
 
     float queryGpuUtilization() {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return -1.f;
+        }
         return nvmlState().getUtilization();
     }
 

@@ -23,7 +23,7 @@ namespace lfs::rendering {
             return Tensor::cat({rgb, alpha}, 2);
         }
 
-        // Nearest uint8 matching cuda_vulkan_interop::toByte and export_post_process::floatToU8:
+        // Nearest uint8 uses clamp[0,1] * 255 + 0.5:
         // unsigned char(fminf(fmaxf(v, 0), 1) * 255 + 0.5). Tensor::clamp preserves NaN on CPU
         // and CUDA; to(UInt8) then uses torch_uint8_cast, which maps non-finite values to 0, so
         // NaN still becomes 0 (same as fmaxf(NaN, 0)). Inf clamps to the [0, 1] endpoints before

@@ -30,6 +30,8 @@
 
 namespace lfs::core {
 
+    class TensorCompletion;
+
     using NodeId = int32_t;
     constexpr NodeId NULL_NODE = -1;
 
@@ -433,10 +435,9 @@ namespace lfs::core {
             std::shared_ptr<lfs::core::SplatData> model;
             std::shared_ptr<lfs::core::Tensor> transform_indices;
             std::shared_ptr<lfs::core::Tensor> visible_selection_indices;
-            // The worker records this after all output tensors have been ordered
-            // onto worker_stream. The consumer synchronizes it before install.
-            std::shared_ptr<void> ready_event;
-            cudaStream_t worker_stream = nullptr;
+            // Own completion on the output tensors' storage backends. Results
+            // must settle before installation or destruction, including stale ones.
+            std::shared_ptr<TensorCompletion> completion;
             uint64_t generation = 0;
             bool includes_hidden_splats = false;
         };

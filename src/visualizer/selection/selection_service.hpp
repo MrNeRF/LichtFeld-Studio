@@ -6,13 +6,13 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_readback.hpp"
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include "rendering/selection_ops.hpp"
 #include <array>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <expected>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -214,7 +214,7 @@ namespace lfs::vis {
         // also poll before starting a new commit.
         void pollPendingSelectionCounts() const;
         // MCP and history boundaries use this synchronous variant. The
-        // histogram is only 257 integers; the interactive path remains on the
+        // histogram is only 256 integers; the interactive path remains on the
         // non-blocking poll above.
         void completePendingSelectionCounts() const;
 
@@ -228,9 +228,8 @@ namespace lfs::vis {
             std::shared_ptr<core::Tensor> mask;
             std::unique_ptr<op::SceneSnapshot> undo_entry;
             core::Tensor scratch;
-            int* host_counts = nullptr;
-            cudaEvent_t ready_event = nullptr;
-            lfs::rendering::SelectionCountTicket vulkan_ticket;
+            std::array<int, 256> host_counts{};
+            core::TensorReadback readback;
             bool pending = false;
             bool apply_to_scene = true;
             uint64_t sequence = 0;
@@ -405,7 +404,7 @@ namespace lfs::vis {
         std::shared_ptr<core::Tensor> selection_before_stroke_;
         core::Tensor command_selection_buffer_;
         core::Tensor locked_groups_device_mask_;
-        std::array<uint32_t, 8> locked_groups_host_mask_{};
+        std::array<bool, 256> locked_groups_host_mask_{};
         bool locked_groups_host_mask_valid_ = false;
         mutable std::array<PendingSelectionCounts, 2> pending_selection_counts_{};
         mutable PendingSelectionCounts pending_passive_ring_count_{};

@@ -3,6 +3,7 @@
 
 #include "core/tensor.hpp"
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <sstream>
 #include <torch/torch.h>

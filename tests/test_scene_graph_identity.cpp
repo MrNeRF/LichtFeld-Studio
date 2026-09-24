@@ -16,7 +16,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
@@ -495,10 +494,6 @@ TEST_F(SceneGraphIdentityTest, PlyPathRestoredToFreshIdByTopologyUndo) {
 }
 
 TEST(SceneCameraAssetPathTest, RebaseRewritesUnderOldRootAndRefreshesNodeMirrors) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
 
     const auto old_root = std::filesystem::temp_directory_path() / "lfs-rebase-old";
     const auto new_root = std::filesystem::temp_directory_path() / "lfs-rebase-new";

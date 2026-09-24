@@ -8,6 +8,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <chrono>
 #include <cmath>
 #include <gtest/gtest.h>
@@ -17,11 +18,11 @@
 
 using namespace lfs::core;
 
-class NaNInfGPUCheckTest : public ::testing::Test {
+class NaNInfGPUCheckTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         // Ensure CUDA is available
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA not available";
+        LFS_CUDA_BACKEND_OR_RETURN();
     }
 
     // Helper to create LFS tensor from torch tensor

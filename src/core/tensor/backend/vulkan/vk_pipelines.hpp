@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
+
+#include "../../internal/expression_runtime.hpp"
 
 #include <cstdint>
 #include <mutex>
@@ -33,6 +36,7 @@ namespace lfs::core::internal {
             const std::string& module, uint32_t expected_push_constant_size,
             std::span<const uint32_t> constants);
         void shutdown();
+        ExpressionCache& expressions() { return expressions_; }
 
     private:
         [[nodiscard]] VulkanPipeline load(const std::string& module,
@@ -44,6 +48,7 @@ namespace lfs::core::internal {
         std::mutex mutex_;
         std::unordered_map<std::string, VulkanPipeline> pipelines_;
         bool shutting_down_ = false;
+        ExpressionCache expressions_;
     };
 
 } // namespace lfs::core::internal

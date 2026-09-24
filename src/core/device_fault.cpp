@@ -3,6 +3,8 @@
 
 #include "core/device_fault.hpp"
 
+#include "core/tensor_cuda_interop.hpp"
+
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
 #include "core/error_reporter.hpp"
@@ -10,25 +12,26 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::core {
     namespace {
 
-        // The record lives in host-mapped pinned memory: the kernel writes it
-        // through the device alias and the host reads it after the stream wait,
-        // so the checked range needs no device-to-host copy behind the kernel
-        // (that copy was scheduled 8 us late by the runtime on driver 580 and
-        // doubled the cost of small Assert-mode index reads).
+        // Kernels write the mapped record through its device alias; host reads
+        // and clears occur only after the producing stream completes.
         struct DeviceFaultSlot {
             DeviceFaultRecord* device_record = nullptr; // device alias of the mapped record
             DeviceFaultRecord* host_staging = nullptr;  // cudaHostAlloc mapped pinned
+            bool armed = false;
         };
 
         std::mutex g_registry_mu;
         std::unordered_map<cudaStream_t, DeviceFaultSlot> g_slots;
+        std::uint64_t g_registry_generation = 0;
         // Set by device_fault_registry_teardown(); cleared only by the testing reset.
         std::atomic<bool> g_registry_torn_down{false};
 
@@ -42,8 +45,7 @@ namespace lfs::core {
             }
         }
 
-        // Allocate device record + pinned staging. Caller holds g_registry_mu.
-        // On failure leaves *out empty and returns the failing cudaError_t.
+        // The caller holds g_registry_mu; failure leaves out empty.
         [[nodiscard]] cudaError_t allocate_slot_buffers(DeviceFaultSlot& out) noexcept {
             out = {};
             void* host_ptr = nullptr;
@@ -63,8 +65,7 @@ namespace lfs::core {
 
             out.device_record = static_cast<DeviceFaultRecord*>(device_ptr);
             out.host_staging = static_cast<DeviceFaultRecord*>(host_ptr);
-            // The record starts clean so a premature consume reads NoFault; the
-            // mandatory pre-range enqueue_reset zeroes it in stream order.
+            // Only a synchronized consumer clears a record after initialization.
             std::memset(out.host_staging, 0, sizeof(DeviceFaultRecord));
             return cudaSuccess;
         }
@@ -82,9 +83,22 @@ namespace lfs::core {
                 return cudaErrorCudartUnloading;
             }
 
+            struct CachedSlot {
+                cudaStream_t stream = nullptr;
+                DeviceFaultSlot* slot = nullptr;
+                std::uint64_t generation = 0;
+            };
+            thread_local CachedSlot cache;
+            if (cache.slot != nullptr && cache.stream == stream &&
+                cache.generation == g_registry_generation) {
+                *out_slot = cache.slot;
+                return cudaSuccess;
+            }
+
             const auto it = g_slots.find(stream);
             if (it != g_slots.end()) {
                 *out_slot = &it->second;
+                cache = {stream, *out_slot, g_registry_generation};
                 return cudaSuccess;
             }
 
@@ -101,10 +115,12 @@ namespace lfs::core {
                 return cudaErrorUnknown;
             }
             *out_slot = &inserted_it->second;
+            cache = {stream, *out_slot, g_registry_generation};
             return cudaSuccess;
         }
 
         void drain_all_slots_locked() noexcept {
+            ++g_registry_generation;
             for (auto& entry : g_slots) {
                 free_slot_buffers(entry.second);
             }
@@ -131,64 +147,23 @@ namespace lfs::core {
 
     } // namespace
 
-    cudaError_t device_fault_slot_acquire(
-        const cudaStream_t stream,
-        DeviceFaultRecord** out_device_record) noexcept {
-        if (out_device_record == nullptr) {
+    cudaError_t device_fault_slot_arm(cudaStream_t stream, DeviceFaultRecord** out_device_record) noexcept {
+        if (out_device_record == nullptr)
             return cudaErrorInvalidValue;
-        }
         *out_device_record = nullptr;
-
-        std::lock_guard<std::mutex> lock(g_registry_mu);
+        // The legacy null stream cannot be captured.
+        if (stream != nullptr) {
+            const auto capture_status = reject_if_graph_capturing(stream);
+            if (capture_status != cudaSuccess)
+                return capture_status;
+        }
+        std::lock_guard lock(g_registry_mu);
         DeviceFaultSlot* slot = nullptr;
-        const cudaError_t status = get_or_create_slot_locked(stream, &slot);
-        if (status != cudaSuccess) {
+        const auto status = get_or_create_slot_locked(stream, &slot);
+        if (status != cudaSuccess)
             return status;
-        }
+        slot->armed = true;
         *out_device_record = slot->device_record;
-        return cudaSuccess;
-    }
-
-    cudaError_t device_fault_slot_enqueue_reset(const cudaStream_t stream) noexcept {
-        // Spec §1.9: host entry of reset rejects graph capture before any enqueue.
-        const cudaError_t capture_status = reject_if_graph_capturing(stream);
-        if (capture_status != cudaSuccess) {
-            return capture_status;
-        }
-
-        std::lock_guard<std::mutex> lock(g_registry_mu);
-        DeviceFaultSlot* slot = nullptr;
-        const cudaError_t acquire_status = get_or_create_slot_locked(stream, &slot);
-        if (acquire_status != cudaSuccess) {
-            return acquire_status;
-        }
-        // The record is written only by Assert-mode kernels, and every Assert
-        // operation waits on its stream and consumes the record before it
-        // returns, so no writer is in flight here: the host clears the mapped
-        // record directly. A device memset into host memory stalled the stream
-        // (training pairs at 75c01f402 lost up to 10 s in 7000 iterations).
-        std::memset(slot->host_staging, 0, sizeof(DeviceFaultRecord));
-        (void)stream;
-        return cudaSuccess;
-    }
-
-    cudaError_t device_fault_slot_enqueue_harvest(const cudaStream_t stream) noexcept {
-        // Spec §1.9: harvest host entry also rejects graph capture (no silent sync).
-        const cudaError_t capture_status = reject_if_graph_capturing(stream);
-        if (capture_status != cudaSuccess) {
-            return capture_status;
-        }
-
-        std::lock_guard<std::mutex> lock(g_registry_mu);
-        DeviceFaultSlot* slot = nullptr;
-        const cudaError_t acquire_status = get_or_create_slot_locked(stream, &slot);
-        if (acquire_status != cudaSuccess) {
-            return acquire_status;
-        }
-        // The record is host-mapped: whatever the checked range wrote is visible
-        // on the host once the caller's wait on `stream` completes (spec §1.5
-        // step 4 keeps the no-synchronize rule; there is nothing to copy).
-        (void)slot;
         return cudaSuccess;
     }
 
@@ -206,7 +181,11 @@ namespace lfs::core {
             return clean;
         }
         // Host read of the mapped record after the caller's wait on the stream.
-        return *it->second.host_staging;
+        const auto record = *it->second.host_staging;
+        if (record.code != static_cast<std::uint32_t>(DeviceFaultCode::NoFault))
+            std::memset(it->second.host_staging, 0, sizeof(DeviceFaultRecord));
+        it->second.armed = false;
+        return record;
     }
 
     void device_fault_registry_teardown() noexcept {
@@ -303,12 +282,48 @@ namespace lfs::core {
                                  reinterpret_cast<std::uintptr_t>(stream));
     }
 
+    void device_fault_registry_consume_or_throw(const SourceSite location, bool device_synchronized) {
+        std::vector<cudaStream_t> streams;
+        {
+            std::lock_guard lock(g_registry_mu);
+            for (const auto& [stream, slot] : g_slots) {
+                if (slot.armed)
+                    streams.push_back(stream);
+            }
+        }
+        std::exception_ptr failure;
+        for (const auto stream : streams) {
+            try {
+                if (!device_synchronized) {
+                    // Pool retirement waits for stream work before the handle is destroyed.
+                    if (!is_stream_retired(stream)) {
+                        const auto status = cudaStreamQuery(stream);
+                        if (status == cudaErrorNotReady)
+                            continue;
+                        if (status == cudaErrorInvalidResourceHandle) {
+                            (void)cudaGetLastError();
+                            continue;
+                        }
+                        ensure_cuda_success(status, "cudaStreamQuery(device fault)", {}, location);
+                    }
+                }
+                device_fault_slot_consume_or_throw(stream, "tensor.synchronize", location);
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): Preserve the first error while clearing all completed slots.
+                if (!failure)
+                    failure = std::current_exception();
+            }
+        }
+        if (failure)
+            std::rethrow_exception(failure);
+    }
+
     Error make_device_fault_graph_capture_error(const cudaStream_t stream,
                                                 const SourceSite location) {
         return make_error(ErrorInit{
             .code = ErrorCode::Unsupported,
             .domain = ErrorDomain::CUDA,
-            .detail = "device-fault reset/harvest is unsupported under CUDA graph "
+            .detail = "device-fault checking is unsupported under CUDA graph "
                       "capture (no silent synchronize)",
             .detection = location,
             .fields = SmallFields{}.add(

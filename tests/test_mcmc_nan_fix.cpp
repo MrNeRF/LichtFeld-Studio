@@ -6,6 +6,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/mcmc_kernels.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
@@ -13,9 +14,10 @@
 
 using namespace lfs::core;
 
-class MCMCNaNFixTest : public ::testing::Test {
+class MCMCNaNFixTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         cudaDeviceSynchronize();
         lfs::training::mcmc::init_relocation_coefficients(51);
     }

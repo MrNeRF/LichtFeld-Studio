@@ -12,7 +12,6 @@
 #include "io/formats/ply.hpp"
 #include "io/splat_chapter.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -125,10 +124,6 @@ namespace {
 class SceneConsolidationExtractTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto path = bike_ply_path();
         if (!std::filesystem::exists(path)) {
             GTEST_SKIP() << "tests/data/bike.ply is not available";
@@ -571,9 +566,6 @@ TEST_F(SceneConsolidationExtractTest, ReturnsNullWhenNotConsolidatedOrUnknown) {
 }
 
 TEST(SceneActiveShTest, SourceRetentionPreservesEditableModelsAndResetsForNewScene) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
-        GTEST_SKIP() << "CUDA device unavailable";
     auto model = SplatData(1,
                            Tensor::zeros({2, 3}, Device::CUDA),
                            Tensor::zeros({2, 1, 3}, Device::CUDA),
@@ -597,10 +589,6 @@ TEST(SceneActiveShTest, SourceRetentionPreservesEditableModelsAndResetsForNewSce
 }
 
 TEST(SceneActiveShTest, PreservesInactiveDataAndNodeLimitsThroughConsolidationAndCompaction) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
     Scene scene;
     std::vector<Uuid> uuids;
     std::vector<CpuAttrs> attributes;

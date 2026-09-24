@@ -4,9 +4,9 @@
 #include "core/nn/ops.hpp"
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan_ops.hpp"
@@ -34,14 +34,14 @@ namespace lfs::core::nn {
         void require_same_dtype_device(const Tensor& a, const Tensor& b, const std::string_view op,
                                        const std::string_view a_role, const std::string_view b_role) {
             tensor_contract::require_same_device(a, b, op, a_role, b_role, LFS_SOURCE_SITE_CURRENT());
-            internal::require_same_gpu_backend(a, b, op);
+            LFS_ASSERT_MSG(gpu_backend_of(a) == gpu_backend_of(b), "NN operands must share a GPU backend");
             LFS_ASSERT_MSG(a.dtype() == b.dtype(),
                            std::format("{} dtype mismatch ({}={}, {}={})", op, a_role,
                                        dtype_name(a.dtype()), b_role, dtype_name(b.dtype())));
         }
 
         Tensor empty_like_shape(const Tensor& like, const TensorShape& shape) {
-            auto out = internal::allocate_like(like, shape, like.dtype());
+            auto out = Tensor::empty_like(like, shape, like.dtype());
             out.set_stream(like.stream());
             return out;
         }

@@ -376,7 +376,7 @@ float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t act
 // future rewrite.
 
 // ---------------------------------------------------------------------------
-// Canonical quantized LOD pool reads (lod_pool_quant.hpp): sh0 is f16x3
+// Canonical quantized LOD pool reads (core/rad_pool_quant.hpp): sh0 is f16x3
 // packed in a uint2; each shN float4 slot is four s8 components in one uint,
 // scaled by the page's per-band |max| from the dequant frame. The s8 formula
 // (q/127)*max matches the CPU/CUDA dequantS8 exactly.
