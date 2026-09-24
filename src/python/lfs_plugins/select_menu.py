@@ -47,6 +47,26 @@ def _is_selection_tool_active():
         return False
 
 
+def _activate_select_tool():
+    from .tools import ToolRegistry
+
+    return ToolRegistry.set_active("builtin.select")
+
+
+def _open_selection_groups():
+    """Enable the Rendering child. Registration stays closed, so layout reset does not add a tab."""
+    try:
+        lf.ui.set_panel_enabled("lfs.selection_groups", True)
+    except (AttributeError, RuntimeError, TypeError):
+        return False
+    if _is_selection_tool_active():
+        return True
+    try:
+        return bool(_activate_select_tool())
+    except (AttributeError, RuntimeError, TypeError):
+        return False
+
+
 @register_menu
 class SelectMenu:
     """Select menu for Gaussian selection actions."""
@@ -100,6 +120,12 @@ class SelectMenu:
                 lf.ui.deselect_all_gaussians,
                 shortcut=_shortcut(action.DESELECT_ALL, "Ctrl+D"),
                 enabled=can_edit and has_selection,
+            ),
+            menu_separator(),
+            menu_action(
+                tr("menu.select.selection_groups"),
+                _open_selection_groups,
+                enabled=can_edit,
             ),
         ]
 

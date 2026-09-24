@@ -134,6 +134,7 @@
     "select.invert_selection": "Odwróć zaznaczenie",
     "select.select_all": "Zaznacz wszystko",
     "select.deselect_all": "Odznacz wszystko",
+    "select.selection_groups": "Grupy Zaznaczenia",
     "tools": "Narzędzia",
     "tools.asset_manager": "Projekty",
     "tools.python_console": "Konsola Pythona",

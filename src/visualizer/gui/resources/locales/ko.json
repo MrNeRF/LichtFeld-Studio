@@ -134,6 +134,7 @@
     "select.invert_selection": "선택 반전",
     "select.select_all": "모두 선택",
     "select.deselect_all": "선택 해제",
+    "select.selection_groups": "선택 그룹",
     "tools": "도구",
     "tools.asset_manager": "프로젝트",
     "tools.python_console": "Python 콘솔",

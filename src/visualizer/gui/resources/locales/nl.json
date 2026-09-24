@@ -134,6 +134,7 @@
     "select.invert_selection": "Selectie omkeren",
     "select.select_all": "Alles selecteren",
     "select.deselect_all": "Selectie opheffen",
+    "select.selection_groups": "Selectie Groepen",
     "tools": "Hulpmiddelen",
     "tools.asset_manager": "Projecten",
     "tools.python_console": "Python-console",

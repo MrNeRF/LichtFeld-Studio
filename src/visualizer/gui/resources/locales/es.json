@@ -134,6 +134,7 @@
     "select.invert_selection": "Invertir selección",
     "select.select_all": "Seleccionar todo",
     "select.deselect_all": "Deseleccionar todo",
+    "select.selection_groups": "Grupos de Selección",
     "tools": "Herramientas",
     "tools.asset_manager": "Proyectos",
     "tools.python_console": "Consola de Python",

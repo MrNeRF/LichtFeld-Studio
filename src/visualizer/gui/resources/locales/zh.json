@@ -134,6 +134,7 @@
     "select.invert_selection": "反选",
     "select.select_all": "全选",
     "select.deselect_all": "取消全选",
+    "select.selection_groups": "选择组",
     "tools": "工具",
     "tools.asset_manager": "项目",
     "tools.python_console": "Python 控制台",

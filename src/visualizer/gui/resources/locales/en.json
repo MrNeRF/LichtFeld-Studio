@@ -130,6 +130,7 @@
     "select.invert_selection": "Invert Selection",
     "select.select_all": "Select All",
     "select.deselect_all": "Deselect All",
+    "select.selection_groups": "Selection Groups",
     "tools": "Tools",
     "tools.asset_manager": "Projects",
     "tools.python_console": "Python Console",

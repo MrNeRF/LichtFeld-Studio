@@ -134,6 +134,7 @@
     "select.invert_selection": "選択を反転",
     "select.select_all": "すべて選択",
     "select.deselect_all": "選択を解除",
+    "select.selection_groups": "選択グループ",
     "tools": "ツール",
     "tools.asset_manager": "プロジェクト",
     "tools.python_console": "Python コンソール",
