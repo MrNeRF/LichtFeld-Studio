@@ -34,6 +34,7 @@
 #include <cmath>
 #include <format>
 #include <glm/glm.hpp>
+#include <string_view>
 
 namespace lfs::vis::gui {
 
@@ -1103,10 +1104,12 @@ namespace lfs::vis::gui {
         const auto gallery = lfs::vis::app_store().gallery_state.get();
         const auto& localization = lfs::event::LocalizationManager::getInstance();
         const bool needs_approval = account.signed_in && gallery.relink_required;
-        const std::string connection = account.disconnecting ? "disconnecting" : account.linking ? "linking"
-                                                                             : needs_approval    ? "approval_needed"
-                                                                             : account.signed_in ? "connected"
-                                                                                                 : "disconnected";
+        const std::string connection = account.disconnecting ? "disconnecting"
+                                       : account.linking     ? "linking"
+                                       : needs_approval      ? "approval_needed"
+                                       : account.signed_in   ? "connected"
+                                       : account.authorized  ? "switched_off"
+                                                             : "not_connected";
         const bool connected = account.signed_in;
         const bool checking = account.linking || account.disconnecting;
         const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
@@ -1128,23 +1131,33 @@ namespace lfs::vis::gui {
                 render_needed_ = true;
             }
         };
-        const std::string activity = transferring && !checking
+        const std::string activity = transferring && connection == "connected"
                                          ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
                                             : gallery.active_uploads > 0                               ? "uploading"
                                                                                                        : "downloading")
                                          : connection;
-        const auto connection_key = "portal.status." + activity;
+        const auto connection_key = "portal.status." + (activity == "not_connected" ? "disconnected" : activity);
         std::string label = localization.get(connection_key);
-        if (connected && !account.label.empty())
-            label = account.label + ", " + localization.get("projects.gallery.sidebar.title");
-        else if (account.linking && !account.label.empty())
+        if (connection == "connected" && !account.label.empty()) {
+            label = localization.get("portal.status.toolbar_connected");
+            constexpr std::string_view kInitialsToken = "{initials}";
+            if (const auto initials = label.find(kInitialsToken); initials != std::string::npos)
+                label.replace(initials, kInitialsToken.size(), account.label);
+        } else if (account.linking && !account.label.empty())
             label += " " + account.label;
         set("portal_connection_label", portal_connection_label_, std::move(label));
-        std::string tooltip = localization.get(account.linking  ? "portal.status.cancel"
-                                               : needs_approval ? "portal.status.reauthorize"
-                                               : connected      ? "portal.status.disconnect"
-                                                                : "portal.status.connect");
-        if (!account.tooltip.empty())
+        std::string tooltip = localization.get(needs_approval       ? "portal.status.reauthorize"
+                                               : connected          ? "portal.status.disconnect"
+                                               : account.linking    ? "portal.status.cancel"
+                                               : account.authorized ? "portal.status.turn_on"
+                                                                    : "portal.status.connect");
+        if (connected && !account.display_name.empty()) {
+            std::string connected_as = localization.get("portal.status.connected_as");
+            constexpr std::string_view kNameToken = "{name}";
+            if (const auto name = connected_as.find(kNameToken); name != std::string::npos)
+                connected_as.replace(name, kNameToken.size(), account.display_name);
+            tooltip += "\n" + connected_as;
+        } else if (!account.tooltip.empty())
             tooltip += "\n" + account.tooltip;
         if (transferring)
             tooltip += "\n" + gallery.tooltip;

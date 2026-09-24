@@ -163,6 +163,7 @@ namespace lfs::python {
         nb::dict account_state_to_dict(const lfs::vis::AppStore::AccountState& value) {
             nb::dict state;
             state["signed_in"] = value.signed_in;
+            state["authorized"] = value.authorized;
             state["linking"] = value.linking;
             state["disconnecting"] = value.disconnecting;
             state["error"] = value.error;
@@ -170,6 +171,7 @@ namespace lfs::python {
             state["label"] = value.label;
             state["email"] = value.email;
             state["connected_since"] = value.connected_since;
+            state["display_name"] = value.display_name;
             state["tier"] = value.tier;
             state["tooltip"] = value.tooltip;
             return state;
@@ -184,6 +186,7 @@ namespace lfs::python {
             const nb::dict dict = nb::cast<nb::dict>(value);
             lfs::vis::AppStore::AccountState state;
             state.signed_in = dict_value(dict, "signed_in", false);
+            state.authorized = dict_value(dict, "authorized", false);
             state.linking = dict_value(dict, "linking", false);
             state.disconnecting = dict_value(dict, "disconnecting", false);
             state.error = dict_value(dict, "error", std::string{});
@@ -191,6 +194,7 @@ namespace lfs::python {
             state.label = dict_value(dict, "label", std::string{});
             state.email = dict_value(dict, "email", std::string{});
             state.connected_since = dict_value(dict, "connected_since", std::string{});
+            state.display_name = dict_value(dict, "display_name", std::string{});
             state.tier = dict_value(dict, "tier", std::string{});
             state.tooltip = dict_value(dict, "tooltip", std::string{});
             return state;
@@ -591,16 +595,26 @@ namespace lfs::python {
         }
     } // namespace
 
-    void shutdown_store_bridge() {
-        if (!can_acquire_gil())
-            return;
-
-        const GilAcquire gil;
+    void clear_store_subscriptions() {
         std::unordered_map<std::uint64_t, std::shared_ptr<PyStoreSubscription>> subscriptions;
         {
             std::lock_guard lock(g_subscriptions_mutex);
             subscriptions.swap(g_subscriptions);
         }
+    }
+
+    void shutdown_store_bridge() {
+        if (!can_acquire_gil())
+            return;
+
+        const GilAcquire gil;
+        clear_store_subscriptions();
+    }
+
+    void shutdown_store_bridge_at_exit() {
+        // Python invokes atexit handlers with the GIL held. A standalone
+        // extension import never sets the app runtime's GIL-ready flag.
+        clear_store_subscriptions();
     }
 
     void register_store(nb::module_& ui_module) {
@@ -612,6 +626,8 @@ namespace lfs::python {
         store.def("begin_batch", &begin_batch, "Begin a batched app store update");
         store.def("end_batch", &end_batch, "End a batched app store update");
         store.def("_drain_for_tests", &drain_for_tests, "Drain pending app store notifications in tests");
+        nb::module_::import_("atexit").attr("register")(
+            nb::cpp_function(&shutdown_store_bridge_at_exit));
     }
 
 } // namespace lfs::python

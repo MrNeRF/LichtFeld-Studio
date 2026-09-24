@@ -3,18 +3,9 @@
 """Select menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action, menu_separator
+from .layouts.menus import keymap_shortcut, register_menu, menu_action, menu_separator
 
 __lfs_menu_classes__ = ["SelectMenu"]
-
-
-def _shortcut(action, fallback):
-    try:
-        if not lf.keymap.is_bound(action, lf.keymap.ToolMode.GLOBAL):
-            return ""
-        return lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.GLOBAL)
-    except (AttributeError, RuntimeError, TypeError):
-        return fallback
 
 
 def _can_edit_selection():
@@ -87,38 +78,38 @@ class SelectMenu:
             menu_action(
                 tr("menu.select.copy_selection"),
                 lf.ui.copy_gaussian_selection,
-                shortcut=_shortcut(action.COPY_SELECTION, "Ctrl+C"),
+                shortcut=keymap_shortcut(action.COPY_SELECTION),
                 enabled=can_edit and has_selection,
             ),
             menu_action(
                 tr("menu.select.cut_selection"),
                 lf.ui.cut_gaussian_selection,
-                shortcut=_shortcut(action.CUT_SELECTION, "Ctrl+X"),
+                shortcut=keymap_shortcut(action.CUT_SELECTION),
                 enabled=can_edit and has_selection,
             ),
             menu_action(
                 tr("menu.select.paste_selection"),
                 lf.ui.paste_gaussian_selection,
-                shortcut=_shortcut(action.PASTE_SELECTION, "Ctrl+V"),
+                shortcut=keymap_shortcut(action.PASTE_SELECTION),
                 enabled=can_edit and has_clipboard,
             ),
             menu_separator(),
             menu_action(
                 tr("menu.select.invert_selection"),
                 lf.ui.invert_gaussian_selection,
-                shortcut=_shortcut(action.INVERT_SELECTION, "Ctrl+I"),
+                shortcut=keymap_shortcut(action.INVERT_SELECTION),
                 enabled=can_edit,
             ),
             menu_action(
                 tr("menu.select.select_all"),
                 lf.ui.select_all_gaussians,
-                shortcut=_shortcut(action.SELECT_ALL, "Ctrl+A"),
+                shortcut=keymap_shortcut(action.SELECT_ALL),
                 enabled=can_edit and selection_tool_active,
             ),
             menu_action(
                 tr("menu.select.deselect_all"),
                 lf.ui.deselect_all_gaussians,
-                shortcut=_shortcut(action.DESELECT_ALL, "Ctrl+D"),
+                shortcut=keymap_shortcut(action.DESELECT_ALL),
                 enabled=can_edit and has_selection,
             ),
             menu_separator(),

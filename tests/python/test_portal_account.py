@@ -94,6 +94,67 @@ def test_busy_tracks_account_worker_lifetime(tmp_path, worker):
     assert account.busy is False
 
 
+def test_saved_authorization_is_visible_while_connection_is_switched_off(tmp_path):
+    path = tmp_path / "credentials.json"
+    write_credentials(path, connection_enabled=False)
+
+    account = portal_account.PortalAccountService(credentials_path=path)
+
+    assert account.snapshot().signed_in is False
+    assert account.snapshot().authorized is True
+    from lfs_plugins.portal_connection_ui import connection_state
+    assert connection_state(account.snapshot()) == "switched_off"
+
+
+def test_action_waits_for_successful_connection_and_runs_once(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    scheduled = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+    monkeypatch.setattr(account, "_run_connection_action", scheduled.append)
+
+    assert account.run_after_connection(lambda: actions.append("publish")) is True
+    assert actions == [] and len(account._connection_actions) == 1
+
+    account._snapshot = replace(account.snapshot(), signed_in=True)
+    account._run_pending_connection_actions()
+    account._run_pending_connection_actions()
+    assert len(scheduled) == 1
+    scheduled.pop()()
+    assert actions == ["publish"]
+
+
+def test_action_waits_for_profile_identity_after_device_approval(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    scheduled = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+    monkeypatch.setattr(account, "_run_connection_action", scheduled.append)
+    account.run_after_connection(lambda: actions.append("publish"))
+
+    credentials = account._credentials_from_token_pair(token_pair())
+    account._apply_credentials_state(credentials)
+    assert scheduled == []
+
+    account._apply_credentials_state(replace(credentials, email="ada@example.com",
+                                             connected_since="2026-09-24T11:00:00Z"))
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert actions == ["publish"]
+
+
+def test_cancelled_connection_drops_pending_action(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+
+    account.run_after_connection(lambda: actions.append("check"))
+    account._finish_device_flow("")
+
+    assert actions == []
+    assert account._connection_actions == []
+
+
 def test_gallery_request_rejects_different_session_before_network(tmp_path, monkeypatch):
     path = tmp_path / "credentials.json"
     write_credentials(path)
@@ -184,6 +245,7 @@ def write_credentials(
     refresh_expires_at=None,
     display_name="Ada Lovelace",
     tier="Professional",
+    connection_enabled=True,
 ):
     now = time.time()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +263,7 @@ def write_credentials(
                 "customer_tier": tier,
                 "member_since": "2025-01-02T03:04:05Z",
                 "connected_since": "2026-02-03T04:05:06Z",
+                "connection_enabled": connection_enabled,
             }
         ),
         encoding="utf-8",

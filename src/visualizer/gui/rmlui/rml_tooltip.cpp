@@ -19,22 +19,25 @@
 namespace lfs::vis::gui {
 
     namespace {
-        std::string actionShortcut(std::string_view action_name) {
+        std::string actionShortcut(std::string_view action_name, std::string_view mode_name) {
             if (action_name.empty())
                 return {};
             const auto action = lfs::vis::input::actionFromName(action_name);
             if (!action)
                 return {};
             const auto* const bindings = lfs::python::get_keymap_bindings();
-            if (!bindings || !bindings->getEffectiveTriggerForAction(*action))
+            const auto mode = lfs::vis::input::toolModeFromName(mode_name);
+            if (!bindings || !bindings->getEffectiveTriggerForAction(*action, mode))
                 return {};
-            return bindings->getLocalizedTriggerDescription(*action);
+            return bindings->getLocalizedTriggerDescription(*action, mode);
         }
 
         std::string appendShortcut(Rml::Element* el, std::string text) {
-            auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
-            if (shortcut.empty())
-                shortcut = actionShortcut(el->GetAttribute<Rml::String>("data-action", ""));
+            const auto explicit_action = el->GetAttribute<Rml::String>("data-keymap-action", "");
+            const auto shortcut = actionShortcut(explicit_action.empty()
+                                                     ? el->GetAttribute<Rml::String>("data-action", "")
+                                                     : explicit_action,
+                                                 el->GetAttribute<Rml::String>("data-keymap-mode", ""));
             if (!shortcut.empty())
                 text.append(" (").append(shortcut).append(")");
             return text;

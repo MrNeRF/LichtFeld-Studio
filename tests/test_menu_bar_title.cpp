@@ -1,8 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rml_menu_bar.hpp"
+#include "input/input_bindings.hpp"
+#include "python/python_runtime.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <RmlUi/Core.h>
@@ -40,6 +44,7 @@ namespace lfs::vis::gui {
             bar.project_title_el_ = doc->GetElementById("project-title-content");
         }
         static RmlTooltipController& tooltip(RmlMenuBar& bar) { return bar.tooltip_; }
+        static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
             bar.updateProjectTitleLayout(width, dp);
         }
@@ -57,6 +62,7 @@ namespace lfs::vis::gui {
 
 namespace {
     using lfs::vis::ProjectDisplayInfo;
+    using lfs::vis::gui::resolveRmlTooltip;
     using lfs::vis::gui::RmlMenuBarTestAccess;
 
     class TitleRenderInterface final : public Rml::RenderInterface {
@@ -103,11 +109,16 @@ namespace {
     protected:
         static void SetUpTestSuite() {
             ASSERT_TRUE(Rml::Initialise());
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
             ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
                                            "src/visualizer/gui/assets/fonts/Inter-Regular.ttf")
                                               .string()));
         }
-        static void TearDownTestSuite() { Rml::Shutdown(); }
+        static void TearDownTestSuite() {
+            lfs::event::LocalizationManager::getInstance().reset();
+            Rml::Shutdown();
+        }
         void SetUp() override {
             context_ = Rml::CreateContext("menu_bar_title_test", {1600, 300}, &renderer_);
             ASSERT_NE(context_, nullptr);
@@ -182,6 +193,53 @@ namespace {
         }
     }
 
+    TEST_F(MenuBarTitleTest, PortalStatusKeepsLongNameInTooltipAtNarrowWidth) {
+        auto& store = lfs::vis::app_store();
+        const auto previous = store.account_state.get();
+        const std::string name = "Katharina Theodora Extremely Long Display Name Example";
+        store.account_state.set(lfs::vis::AppStore::AccountState{
+            .signed_in = true,
+            .authorized = true,
+            .label = "KE",
+            .display_name = name,
+        });
+        RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
+        resize(1280);
+        EXPECT_EQ(textContent(el("menu-portal-connection")), "KE · Portal");
+        const auto tooltip = el("menu-portal-connection")->GetAttribute<Rml::String>("title", "");
+        EXPECT_NE(tooltip.find("Portal connected as " + name), std::string::npos);
+        EXPECT_EQ(textContent(el("menu-portal-connection")).find(name), std::string::npos);
+        store.account_state.set(previous);
+    }
+
+    TEST_F(MenuBarTitleTest, PortalStatusShowsSpecificTransitionLabels) {
+        auto& store = lfs::vis::app_store();
+        const auto previous_account = store.account_state.get();
+        const auto previous_gallery = store.gallery_state.get();
+        store.gallery_state.set({});
+        const auto label_for = [&](lfs::vis::AppStore::AccountState state) {
+            store.account_state.set(std::move(state));
+            RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
+            context_->Update();
+            return textContent(el("menu-portal-connection"));
+        };
+        EXPECT_EQ(label_for({}), "Portal: Not connected");
+        EXPECT_EQ(label_for({.authorized = true}), "Portal connected, switched off");
+        EXPECT_EQ(label_for({.linking = true, .label = "ABCD-EFGH"}), "Portal: Connecting… ABCD-EFGH");
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .disconnecting = true, .label = "KT", .display_name = "Kay Test"}),
+                  "Portal: Disconnecting…");
+        auto approval_gallery = previous_gallery;
+        approval_gallery.relink_required = true;
+        store.gallery_state.set(approval_gallery);
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
+                  "Portal: Approval needed");
+        store.gallery_state.set({});
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
+                  "KT · Portal");
+        store.account_state.set(previous_account);
+        store.gallery_state.set(previous_gallery);
+    }
+
     TEST_F(MenuBarTitleTest, AccountsForPendingToolbarPlacementInTheSameFrame) {
         // SetProperty is pending until Update. The layout code must use the new
         // placement selected by the caller, not the toolbar's stale Rml box.
@@ -253,6 +311,60 @@ namespace {
                 EXPECT_NE(textContent(marker).find('*'), std::string::npos);
             EXPECT_EQ(titleText(), "Scene");
         }
+    }
+
+    TEST_F(MenuBarTitleTest, ShortcutTooltipTracksBindingAndUnbinding) {
+        using namespace lfs::vis::input;
+        EXPECT_EQ(toolModeFromName("global"), ToolMode::GLOBAL);
+        EXPECT_EQ(toolModeFromName("selection"), ToolMode::SELECTION);
+        EXPECT_EQ(toolModeFromName("translate"), ToolMode::TRANSLATE);
+        EXPECT_EQ(toolModeFromName("rotate"), ToolMode::ROTATE);
+        EXPECT_EQ(toolModeFromName("scale"), ToolMode::SCALE);
+        EXPECT_EQ(toolModeFromName("align"), ToolMode::ALIGN);
+        EXPECT_EQ(toolModeFromName("crop_box"), ToolMode::CROP_BOX);
+        EXPECT_EQ(toolModeFromName("SeLeCtIoN"), ToolMode::SELECTION);
+        EXPECT_EQ(toolModeFromName("unknown"), ToolMode::GLOBAL);
+        InputBindings bindings;
+        lfs::python::set_keymap_bindings(&bindings);
+        auto button = document_->CreateElement("button");
+        button->SetAttribute("title", "Home");
+        button->SetAttribute("data-action", "camera_reset_home");
+        button->SetAttribute("data-shortcut", "stale");
+        auto* element = document_->AppendChild(std::move(button));
+        const auto initial = bindings.getLocalizedTriggerDescription(Action::CAMERA_RESET_HOME);
+        EXPECT_EQ(resolveRmlTooltip(element), "Home (" + initial + ")");
+        bindings.setBinding(ToolMode::GLOBAL, Action::CAMERA_RESET_HOME, KeyTrigger{KEY_F6});
+        const auto rebound = bindings.getLocalizedTriggerDescription(Action::CAMERA_RESET_HOME);
+        EXPECT_EQ(resolveRmlTooltip(element), "Home (" + rebound + ")");
+        bindings.clearBinding(ToolMode::GLOBAL, Action::CAMERA_RESET_HOME);
+        EXPECT_EQ(resolveRmlTooltip(element), "Home");
+
+        auto selection_button = document_->CreateElement("button");
+        selection_button->SetAttribute("title", "Depth filter");
+        selection_button->SetAttribute("data-action", "toggle_depth_view");
+        selection_button->SetAttribute("data-keymap-action", "toggle_selection_depth_filter");
+        selection_button->SetAttribute("data-keymap-mode", "selection");
+        auto* selection_element = document_->AppendChild(std::move(selection_button));
+        const auto selection_shortcut = bindings.getLocalizedTriggerDescription(
+            Action::TOGGLE_SELECTION_DEPTH_FILTER, ToolMode::SELECTION);
+        EXPECT_EQ(resolveRmlTooltip(selection_element), "Depth filter (" + selection_shortcut + ")");
+        bindings.clearBinding(ToolMode::SELECTION, Action::TOGGLE_SELECTION_DEPTH_FILTER);
+        EXPECT_EQ(resolveRmlTooltip(selection_element), "Depth filter");
+
+        auto& locale = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(locale.initialize((std::filesystem::path(PROJECT_ROOT_PATH) /
+                                       "src/visualizer/gui/resources/locales")
+                                          .string()));
+        ASSERT_TRUE(locale.setLanguage("de"));
+        auto orbit_button = document_->CreateElement("button");
+        orbit_button->SetAttribute("title", "Orbit");
+        orbit_button->SetAttribute("data-action", "camera_orbit");
+        auto* orbit_element = document_->AppendChild(std::move(orbit_button));
+        const auto localized = bindings.getLocalizedTriggerDescription(Action::CAMERA_ORBIT);
+        EXPECT_NE(localized.find("Ziehen"), std::string::npos);
+        EXPECT_EQ(resolveRmlTooltip(orbit_element), "Orbit (" + localized + ")");
+        EXPECT_TRUE(locale.setLanguage("en"));
+        lfs::python::set_keymap_bindings(nullptr);
     }
 
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {

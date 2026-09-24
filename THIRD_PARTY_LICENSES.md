@@ -92,6 +92,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## Utilities
 | Project | Description | License |
 |---------|-------------|---------|
+| [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library) | Python QR encoder | MIT |
 | [spdlog](https://github.com/gabime/spdlog) | Fast C++ logging library | MIT |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | HTTP/HTTPS library | MIT |
 | [FreeType](https://freetype.org/) | Font rendering library | FreeType License |

@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/resize_geometry.hpp"
 #include "gui/ui_context.hpp"
 #include "input/frame_input_buffer.hpp"
 #include <algorithm>
@@ -184,13 +185,11 @@ namespace lfs::vis::gui {
         [[nodiscard]] static LeftDockResizeRect leftDockResizeRect(float work_x, float work_y,
                                                                    float work_h, float dpi,
                                                                    float dock_width) {
-            const float edge_grab_w = std::min(std::max(SPLITTER_H * dpi, 8.0f * dpi), TOOLBAR_INSET * dpi);
-            const float panel_right_x = work_x + dock_width;
+            // The dock content stops before the inner half of this zone, so scrollbar drags never start a resize.
+            const auto edge_zone = resizeHitZone(work_x + dock_width, dpi);
             return LeftDockResizeRect{
-                // Keep the shared hit area outside the dock so scrollbar drags
-                // never start a resize, including native Wayland hit testing.
-                .x0 = panel_right_x,
-                .x1 = panel_right_x + edge_grab_w,
+                .x0 = edge_zone.min,
+                .x1 = edge_zone.max,
                 .y0 = work_y,
                 .y1 = work_y + work_h,
             };
@@ -202,13 +201,13 @@ namespace lfs::vis::gui {
 
         CursorRequest getCursorRequest() const { return cursor_request_; }
 
-        void applyResizeDelta(float dx, const ScreenState& screen);
+        void setRightPanelWidth(float width, const ScreenState& screen);
         void enforceWidthConstraints(bool show_main_panel, bool ui_hidden,
                                      const ScreenState& screen);
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
-        void adjustScenePanelRatio(float delta_y, const ScreenState& screen);
+        void setScenePanelHeight(float height, float panel_height);
         float getPythonConsoleWidth() const { return python_console_width_; }
         float getBottomDockHeight() const { return bottom_dock_height_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
@@ -263,15 +262,18 @@ namespace lfs::vis::gui {
         float python_console_width_ = -1.0f;
         bool python_console_resizing_ = false;
         bool python_console_hovering_edge_ = false;
+        ResizeDrag python_console_drag_{};
         float bottom_dock_height_ = 320.0f;
         bool bottom_dock_resizing_ = false;
         bool bottom_dock_hovering_edge_ = false;
+        ResizeDrag bottom_dock_drag_{};
         bool bottom_dock_visible_ = false;
         float bottom_dock_top_y_ = -1.0f;
 
         float left_dock_width_ = 320.0f;
         bool left_dock_resizing_ = false;
         bool left_dock_hovering_edge_ = false;
+        ResizeDrag left_dock_drag_{};
         bool left_dock_visible_ = false;
 
         bool show_sequencer_ = false;
@@ -287,8 +289,6 @@ namespace lfs::vis::gui {
         float tab_content_total_h_ = 0.0f;
 
         CursorRequest cursor_request_ = CursorRequest::None;
-        float prev_mouse_x_ = 0;
-        float prev_mouse_y_ = 0;
 
         static constexpr float RIGHT_PANEL_MIN_RATIO = 0.01f;
         static constexpr float RIGHT_PANEL_MAX_RATIO = 0.99f;

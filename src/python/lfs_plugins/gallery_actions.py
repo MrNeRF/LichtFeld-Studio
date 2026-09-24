@@ -19,7 +19,8 @@ def gallery_quota(facts):
 
 def gallery_eligibility(entry, facts):
     reasons = []
-    if not facts.get("signed_in", True) or facts.get("relink_required"):
+    if (facts.get("connection_state", "connected" if facts.get("signed_in", True) else "not_connected") != "connected"
+            or facts.get("relink_required")):
         reasons.append("connect")
     if facts.get("busy") or facts.get("active"):
         reasons.append("busy")
@@ -69,7 +70,12 @@ def gallery_actions(entry, facts):
     """
     entry = entry or {}
     actions = []
-    connected = facts.get("signed_in", True) and not facts.get("relink_required")
+    from .portal_connection_ui import connection_action
+
+    connection_state = facts.get("connection_state", "connected")
+    connection_action_id, connection_label_key = connection_action(connection_state)
+    connected = (connection_action_id is None and connection_state == "connected"
+                 and not facts.get("relink_required"))
     busy = bool(facts.get("busy"))
     eligibility = gallery_eligibility(entry, facts)
 
@@ -80,8 +86,13 @@ def gallery_actions(entry, facts):
             enabled, reason = False, tr("eligibility.connect")
         elif not enabled and not reason and busy:
             reason = tr("eligibility.busy")
+        if label and label.startswith("portal."):
+            import lichtfeld as lf
+            label = lf.ui.tr(label)
+        else:
+            label = tr(label or "action." + identifier)
         actions.append(dict(id=identifier, enabled=bool(enabled), reason=reason,
-                            label=tr(label or "action." + identifier), primary=not actions))
+                            label=label, primary=not actions))
 
     if ((not entry.get("exists", True) and facts.get("state") == "unlinked")
             or entry.get("status") in FILE_PROBLEMS
@@ -159,12 +170,20 @@ def gallery_actions(entry, facts):
                 "remote_content": "apply", "presentation": "open", "remote_only": "pull",
                 "local_missing": "pull", "remote_deleted": "publish_again", "unknown": "check",
                 "not_checked": "check"}.get(state)
+        if (verb == "check" and state == "not_checked" and not connected
+                and facts.get("relationship") == "unlinked" and not entry.get("remote_only")):
+            # The row's connection action retains the intended publish. Its
+            # review opens after the first account-specific Gallery check.
+            verb = "publish"
         if facts.get("viewingCopy") and verb in ("update", "open", "apply"):
             add("publish_new", enabled=not busy and eligibility["status"] != "blocked", reason=eligibility["reason"])
         if verb:
             publishing = verb in ("publish", "update", "publish_again")
-            add(verb, enabled=not busy and (not publishing or eligibility["status"] != "blocked"),
-                reason=eligibility["reason"] if publishing else "")
+            blocked = [reason for reason in eligibility["reasons"] if reason != "connect"]
+            label = connection_label_key if not connected else None
+            add(verb, enabled=not busy and (not publishing or not blocked),
+                reason="\n".join(tr("eligibility." + reason) for reason in blocked) if publishing else "",
+                account=not publishing, label=label)
     if entry.get("remote_only"):
         add("pull_open", enabled=not busy)
     if facts.get("sceneReady"):

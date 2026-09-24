@@ -696,6 +696,30 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
 
         controller = get_gallery_controller()
         state = controller.snapshot()
+        from .portal_connection_ui import connection_state
+        account = getattr(getattr(controller, "service", None), "account", None)
+        gallery_connection_state = connection_state(account.snapshot() if account else None)
+        if account is not None and gallery_connection_state != "connected":
+            def continue_after_connection():
+                if connection_state(account.snapshot()) != "connected":
+                    return
+                current = str(lf.project_poll_write().get("path") or "")
+                if not current or Path(current).resolve() != project_path:
+                    return
+                controller.refresh(force=True)
+                expected_identity = controller.service.identity()
+
+                def continue_after_refresh():
+                    state = controller.snapshot()
+                    if (controller.service.identity() == expected_identity
+                            and state.get("checkedAt") and not state.get("offline")
+                            and Path(str(lf.project_poll_write().get("path") or "")).resolve() == project_path):
+                        _publish_current_project_to_gallery(refresh_once=False)
+
+                controller._after_service = continue_after_refresh
+
+            account.run_after_connection(continue_after_connection)
+            return
         link = state.get("links", {}).get(project_id)
         scene = None
         if link:
@@ -761,6 +785,7 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
                         "quotaBytes", "usedBytes", "reservedBytes", "hdrBackgrounds"):
                 if key in state:
                     facts[key] = state[key]
+            facts["connection_state"] = gallery_connection_state
             primary = next((item for item in gallery_actions(asset, facts) if item["primary"]), None)
             action = _file_menu_publish_action(primary, link)
             if action is None:

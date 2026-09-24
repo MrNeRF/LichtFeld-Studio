@@ -11,12 +11,14 @@ from .asset_watch import scan_all_asset_folders, scan_asset_folder
 from .keymap_bindings import KeymapBindingsSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .ui import PanelStateBinding, RuntimeState
 from .panels import panel_class
 from .project_manager_preferences import (
     read_preferences as read_project_manager_preferences,
     reset_preferences as reset_project_manager_preferences,
     set_preference as set_project_manager_preference,
 )
+from .portal_connection_ui import connection_action, connection_state
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
@@ -107,6 +109,7 @@ class PreferencesPanel(Panel):
         self._document = None
         self._file_associations = []
         self._mount_count = 0
+        self._portal_state_binding = PanelStateBinding()
         self._scrub_fields = ScrubFieldController(
             self.SPEED_SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -138,7 +141,21 @@ class PreferencesPanel(Panel):
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
         model.bind_func("show_mcp", lambda: self._section == "mcp")
-        model.bind_func("show_section_reset", lambda: True)
+        model.bind_func("show_portal", lambda: self._section == "portal")
+        for name, getter in (
+            ("portal_connection_status", self._portal_connection_status),
+            ("portal_connection_since", self._portal_connection_since),
+            ("portal_user_code", self._portal_user_code),
+            ("portal_verification_qr", self._portal_verification_qr),
+            ("portal_qr_alt", lambda: lf.ui.tr("portal.preferences.qr_alt")),
+            ("portal_connect_visible", lambda: self._portal_connection_action() == "connect"),
+            ("portal_turn_on_visible", lambda: self._portal_connection_action() == "turn_on"),
+            ("portal_disconnect_visible", lambda: self._portal_connection_state() == "connected"),
+            ("portal_linking", lambda: self._portal_connection_snapshot().linking),
+            ("portal_code_visible", lambda: bool(self._portal_user_code())),
+        ):
+            model.bind_func(name, getter)
+        model.bind_func("show_section_reset", self._show_section_reset)
         model.bind_func("reset_section_label", self._reset_section_label)
         for section in self.EXPANDABLE_SECTIONS:
             model.bind_func(
@@ -247,6 +264,13 @@ class PreferencesPanel(Panel):
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
+        model.bind_event("show_portal", lambda *_: self._set_section("portal"))
+        model.bind_event("portal_connect", lambda *_: self._portal_account().start_device_flow())
+        model.bind_event("portal_turn_on", lambda *_: self._portal_account().start_device_flow())
+        model.bind_event("portal_disconnect", lambda *_: self._portal_account().disconnect_async())
+        model.bind_event("portal_cancel", lambda *_: self._portal_account().cancel_device_flow())
+        model.bind_event("portal_copy_code", self._copy_portal_code)
+        model.bind_event("portal_open", self._open_portal_verification)
         model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
@@ -271,6 +295,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("navigation_modes")
         model.bind_record_list("file_associations")
         self._handle = model.get_handle()
+        self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
         self._reload_file_associations()
 
@@ -284,6 +309,21 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._portal_state_binding.close()
+        self._portal_state_binding.watch(
+            RuntimeState.account_state,
+            dirty=(
+                "portal_connection_status",
+                "portal_connection_since",
+                "portal_user_code",
+                "portal_verification_qr",
+                "portal_connect_visible",
+                "portal_turn_on_visible",
+                "portal_disconnect_visible",
+                "portal_linking",
+                "portal_code_visible",
+            ),
+        )
         self._mount_count += 1
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
@@ -301,6 +341,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._portal_state_binding.close()
         self._scrub_fields.unmount()
         self._keymap.on_unmount()
         self._document = None
@@ -1347,10 +1388,82 @@ class PreferencesPanel(Panel):
                 "show_file_associations",
                 "has_file_associations",
                 "show_mcp",
+                "show_portal",
                 "show_section_reset",
                 "reset_section_label",
             ):
                 self._handle.dirty(name)
+
+    @staticmethod
+    def _portal_account():
+        from .portal_account import get_portal_account_service
+        return get_portal_account_service()
+
+    def _portal_connection_snapshot(self):
+        return self._portal_account().snapshot()
+
+    def _portal_connection_state(self):
+        return connection_state(self._portal_connection_snapshot())
+
+    def _portal_connection_action(self):
+        return connection_action(self._portal_connection_state())[0]
+
+    def _show_section_reset(self):
+        return self._section != "portal"
+
+    def _portal_connection_status(self):
+        account = self._portal_connection_snapshot()
+        status = connection_state(account)
+        _action, label_key = connection_action(status)
+        if status == "connected" and account.display_name:
+            label = lf.ui.tr(label_key)
+            return label.replace("{name}", account.display_name)
+        if status == "busy":
+            return lf.ui.tr(label_key)
+        if status == "connected":
+            return lf.ui.tr("portal.status.connected")
+        return lf.ui.tr({
+            "switched_off": "portal.status.switched_off",
+            "not_connected": "portal.status.disconnected",
+        }.get(status, label_key))
+
+    def _portal_connection_since(self):
+        account = self._portal_account().snapshot()
+        if not account.signed_in or not account.connected_since:
+            return ""
+        return account.connected_since[:10]
+
+    def _portal_user_code(self):
+        return self._portal_account().snapshot().user_code
+
+    def _portal_verification_qr(self):
+        account = self._portal_account()
+        url = account.snapshot().verification_uri_complete
+        from .portal_connection_ui import qr_image_path
+        path = account.credentials_path.parent / "portal-approval-qr.png"
+        if not url:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return ""
+        from .portal_security import checked_portal_url
+        try:
+            return qr_image_path(checked_portal_url(account, url), path.parent)
+        except ValueError:
+            return ""
+
+    def _copy_portal_code(self, *_args):
+        code = self._portal_user_code()
+        if code:
+            lf.ui.set_clipboard_text(code)
+
+    def _open_portal_verification(self, *_args):
+        account = self._portal_account()
+        url = account.snapshot().verification_uri_complete
+        if url:
+            from .portal_security import checked_portal_url
+            lf.ui.open_url(checked_portal_url(account, url))
 
     def _on_toggle_section(self, _handle, _event, args):
         if not args:
@@ -1376,6 +1489,8 @@ class PreferencesPanel(Panel):
         return lf.ui.tr("preferences.reset_current_section")
 
     def _on_reset_current_section(self, _handle, _event, _args):
+        if self._section == "portal":
+            return
         reset_label = self._reset_section_label()
         section_name = lf.ui.tr(f"preferences.{self._section}")
 
@@ -1433,6 +1548,8 @@ class PreferencesPanel(Panel):
 
     def _reset_section(self, section=None):
         section = section or self._section
+        if section == "portal":
+            return None
         if section == "general":
             lf.ui.set_tensor_backend_preferences()
             if self._handle:

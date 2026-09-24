@@ -137,6 +137,9 @@
 
 #asset-shell.is-floating {
     padding-top: 10dp;
+    padding-right: 6dp;
+    padding-bottom: 6dp;
+    box-sizing: border-box;
 }
 
 #asset-popup {
@@ -862,8 +865,9 @@
 .asset-results-stack { display: flex; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow: hidden; }
 
 .asset-resize-handle { flex: 0 0 auto; z-index: 2; background-color: transparent; }
+.inspector-resize-handle { display: none; position: relative; flex: 0 0 8dp; width: 8dp; min-width: 8dp; height: 100%; margin-left: -4dp; margin-right: -4dp; z-index: 20; cursor: resize-horizontal; }
 .asset-resize-handle--horizontal { display: none; position: relative; width: 100%; height: 12dp; min-height: 12dp; flex: 0 0 12dp; margin: 0; z-index: 20; cursor: resize-vertical; }
-.asset-resize-handle-line { position: absolute; left: 0; right: 0; top: 5dp; height: 1dp; pointer-events: none; }
+.asset-resize-handle-line { position: absolute; left: 0; right: 0; top: 6dp; height: 1dp; pointer-events: none; }
 #asset-gallery { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; }
 .asset-gallery-header { flex: 0 0 auto; min-width: 0; }
 .asset-gallery-header-row { min-height: 32dp; display: flex; align-items: center; gap: 8dp; padding: 4dp 12dp; }
@@ -908,7 +912,7 @@
 .asset-list-header { height: 40dp; min-height: 40dp; }
 #asset-gallery > .asset-list-header { width: auto; margin: 0 12dp; padding: 0 8dp; border-width: 0; }
 .asset-list-row { position: relative; height: 40dp; min-height: 40dp; padding: 0 8dp; border-width: 0; border-bottom-width: 1dp; }
-.asset-list-header .asset-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-list-header .asset-col { white-space: nowrap; overflow: visible; }
 .asset-list-header-spacer { visibility: hidden; }
 .asset-list-menu-spacer { flex: 0 0 32dp; width: 32dp; min-width: 32dp; visibility: hidden; }
 .asset-list-menu { flex: 0 0 24dp; width: 24dp; min-width: 24dp; visibility: visible; margin: 0 4dp; }
@@ -926,7 +930,7 @@
 .asset-list-header .asset-col { position: relative; display: flex; flex-direction: row; align-items: center; height: 24dp; padding: 0; font-family: Inter; font-size: 12dp; font-weight: 400; }
 .asset-list-column-handle {
     position: absolute;
-    right: 0;
+    right: -4dp;
     top: 0;
     width: 8dp;
     min-width: 8dp;
@@ -935,6 +939,7 @@
     border-right-width: 1dp;
     border-right-color: transparent;
     cursor: ew-resize;
+    z-index: 20;
 }
 .asset-list-header .asset-col-gallery, .asset-list-row .asset-col-gallery { flex: 0 0 auto; min-width: 0; }
 .asset-scroll-shell-list.show-folder .asset-col-folder { display: block; }
@@ -997,7 +1002,10 @@
 .asset-shell.is-wide #asset-main-row { flex-direction: row; }
 .asset-shell.is-wide .asset-results-stack { flex-direction: row; }
 .asset-shell.is-floating #asset-popup { min-width: 260dp; min-height: 360dp; }
-.asset-shell.is-wide .inspector-resize-handle { display: none; }
+.asset-shell.inspector-expanded.is-wide .inspector-resize-handle,
+.asset-shell.inspector-expanded.is-medium .inspector-resize-handle { display: block; }
+.asset-shell.is-wide .asset-results-stack,
+.asset-shell.is-medium .asset-results-stack { box-sizing: border-box; padding-right: 4dp; }
 .asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector {
     position: relative;
     right: auto;
@@ -1014,7 +1022,6 @@
 .asset-shell.is-medium .asset-results-stack { flex-direction: row; }
 .asset-shell.is-medium .asset-info-asset-layout { flex-direction: column; }
 
-.asset-shell.is-medium .inspector-resize-handle { display: none; }
 .asset-shell.is-narrow .asset-results-stack, .asset-shell.is-compact .asset-results-stack { flex-direction: column; }
 .asset-shell.inspector-expanded.is-narrow .asset-resize-handle--horizontal,
 .asset-shell.inspector-expanded.is-compact .asset-resize-handle--horizontal {

@@ -826,14 +826,11 @@ apply_registered_chrome:
             layout.mouse_in_titlebar =
                 mouse_x >= px && mouse_x < px + w && mouse_y >= py && mouse_y < py + kTitleH;
 
-            const bool on_left =
-                mouse_x >= px - kResizeEdge && mouse_x < px + kResizeEdge;
-            const bool on_right =
-                mouse_x >= px + w - kResizeEdge && mouse_x < px + w + kResizeEdge;
-            const bool on_top =
-                mouse_y >= py - kResizeEdge && mouse_y < py + kResizeEdge;
-            const bool on_bottom =
-                mouse_y >= py + h - kResizeEdge && mouse_y < py + h + kResizeEdge;
+            const float resize_scale = floatingUiScale();
+            const bool on_left = resizeHitZone(px, resize_scale, 6.0f).contains(mouse_x);
+            const bool on_right = resizeHitZone(px + w, resize_scale, 6.0f).contains(mouse_x);
+            const bool on_top = resizeHitZone(py, resize_scale, 6.0f).contains(mouse_y);
+            const bool on_bottom = resizeHitZone(py + h, resize_scale, 6.0f).contains(mouse_y);
             const bool on_edge_x = on_left || on_right;
             const bool on_edge_y = on_top || on_bottom;
             const bool in_y_range =
@@ -914,6 +911,7 @@ apply_registered_chrome:
                         float py = layout.pos_y;
                         float drawn_h = layout.drawn_height;
                         bool has_user_height = layout.has_user_height;
+                        bool resize_owns_input = false;
 
                         const float kMinPanelWidth = (snap.id == "lfs.asset_manager" ? 260.0f : 320.0f) * dpi;
                         const float kMinPanelHeight = 180.0f * dpi;
@@ -1003,6 +1001,8 @@ apply_registered_chrome:
                                         interaction.resize_direction_y = 0;
                                     }
                                 }
+                                resize_owns_input = interaction.resizing ||
+                                                    (hovered_this_panel && layout.mouse_in_resize_grip);
 
                                 if (!interaction.resizing && interaction.user_height > 0 &&
                                     drawn_h <= 0) {
@@ -1049,6 +1049,23 @@ apply_registered_chrome:
                         }
 
                         const float forced = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
+                        PanelInputState masked_resize_input;
+                        const PanelInputState* panel_input = input;
+                        if (resize_owns_input && input) {
+                            masked_resize_input = *input;
+                            masked_resize_input.mouse_x = -1.0e9f;
+                            masked_resize_input.mouse_y = -1.0e9f;
+                            for (auto& down : masked_resize_input.mouse_down)
+                                down = false;
+                            for (auto& clicked : masked_resize_input.mouse_clicked)
+                                clicked = false;
+                            for (auto& released : masked_resize_input.mouse_released)
+                                released = false;
+                            masked_resize_input.mouse_button_events.clear();
+                            masked_resize_input.mouse_wheel = 0.0f;
+                            masked_resize_input.mouse_wheel_x = 0.0f;
+                            panel_input = &masked_resize_input;
+                        }
                         const auto result = snap.panel->renderDirect({
                                                                          .mode = PanelDirectRenderMode::Draw,
                                                                          .space = snap.space,
@@ -1057,7 +1074,7 @@ apply_registered_chrome:
                                                                          .width = w,
                                                                          .height = h,
                                                                          .forced_height = forced,
-                                                                         .input = input,
+                                                                         .input = panel_input,
                                                                      },
                                                                      ctx);
                         drawn_h = result.height;

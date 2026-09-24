@@ -120,6 +120,7 @@
                 <span class="asset-gallery-scan-status" data-if="has_scan_status">{{scan_status}}</span>
                 <button class="asset-button asset-button--icon asset-view-button asset-refresh-button"
                         data-class-is-stop="scan_active" data-event-click="refresh_catalog"
+                        data-keymap-action="asset_refresh"
                         data-attr-data-tooltip="refresh_action_tooltip" aria-label="{{refresh_action_tooltip}}">
                   <span class="asset-refresh-glyph" data-if="!scan_active">&#x21BB;</span>
                   <span class="asset-button-text" data-if="scan_active">{{stop_scan_label}}</span>
@@ -133,7 +134,7 @@
               <button class="btn btn--secondary" data-if="gallery_toast_open" data-event-click="gallery_toast_open">{{g_action_open_local}}</button>
             </div>
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
-            <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}}</div>
+            <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}} <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_needs_connection" data-event-click="gallery_refresh">{{gallery_connection_action_label}}</button></div>
             <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
             <div class="gallery-empty" data-if="no_folders">{{no_folders_label}}</div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
@@ -254,8 +255,8 @@
                     <div class="inspector-actions">
                       <button class="btn btn--primary asset-button--toolbar24" data-attr-data-asset-id="selected_asset_id" data-event-click="on_load_asset"><span>{{open_button_label}}</span></button>
                       <button class="btn btn--success asset-button--toolbar24" data-if="inspector_can_resume" data-event-click="on_load_asset" data-attr-title="resume_button_label"><span>{{resume_button_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attrif-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
-                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy"><span>{{g_action_copy}}</span></button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="inspector_has_gallery_action" data-attrif-disabled="!inspector_gallery_action_enabled" data-attr-data-asset-id="selected_asset_id" data-asset-action="gallery" data-keymap-action="asset_gallery_primary" data-attr-title="inspector_gallery_action_tooltip"><span>{{inspector_gallery_action_label}}</span></button>
+                      <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_can_copy" data-event-click="gallery_copy" data-keymap-action="asset_gallery_copy_link" data-attr-title="g_action_copy"><span>{{g_action_copy}}</span></button>
                       <button class="asset-button asset-button--small-icon inspector-more" data-event-click="open_inspector_menu" data-tooltip="common.more" data-attr-aria-label="inspector_more_label"><img src="../icon/more-vertical.png"/></button>
                     </div>
                   </div>

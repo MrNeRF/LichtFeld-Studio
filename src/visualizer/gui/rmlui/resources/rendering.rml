@@ -107,7 +107,7 @@
         <input type="checkbox" data-checked="show_pivot" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid" data-keymap-action="toggle_grid">
       <span class="setting-row__label-col">{{label_show_grid}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="show_grid" />
@@ -132,7 +132,7 @@
         </div>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustums">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustums" data-keymap-action="toggle_camera_frustums">
       <span class="setting-row__label-col">{{label_show_camera_frustums}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="show_camera_frustums" />

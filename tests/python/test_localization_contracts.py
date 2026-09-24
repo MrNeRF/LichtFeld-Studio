@@ -55,6 +55,20 @@ def _fields(text):
     ))
 
 
+def test_locale_markup_contract():
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import check_locale_completeness as audit
+    finally:
+        sys.path.pop(0)
+
+    assert audit.markup_findings("test.json", {"hint": "Use <path>"}, {"hint": "Use <path>"})
+    assert audit.markup_findings("test.json", {"hint": "<b>bold"}, {"hint": "<b>{}</b>"})
+    assert not audit.markup_findings("test.json", {"hint": "<b>{}</b>"}, {"hint": "<b>{}</b>"})
+    assert not audit.markup_findings("test.json", {"hint": "&lt;path&gt;"}, {"hint": "&lt;path&gt;"})
+    assert audit.markup_findings("test.json", {"hint": "plain"}, {"hint": "<b>bold</b>"})
+
+
 def test_shipped_locales_match_english_keys_and_placeholders():
     english = dict(_flatten(_load("en")))
     for path in sorted(LOCALES.glob("*.json")):

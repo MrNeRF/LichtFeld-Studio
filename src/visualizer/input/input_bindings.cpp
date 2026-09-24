@@ -1399,24 +1399,6 @@ namespace lfs::vis::input {
         }
     }
 
-    std::optional<Action> actionFromName(std::string_view name) {
-        static const auto table = [] {
-            std::unordered_map<std::string, Action> m;
-            for (int i = 0; i <= static_cast<int>(LAST_ACTION); ++i) {
-                const auto action = static_cast<Action>(i);
-                const auto key = actionNameKey(action);
-                if (!key.empty())
-                    m.emplace(key, action);
-            }
-            return m;
-        }();
-        std::string normalized(name);
-        std::ranges::transform(normalized, normalized.begin(),
-                               [](unsigned char c) { return std::tolower(c); });
-        const auto it = table.find(normalized);
-        return it == table.end() ? std::nullopt : std::optional<Action>(it->second);
-    }
-
     namespace {
         std::string lookupLocale(std::string_view key, std::string_view fallback) {
             if (key.empty())
@@ -1443,6 +1425,35 @@ namespace lfs::vis::input {
             {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
         };
     } // namespace
+
+    std::optional<Action> actionFromName(std::string_view name) {
+        static const auto table = [] {
+            std::unordered_map<std::string, Action> m;
+            for (int i = 0; i <= static_cast<int>(LAST_ACTION); ++i) {
+                const auto action = static_cast<Action>(i);
+                const auto key = actionNameKey(action);
+                if (!key.empty())
+                    m.emplace(key, action);
+            }
+            return m;
+        }();
+        std::string normalized(name);
+        std::ranges::transform(normalized, normalized.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+        const auto it = table.find(normalized);
+        return it == table.end() ? std::nullopt : std::optional<Action>(it->second);
+    }
+
+    ToolMode toolModeFromName(std::string_view name) {
+        std::string normalized(name);
+        std::ranges::transform(normalized, normalized.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+        for (const auto& [mode, suffix, english] : kToolModeEntries) {
+            if (suffix == normalized)
+                return mode;
+        }
+        return ToolMode::GLOBAL;
+    }
 
     std::string getLocalizedActionName(const Action action) {
         const auto suffix = actionNameKey(action);

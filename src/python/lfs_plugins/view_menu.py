@@ -3,7 +3,7 @@
 """View menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import menu_action, menu_separator, register_menu, menu_submenu, menu_toggle
+from .layouts.menus import keymap_shortcut, menu_action, menu_separator, register_menu, menu_submenu, menu_toggle
 
 __lfs_menu_classes__ = ["ViewMenu"]
 
@@ -148,7 +148,7 @@ class ViewMenu:
                 tr("menu.view.performance_hud"),
                 lf.ui.toggle_vram_hud,
                 bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
-                shortcut="F10",
+                shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PERFORMANCE_HUD),
             ),
             menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),

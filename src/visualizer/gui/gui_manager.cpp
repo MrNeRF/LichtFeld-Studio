@@ -4710,20 +4710,14 @@ namespace lfs::vis::gui {
             if (focus_panel_name_ == id)
                 focus_panel_name_.clear();
         };
-        rml_right_panel_.on_splitter_delta = [this](float delta_y) {
+        rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
-            int ww = 0;
-            int wh = 0;
-            SDL_GetWindowSizeInPixels(viewer_->getWindow(), &ww, &wh);
-            ScreenState ss;
-            ss.work_pos = {0.0f, 0.0f};
-            ss.work_size = {static_cast<float>(ww), static_cast<float>(wh)};
-            panel_layout_.adjustScenePanelRatio(delta_y, ss);
+            panel_layout_.setScenePanelHeight(height, panel_height);
         };
         rml_right_panel_.on_splitter_end = [this]() {
             viewer_->getRenderingManager()->setViewportResizeActive(false);
         };
-        rml_right_panel_.on_resize_delta = [this](float dx) {
+        rml_right_panel_.on_resize_width = [this](float width) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
             int ww = 0;
             int wh = 0;
@@ -4731,7 +4725,7 @@ namespace lfs::vis::gui {
             ScreenState ss;
             ss.work_pos = {0.0f, 0.0f};
             ss.work_size = {static_cast<float>(ww), static_cast<float>(wh)};
-            panel_layout_.applyResizeDelta(dx, ss);
+            panel_layout_.setRightPanelWidth(width, ss);
         };
         rml_right_panel_.on_resize_end = [this]() {
             viewer_->getRenderingManager()->setViewportResizeActive(false);
@@ -6759,7 +6753,7 @@ namespace lfs::vis::gui {
                             rp_layout.pos, rp_layout.size);
             const bool pointer_over_right_panel_edge =
                 panel_input.mouse_x >= rp_layout.pos.x - right_panel_edge_grab_w &&
-                panel_input.mouse_x <= rp_layout.pos.x + right_panel_edge_grab_w &&
+                panel_input.mouse_x < rp_layout.pos.x + right_panel_edge_grab_w &&
                 panel_input.mouse_y >= rp_layout.pos.y &&
                 panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
             const bool float_blocks_rp = has_floating_panels &&
@@ -6768,7 +6762,8 @@ namespace lfs::vis::gui {
             // the resize edge, rather than starting panel hover or resize UI.
             const bool viewport_pointer_captured =
                 hasMouseButtonDown(sdl_input) && window_manager &&
-                window_manager->inputRouter().state().pointer_capture == input::InputTarget::Viewport;
+                window_manager->inputRouter().state().pointer_capture == input::InputTarget::Viewport &&
+                !(panel_input.mouse_clicked[0] && pointer_over_right_panel_edge);
             right_panel_resize_edge_was_hovered_ = !float_blocks_rp && !viewport_pointer_captured &&
                                                    pointer_over_right_panel_edge;
             constexpr float RIGHT_PANEL_PAD = 8.0f;
@@ -6788,7 +6783,8 @@ namespace lfs::vis::gui {
                             glm::vec2{content_x, tab_content_y},
                             glm::vec2{content_w, tab_content_h});
 
-            if (float_blocks_rp || viewport_pointer_captured) {
+            if ((float_blocks_rp || viewport_pointer_captured) &&
+                !rml_right_panel_.isResizeInteractionActive()) {
                 PanelInputState masked_input = panel_input;
                 masked_input.mouse_x = -1.0e9f;
                 masked_input.mouse_y = -1.0e9f;
@@ -6910,9 +6906,6 @@ namespace lfs::vis::gui {
         const float bottom_dock_w = bottom_dock_layout.width;
         const float bottom_dock_y =
             screen.work_pos.y + screen.work_size.y - bottom_dock_h;
-        const float bottom_dock_edge_grab_h =
-            std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
-                     8.0f * current_ui_scale_);
         const float bottom_dock_grip_h = PanelLayoutManager::DOCK_GRIP_H * current_ui_scale_;
         const bool pointer_over_bottom_dock =
             panel_layout_.isBottomDockVisible() &&
@@ -6923,8 +6916,8 @@ namespace lfs::vis::gui {
             panel_layout_.isBottomDockVisible() &&
             panel_input.mouse_x >= bottom_dock_x &&
             panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
-            panel_input.mouse_y >= bottom_dock_y - bottom_dock_edge_grab_h &&
-            panel_input.mouse_y <= bottom_dock_y + bottom_dock_grip_h + 4.0f * current_ui_scale_;
+            bottomDockResizeHitZone(bottom_dock_y, current_ui_scale_, bottom_dock_grip_h)
+                .contains(panel_input.mouse_y);
         const bool pointer_targets_bottom_dock =
             pointer_over_bottom_dock || pointer_over_bottom_dock_edge;
         if (pointer_targets_bottom_dock &&
@@ -8427,7 +8420,7 @@ namespace lfs::vis::gui {
                               panel_layout_.getRightPanelWidth();
         const float strip_half_w =
             PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * current_ui_scale_;
-        return x >= panel_x - strip_half_w && x <= panel_x + strip_half_w &&
+        return x >= panel_x - strip_half_w && x < panel_x + strip_half_w &&
                y >= last_ui_layout_work_pos_.y &&
                y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
     }
