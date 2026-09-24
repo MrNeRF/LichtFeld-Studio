@@ -133,6 +133,7 @@ try:
         is_supported_asset_path,
         resolve_default_asset_directory,
         resolve_asset_manager_storage_path,
+        read_catalog_preview,
     )
     from .asset_index import LibraryService
 
@@ -175,6 +176,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._doc = None
         self._asset_index: Optional[Any] = None
         self._library_service: Optional[Any] = None
+        self._catalog_snapshot_epoch: Optional[int] = None
+        self._catalog_snapshot: Optional[Dict[str, Any]] = None
+        self._catalog_snapshot_refresh_active = False
+        self._catalog_preview: Optional[Dict[str, Any]] = None
+        self._filtered_cache_key: Optional[tuple] = None
+        self._filtered_cache_rows: List[Dict[str, Any]] = []
+        self._filtered_cache_scope_count = 0
 
         self._selected_asset_ids: Set[str] = set()
         self._selection_cursor_id: Optional[str] = None
@@ -501,9 +509,25 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             loaded = False
             recovered_operations = {}
             backend_error = None
+            detached_snapshot = None
             try:
                 storage_path = resolve_asset_manager_storage_path()
                 storage_path.mkdir(parents=True, exist_ok=True)
+                cached_preview = read_catalog_preview(storage_path / "library.json")
+                if cached_preview:
+                    def show_cached() -> None:
+                        if generation != self._mount_generation or not self._panel_mounted:
+                            return
+                        if self._asset_index is not None:
+                            return
+                        self._catalog_preview = cached_preview
+                        self._filtered_cache_key = None
+                        self._repair_selection()
+                        self._refresh_records(assets=True, folders=True)
+                        if self._handle:
+                            self._handle.dirty_all()
+
+                    self._schedule_ui(show_cached)
                 try:
                     index = AssetIndex(
                         library_path=storage_path / "library.json",
@@ -514,6 +538,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 service = LibraryService(index)
                 index = service.index
                 loaded = service._call("load")
+                if loaded and callable(getattr(index, "snapshot", None)):
+                    detached_snapshot = service.snapshot()
                 default_path = str(resolve_default_asset_directory())
                 from .project_operations import ProjectOperations
                 recovered_operations = ProjectOperations(lf.io).recover()
@@ -533,6 +559,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 if index is not None and service is not None:
                     self._asset_index = index
                     self._library_service = service
+                    self._catalog_preview = None
+                    self._catalog_snapshot = detached_snapshot
+                    self._catalog_snapshot_epoch = (
+                        detached_snapshot.get("epoch") if detached_snapshot else None
+                    )
+                    self._filtered_cache_key = None
                     self.STORAGE_PATH = storage_path
                     self.__class__.STORAGE_PATH = storage_path
                     self._last_default_folder_path = default_path
@@ -695,7 +727,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("asset_search_empty", self.get_asset_search_empty)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
-        model.bind_func("catalog_loading", lambda: self._backend_load_active)
+        model.bind_func("catalog_loading", lambda: self._backend_load_active and not self._catalog_preview)
         model.bind_func("scan_active", self.get_scan_active)
         model.bind_func("scan_status", self.get_scan_status)
         model.bind_func("has_scan_status", self.get_has_scan_status)
@@ -1120,7 +1152,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _asset_index_assets(self) -> Dict[str, Dict[str, Any]]:
         if self._library_service is not None:
-            assets = self._library_service.snapshot().get("projects", {})
+            assets = self._library_snapshot().get("projects", {})
+        elif self._catalog_preview is not None:
+            assets = self._catalog_preview.get("projects", {})
         else:
             assets = getattr(self._asset_index, "assets", {}) if self._asset_index else {}
         return assets if isinstance(assets, dict) else {}
@@ -1132,10 +1166,14 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return self._recent_only_assets().get(asset_id)
         if asset_id and asset_id.startswith("remote:"):
             return self._gallery_remote_assets().get(asset_id)
-        if not asset_id or not self._asset_index:
+        if not asset_id:
             return None
+        if self._asset_index is None:
+            asset = (self._catalog_preview or {}).get("projects", {}).get(asset_id)
+            return dict(asset) if isinstance(asset, dict) else None
         if self._library_service is not None:
-            return self._library_service.snapshot().get("projects", {}).get(asset_id)
+            asset = self._library_snapshot().get("projects", {}).get(asset_id)
+            return dict(asset) if isinstance(asset, dict) else asset
         getter = getattr(self._asset_index, "get_asset_dict", None)
         if callable(getter):
             return getter(asset_id)
@@ -1244,10 +1282,65 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _asset_index_folders(self) -> Dict[str, Dict[str, Any]]:
         if self._library_service is not None:
-            folders = self._library_service.snapshot().get("folders", {})
+            folders = self._library_snapshot().get("folders", {})
+        elif self._catalog_preview is not None:
+            folders = self._catalog_preview.get("folders", {})
         else:
             folders = getattr(self._asset_index, "folders", {}) if self._asset_index else {}
         return folders if isinstance(folders, dict) else {}
+
+    def _library_snapshot(self) -> Dict[str, Any]:
+        """Reuse the detached catalog snapshot until its epoch changes."""
+        epoch = self._catalog_epoch()
+        if self._catalog_snapshot is not None:
+            if self._catalog_snapshot_epoch != epoch and self._handle is not None:
+                self._refresh_catalog_snapshot_async()
+            else:
+                if self._catalog_snapshot_epoch == epoch:
+                    return self._catalog_snapshot
+            if self._handle is not None:
+                return self._catalog_snapshot
+        snapshot = self._library_service.snapshot()
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        self._catalog_snapshot = snapshot
+        self._catalog_snapshot_epoch = snapshot.get("epoch", epoch)
+        return snapshot
+
+    def _refresh_catalog_snapshot_async(self) -> None:
+        if self._catalog_snapshot_refresh_active or self._library_service is None:
+            return
+        self._catalog_snapshot_refresh_active = True
+        service = self._library_service
+        generation = self._mount_generation
+
+        def worker() -> None:
+            try:
+                snapshot = service.snapshot()
+            except Exception:
+                _log.exception("Projects catalog snapshot refresh failed")
+                snapshot = None
+
+            def complete() -> None:
+                self._catalog_snapshot_refresh_active = False
+                if generation != self._mount_generation or not self._panel_mounted:
+                    return
+                if isinstance(snapshot, dict):
+                    self._catalog_snapshot = snapshot
+                    self._catalog_snapshot_epoch = snapshot.get("epoch")
+                    self._catalog_epoch_seen = self._catalog_snapshot_epoch
+                    self._filtered_cache_key = None
+                    self._invalidate_recent_scope_cache()
+                    self._repair_selection()
+                    self._refresh_records(assets=True, folders=True)
+                    self._dirty_selection()
+                    self._start_inspection_refresh()
+                if self._catalog_snapshot_epoch != self._catalog_epoch():
+                    self._refresh_catalog_snapshot_async()
+
+            self._schedule_ui(complete)
+
+        threading.Thread(target=worker, daemon=True, name="AssetManagerSnapshot").start()
 
     def _library_command(self, command: str, *args: Any, **kwargs: Any) -> Any:
         if self._library_service is not None:
@@ -1367,6 +1460,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def _cache_iteration(self, asset_id: str, iteration: int) -> None:
         self._inspection_by_asset.setdefault(asset_id, {})["iteration"] = int(iteration)
+        if self._sort_mode == "iteration":
+            self._filtered_cache_key = None
 
     def _cached_iteration(self, asset: Dict[str, Any]) -> Optional[int]:
         cached = self._inspection_by_asset.get(asset.get("id"), {})
@@ -1869,6 +1964,19 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _filtered_assets(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         folder_id = self._selected_folder_id if folder_id is None else folder_id
         query = self._search_query.strip().casefold()
+        cacheable = folder_id != SCOPE_RECENT and self._sort_mode != "opened"
+        epoch = (self._catalog_snapshot_epoch if self._library_service is not None
+                 else self._catalog_epoch())
+        cache_key = (
+            id(self._asset_index), id(self._catalog_preview), epoch,
+            folder_id, query, self._active_filter, self._sort_mode,
+            self._sort_descending, id(self._gallery_state),
+            lf.ui.get_current_language(),
+        ) if cacheable and (epoch is not None or self._catalog_preview is not None) else None
+        if cache_key is not None and cache_key == self._filtered_cache_key:
+            self._last_asset_match_count = len(self._filtered_cache_rows)
+            self._last_asset_scope_count = self._filtered_cache_scope_count
+            return self._filtered_cache_rows
         rows: List[Dict[str, Any]] = []
         scope_count = 0
         if folder_id == SCOPE_RECENT:
@@ -1894,20 +2002,30 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             links = self._gallery_state.get("links", {})
             def sort_value(asset):
                 name = self._sort_text(self._get_asset_display_name(asset))
-                value = {
-                    "name": name,
-                    "saved": int(asset.get("saved_at_unix_ns") or asset.get("mtime_ns") or 0),
-                    "size": int(asset.get("file_size_bytes") or 0),
-                    "iteration": self._cached_iteration(asset) or 0,
-                    "opened": recent.get(str(Path(asset.get("path") or "")), -len(recent) - 1),
-                    "published": float(links.get(asset.get("id"), {}).get("exchangedAt") or 0),
-                    "gallery": self._sort_text(self._gallery_badge(asset)["gallery_label"]) if self._sort_mode == "gallery" else "",
-                    "folder": self._sort_text(self._folder_name(asset.get("folder_id"))),
-                }[self._sort_mode]
+                if self._sort_mode == "name":
+                    value = name
+                elif self._sort_mode == "saved":
+                    value = int(asset.get("saved_at_unix_ns") or asset.get("mtime_ns") or 0)
+                elif self._sort_mode == "size":
+                    value = int(asset.get("file_size_bytes") or 0)
+                elif self._sort_mode == "iteration":
+                    value = self._cached_iteration(asset) or 0
+                elif self._sort_mode == "opened":
+                    value = recent.get(str(Path(asset.get("path") or "")), -len(recent) - 1)
+                elif self._sort_mode == "published":
+                    value = float(links.get(asset.get("id"), {}).get("exchangedAt") or 0)
+                elif self._sort_mode == "gallery":
+                    value = self._sort_text(self._gallery_badge(asset)["gallery_label"])
+                else:
+                    value = self._sort_text(self._folder_name(asset.get("folder_id")))
                 return value, name
             rows.sort(key=sort_value, reverse=self._sort_descending)
         self._last_asset_match_count = len(rows)
         self._last_asset_scope_count = scope_count
+        if cache_key is not None:
+            self._filtered_cache_key = cache_key
+            self._filtered_cache_rows = rows
+            self._filtered_cache_scope_count = scope_count
         return rows
 
     def _gallery_window_metrics(self, client_width: float) -> tuple[int, float, float]:
@@ -3611,7 +3729,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _catalog_epoch(self) -> Optional[int]:
         if not self._asset_index:
             return None
-        getter = getattr(self._asset_index, "catalog_epoch", None)
+        getter = getattr(self._asset_index, "peek_catalog_epoch", None)
+        if not callable(getter):
+            getter = getattr(self._asset_index, "catalog_epoch", None)
         if callable(getter):
             return int(getter())
         if isinstance(getter, int):
@@ -3621,6 +3741,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def _publish_catalog_if_changed(self) -> bool:
         epoch = self._catalog_epoch()
         if epoch is None or epoch == self._catalog_epoch_seen:
+            return False
+        if self._library_service is not None and self._handle is not None:
+            self._refresh_catalog_snapshot_async()
             return False
         self._catalog_epoch_seen = epoch
         self._invalidate_recent_scope_cache()

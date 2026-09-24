@@ -517,6 +517,104 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
 
+def test_asset_catalog_snapshot_is_reused_for_the_current_epoch(panel_module):
+    project = _project()
+    folders = {"default": {"id": "default", "name": "Projects"}}
+    epoch = [7]
+
+    class _Library:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self):
+            self.calls += 1
+            return {"projects": {project["id"]: project}, "folders": folders, "epoch": epoch[0]}
+
+    library = _Library()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        catalog_epoch=lambda: epoch[0],
+        iter_project_ids=lambda: [project["id"]],
+    )
+    panel._library_service = library
+
+    assert panel._asset_index_assets()[project["id"]]["id"] == project["id"]
+    assert panel._asset_index_folders()["default"]["name"] == "Projects"
+    panel._asset_index_assets()
+
+    operation_asset = panel._asset_dict(project["id"])
+    operation_asset["name"] = "Operation copy"
+    assert panel._asset_index_assets()[project["id"]]["name"] == project["name"]
+
+    assert library.calls == 1
+
+    epoch[0] += 1
+    panel._asset_index_assets()
+    assert library.calls == 2
+
+
+def test_cached_catalog_preview_uses_persisted_card_metadata(panel_module, tmp_path):
+    from lfs_plugins.asset_index import read_catalog_preview, SCHEMA_VERSION
+
+    project_id = str(uuid.uuid4())
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "folders": {"local": {"path": str(tmp_path / "local")}},
+        "projects": {project_id: {
+            "path": str(tmp_path / "local" / "sample.licht"),
+            "folder_id": "local", "name": "Saved title", "name_origin": "user",
+            "has_preview": True, "preview_width": 230, "preview_height": 256,
+            "file_size_bytes": 3000, "status": "AVAILABLE",
+        }},
+    }))
+
+    preview = read_catalog_preview(library)
+    card = preview["projects"][project_id]
+    assert card["name"] == "Saved title"
+    assert card["has_preview"] is True
+    assert card["preview_width"] == 230
+    assert preview["folders"]["local"]["name"] == "local"
+
+
+def test_filtered_rows_are_reused_until_catalog_or_filter_changes(panel_module, monkeypatch):
+    first = _project(name="First")
+    second = _project(project_id="22222222-2222-4222-8222-222222222222", name="Second")
+    epoch = [1]
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={first["id"]: first, second["id"]: second})
+    panel._asset_index.catalog_epoch = lambda: epoch[0]
+    original = panel._asset_index_assets
+    reads = []
+
+    def counted():
+        reads.append(True)
+        return original()
+
+    monkeypatch.setattr(panel, "_asset_index_assets", counted)
+    assert len(panel._filtered_assets()) == 2
+    first_read_count = len(reads)
+    panel._asset_window_client_width = 500.0
+    assert len(panel._filtered_assets()) == 2
+    panel._asset_window_client_width = 540.0
+    assert len(panel._filtered_assets()) == 2
+    assert len(reads) == first_read_count
+
+    panel._search_query = "First"
+    assert [row["name"] for row in panel._filtered_assets()] == ["First"]
+    search_read_count = len(reads)
+    assert search_read_count > first_read_count
+    panel._search_query = ""
+    panel._active_filter = "missing"
+    assert panel._filtered_assets() == []
+    filter_read_count = len(reads)
+    assert filter_read_count > search_read_count
+    panel._active_filter = "all"
+    epoch[0] += 1
+    assert len(panel._filtered_assets()) == 2
+    assert len(reads) > filter_read_count
+
+
 def test_project_card_name_uses_project_filename_not_assets_parent(panel_module):
     asset = _project(
         name="project",
