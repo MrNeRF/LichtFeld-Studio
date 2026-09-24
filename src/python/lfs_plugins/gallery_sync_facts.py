@@ -29,8 +29,8 @@ _VIEW_FLOAT_TOLERANCE = 1e-6
 
 
 def needs_attention(facts):
-    """Whether the project card presents a health or gallery attention state."""
-    return bool(facts.get("health_icon") or facts.get("attention") or facts.get("relink_required"))
+    """Whether this project has a health or gallery attention state."""
+    return bool(facts.get("health_icon") or facts.get("attention"))
 
 
 def _same_view(a, b):

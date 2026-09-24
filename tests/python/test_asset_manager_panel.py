@@ -3630,12 +3630,22 @@ def test_needs_attention_filter_only_shows_card_attention_states(panel_module):
     }]
     panel._active_filter = "attention"
     assert panel._gallery_facts(unpublished)["action"] == "publish"
-    assert panel._gallery_badge(unpublished)["gallery_attention"] is False
     assert {a["id"] for a in panel._asset_index.assets.values()
             if panel._asset_matches_filter(a)} == {missing["id"], diverged["id"], failed_upload["id"]}
+
+def test_relink_required_does_not_mark_clean_projects_as_attention(panel_module):
+    panel, equal, _remote = _gallery_fixture(panel_module)
+    clean_local = _project("clean-local")
+    unpublished = _project("unpublished")
+    panel._asset_index.assets.update({
+        clean_local["id"]: clean_local,
+        unpublished["id"]: unpublished,
+    })
     panel._gallery_state["relink_required"] = True
-    assert panel._gallery_badge(unpublished)["gallery_attention"] is True
-    assert panel._asset_matches_filter(unpublished) is True
+    panel._active_filter = "attention"
+
+    assert panel._gallery_facts(equal)["relink_required"] is True
+    assert panel._filtered_assets() == []
 
 def test_update_all_visibility_matches_visible_candidates(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)

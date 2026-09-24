@@ -300,7 +300,6 @@ class GalleryAssetMixin:
                 "gallery_has_controls": can_cancel or bool(gallery_action),
                 "gallery_tooltip": "\n".join(filter(None, (label, facts.get("change_detail") or facts["reason"], byte_label, detail, primary.get("reason")))),
                 "health_badge": bool(facts["health_icon"]),
-                "gallery_attention": needs_attention(facts),
                 "health_tone": "asset-health-" + facts["health_tone"],
                 "gallery_ring": facts["active"],
                 "gallery_progress_value": (0.25 if indeterminate else facts["progress"] / 100.0),
