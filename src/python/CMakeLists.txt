@@ -282,7 +282,7 @@ target_link_libraries(lfs_py PRIVATE
     OpenMeshTools
     $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
     $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
-    SDL3::SDL3
+    $<$<NOT:$<PLATFORM_ID:Darwin>>:SDL3::SDL3>
     ${CMAKE_DL_LIBS}
     GPUOpen::VulkanMemoryAllocator
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
