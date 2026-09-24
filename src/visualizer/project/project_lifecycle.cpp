@@ -33,6 +33,7 @@
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
+#include "io/snapshot_path.hpp"
 #include "ipc/view_context.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
@@ -42,8 +43,8 @@
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/viewer_splat_quantize.hpp"
-#include "training/project_snapshot_chapters.hpp"
 #if LFS_BUILD_TRAINER
+#include "training/project_snapshot_chapters.hpp"
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
@@ -53,7 +54,9 @@
 #include <nlohmann/json.hpp>
 #include <stb_image_write.h>
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -1251,7 +1254,9 @@ namespace lfs::vis::project {
                         false, std::memory_order_release);
                     return;
                 }
+#if LFS_HAS_CUDA
                 (void)cudaSetDevice(0);
+#endif
                 auto* scene_manager =
                     viewer_.getSceneManager();
                 if (!scene_manager || !document_) {
@@ -1878,10 +1883,17 @@ namespace lfs::vis::project {
                     std::filesystem::last_write_time(
                         path, error);
                 if (!error) {
+#ifdef __APPLE__
+                    const auto system_time =
+                        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                            file_time - std::filesystem::file_time_type::clock::now() +
+                            std::chrono::system_clock::now());
+#else
                     const auto system_time =
                         std::chrono::clock_cast<
                             std::chrono::system_clock>(
                             file_time);
+#endif
                     unix_seconds =
                         std::chrono::system_clock::to_time_t(
                             system_time);

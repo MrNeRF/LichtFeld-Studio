@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include "core/cuda_types.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 
 namespace lfs::core {
 

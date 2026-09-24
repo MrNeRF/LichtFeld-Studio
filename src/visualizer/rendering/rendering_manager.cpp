@@ -4,7 +4,9 @@
 
 #include "rendering_manager.hpp"
 #include "core/camera_metrics.hpp"
+#if LFS_BUILD_TRAINER
 #include "core/cuda/memory_arena.hpp"
+#endif
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
@@ -565,8 +567,12 @@ namespace lfs::vis {
             return;
         }
 
+#if LFS_BUILD_TRAINER
         auto* const arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
         const bool under_pressure = arena != nullptr && arena->is_under_memory_pressure();
+#else
+        constexpr bool under_pressure = false;
+#endif
 
         if (!training_active) {
             vksplat_idle_frame_count_ = 0;

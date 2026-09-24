@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include "core/cuda_types.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_image.hpp"
-#include <cuda_runtime.h>
 
 namespace lfs::core {
 

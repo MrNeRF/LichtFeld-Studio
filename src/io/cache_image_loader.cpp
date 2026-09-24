@@ -9,11 +9,13 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_HAS_CUDA
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
+#include <cuda_runtime.h>
+#endif
 
 #include <algorithm>
-#include <cuda_runtime.h>
 #include <fstream>
 
 #ifdef __linux__
@@ -325,12 +327,14 @@ namespace lfs::io {
 
         // Hardware decode and its layout kernels write CUDA storage. Viewer
         // image loading on another tensor backend uses the existing CPU cache.
+#if LFS_HAS_CUDA
         if (default_gpu_backend() == GpuBackend::CUDA) {
             determine_nv_image_codec();
             if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
                 return load_jpeg_with_hardware_decode(path, params);
             }
         }
+#endif
 
         determine_cache_mode(path, params);
 
@@ -384,6 +388,7 @@ namespace lfs::io {
         }
     }
 
+#if LFS_HAS_CUDA
     namespace {
 
         NvCodecImageLoader& get_nvcodec_loader() {
@@ -590,5 +595,6 @@ namespace lfs::io {
             LOG_WARN("[CacheLoader] Check diagnostic logs above for details on why nvImageCodec is unavailable");
         }
     }
+#endif
 
 } // namespace lfs::io

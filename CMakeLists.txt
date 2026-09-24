@@ -94,7 +94,13 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+if(APPLE)
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C)
+    set(LFS_HAS_CUDA OFF)
+else()
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+    set(LFS_HAS_CUDA ON)
+endif()
 
 if(WIN32)
     enable_language(RC)
@@ -170,7 +176,10 @@ add_custom_target(lfs_git_version ALL
     VERBATIM
 )
 
-option(LFS_BUILD_TRAINER "Include training in the full LichtFeld Studio application" ON)
+include(CMakeDependentOption)
+cmake_dependent_option(LFS_BUILD_TRAINER
+    "Include training in the full LichtFeld Studio application" ON
+    "NOT APPLE" OFF)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
 option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)
@@ -349,12 +358,13 @@ if(MSVC)
     unset(_lfs_language)
 endif()
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(LFS_HAS_CUDA)
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
 set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
-
-set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # CUDA setup
@@ -473,6 +483,7 @@ if(NOT TARGET CUDA::nvToolsExt)
 endif()
 
 message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGET_DIR}")
+endif()
 
 # Find packages
 find_package(TBB REQUIRED)
@@ -548,6 +559,7 @@ add_custom_target(lfs_core_abi_stamp ALL
         "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
         "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
         "-DLFS_BUILD_TRAINER=${LFS_BUILD_TRAINER}"
+        "-DLFS_HAS_CUDA=${LFS_HAS_CUDA}"
         -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
     COMMENT "Refreshing lfs_core ABI stamp"
     VERBATIM
@@ -585,6 +597,7 @@ else()
 endif()
 
 add_compile_definitions(
+    LFS_HAS_CUDA=$<BOOL:${LFS_HAS_CUDA}>
     LFS_BUILD_TRAINER=$<BOOL:${LFS_BUILD_TRAINER}>
     $<$<CONFIG:Debug>:DEBUG_BUILD>
     $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
@@ -722,13 +735,15 @@ endif()
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
         ${LFS_APP_INTERNAL_LINK_LIBS}
-
-        CUDA::cudart
-        CUDA::curand
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
         taywee::args
         SDL3::SDL3
 )
+if(APPLE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE lfs_python_embed)
+endif()
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
@@ -1125,16 +1140,21 @@ endif()
 
 # Platform-specific settings
 if(UNIX)
+    if(APPLE)
+        set(_lichtfeld_origin "@executable_path")
+    else()
+        set(_lichtfeld_origin "$ORIGIN")
+    endif()
     if(BUILD_PORTABLE)
         set_target_properties(${PROJECT_NAME} PROPERTIES
-                INSTALL_RPATH "$ORIGIN:$ORIGIN/lib:$ORIGIN/../lib"
+                INSTALL_RPATH "${_lichtfeld_origin};${_lichtfeld_origin}/lib;${_lichtfeld_origin}/../lib"
                 BUILD_WITH_INSTALL_RPATH TRUE
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
         set(_lichtfeld_runtime_rpath_common
-                "$ORIGIN"
-                "$ORIGIN/lib"
+                "${_lichtfeld_origin}"
+                "${_lichtfeld_origin}/lib"
                 "${CUDAToolkit_LIBRARY_DIR}"
         )
         if(TARGET OpenMeshCore)
@@ -1157,16 +1177,28 @@ if(UNIX)
 
         list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_release)
         list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_debug)
-        list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
-        list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
-
-        if(CMAKE_CONFIGURATION_TYPES)
-            set(_lichtfeld_runtime_rpath_string
-                    "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+        if(APPLE)
+            if(CMAKE_CONFIGURATION_TYPES)
+                set(_lichtfeld_runtime_rpath_string
+                    ${_lichtfeld_runtime_rpath_release}
+                    ${_lichtfeld_runtime_rpath_debug})
+                list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_string)
+            elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(_lichtfeld_runtime_rpath_string ${_lichtfeld_runtime_rpath_debug})
+            else()
+                set(_lichtfeld_runtime_rpath_string ${_lichtfeld_runtime_rpath_release})
+            endif()
         else()
-            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+            list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
+            list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
+            if(CMAKE_CONFIGURATION_TYPES)
+                set(_lichtfeld_runtime_rpath_string
+                        "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
+            elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+            else()
+                set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+            endif()
         endif()
 
         set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -1175,6 +1207,7 @@ if(UNIX)
                 INSTALL_RPATH_USE_LINK_PATH TRUE
         )
     endif()
+    unset(_lichtfeld_origin)
 
 elseif(WIN32)
     # On Windows, DLLs in the same directory as the .exe are automatically found.

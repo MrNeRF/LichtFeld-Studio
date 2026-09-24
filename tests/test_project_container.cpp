@@ -2866,7 +2866,7 @@ namespace {
                 writer, cycle);
             require_status(writer.commit());
 
-            const auto current_autosave =
+            const std::uint64_t current_autosave =
                 fs::file_size(sidecar);
             autosave_min =
                 std::min(

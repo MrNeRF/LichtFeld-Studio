@@ -14,7 +14,9 @@ extern "C" {
 #include <libavutil/display.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
+#if LFS_HAS_CUDA
 #include <libavutil/hwcontext_cuda.h>
+#endif
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
@@ -324,7 +326,11 @@ namespace lfs::io {
             if (is_hdr_ && source_range_ == AVCOL_RANGE_UNSPECIFIED)
                 source_range_ = AVCOL_RANGE_MPEG;
 
+#if LFS_HAS_CUDA
             const char* hw_decoder_name = getHwDecoderName(codec_id);
+#else
+            const char* hw_decoder_name = nullptr;
+#endif
             const AVCodec* codec = nullptr;
 
             // NVDEC cuvid does not reliably preserve Dolby Vision RPU side data.

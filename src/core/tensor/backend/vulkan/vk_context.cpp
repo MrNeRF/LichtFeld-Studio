@@ -9,7 +9,9 @@
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "core/vulkan_helpers.hpp"
+#if LFS_HAS_CUDA
 #include "vk_cuda_bridge.hpp"
+#endif
 #include "vk_memory.hpp"
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
@@ -244,6 +246,7 @@ namespace lfs::core::internal {
             return false;
         }
 
+#if LFS_HAS_CUDA
         bool timeline_semaphore_exportable(const VkPhysicalDevice device) {
             VkSemaphoreTypeCreateInfo type_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
             type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -258,6 +261,7 @@ namespace lfs::core::internal {
                     VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0 &&
                    (properties.compatibleHandleTypes & kVulkanExportSemaphoreHandleType) != 0;
         }
+#endif
 
         bool has_compute_queue(VkPhysicalDevice device) {
             uint32_t count = 0;
@@ -341,20 +345,28 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::initialize_runtime() {
+#if LFS_HAS_CUDA
         if (gpu_backend_available(GpuBackend::CUDA)) {
             cuda_imports_ = std::make_unique<VulkanCudaImportRegistry>(*this);
         }
+#endif
         create_allocator();
         VkExportSemaphoreCreateInfo export_info{
             VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
         VkSemaphoreTypeCreateInfo type_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
         type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+#if LFS_HAS_CUDA
         const bool export_timeline =
             caps_.external_semaphore && timeline_semaphore_exportable(physical_device_);
+#else
+        constexpr bool export_timeline = false;
+#endif
         if (export_timeline) {
+#if LFS_HAS_CUDA
             export_info.handleTypes = kVulkanExportSemaphoreHandleType;
             type_info.pNext = &export_info;
+#endif
         }
         VkSemaphoreCreateInfo semaphore_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -639,16 +651,17 @@ namespace lfs::core::internal {
         if (caps_.shader_atomic_float) {
             enabled_extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
-#ifdef _WIN32
+#if LFS_HAS_CUDA && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
             VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
         constexpr const char* kExternalSemaphoreExtension =
             VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
-#else
+#elif LFS_HAS_CUDA && defined(__linux__)
         constexpr const char* kExternalMemoryExtension = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
         constexpr const char* kExternalSemaphoreExtension =
             VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
 #endif
+#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
         caps_.external_memory = extensions_available.contains(kExternalMemoryExtension);
         caps_.external_semaphore = extensions_available.contains(kExternalSemaphoreExtension);
         if (caps_.external_memory) {
@@ -657,6 +670,10 @@ namespace lfs::core::internal {
         if (caps_.external_semaphore) {
             enabled_extensions.push_back(kExternalSemaphoreExtension);
         }
+#else
+        caps_.external_memory = false;
+        caps_.external_semaphore = false;
+#endif
         const float priority = 1.0f;
         VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         queue_info.queueFamilyIndex = queue_family_;
@@ -669,10 +686,12 @@ namespace lfs::core::internal {
 
     void VulkanContext::create_allocator() {
         VmaDeviceMemoryCallbacks memory_callbacks{};
+#if LFS_HAS_CUDA
         if (cuda_imports_) {
             memory_callbacks.pfnFree = &VulkanCudaImportRegistry::vma_free_callback;
             memory_callbacks.pUserData = cuda_imports_.get();
         }
+#endif
         VmaAllocatorCreateInfo create_info{};
         create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         if (caps_.memory_budget) {
@@ -682,8 +701,11 @@ namespace lfs::core::internal {
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.vulkanApiVersion = VK_API_VERSION_1_3;
-        create_info.pDeviceMemoryCallbacks =
-            cuda_imports_ != nullptr ? &memory_callbacks : nullptr;
+#if LFS_HAS_CUDA
+        create_info.pDeviceMemoryCallbacks = cuda_imports_ != nullptr ? &memory_callbacks : nullptr;
+#else
+        create_info.pDeviceMemoryCallbacks = nullptr;
+#endif
         vk_check(this, vmaCreateAllocator(&create_info, &allocator_),
                  "vmaCreateAllocator");
     }
@@ -992,10 +1014,12 @@ namespace lfs::core::internal {
             vmaDestroyAllocator(allocator_);
             allocator_ = nullptr;
         }
+#if LFS_HAS_CUDA
         if (cuda_imports_) {
             cuda_imports_->shutdown();
             cuda_imports_.reset();
         }
+#endif
         if (timeline_ != VK_NULL_HANDLE) {
             vkDestroySemaphore(device_, timeline_, nullptr);
             timeline_ = VK_NULL_HANDLE;
@@ -1163,6 +1187,7 @@ namespace lfs::core::internal {
     }
 
     uint64_t vulkan_cuda_import_count_for_testing() noexcept {
+#if LFS_HAS_CUDA
         try {
             if (const auto context = try_live_vulkan_context();
                 context != nullptr && context->cuda_imports() != nullptr) {
@@ -1172,6 +1197,7 @@ namespace lfs::core::internal {
             // LFS-CENSUS-OK(empty-catch): test accessor; a context that cannot
             // answer counts as no live imports.
         }
+#endif
         return 0;
     }
 

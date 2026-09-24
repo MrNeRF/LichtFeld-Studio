@@ -11,7 +11,9 @@
 #include "python/python_runtime.hpp"
 
 #include <cstring>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <dlpack/dlpack.h>
 #include <nanobind/stl/optional.h>
 #include <sstream>
@@ -28,8 +30,14 @@ namespace lfs::python {
     namespace {
 
         Device from_dl_device(const DLDeviceType t) {
-            if (t == kDLCUDA || t == kDLCUDAManaged)
+            if (t == kDLCUDA || t == kDLCUDAManaged) {
+#if LFS_HAS_CUDA
                 return Device::GPU;
+#else
+                throw std::runtime_error(
+                    "CUDA DLPack import is unavailable in this build");
+#endif
+            }
             if (t == kDLCPU || t == kDLCUDAHost)
                 return Device::CPU;
             throw std::runtime_error("Unsupported DLPack device type");
@@ -1360,11 +1368,18 @@ namespace lfs::python {
     }
 
     nb::tuple PyTensor::dlpack_device() const {
+#if !LFS_HAS_CUDA
+        if (tensor_.device() == Device::GPU) {
+            throw std::runtime_error(
+                "GPU DLPack export is unavailable without CUDA; call .cpu() first");
+        }
+#else
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan &&
             !lfs::core::vulkan_backend_exports_memory()) {
             throw std::runtime_error(
                 "DLPack export of a Vulkan tensor requires CUDA external memory; call .cpu() first");
         }
+#endif
         const int32_t device_type = tensor_.device() == Device::GPU ? kDLCUDA : kDLCPU;
         return nb::make_tuple(device_type, 0);
     }
@@ -1374,6 +1389,7 @@ namespace lfs::python {
         constexpr int64_t kDLPackLegacyDefault = 1;
         constexpr int64_t kDLPackPerThreadDefault = 2;
 
+#if LFS_HAS_CUDA
         cudaStream_t dlpack_stream_to_cuda(int64_t s) {
             switch (s) {
             case 0:
@@ -1390,6 +1406,7 @@ namespace lfs::python {
             const uintptr_t v = reinterpret_cast<uintptr_t>(s);
             return v == 0 ? kDLPackLegacyDefault : static_cast<int64_t>(v);
         }
+#endif
 
         // Query __dlpack_device__ so CPU producers (e.g. NumPy) are not
         // given a CUDA stream. Matches from_dl_device for CUDA types.
@@ -1431,6 +1448,7 @@ namespace lfs::python {
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
         Tensor exported = tensor_;
+#if LFS_HAS_CUDA
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
             const cudaStream_t consumer = stream.is_none() ||
                                                   nb::cast<int64_t>(stream) == kDLPackNoSync
@@ -1463,6 +1481,12 @@ namespace lfs::python {
                 }
             }
         }
+#else
+        if (tensor_.device() == Device::GPU) {
+            throw std::runtime_error(
+                "GPU DLPack export is unavailable without CUDA; call .cpu() first");
+        }
+#endif
 
         auto* ctx = new DLPackContext(std::move(exported));
         auto* managed = new DLManagedTensor{};
@@ -1493,6 +1517,7 @@ namespace lfs::python {
 
         if (nb::hasattr(obj, "__dlpack__")) {
             nb::object dlpack_fn = obj.attr("__dlpack__");
+#if LFS_HAS_CUDA
             if (dlpack_producer_is_cuda_ordered(obj)) {
                 const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
                 try {
@@ -1510,6 +1535,9 @@ namespace lfs::python {
             } else {
                 capsule = nb::cast<nb::capsule>(dlpack_fn());
             }
+#else
+            capsule = nb::cast<nb::capsule>(dlpack_fn());
+#endif
         } else if (nb::isinstance<nb::capsule>(obj)) {
             capsule = nb::cast<nb::capsule>(obj);
         } else {
@@ -1555,10 +1583,12 @@ namespace lfs::python {
 
         Tensor tensor(data, TensorShape(shape_vec), device, dtype);
         if (stream_handshake && device == Device::GPU) {
+#if LFS_HAS_CUDA
             // The producer ordered the data onto our current stream via the
             // __dlpack__(stream=) handshake; home the tensor there so a later
             // cross-stream op bridges from the consumer stream, not legacy.
             tensor.set_stream(lfs::core::getCurrentCUDAStream());
+#endif
         }
 
         // Store the DLManagedTensor with a custom deleter that calls the DLPack deleter

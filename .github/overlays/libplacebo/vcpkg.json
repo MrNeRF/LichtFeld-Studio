@@ -4,7 +4,7 @@
   "description": "GPU-accelerated video rendering, color management, and HDR tone mapping library",
   "homepage": "https://libplacebo.org/",
   "license": "LGPL-2.1-or-later",
-  "supports": "(windows | linux) & !uwp & !xbox",
+  "supports": "(windows | linux | osx) & !uwp & !xbox",
   "dependencies": [
     "shaderc",
     "vulkan",

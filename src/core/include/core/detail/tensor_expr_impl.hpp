@@ -7,12 +7,12 @@
 // It should be included at the END of tensor.hpp, after Tensor class is fully defined
 
 #include "core/tensor_cuda_interop.hpp"
+#include "tensor_half.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
 #include "lazy_ir.hpp"
 #include "tensor_expr.hpp"
 #include "tensor_functors.hpp" // For ops::compose
-#include <cuda_fp16.h>
 #include <limits>
 #include <optional>
 #include <typeinfo>
@@ -369,14 +369,14 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const __half* left_ptr = left_tensor.template ptr<__half>();
-                            const __half* right_ptr = right_tensor.template ptr<__half>();
-                            __half* out_ptr = result.template ptr<__half>();
+                            const detail::tensor_half_t* left_ptr = left_tensor.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = right_tensor.template ptr<detail::tensor_half_t>();
+                            detail::tensor_half_t* out_ptr = result.template ptr<detail::tensor_half_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
-                                float l = __half2float(left_ptr[i]);
-                                float r = __half2float(right_ptr[i]);
-                                out_ptr[i] = __float2half(op(l, r));
+                                float l = detail::tensor_half_to_float(left_ptr[i]);
+                                float r = detail::tensor_half_to_float(right_ptr[i]);
+                                out_ptr[i] = detail::tensor_float_to_half(op(l, r));
                             }
                         } else {
                             Tensor left_broadcast = left_tensor;
@@ -388,14 +388,14 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const __half* left_ptr = left_broadcast.template ptr<__half>();
-                            const __half* right_ptr = right_broadcast.template ptr<__half>();
-                            __half* out_ptr = result.template ptr<__half>();
+                            const detail::tensor_half_t* left_ptr = left_broadcast.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = right_broadcast.template ptr<detail::tensor_half_t>();
+                            detail::tensor_half_t* out_ptr = result.template ptr<detail::tensor_half_t>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
-                                float l = __half2float(left_ptr[i]);
-                                float r = __half2float(right_ptr[i]);
-                                out_ptr[i] = __float2half(op(l, r));
+                                float l = detail::tensor_half_to_float(left_ptr[i]);
+                                float r = detail::tensor_half_to_float(right_ptr[i]);
+                                out_ptr[i] = detail::tensor_float_to_half(op(l, r));
                             }
                         }
                     }
@@ -675,13 +675,13 @@ namespace lfs::core {
                         // CPU fallback
                         if (!needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            const __half* left_ptr = left_tensor.template ptr<__half>();
-                            const __half* right_ptr = right_tensor.template ptr<__half>();
+                            const detail::tensor_half_t* left_ptr = left_tensor.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = right_tensor.template ptr<detail::tensor_half_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
-                                float l = __half2float(left_ptr[i]);
-                                float r = __half2float(right_ptr[i]);
+                                float l = detail::tensor_half_to_float(left_ptr[i]);
+                                float r = detail::tensor_half_to_float(right_ptr[i]);
                                 out_ptr[i] = op(l, r);
                             }
                         } else {
@@ -694,13 +694,13 @@ namespace lfs::core {
                                 right_broadcast = right_tensor.broadcast_to(shape).contiguous();
                             }
                             pin_operands({&left_broadcast, &right_broadcast});
-                            const __half* left_ptr = left_broadcast.template ptr<__half>();
-                            const __half* right_ptr = right_broadcast.template ptr<__half>();
+                            const detail::tensor_half_t* left_ptr = left_broadcast.template ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = right_broadcast.template ptr<detail::tensor_half_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
                             size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
-                                float l = __half2float(left_ptr[i]);
-                                float r = __half2float(right_ptr[i]);
+                                float l = detail::tensor_half_to_float(left_ptr[i]);
+                                float r = detail::tensor_half_to_float(right_ptr[i]);
                                 out_ptr[i] = op(l, r);
                             }
                         }

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # CUDA library for IO-specific kernels (morton encoding, k-means)
+if(LFS_HAS_CUDA)
 add_library(lfs_io_cuda STATIC
         cuda/morton_encoding.hpp
         cuda/morton_encoding.cu
@@ -52,6 +53,7 @@ if(MSVC)
             $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
 endif()
+endif()
 
 # SPZ library (Niantic compressed format) - MIT licensed
 add_library(spz_lib STATIC
@@ -95,10 +97,6 @@ add_library(lfs_video STATIC
         video/video_encoder.hpp
         video/video_encoder.cpp
         video/video_reconstruction.cpp
-        video/color_convert.cuh
-        video/color_convert.cu
-        video/cuda_frame_handoff.hpp
-        video/cuda_frame_handoff.cpp
         video_frame_extractor.hpp
         video_frame_extractor.cpp
         hdr_tonemap.hpp
@@ -109,6 +107,13 @@ add_library(lfs_video STATIC
         video_player.hpp
         video_player.cpp
 )
+if(LFS_HAS_CUDA)
+    target_sources(lfs_video PRIVATE
+        video/color_convert.cuh
+        video/color_convert.cu
+        video/cuda_frame_handoff.hpp
+        video/cuda_frame_handoff.cpp)
+endif()
 
 target_include_directories(lfs_video
         PUBLIC
@@ -128,8 +133,8 @@ target_link_libraries(lfs_video
         PkgConfig::FFMPEG
         spdlog::spdlog
         nlohmann_json::nlohmann_json
-        CUDA::cudart
-        CUDA::cuda_driver
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cuda_driver>
 )
 
 # libplacebo's static pkg-config dependency chain includes shaderc and
@@ -209,7 +214,6 @@ add_library(lfs_io STATIC
         loader.cpp
         ppisp_file.cpp
         dataset_scene_import.cpp
-        splat_decimate.cpp
 
         # Internal implementation files
         # Core interfaces and types
@@ -279,9 +283,6 @@ add_library(lfs_io STATIC
         mesh/texture_loader.hpp
         mesh/texture_loader.cpp
         cache_image_loader.cpp
-        nvcodec_image_loader.hpp
-        nvcodec_image_loader.cpp
-        pipelined_image_loader.cpp
         stb_image_impl.cpp
         tinyply.cpp
 
@@ -310,6 +311,15 @@ add_library(lfs_io STATIC
         project/embedded_dataset.cpp
 
 )
+if(LFS_HAS_CUDA)
+    target_sources(lfs_io PRIVATE
+        splat_decimate.cpp
+        nvcodec_image_loader.hpp
+        nvcodec_image_loader.cpp
+        pipelined_image_loader.cpp)
+else()
+    target_sources(lfs_io PRIVATE splat_decimate_no_cuda.cpp)
+endif()
 
 # Set include directories
 target_include_directories(lfs_io
@@ -317,6 +327,7 @@ target_include_directories(lfs_io
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
         PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/rendering/include
         ${CMAKE_SOURCE_DIR}/external/spz
@@ -364,8 +375,9 @@ else()
     set(ARCHIVE_LIB ${ARCHIVE_LIBRARY})
 endif()
 
-# Ensure CUDA library is built first
-add_dependencies(lfs_io lfs_io_cuda)
+if(LFS_HAS_CUDA)
+    add_dependencies(lfs_io lfs_io_cuda)
+endif()
 
 # Link dependencies
 target_link_libraries(lfs_io
@@ -384,9 +396,9 @@ target_link_libraries(lfs_io
         zstd::libzstd          # .licht project container chunk compression
         OpenSSL::Crypto
         xxHash::xxhash         # REFS fingerprints and embedded-payload provenance
-        CUDA::cudart           # CUDA runtime for nvImageCodec
-        lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
-        lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart> # CUDA runtime for nvImageCodec
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_io_cuda>  # IO-specific CUDA kernels (morton, k-means)
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda> # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
         lfs_tinyusdz           # USDA parser for flat Gaussian ParticleField interchange
         OpenMeshCore
@@ -395,11 +407,11 @@ target_link_libraries(lfs_io
 target_compile_definitions(lfs_io PRIVATE nsel_CONFIG_SELECT_EXPECTED=1)
 
 # Link nvImageCodec if available
-if(TARGET nvimgcodec)
+if(LFS_HAS_CUDA AND TARGET nvimgcodec)
     target_link_libraries(lfs_io PRIVATE nvimgcodec)
     add_dependencies(lfs_io nvimgcodec)
     message(STATUS "Linking nvImageCodec to lfs_io")
-else()
+elseif(LFS_HAS_CUDA)
     message(WARNING "nvImageCodec target not found - JPEG hardware decode will not work")
 endif()
 

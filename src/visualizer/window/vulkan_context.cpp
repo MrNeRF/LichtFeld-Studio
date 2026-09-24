@@ -63,7 +63,7 @@ namespace lfs::vis {
             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
         constexpr VkExternalSemaphoreHandleTypeFlagBits kExternalSemaphoreHandleType =
             VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-#else
+#elif defined(__linux__)
         constexpr VkExternalMemoryHandleTypeFlagBits kExternalMemoryHandleType =
             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
         constexpr VkExternalSemaphoreHandleTypeFlagBits kExternalSemaphoreHandleType =
@@ -2153,6 +2153,7 @@ namespace lfs::vis {
             for (const auto& name : dlss_instance_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
+#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2163,6 +2164,10 @@ namespace lfs::vis {
         if (instance_external_semaphore_capabilities_enabled_) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
         }
+#else
+        instance_external_memory_capabilities_enabled_ = false;
+        instance_external_semaphore_capabilities_enabled_ = false;
+#endif
 
         instance_surface_maintenance_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) &&
@@ -2235,7 +2240,7 @@ namespace lfs::vis {
 
         const void* next = validation_enabled_ ? &debug_create_info : nullptr;
         const VkResult result = lfs::core::create_vulkan_instance(
-            app_info, extensions, layers, next, 0, &instance_, true);
+            app_info, extensions, layers, next, 0, &instance_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
         }
@@ -2581,6 +2586,7 @@ namespace lfs::vis {
         // The tensor backend gets its own queue: the second queue of the compute
         // family when it has one, else the second queue of the graphics family.
         std::optional<uint32_t> tensor_queue_family;
+        uint32_t tensor_queue_index = 1;
         {
             uint32_t family_count = 0;
             vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
@@ -2593,6 +2599,17 @@ namespace lfs::vis {
                     break;
                 }
             }
+            if (!tensor_queue_family) {
+                for (uint32_t candidate = 0; candidate < family_count; ++candidate) {
+                    if (!unique_families.contains(candidate) &&
+                        (family_props[candidate].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+                        tensor_queue_family = candidate;
+                        tensor_queue_index = 0;
+                        unique_families.insert(candidate);
+                        break;
+                    }
+                }
+            }
         }
         std::vector<VkDeviceQueueCreateInfo> queue_infos;
         static constexpr std::array<float, 2> queue_priorities{1.0f, 1.0f};
@@ -2600,7 +2617,7 @@ namespace lfs::vis {
             VkDeviceQueueCreateInfo queue_info{};
             queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
             queue_info.queueFamilyIndex = family;
-            queue_info.queueCount = tensor_queue_family == family ? 2 : 1;
+            queue_info.queueCount = tensor_queue_family == family ? tensor_queue_index + 1 : 1;
             queue_info.pQueuePriorities = queue_priorities.data();
             queue_infos.push_back(queue_info);
         }
@@ -2642,13 +2659,14 @@ namespace lfs::vis {
             for (const auto& name : dlss_device_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
+#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
         const bool has_external_memory =
             instance_external_memory_capabilities_enabled_ &&
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
 #ifdef _WIN32
         const bool has_platform_external_memory =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
-#else
+#elif defined(__linux__)
         const bool has_platform_external_memory =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
@@ -2657,7 +2675,7 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
 #ifdef _WIN32
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
-#else
+#elif defined(__linux__)
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
         }
@@ -2668,7 +2686,7 @@ namespace lfs::vis {
 #ifdef _WIN32
         const bool has_platform_external_semaphore =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
-#else
+#elif defined(__linux__)
         const bool has_platform_external_semaphore =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 #endif
@@ -2677,10 +2695,14 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
 #ifdef _WIN32
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
-#else
+#elif defined(__linux__)
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 #endif
         }
+#else
+        constexpr bool enable_external_memory = false;
+        constexpr bool enable_external_semaphore = false;
+#endif
 
         const bool enable_dedicated_allocation =
             enable_external_memory &&
@@ -2879,6 +2901,7 @@ namespace lfs::vis {
         features2.features.shaderInt64 = supported_features2.features.shaderInt64;
         features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
         features2.features.wideLines = supported_features2.features.wideLines;
+        features2.features.largePoints = supported_features2.features.largePoints;
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
@@ -2919,7 +2942,7 @@ namespace lfs::vis {
         tensor_backend_device_ = {};
         if (tensor_queue_family.has_value()) {
             tensor_backend_device_.queue_family = *tensor_queue_family;
-            vkGetDeviceQueue(device_, *tensor_queue_family, 1, &tensor_backend_device_.queue);
+            vkGetDeviceQueue(device_, *tensor_queue_family, tensor_queue_index, &tensor_backend_device_.queue);
             tensor_backend_device_.shader_atomic_float =
                 atomic_float_features.shaderBufferFloat32AtomicAdd == VK_TRUE;
             tensor_backend_device_.shader_float64 = features2.features.shaderFloat64 == VK_TRUE;
@@ -2999,21 +3022,29 @@ namespace lfs::vis {
         vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
         line_width_range_[0] = device_properties.limits.lineWidthRange[0];
         line_width_range_[1] = device_properties.limits.lineWidthRange[1];
-        if (!external_memory_interop_enabled_) {
+#ifdef __APPLE__
+        constexpr bool require_external_interop = false;
+#else
+        const bool require_external_interop = LFS_HAS_CUDA || !tensor_backend_device_.complete;
+#endif
+        if (require_external_interop && !external_memory_interop_enabled_) {
             return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
         }
-        if (!external_semaphore_interop_enabled_) {
+        if (require_external_interop && !external_semaphore_interop_enabled_) {
             return fail("Vulkan external timeline-semaphore interop is required (KHR_external_semaphore + platform variant); device is missing the extension(s)");
         }
-        LOG_INFO("Vulkan external memory interop enabled{}",
-                 external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
-        if (lfs::core::shareable_allocation_limited()) {
-            LOG_INFO("Vulkan external memory interop shareable ceiling: {} bytes ({})",
-                     lfs::core::max_shareable_allocation_bytes(),
-                     lfs::core::shareable_allocation_limit_from_env() ? "env override"
-                                                                      : "platform default");
+        if (external_memory_interop_enabled_) {
+            LOG_INFO("Vulkan external memory interop enabled{}",
+                     external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
+            if (lfs::core::shareable_allocation_limited()) {
+                LOG_INFO("Vulkan external memory interop shareable ceiling: {} bytes ({})",
+                         lfs::core::max_shareable_allocation_bytes(),
+                         lfs::core::shareable_allocation_limit_from_env() ? "env override"
+                                                                          : "platform default");
+            }
         }
-        LOG_INFO("Vulkan external timeline semaphore interop enabled");
+        if (external_semaphore_interop_enabled_)
+            LOG_INFO("Vulkan external timeline semaphore interop enabled");
         LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={} fill_mode_non_solid={} wide_lines={}",
                  has_push_descriptor_,
                  has_host_image_copy_,
@@ -3447,6 +3478,9 @@ namespace lfs::vis {
                                              const std::string_view diagnostic_scope,
                                              const std::string_view diagnostic_label) {
         out = {};
+#if !LFS_HAS_CUDA || !(defined(_WIN32) || defined(__linux__))
+        return fail("CUDA/Vulkan external-buffer interop is unavailable in this build");
+#else
 
         if (!device_ || !physical_device_) {
             return fail("Cannot import external Vulkan buffer before device initialization");
@@ -3643,6 +3677,7 @@ namespace lfs::vis {
         gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
         out.census_counted = true;
         return true;
+#endif
     }
 
     bool VulkanContext::importExportableBlock(const lfs::core::ExportableBlock& block,
@@ -3651,6 +3686,9 @@ namespace lfs::vis {
                                               const std::string_view diagnostic_scope,
                                               const std::string_view diagnostic_label) {
         out = {};
+#if !LFS_HAS_CUDA || !(defined(_WIN32) || defined(__linux__))
+        return fail("CUDA/Vulkan exportable-block interop is unavailable in this build");
+#else
         if (!device_ || !physical_device_) {
             return fail("Cannot import exportable block before device initialization");
         }
@@ -3731,9 +3769,13 @@ namespace lfs::vis {
                   block.chunks.size(),
                   buffer_device_address_enabled_);
         return true;
+#endif
     }
 
     bool VulkanContext::bindNewChunks(ExternalBuffer& imported, const lfs::core::ExportableBlock& block) {
+#if !LFS_HAS_CUDA || !(defined(_WIN32) || defined(__linux__))
+        return fail("CUDA/Vulkan sparse-buffer interop is unavailable in this build");
+#else
         if (!device_ || imported.buffer == VK_NULL_HANDLE) {
             return fail("bindNewChunks requires an imported VkBuffer");
         }
@@ -3910,6 +3952,7 @@ namespace lfs::vis {
                  imported.bound_chunks,
                  block.committed_bytes >> 20);
         return true;
+#endif
     }
 
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
@@ -3944,6 +3987,9 @@ namespace lfs::vis {
                                                         ExternalSemaphore& out,
                                                         const std::string_view diagnostic_scope) {
         out = {};
+#if !LFS_HAS_CUDA || !(defined(_WIN32) || defined(__linux__))
+        return fail("CUDA/Vulkan external-semaphore interop is unavailable in this build");
+#else
 
         if (!device_ || !physical_device_) {
             return fail("Cannot create external Vulkan semaphore before device initialization");
@@ -3997,6 +4043,7 @@ namespace lfs::vis {
         gpu_object_census_.onCreate(GpuObjectKind::ExternalSemaphore, out.diagnostic_scope);
         out.census_counted = true;
         return true;
+#endif
     }
 
     void VulkanContext::destroyExternalSemaphore(ExternalSemaphore& semaphore) {

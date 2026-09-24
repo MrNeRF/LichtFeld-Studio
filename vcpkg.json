@@ -11,7 +11,10 @@
         "avcodec",
         "avfilter",
         "avformat",
-        "nvcodec",
+        {
+          "name": "nvcodec",
+          "platform": "!osx"
+        },
         "openh264",
         "swscale"
       ]

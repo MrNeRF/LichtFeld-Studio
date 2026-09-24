@@ -9,8 +9,7 @@
 // Frozen layout and protocol: .codex_tmp/phase-6c-device-fault-spec.md §0.1 / §1 / §9.
 
 #include "core/export.hpp"
-
-#include <cuda_runtime_api.h>
+#include "core/cuda_types.hpp"
 
 #include <cstddef>
 #include <cstdint>

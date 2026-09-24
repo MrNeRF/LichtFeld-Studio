@@ -10,7 +10,9 @@
 #include "core/tensor_backend.hpp"
 #include <algorithm>
 #include <array>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <format>
 
 extern "C" {
@@ -18,7 +20,9 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
+#if LFS_HAS_CUDA
 #include <libavutil/hwcontext_cuda.h>
+#endif
 #include <libavutil/opt.h>
 }
 
@@ -106,8 +110,12 @@ namespace lfs::io::video {
             width_ = opts.width;
             height_ = opts.height;
             framerate_ = opts.framerate;
+#if LFS_HAS_CUDA
             if (core::default_gpu_backend() != core::GpuBackend::CUDA ||
                 !tryInitNvenc(path, opts)) {
+#else
+            if (true) {
+#endif
                 cleanup();
                 LOG_INFO("NVENC unavailable, falling back to software H.264");
                 if (const auto result = initSoftwareH264(path, opts); !result) {
@@ -140,8 +148,12 @@ namespace lfs::io::video {
                                        ? rgb_hwc.gpu()
                                        : rgb_hwc;
                 const auto planes = rgbToYuv420p(frame.contiguous());
+#if LFS_HAS_CUDA
                 return use_nvenc_ ? writeFrameNvenc(planes)
                                   : writeFrameSoftwareH264(planes);
+#else
+                return writeFrameSoftwareH264(planes);
+#endif
             } catch (const lfs::Exception& e) {
                 lfs::Error error = lfs::Error(e.error())
                                        .with_context("write video frame", LFS_SOURCE_SITE_CURRENT(),
@@ -185,6 +197,7 @@ namespace lfs::io::video {
         [[nodiscard]] bool isOpen() const { return is_open_; }
 
     private:
+#if LFS_HAS_CUDA
         bool tryInitNvenc(const std::filesystem::path& path, const VideoExportOptions& opts) {
             const AVCodec* const codec = avcodec_find_encoder_by_name("h264_nvenc");
             if (!codec) {
@@ -305,6 +318,7 @@ namespace lfs::io::video {
             LOG_INFO("NVENC: {}x{} @ {} fps", width_, height_, framerate_);
             return true;
         }
+#endif
 
         std::expected<void, std::string> initSoftwareH264(
             const std::filesystem::path& path,
@@ -405,6 +419,7 @@ namespace lfs::io::video {
             return {};
         }
 
+#if LFS_HAS_CUDA
         [[nodiscard]] static std::expected<void, std::string> checkCuda(
             const cudaError_t status,
             const char* const operation) {
@@ -439,6 +454,7 @@ namespace lfs::io::video {
             ++frame_count_;
             return {};
         }
+#endif
 
         std::expected<void, std::string> writeFrameSoftwareH264(const YuvPlanes& planes) {
             const int ret = av_frame_make_writable(frame_);

@@ -12,7 +12,8 @@ foreach(_lfs_required_variable IN ITEMS
         LFS_CXX_COMPILER_ID
         LFS_CXX_COMPILER_VERSION
         LFS_CUDA_COMPILER_ID
-        LFS_CUDA_COMPILER_VERSION)
+        LFS_CUDA_COMPILER_VERSION
+        LFS_HAS_CUDA)
     if(NOT DEFINED ${_lfs_required_variable})
         message(FATAL_ERROR "${_lfs_required_variable} is required")
     endif()
@@ -60,7 +61,7 @@ if(NOT _lfs_git_commit_hash_short)
 endif()
 
 set(_lfs_core_abi_material
-    "${LFS_PROJECT_VERSION}|${_lfs_git_commit_hash_short}|${LFS_BUILD_CONFIG}|${LFS_SYSTEM_NAME}|${LFS_SIZEOF_VOID_P}|${LFS_CXX_COMPILER_ID}|${LFS_CXX_COMPILER_VERSION}|${LFS_CUDA_COMPILER_ID}|${LFS_CUDA_COMPILER_VERSION}|${LFS_CUDA_ARCHITECTURES}|${LFS_VCPKG_TARGET_TRIPLET}|trainer=${LFS_BUILD_TRAINER}")
+    "${LFS_PROJECT_VERSION}|${_lfs_git_commit_hash_short}|${LFS_BUILD_CONFIG}|${LFS_SYSTEM_NAME}|${LFS_SIZEOF_VOID_P}|${LFS_CXX_COMPILER_ID}|${LFS_CXX_COMPILER_VERSION}|${LFS_CUDA_COMPILER_ID}|${LFS_CUDA_COMPILER_VERSION}|${LFS_CUDA_ARCHITECTURES}|${LFS_VCPKG_TARGET_TRIPLET}|cuda=${LFS_HAS_CUDA}|trainer=${LFS_BUILD_TRAINER}")
 foreach(_lfs_core_build_input IN LISTS LFS_CORE_BUILD_INPUTS)
     file(SHA256 "${_lfs_core_build_input}" _lfs_core_build_input_hash)
     string(APPEND _lfs_core_abi_material "|${_lfs_core_build_input_hash}")

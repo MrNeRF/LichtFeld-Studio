@@ -10,11 +10,15 @@
 #include "core/events.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/logger.hpp"
+#if LFS_HAS_CUDA
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#endif
 #include "core/tensor_backend.hpp"
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime_api.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -57,6 +61,7 @@ namespace lfs::core {
         size_t query_device_free_bytes(const MemoryDomain domain) {
             if (domain == MemoryDomain::VulkanDevice)
                 return query_vulkan_memory().free_bytes;
+#if LFS_HAS_CUDA
             // Consume only a sticky OOM so an unrelated asynchronous CUDA error
             // is preserved for its real handler.
             const cudaError_t sticky = cudaPeekAtLastError();
@@ -73,19 +78,27 @@ namespace lfs::core {
                 return 0;
             }
             return free_bytes;
+#else
+            return 0;
+#endif
         }
 
         size_t query_device_total_bytes(const MemoryDomain domain) {
             if (domain == MemoryDomain::VulkanDevice)
                 return query_vulkan_memory().total_bytes;
+#if LFS_HAS_CUDA
             size_t free_bytes = 0;
             size_t total_bytes = 0;
             if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
                 return 0;
             }
             return total_bytes;
+#else
+            return 0;
+#endif
         }
 
+#if LFS_HAS_CUDA
         [[noreturn]] void throw_cuda_unavailable_allocation(
             const size_t bytes,
             const cudaStream_t stream,
@@ -147,6 +160,7 @@ namespace lfs::core {
                 cudaGetErrorName(status), cudaGetErrorString(status), bytes,
                 label ? label : "", operation ? operation : ""));
         }
+#endif
 
     } // namespace
 
@@ -250,6 +264,7 @@ namespace lfs::core {
 
     MemoryPressureCoordinator::MemoryPressureCoordinator()
         : impl_(new Impl()) {
+#if LFS_HAS_CUDA
         register_client(PressureClient{
             .name = "tensor-cuda-pool",
             .priority = 10,
@@ -275,6 +290,7 @@ namespace lfs::core {
                 allocator.empty_cache();
                 return ReclaimResult{.logical_bytes_released = before}; },
         });
+#endif
     }
 
     MemoryPressureCoordinator::~MemoryPressureCoordinator() {
@@ -291,6 +307,7 @@ namespace lfs::core {
                                 const CudaStorageMode mode,
                                 const char* const label,
                                 const char* const operation) {
+#if LFS_HAS_CUDA
         if (bytes == 0) {
             return nullptr;
         }
@@ -355,6 +372,9 @@ namespace lfs::core {
             throw MemoryAllocationError(failure);
         }
         return ptr;
+#else
+        throw std::runtime_error("CUDA support is not compiled into this build");
+#endif
     }
 
     size_t MemoryPressureCoordinator::reserve_bytes(const MemoryDomain domain) const noexcept {
@@ -390,7 +410,7 @@ namespace lfs::core {
         if (Impl::in_episode) {
             return 0;
         }
-        if (cuda_is_unavailable()) {
+        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
             return 0;
         }
         Impl::in_episode = true;
@@ -399,7 +419,7 @@ namespace lfs::core {
         } guard;
 
         std::lock_guard<std::mutex> episode_lock(impl_->episode_mutex);
-        if (cuda_is_unavailable()) {
+        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
             return 0;
         }
 
@@ -453,7 +473,9 @@ namespace lfs::core {
         const bool satisfied = !is_device_heap(failure.domain) || free_after >= target;
         const size_t observed_released = free_after > free_before ? free_after - free_before : 0;
 
+#if LFS_HAS_CUDA
         record_cuda_breadcrumb("memory-pressure.episode", __FILE__, __LINE__);
+#endif
 
         std::string summary = std::format(
             "VRAM pressure episode #{} ({}): requested {}, reserve {}, free {} -> {}, released {} across {} client(s){}",
@@ -492,7 +514,7 @@ namespace lfs::core {
 
     bool MemoryPressureCoordinator::relieve_and_should_retry(const AllocationFailure& failure,
                                                              PressureContext context) {
-        if (cuda_is_unavailable()) {
+        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
             return false;
         }
         const size_t target = saturating_add(failure.requested_bytes, reserve_bytes(failure.domain));
@@ -548,9 +570,11 @@ namespace lfs::core {
     }
 
     void MemoryPressureCoordinator::maybe_recover() {
+#if LFS_HAS_CUDA
         if (cuda_is_unavailable()) {
             return;
         }
+#endif
         if (!impl_->pressure_active.load()) {
             return;
         }
@@ -562,7 +586,8 @@ namespace lfs::core {
 
         const size_t target = impl_->last_target_free.load();
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
-        if (impl_->query_free(MemoryDomain::CudaDevice) >= hysteresis) {
+        if (impl_->query_free(LFS_HAS_CUDA ? MemoryDomain::CudaDevice
+                                           : MemoryDomain::VulkanDevice) >= hysteresis) {
             impl_->pressure_active.store(false);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");
         }

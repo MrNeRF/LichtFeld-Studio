@@ -14,7 +14,9 @@
 #include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
+#if LFS_HAS_CUDA
 #include <nvtx3/nvToolsExt.h>
+#endif
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -50,6 +52,7 @@ namespace lfs::vis {
     class ScopedNvtxRange {
     public:
         ScopedNvtxRange(const char* name, std::uint32_t argb) {
+#if LFS_HAS_CUDA
             nvtxEventAttributes_t attribs{};
             attribs.version = NVTX_VERSION;
             attribs.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
@@ -58,8 +61,13 @@ namespace lfs::vis {
             attribs.messageType = NVTX_MESSAGE_TYPE_ASCII;
             attribs.message.ascii = name;
             nvtxRangePushEx(&attribs);
+#endif
         }
-        ~ScopedNvtxRange() { nvtxRangePop(); }
+        ~ScopedNvtxRange() {
+#if LFS_HAS_CUDA
+            nvtxRangePop();
+#endif
+        }
         ScopedNvtxRange(const ScopedNvtxRange&) = delete;
         ScopedNvtxRange& operator=(const ScopedNvtxRange&) = delete;
         ScopedNvtxRange(ScopedNvtxRange&&) = delete;

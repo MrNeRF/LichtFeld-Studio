@@ -18,7 +18,9 @@
 #endif
 
 #include "io/loader.hpp"
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #include "indicators.hpp"
 #include <curl/curl.h>
@@ -802,6 +804,7 @@ namespace {
                                          path_to_string(lfw_path) + ": " +
                                          std::string(loaded.error().detail()));
             model_ = std::move(*loaded);
+#if LFS_HAS_CUDA
             int device = 0;
             cudaDeviceProp properties{};
             if (cudaGetDevice(&device) != cudaSuccess ||
@@ -809,6 +812,9 @@ namespace {
                 throw std::runtime_error("Failed to query native MoGe CUDA device");
             }
             LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
+#else
+            LOG_INFO("Normal estimation: native engine on Vulkan");
+#endif
         }
 
         HeadMaps run(const Image& image, int64_t num_tokens) {
@@ -824,10 +830,13 @@ namespace {
             }
             if (lfs::core::gpu_backend_of(input_) == lfs::core::GpuBackend::Vulkan) {
                 input_.copy_from(lfs::core::Tensor::from_vector(chw, shape, lfs::core::Device::CPU));
-            } else {
+            }
+#if LFS_HAS_CUDA
+            else {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
                                                cudaMemcpyHostToDevice, input_.stream()));
             }
+#endif
             auto result = model_.forward(input_, num_tokens);
             if (!result)
                 throw std::runtime_error("Native MoGe-2 forward failed: " +

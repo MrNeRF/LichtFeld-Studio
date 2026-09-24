@@ -31,6 +31,6 @@ namespace lfs::vis::vksplat {
         std::size_t non_sh_bytes = 0;
     };
 
-    LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
+    [[nodiscard]] LFS_VIS_API std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
         const lfs::core::SplatData& splat_data, int upload_sh_degree = -1);
 } // namespace lfs::vis::vksplat

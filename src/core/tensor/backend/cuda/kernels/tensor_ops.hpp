@@ -4,6 +4,7 @@
 #pragma once
 #include "core/tensor/internal/private_access.hpp"
 
+#include "core/detail/fused_pointwise.hpp"
 #include "core/export.hpp"
 #include "core/tensor/internal/tensor_functors.hpp"
 #include <cuda_fp16.h>
@@ -539,20 +540,6 @@ namespace lfs::core::tensor_ops {
                                                         cudaStream_t stream = nullptr);
 
     // ============= Fused Pointwise Chain =============
-    static constexpr int FUSED_POINTWISE_MAX_OPS = 16;
-
-    struct FusedPointwiseOp {
-        uint8_t kind = 0;
-        float scalar = 0.0f;
-        // Device pointer for tensor-binary stages (kinds 4-7). Null for scalar/unary.
-        const float* rhs = nullptr;
-    };
-
-    struct FusedPointwiseOpChain {
-        FusedPointwiseOp ops[FUSED_POINTWISE_MAX_OPS];
-        int num_ops = 0;
-    };
-
     // Optional test/diagnostic counter of tensor-lib kernel launches (fused + binary).
     LFS_CORE_API void reset_tensor_kernel_launch_count() noexcept;
     LFS_CORE_API uint64_t tensor_kernel_launch_count() noexcept;

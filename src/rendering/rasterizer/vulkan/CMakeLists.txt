@@ -289,8 +289,11 @@ _vulkan_add_slang_shader(wave_partition         macro_tile_shader.slang MACRO_EN
 _vulkan_add_slang_shader(wave_partition_visible macro_tile_shader.slang MACRO_ENTRY=6 LFS_VISIBLE_BOUNDED=1)
 _vulkan_add_slang_shader(macro_raster                  macro_raster.slang)
 _vulkan_add_slang_shader(macro_raster_fp32             macro_raster.slang LFS_HIGS_FP32=1)
+_vulkan_add_slang_shader(macro_raster_fp32_lean        macro_raster.slang LFS_HIGS_FP32=1 LFS_HIGS_LEAN_STAGING=1)
 _vulkan_add_slang_shader(macro_raster_overlays         macro_raster.slang LFS_RASTER_OVERLAYS=1)
+_vulkan_add_slang_shader(macro_raster_overlays_lean    macro_raster.slang LFS_RASTER_OVERLAYS=1 LFS_HIGS_LEAN_STAGING=1)
 _vulkan_add_slang_shader(macro_raster_overlays_fp32    macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1)
+_vulkan_add_slang_shader(macro_raster_overlays_fp32_lean macro_raster.slang LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1 LFS_HIGS_LEAN_STAGING=1)
 _vulkan_add_slang_shader(macro_compose          macro_compose.slang)
 _vulkan_add_slang_shader(macro_compose_overlays macro_compose.slang LFS_RASTER_OVERLAYS=1)
 

@@ -3,7 +3,9 @@
 #pragma once
 
 #include "core/assert.hpp"
-#include "core/cuda_error.hpp"
+#include "core/cuda_types.hpp"
+#include "core/cuda_safe_format.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include <algorithm>
 #include <array>
@@ -12,7 +14,6 @@
 #include <chrono>
 #include <concepts>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <deque>
 #include <functional>
 #include <initializer_list>
@@ -50,7 +51,6 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void record_tensor_kernel_launch(uint64_t n) noexcept;
 }
 
-#include <cuda_fp16.h>
 
 namespace lfs::core {
 
@@ -81,7 +81,7 @@ namespace lfs::core {
                 return "void";
             else if constexpr (std::is_same_v<Value, float>)
                 return "float";
-            else if constexpr (std::is_same_v<Value, __half>)
+            else if constexpr (std::is_same_v<Value, detail::tensor_half_t>)
                 return "__half";
             else if constexpr (std::is_same_v<Value, int> || std::is_same_v<Value, int32_t>)
                 return "int32";
@@ -1210,13 +1210,13 @@ namespace lfs::core {
                                              result.numel(), op);
                             break;
                         case DataType::Float16: {
-                            const __half* left_ptr = ptr<__half>();
-                            const __half* right_ptr = other.ptr<__half>();
-                            __half* out_ptr = result.ptr<__half>();
+                            const detail::tensor_half_t* left_ptr = ptr<detail::tensor_half_t>();
+                            const detail::tensor_half_t* right_ptr = other.ptr<detail::tensor_half_t>();
+                            detail::tensor_half_t* out_ptr = result.ptr<detail::tensor_half_t>();
                             const size_t n = result.numel();
                             for (size_t i = 0; i < n; ++i) {
-                                out_ptr[i] = __float2half(
-                                    op(__half2float(left_ptr[i]), __half2float(right_ptr[i])));
+                                out_ptr[i] = detail::tensor_float_to_half(
+                                    op(detail::tensor_half_to_float(left_ptr[i]), detail::tensor_half_to_float(right_ptr[i])));
                             }
                             break;
                         }
@@ -1773,7 +1773,7 @@ namespace lfs::core {
             if constexpr (!std::is_void_v<Value>) {
                 const bool dtype_matches =
                     (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
-                    (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
+                    (std::is_same_v<Value, detail::tensor_half_t> && dtype_ == DataType::Float16) ||
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
                       std::is_same_v<Value, uint32_t>) &&
                      dtype_ == DataType::Int32) ||

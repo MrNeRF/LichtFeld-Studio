@@ -2,14 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_impl.hpp"
 #include <atomic>
+#if LFS_HAS_CUDA
 #include <curand.h>
 #include <curand_kernel.h>
+#endif
 #include <mutex>
 #include <random>
 
+#if LFS_HAS_CUDA
 #define CHECK_CURAND(call)                                                   \
     do {                                                                     \
         const curandStatus_t error = (call);                                 \
@@ -17,6 +19,7 @@
                        std::string("CURAND operation failed with status ") + \
                            std::to_string(static_cast<int>(error)));         \
     } while (0)
+#endif
 
 namespace lfs::core {
 
@@ -28,7 +31,9 @@ namespace lfs::core {
         std::atomic<uint64_t> call_counter_{0};
         uint64_t cuda_offset_ = 0;
         uint64_t seed_ = 42;
+#if LFS_HAS_CUDA
         curandGenerator_t cuda_generator_ = nullptr;
+#endif
         std::mt19937_64 cpu_generator_;
         std::mutex cuda_mutex_;
 
@@ -36,6 +41,7 @@ namespace lfs::core {
                                 cpu_generator_(seed_) {}
 
         void ensure_cuda_generator() {
+#if LFS_HAS_CUDA
             if (cuda_generator_)
                 return;
             CHECK_CURAND(curandCreateGenerator(&cuda_generator_, CURAND_RNG_PSEUDO_PHILOX4_32_10));
@@ -45,11 +51,16 @@ namespace lfs::core {
                 cuda_generator_ = nullptr;
                 CHECK_CURAND(status);
             }
+#else
+            throw TensorError("CUDA random generation is not available in this build");
+#endif
         }
 
         ~RandomGeneratorImpl() {
+#if LFS_HAS_CUDA
             if (cuda_generator_)
                 curandDestroyGenerator(cuda_generator_);
+#endif
         }
     };
 
@@ -81,11 +92,13 @@ namespace lfs::core {
         impl->call_counter_.store(0);
         impl->cuda_offset_ = 0;
 
+#if LFS_HAS_CUDA
         if (impl->cuda_generator_) {
             CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(impl->cuda_generator_, seed));
             // IMPORTANT: Reset the offset to ensure reproducibility
             CHECK_CURAND(curandSetGeneratorOffset(impl->cuda_generator_, 0));
         }
+#endif
     }
 
     uint64_t RandomGenerator::get_next_cuda_seed() {
@@ -98,6 +111,7 @@ namespace lfs::core {
     void RandomGenerator::generate_cuda_normal(float* output, const size_t count,
                                                const float mean, const float std,
                                                const cudaStream_t stream) {
+#if LFS_HAS_CUDA
         LFS_ASSERT_MSG(output != nullptr,
                        "CUDA normal generation requires a valid output pointer");
         LFS_ASSERT_MSG(count > 0 && count % 2 == 0,
@@ -111,6 +125,9 @@ namespace lfs::core {
         impl->cuda_offset_ += count;
         CHECK_CURAND(curandSetStream(impl->cuda_generator_, stream));
         CHECK_CURAND(curandGenerateNormal(impl->cuda_generator_, output, count, mean, std));
+#else
+        throw TensorError("CUDA random generation is not available in this build");
+#endif
     }
 
     void* RandomGenerator::get_generator(Device device) {
@@ -118,9 +135,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "random generator received an invalid device");
         if (device == Device::GPU) {
+#if LFS_HAS_CUDA
             std::lock_guard lock(impl->cuda_mutex_);
             impl->ensure_cuda_generator();
             return &impl->cuda_generator_;
+#else
+            throw TensorError("CUDA random generator access is not available in this build");
+#endif
         } else {
             return &impl->cpu_generator_;
         }

@@ -3,7 +3,7 @@
 #pragma once
 #include "core/splat_transform_math.hpp"
 #include <cstddef>
-#include <cuda_runtime.h>
+#include "core/cuda_types.hpp"
 
 namespace lfs::core::cuda {
     void transform_splat_geometry(const splat_transform::LinearTransform& matrix,

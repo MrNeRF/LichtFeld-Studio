@@ -98,6 +98,9 @@ namespace lfs::core {
         static std::optional<HeadlessAdoptedDevice> try_create(bool external_interop = false, bool push_descriptors = false,
                                                                std::string_view requested_device = {},
                                                                const std::optional<VulkanDeviceUuid>& cuda_uuid = std::nullopt) {
+#if !LFS_HAS_CUDA
+            external_interop = false;
+#endif
             HeadlessAdoptedDevice device;
             VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
             application.pApplicationName = "LichtFeld Tensor Vulkan Adoption";
@@ -123,9 +126,11 @@ namespace lfs::core {
 #ifdef _WIN32
                 extensions.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
                 extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
-#else
+#elif defined(__linux__)
                 extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
                 extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+#else
+                return std::nullopt;
 #endif
             }
             struct Features {
@@ -165,7 +170,6 @@ namespace lfs::core {
             const auto [queue_family, shader_float16, shader_atomic_float] = features_by_device[*selected];
             if (shader_atomic_float)
                 extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
-
             // Same predicate extension the windowed viewer enables. Without it an
             // off-screen export has to read the instance count back to the CPU
             // before it can bound the depth waves.
@@ -176,9 +180,13 @@ namespace lfs::core {
                 VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
                 query.pNext = &supported;
                 vkGetPhysicalDeviceFeatures2(physical, &query);
+#if LFS_HAS_CUDA
                 const auto cuda = gpu_backend_device_info(GpuBackend::CUDA, 0);
                 const bool pre_volta = cuda && cuda->compute_capability_major > 0 &&
                                        cuda->compute_capability_major < 7;
+#else
+                constexpr bool pre_volta = false;
+#endif
                 if (supported.conditionalRendering == VK_TRUE &&
                     !environment::flag("LFS_VK_DISABLE_CONDITIONAL_RENDERING", pre_volta)) {
                     conditional_rendering = true;

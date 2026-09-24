@@ -6,6 +6,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/vulkan_helpers.hpp"
 #include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
@@ -161,9 +162,8 @@ namespace {
             application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
             application.pEngineName = "LichtFeld";
             application.apiVersion = VK_API_VERSION_1_3;
-            VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-            instance_info.pApplicationInfo = &application;
-            if (vkCreateInstance(&instance_info, nullptr, &device.instance_) != VK_SUCCESS) {
+            if (create_vulkan_instance(
+                    application, {}, {}, nullptr, 0, &device.instance_) != VK_SUCCESS) {
                 return std::nullopt;
             }
 
@@ -231,6 +231,7 @@ namespace {
             }
             extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
             extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+            enable_vulkan_device_portability(physical, extensions);
             const float priority = 1.0f;
             VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
             queue_info.queueFamilyIndex = queue_family;

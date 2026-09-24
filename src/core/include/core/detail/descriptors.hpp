@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/gpu_backend_fwd.hpp"
+#include "core/cuda_types.hpp"
 #include "core/splat_transform_math.hpp"
 #include "core/tensor_filters.hpp"
 #include "core/tensor_sh.hpp"
@@ -10,7 +11,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <optional>
 #include <type_traits>
 

@@ -3,13 +3,13 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/cuda_types.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 
 #include <array>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <memory>
 #include <optional>
 #include <string>

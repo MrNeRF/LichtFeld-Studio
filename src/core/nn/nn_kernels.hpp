@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/cuda_types.hpp"
 #include "core/tensor_fwd.hpp"
 
 #include <cstddef>
-#include <cuda_runtime.h>
 
 namespace lfs::core::nn::kernels {
 

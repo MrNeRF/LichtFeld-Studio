@@ -3,7 +3,9 @@
 
 #include "core/nn/weight_file.hpp"
 
+#if LFS_HAS_CUDA
 #include "core/cuda_error.hpp"
+#endif
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
@@ -76,6 +78,7 @@ namespace lfs::core::nn {
             }
             return tensor.to(dest_dtype);
         }
+#if LFS_HAS_CUDA
         if (dest_dtype == found->dtype) {
             auto gpu = Tensor::empty(found->shape, Device::GPU, dest_dtype);
             if (found->length > 0) {
@@ -91,6 +94,10 @@ namespace lfs::core::nn {
                                            cudaMemcpyHostToDevice, tmp.stream()));
         }
         return tmp.to(dest_dtype);
+#else
+        return io_error(lfs::ErrorCode::Unsupported,
+                        "the requested GPU backend is not compiled into this build");
+#endif
     }
 
     lfs::Result<std::unordered_map<std::string, Tensor>>

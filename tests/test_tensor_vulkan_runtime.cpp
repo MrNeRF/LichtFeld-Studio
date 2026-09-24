@@ -309,6 +309,7 @@ namespace {
                   source_allocation);
     }
 
+#if LFS_HAS_CUDA
     TEST_F(TensorVulkanCudaInterop, ExplicitCrossBackendCopyIsBitExactBothWays) {
         // Catches copy_to_backend consulting the active scope instead of the requested backend.
         Tensor scoped_same_device_clone;
@@ -356,6 +357,7 @@ namespace {
                       std::string::npos);
         }
     }
+#endif
 
     TEST_F(TensorVulkanRuntime, CrossThreadConsumerFlushesUnsubmittedProducer) {
         // Catches pending tokens that only synchronize the consuming thread's recorder.
@@ -695,6 +697,7 @@ namespace {
         EXPECT_TRUE(caps.float_controls_fp16 || !caps.shader_float16);
     }
 
+#if LFS_HAS_CUDA
     TEST_F(TensorVulkanCudaInterop, HalfConversionsMatchCudaBitForBitOnEverySpecialValue) {
         // The fp32 modules convert Float16 storage with integer arithmetic; a
         // wrong tie, a dropped subnormal, an early overflow or a NaN turned
@@ -733,6 +736,7 @@ namespace {
         }
         EXPECT_EQ(mismatches, 0u);
     }
+#endif
 
     TEST_F(TensorVulkanRuntime, InjectedDeviceLossRaisesTypedErrorsAndShutsDownCleanly) {
         // Catches a lost-device path that throws a boundary assertion instead of

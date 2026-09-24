@@ -70,6 +70,9 @@ if(TARGET Python::SABIModule)
     lfs_force_python_release_abi(Python::SABIModule)
 endif()
 
+add_library(lfs_python_embed INTERFACE)
+target_link_libraries(lfs_python_embed INTERFACE Python::Python)
+
 # Shared library for Python runtime state - must be shared to avoid duplicate statics
 # when linked into both the main executable and the Python module
 add_library(lfs_python_runtime SHARED
@@ -78,6 +81,7 @@ add_library(lfs_python_runtime SHARED
 
 target_include_directories(lfs_python_runtime
     PUBLIC
+        ${Python_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core/include
@@ -85,12 +89,19 @@ target_include_directories(lfs_python_runtime
 
 target_link_libraries(lfs_python_runtime
     PUBLIC
-        Python::Python
         glm::glm
     PRIVATE
         lfs_core
         lfs_logger
 )
+if(APPLE)
+    # The runtime is shared by the embedded application and the importable
+    # module. Resolve CPython from whichever process is hosting it; linking the
+    # static vcpkg libpython here would create a second interpreter on import.
+    target_link_options(lfs_python_runtime PRIVATE "LINKER:-undefined,dynamic_lookup")
+else()
+    target_link_libraries(lfs_python_runtime PUBLIC Python::Python)
+endif()
 
 target_compile_definitions(lfs_python_runtime
     PRIVATE
@@ -128,18 +139,21 @@ add_library(lfs_python_utils STATIC
 
 target_include_directories(lfs_python_utils
     PUBLIC
+        ${Python_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(lfs_python_utils
     PUBLIC
-        Python::Python
         lfs_core
         lfs_python_runtime
         lfs::tree_sitter
         lfs::tree_sitter_python
 )
+if(NOT APPLE)
+    target_link_libraries(lfs_python_utils PUBLIC Python::Python)
+endif()
 
 set(LFS_PYTHON_UTILS_DEFINITIONS
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
@@ -266,13 +280,16 @@ target_link_libraries(lfs_py PRIVATE
     ${LFS_PY_INTERNAL_LINK_LIBS}
     OpenMeshCore
     OpenMeshTools
-    CUDA::cudart
-    CUDA::curand
+    $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+    $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
     SDL3::SDL3
     ${CMAKE_DL_LIBS}
     GPUOpen::VulkanMemoryAllocator
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
+if(APPLE)
+    target_link_options(lfs_py PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 
 target_include_directories(lfs_py PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -500,9 +517,17 @@ stamp.touch()
         COMMENT "Checking committed Python stubs against generated stubs"
         VERBATIM
     )
-    add_custom_target(check_python_stubs ALL
-        DEPENDS "${PYTHON_STUB_CHECK_STAMP}"
-    )
+    if(LFS_HAS_CUDA)
+        add_custom_target(check_python_stubs ALL
+            DEPENDS "${PYTHON_STUB_CHECK_STAMP}"
+        )
+    else()
+        # The committed stubs describe the CUDA-enabled API defaults. Keep the
+        # check available explicitly while still generating no-CUDA stubs.
+        add_custom_target(check_python_stubs
+            DEPENDS "${PYTHON_STUB_CHECK_STAMP}"
+        )
+    endif()
 endif()
 
 # Copy lfs_plugins Python module to build directory (recursively to include subdirectories)

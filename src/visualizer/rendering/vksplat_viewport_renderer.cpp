@@ -817,9 +817,13 @@ namespace lfs::vis {
                 {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
                 {"macro_raster", (root / "generated/macro_raster.spv").string()},
                 {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
+                {"macro_raster_fp32_lean", (root / "generated/macro_raster_fp32_lean.spv").string()},
                 {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                {"macro_raster_overlays_lean", (root / "generated/macro_raster_overlays_lean.spv").string()},
                 {"macro_raster_overlays_fp32",
                  (root / "generated/macro_raster_overlays_fp32.spv").string()},
+                {"macro_raster_overlays_fp32_lean",
+                 (root / "generated/macro_raster_overlays_fp32_lean.spv").string()},
                 {"macro_compose", (root / "generated/macro_compose.spv").string()},
                 {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
             };

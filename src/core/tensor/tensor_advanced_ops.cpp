@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <cmath>

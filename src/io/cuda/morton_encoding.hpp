@@ -6,13 +6,18 @@
 
 #include "core/tensor.hpp"
 #include <cstdint>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#define LFS_IO_HOST_DEVICE __host__ __device__
+#else
+#define LFS_IO_HOST_DEVICE
+#endif
 
 namespace lfs::io {
 
     using lfs::core::Tensor;
 
-    __host__ __device__ constexpr uint64_t morton_spread(uint64_t x) {
+    LFS_IO_HOST_DEVICE constexpr uint64_t morton_spread(uint64_t x) {
         x &= 0x1fffffULL;
         x = (x | (x << 32)) & 0x1f00000000ffffULL;
         x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
@@ -21,15 +26,15 @@ namespace lfs::io {
         return (x | (x << 2)) & 0x1249249249249249ULL;
     }
 
-    __host__ __device__ constexpr uint64_t morton_encode(uint32_t x, uint32_t y, uint32_t z) {
+    LFS_IO_HOST_DEVICE constexpr uint64_t morton_encode(uint32_t x, uint32_t y, uint32_t z) {
         return morton_spread(x) | (morton_spread(y) << 1) | (morton_spread(z) << 2);
     }
 
-    __host__ __device__ constexpr float morton_multiplier(float extent) {
+    LFS_IO_HOST_DEVICE constexpr float morton_multiplier(float extent) {
         return extent == 0 ? 0 : float(1u << 21) / extent;
     }
 
-    __host__ __device__ constexpr uint32_t morton_coordinate(float position, float low, float multiplier) {
+    LFS_IO_HOST_DEVICE constexpr uint32_t morton_coordinate(float position, float low, float multiplier) {
         constexpr uint32_t axis_max = (1u << 21) - 1;
         const float normalized = (position - low) * multiplier;
         return normalized <= 0 ? 0 : normalized >= axis_max ? axis_max
@@ -50,3 +55,5 @@ namespace lfs::io {
     Tensor morton_sort_indices_for_positions(const Tensor& positions, Tensor* sorted_keys = nullptr);
 
 } // namespace lfs::io
+
+#undef LFS_IO_HOST_DEVICE

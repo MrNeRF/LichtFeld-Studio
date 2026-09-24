@@ -3,10 +3,9 @@
 #pragma once
 
 #include "core/cuda_safe_format.hpp"
+#include "core/cuda_types.hpp"
 #include "core/export.hpp"
 #include "core/source_site.hpp"
-
-#include <cuda_runtime_api.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -33,16 +32,16 @@ namespace lfs::core {
     };
 
     struct LFS_CORE_API CudaCheckState {
-        cudaError_t pre_call_error = cudaSuccess;
-        cudaError_t pre_call_sync_error = cudaSuccess;
+        cudaError_t pre_call_error{};
+        cudaError_t pre_call_sync_error{};
         uintptr_t stream = 0;
         bool pre_call_sampled = false;
     };
 
     struct LFS_CORE_API CudaCheckCompletion {
-        cudaError_t effective_error = cudaSuccess;
-        cudaError_t post_sync_error = cudaSuccess;
-        cudaError_t post_peek_error = cudaSuccess;
+        cudaError_t effective_error{};
+        cudaError_t post_sync_error{};
+        cudaError_t post_peek_error{};
     };
 
     // Trivially-copyable, non-owning cold-path payload for a detected CUDA

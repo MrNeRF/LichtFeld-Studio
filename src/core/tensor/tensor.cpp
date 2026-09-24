@@ -4,23 +4,25 @@
 #include "core/checked_arithmetic.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#endif
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_trace.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
 #include <cstring>
-#include <cuda_fp16.h>
-#include <cuda_runtime.h>
 #include <format>
 #include <fstream>
 #include <iomanip>
@@ -668,12 +670,18 @@ namespace lfs::core {
                        "Tensor constructor received null storage for a non-empty tensor");
 
         if (home_stream != nullptr && device_ == Device::GPU) {
+#if LFS_HAS_CUDA
             unretire_stream(home_stream);
+#endif
         }
         state_->stream = home_stream;
         init_storage_meta();
         if (device_ == Device::GPU) {
+#if LFS_HAS_CUDA
             storage_meta_->backend = GpuBackend::CUDA;
+#else
+            storage_meta_->backend = GpuBackend::Vulkan;
+#endif
             storage_meta_->gpu_descriptor.byte_size = bytes();
         }
         compute_alignment();
@@ -844,7 +852,9 @@ namespace lfs::core {
             stream = nullptr;
         }
         if (stream) {
+#if LFS_HAS_CUDA
             unretire_stream(stream);
+#endif
         }
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
@@ -876,7 +886,9 @@ namespace lfs::core {
 
     void Tensor::record_stream(cudaStream_t stream) const {
         if (stream) {
+#if LFS_HAS_CUDA
             unretire_stream(stream);
+#endif
         }
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
@@ -949,11 +961,15 @@ namespace lfs::core {
         //
         // The backend service clears pool liveness before shutdown so concurrent
         // and late Tensor deleters cannot re-enter a destroyed singleton.
+#if LFS_HAS_CUDA
         internal::backend_ops(GpuBackend::CUDA).shutdown();
+#endif
     }
 
     void Tensor::set_memory_pool_iteration(int iteration) {
+#if LFS_HAS_CUDA
         internal::backend_ops(GpuBackend::CUDA).set_allocation_iteration(iteration);
+#endif
     }
 
     // ============= Destructor =============
@@ -1070,9 +1086,14 @@ namespace lfs::core {
             return;
         }
 
+#if LFS_HAS_CUDA
+        constexpr GpuBackend storage_less_backend = GpuBackend::CUDA;
+#else
+        constexpr GpuBackend storage_less_backend = GpuBackend::Vulkan;
+#endif
         const GpuBackend backend = device_ == Device::GPU && storage_meta_
                                        ? storage_meta_->backend
-                                       : GpuBackend::CUDA;
+                                       : storage_less_backend;
         const internal::PointerClass pointer_class =
             internal::backend_ops(backend).classify_pointer(data_);
         if (pointer_class == internal::PointerClass::Unknown) {
@@ -1935,9 +1956,9 @@ namespace lfs::core {
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
-                __half* dst = result.ptr<__half>();
+                detail::tensor_half_t* dst = result.ptr<detail::tensor_half_t>();
                 for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = __float2half(static_cast<float>(src[i]));
+                    dst[i] = detail::tensor_float_to_half(static_cast<float>(src[i]));
                 }
             }
             return result;
@@ -1952,8 +1973,8 @@ namespace lfs::core {
             if (device_ == Device::GPU) {
                 // Copy to CPU, convert, copy back
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<__half> temp(numel());
-                __half* const download_dst = temp.data();
+                std::vector<detail::tensor_half_t> temp(numel());
+                detail::tensor_half_t* const download_dst = temp.data();
                 const size_t download_bytes = bytes();
                 internal::order_legacy_after_home(*this);
                 internal::backend_ops_for(*this).copy_device_to_host(
@@ -1968,7 +1989,7 @@ namespace lfs::core {
 
                 unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (__half2float(temp[i]) != 0.0f) ? 1 : 0;
+                    dst_cpu[i] = (detail::tensor_half_to_float(temp[i]) != 0.0f) ? 1 : 0;
                 }
 
                 const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
@@ -1985,10 +2006,10 @@ namespace lfs::core {
                 internal::order_home_after_legacy(result);
                 internal::backend_ops_for(result).synchronize_device();
             } else {
-                const __half* src = ptr<__half>();
+                const detail::tensor_half_t* src = ptr<detail::tensor_half_t>();
                 unsigned char* dst = result.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (__half2float(src[i]) != 0.0f) ? 1 : 0;
+                    dst[i] = (detail::tensor_half_to_float(src[i]) != 0.0f) ? 1 : 0;
                 }
             }
             return result;
@@ -2022,14 +2043,14 @@ namespace lfs::core {
         }
 
         // Float16 conversions
-        CONVERT_DTYPE_CUDA(float, __half, DataType::Float32, DataType::Float16)
-        CONVERT_DTYPE_CUDA(__half, float, DataType::Float16, DataType::Float32)
-        CONVERT_DTYPE_CUDA(int, __half, DataType::Int32, DataType::Float16)
-        CONVERT_DTYPE_CUDA(__half, int, DataType::Float16, DataType::Int32)
-        CONVERT_DTYPE_CUDA(int64_t, __half, DataType::Int64, DataType::Float16)
-        CONVERT_DTYPE_CUDA(__half, int64_t, DataType::Float16, DataType::Int64)
-        CONVERT_DTYPE_CUDA(uint8_t, __half, DataType::UInt8, DataType::Float16)
-        CONVERT_DTYPE_CUDA(__half, uint8_t, DataType::Float16, DataType::UInt8)
+        CONVERT_DTYPE_CUDA(float, detail::tensor_half_t, DataType::Float32, DataType::Float16)
+        CONVERT_DTYPE_CUDA(detail::tensor_half_t, float, DataType::Float16, DataType::Float32)
+        CONVERT_DTYPE_CUDA(int, detail::tensor_half_t, DataType::Int32, DataType::Float16)
+        CONVERT_DTYPE_CUDA(detail::tensor_half_t, int, DataType::Float16, DataType::Int32)
+        CONVERT_DTYPE_CUDA(int64_t, detail::tensor_half_t, DataType::Int64, DataType::Float16)
+        CONVERT_DTYPE_CUDA(detail::tensor_half_t, int64_t, DataType::Float16, DataType::Int64)
+        CONVERT_DTYPE_CUDA(uint8_t, detail::tensor_half_t, DataType::UInt8, DataType::Float16)
+        CONVERT_DTYPE_CUDA(detail::tensor_half_t, uint8_t, DataType::Float16, DataType::UInt8)
 
 #undef CONVERT_DTYPE_CUDA
 

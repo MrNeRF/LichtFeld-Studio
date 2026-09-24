@@ -499,7 +499,11 @@ namespace lfs::core::internal {
 
     ExpressionCacheStats expression_cache_stats(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA)
+#if LFS_HAS_CUDA
             return cuda_expression_cache().stats();
+#else
+            throw std::runtime_error("CUDA expression backend is unavailable");
+#endif
 #ifdef LFS_TENSOR_VULKAN
         return acquire_vulkan_context()->pipelines().expressions().stats();
 #else

@@ -320,6 +320,7 @@ if(NOT WIN32)
     )
 endif()
 target_compile_definitions(lichtfeld_format_tests PRIVATE
+    LFS_TENSOR_PRIVATE_ACCESS
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
 if(WIN32)
@@ -350,7 +351,9 @@ else()
         -ffunction-sections -fdata-sections
     )
     target_link_options(lichtfeld_format_tests PRIVATE
-        -Wl,--no-export-dynamic -Wl,--gc-sections
+        $<$<PLATFORM_ID:Darwin>:-Wl,-dead_strip>
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,--no-export-dynamic>
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,--gc-sections>
     )
 endif()
 if(WIN32)
@@ -426,7 +429,41 @@ function(lfs_tensor_private_access)
     endforeach()
 endfunction()
 
-if(NOT LFS_BUILD_TRAINER)
+if(NOT LFS_HAS_CUDA)
+    set(TEST_SOURCES
+        test_main.cpp
+        test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_allocation_padding.cpp
+        test_tensor_vulkan_adoption.cpp
+        test_tensor_vulkan_pointwise.cpp
+        test_tensor_vulkan_reduce.cpp
+        test_tensor_vulkan_index.cpp
+        test_tensor_vulkan_matrix_nn.cpp
+        test_tensor_vulkan_random.cpp
+        test_tensor_vulkan_buffer.cpp
+        test_viewer_no_cuda.cpp
+    )
+    add_executable(lichtfeld_tests ${TEST_SOURCES})
+    target_compile_features(lichtfeld_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_tests PRIVATE
+        ${LFS_CORE_ABI_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/tests
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/app/include
+    )
+    lfs_tensor_private_access(${TEST_SOURCES})
+    target_link_libraries(lichtfeld_tests PRIVATE
+        lfs_rendering_tensor
+        lfs_core
+        GTest::gtest
+        Vulkan::Vulkan
+    )
+    add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
+    set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
+    return()
+elseif(NOT LFS_BUILD_TRAINER)
     include(${CMAKE_CURRENT_SOURCE_DIR}/ViewerTests.cmake)
     return()
 endif()

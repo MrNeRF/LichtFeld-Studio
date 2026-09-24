@@ -23,7 +23,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <exception>
 #include <expected>
 #include <format>
@@ -754,6 +756,7 @@ namespace lfs::core {
             if (gpu_backend_of(contiguous) != GpuBackend::CUDA || stream == nullptr) {
                 return contiguous.clone();
             }
+#if LFS_HAS_CUDA
             const GpuBackendScope cuda_scope(GpuBackend::CUDA);
             Tensor result = Tensor::empty(
                 contiguous.shape(), Device::GPU, contiguous.dtype());
@@ -766,6 +769,9 @@ namespace lfs::core {
             }
             result.record_stream(stream);
             return result;
+#else
+            return contiguous.clone();
+#endif
         };
 
         SplatData copy;
@@ -939,6 +945,7 @@ namespace lfs::core {
             if (!tensor->is_valid() || tensor->device() != Device::GPU) {
                 continue;
             }
+#if LFS_HAS_CUDA
             if (const cudaStream_t stream = tensor->stream()) {
                 const cudaError_t sync_status = cudaStreamSynchronize(stream);
                 if (sync_status != cudaSuccess) {
@@ -947,6 +954,7 @@ namespace lfs::core {
                     (void)cudaGetLastError();
                 }
             }
+#endif
             tensor->set_stream(nullptr);
         }
     }
@@ -1743,7 +1751,11 @@ namespace lfs::core {
         }
 
         const auto header_finished = std::chrono::steady_clock::now();
+#if LFS_HAS_CUDA
         const cudaStream_t upload_stream = getCurrentCUDAStream();
+#else
+        constexpr cudaStream_t upload_stream = nullptr;
+#endif
 
         Tensor means, sh0, scaling, rotation, opacity;
         Tensor shN_canon;
@@ -1889,6 +1901,7 @@ namespace lfs::core {
                                                tensor_allocator,
                                                name);
             if (host.numel() > 0) {
+#if LFS_HAS_CUDA
                 if (gpu_backend_of(dst) == GpuBackend::CUDA && dst.dtype() == host.dtype() &&
                     dst.is_contiguous()) {
                     LFS_CUDA_CHECK_MSG_STREAM_ARGS(
@@ -1904,8 +1917,11 @@ namespace lfs::core {
                         dtype_name(host.dtype()));
                     dst.record_stream(upload_stream);
                 } else {
+#endif
                     dst.copy_from(host);
+#if LFS_HAS_CUDA
                 }
+#endif
             }
             return dst;
         };
@@ -2513,6 +2529,7 @@ namespace lfs::core {
                           shN_cpu.shape().str(), shN_cpu.numel());
 
                 // Copy CPU data to direct GPU tensors
+#if LFS_HAS_CUDA
                 LOG_DEBUG("Copying CPU values to direct CUDA tensors");
                 cudaError_t err;
 
@@ -2626,6 +2643,17 @@ namespace lfs::core {
                 LOG_DEBUG("  SHN swizzle successful");
 
                 LOG_DEBUG("All CPU to CUDA copies completed successfully");
+#else
+                means_.copy_from(means_cpu);
+                scaling_.copy_from(scaling_cpu);
+                rotation_.copy_from(rotation_cpu);
+                opacity_.copy_from(opacity_cpu);
+                sh0_.copy_from(sh0_cpu);
+                reorder_canonical_into_swizzled(
+                    shN_cpu, shN_, num_points,
+                    static_cast<uint32_t>(feature_shape - 1),
+                    static_cast<uint32_t>(feature_shape - 1));
+#endif
             } else {
                 // No capacity specified - use pool
                 Tensor means_temp;
@@ -2777,6 +2805,38 @@ namespace lfs::core {
         LOG_DEBUG("SH value quant applied: N={} cap={} rest={} cells={} bounds={}",
                   n, cap, rest, n_cells, n_bounds);
         return true;
+    }
+
+    Q16BindPtrs resolve_q16_bind_ptrs(const SplatData& model) {
+        Q16BindPtrs out{};
+        if (!model.shN_value_quantized()) {
+            return out;
+        }
+        const Tensor& codes = model.shN_raw();
+        const Tensor& bounds = model.shN_value_bounds();
+        if (!codes.is_valid() || codes.numel() == 0) {
+            return out;
+        }
+        out.codes = static_cast<const float*>(resolve_exportable_device_ptr(codes));
+        if (bounds.is_valid() && bounds.numel() > 0) {
+            out.bounds = static_cast<const float*>(resolve_exportable_device_ptr(bounds));
+        }
+        out.n_cells_per_prim = static_cast<unsigned>(
+            sh_value_quant::n_value_cells_per_prim(
+                static_cast<std::uint32_t>(model.max_sh_coeffs_rest())));
+        if (codes.has_exportable_provenance()) {
+            out.generation = codes.exportable_bound_generation();
+            out.generation_checked = true;
+            // Codes + bounds must share the same live generation (0.15 alt).
+            if (bounds.is_valid() && bounds.has_exportable_provenance() &&
+                bounds.exportable_bound_generation() != codes.exportable_bound_generation()) {
+                LOG_ERROR(
+                    "q16 codes/bounds generation pair mismatch: codes_gen={} bounds_gen={}",
+                    codes.exportable_bound_generation(),
+                    bounds.exportable_bound_generation());
+            }
+        }
+        return out;
     }
 
 } // namespace lfs::core

@@ -4,7 +4,9 @@
 
 #include "core/system_info.hpp"
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,8 @@
 #include <intrin.h>
 #include <windows.h>
 #include <winternl.h>
+#elif defined(__APPLE__)
+#include <sys/utsname.h>
 #else
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
@@ -35,11 +39,15 @@ namespace lfs::core::system_info {
         }
 
         std::string cuda_runtime_version() {
+#if LFS_HAS_CUDA
             int version = 0;
             if (cudaRuntimeGetVersion(&version) != cudaSuccess || version <= 0)
                 return {};
             return std::to_string(version / 1000) + "." +
                    std::to_string((version % 1000) / 10);
+#else
+            return {};
+#endif
         }
 
 #ifdef _WIN32
@@ -84,6 +92,16 @@ namespace lfs::core::system_info {
                 return 0;
             return static_cast<std::uint64_t>(state.ullTotalPhys / (1024ULL * 1024ULL));
         }
+#elif defined(__APPLE__)
+        void collect_os(SystemInfo& info) {
+            info.os = "macOS";
+            utsname name{};
+            if (uname(&name) == 0)
+                info.os_build = name.release;
+        }
+
+        std::string collect_cpu() { return {}; }
+        std::uint64_t collect_ram_mb() { return 0; }
 #else
         std::string unquote_os_release(std::string value) {
             value = trim(std::move(value));

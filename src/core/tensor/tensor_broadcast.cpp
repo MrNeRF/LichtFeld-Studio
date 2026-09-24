@@ -3,8 +3,7 @@
 
 #include "internal/tensor_broadcast.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "internal/tensor_impl.hpp"
 
 namespace lfs::core {

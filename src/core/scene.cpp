@@ -4,7 +4,9 @@
 
 #include "core/scene.hpp"
 #include "core/camera.hpp"
+#if LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
+#endif
 #include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -14,14 +16,15 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
-#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_sh.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -766,11 +769,17 @@ namespace lfs::core {
         training_model_uuid_ = {};
         training_model_node_.clear();
 
+#if LFS_HAS_CUDA
         if (gpu_backend_live(GpuBackend::CUDA)) {
             cudaDeviceSynchronize();
             lfs::core::Tensor::trim_memory_pool();
             lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
         }
+#else
+        if (gpu_backend_live(GpuBackend::Vulkan)) {
+            lfs::core::Tensor::trim_memory_pool();
+        }
+#endif
 
         notifyMutation(MutationType::CLEARED);
     }
@@ -2612,6 +2621,7 @@ namespace lfs::core {
         // before this function returns and drops live_model / combined locks.
         // Otherwise post-refine trim_memory_pool can decommit a float workspace
         // still referenced by in-flight rebuild kernels.
+#if LFS_HAS_CUDA
         if (liveModelMutex() != nullptr) {
             const cudaError_t sync_err = cudaDeviceSynchronize();
             if (sync_err != cudaSuccess) {
@@ -2619,6 +2629,7 @@ namespace lfs::core {
                           cudaGetErrorName(sync_err), cudaGetErrorString(sync_err));
             }
         }
+#endif
 
         model_cache_valid_.store(true, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);

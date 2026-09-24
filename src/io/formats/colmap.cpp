@@ -1436,7 +1436,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "images.bin: trailing bytes",
-                               lfs::SmallFields{}.add("images_read", images.size()));
+                               lfs::SmallFields{}.add("images_read", static_cast<std::uint64_t>(images.size())));
         }
         if (images.empty()) {
             throw_colmap_error(
@@ -1444,7 +1444,7 @@ namespace lfs::io {
                 "images.bin contains no usable images",
                 lfs::SmallFields{}
                     .add("declared_count", n_images)
-                    .add("skipped_count", pose_tally ? pose_tally->count() : 0));
+                    .add("skipped_count", static_cast<std::uint64_t>(pose_tally ? pose_tally->count() : 0)));
         }
         return images;
     }
@@ -1557,7 +1557,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "cameras.bin: trailing bytes",
-                               lfs::SmallFields{}.add("cameras_read", cams.size()));
+                               lfs::SmallFields{}.add("cameras_read", static_cast<std::uint64_t>(cams.size())));
         }
         if (cams.empty()) {
             throw_colmap_error(
@@ -1565,7 +1565,7 @@ namespace lfs::io {
                 "cameras.bin contains no usable cameras",
                 lfs::SmallFields{}
                     .add("declared_count", n_cams)
-                    .add("skipped_count", tally ? tally->count() : 0));
+                    .add("skipped_count", static_cast<std::uint64_t>(tally ? tally->count() : 0)));
         }
         return cams;
     }
@@ -1713,7 +1713,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "points3D.bin: trailing bytes",
-                               lfs::SmallFields{}.add("points_read", points.size()));
+                               lfs::SmallFields{}.add("points_read", static_cast<std::uint64_t>(points.size())));
         }
         return points;
     }
@@ -2870,6 +2870,7 @@ namespace lfs::io {
             if (!calibration) {
                 continue;
             }
+#if LFS_HAS_CUDA
             if (colmap_calibration_has_distortion(*calibration)) {
                 LOG_TIMER_DEBUG("COLMAP assemble: undistort");
                 undistort_cache.emplace(
@@ -2881,7 +2882,9 @@ namespace lfs::io {
                         calibration->radial_distortion,
                         calibration->tangential_distortion,
                         calibration->camera_model_type));
-            } else {
+            } else
+#endif
+            {
                 undistort_cache.emplace(camera_id, std::nullopt);
             }
             calibrations.emplace(camera_id, std::move(*calibration));

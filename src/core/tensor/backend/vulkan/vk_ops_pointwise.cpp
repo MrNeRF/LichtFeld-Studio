@@ -7,7 +7,8 @@
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/detail/fused_pointwise.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
 #include "vk_ops_common.hpp"
@@ -185,7 +186,7 @@ namespace lfs::core::internal {
                 return pattern;
             }
             case DataType::Float16: {
-                const __half converted = __float2half(scalar_float(value));
+                const detail::tensor_half_t converted = detail::tensor_float_to_half(scalar_float(value));
                 std::memcpy(&pattern, &converted, sizeof(converted));
                 return pattern;
             }
