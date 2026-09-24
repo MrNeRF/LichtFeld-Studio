@@ -3,13 +3,18 @@
 
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
+#include "core/detail/fused_pointwise.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "core/nn/activation_arena.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#endif
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_executor.hpp"
@@ -22,7 +27,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <format>
 #include <numeric>
 #include <optional>
@@ -592,8 +596,8 @@ namespace lfs::core {
                     float* ptr = static_cast<float*>(result.data_);
                     std::fill_n(ptr, result.numel(), value);
                 } else if (result.dtype_ == DataType::Float16) {
-                    __half* ptr = static_cast<__half*>(result.data_);
-                    std::fill_n(ptr, result.numel(), __float2half(value));
+                    detail::tensor_half_t* ptr = static_cast<detail::tensor_half_t*>(result.data_);
+                    std::fill_n(ptr, result.numel(), detail::tensor_float_to_half(value));
                 } else if (result.dtype_ == DataType::Bool) {
                     unsigned char* ptr = static_cast<unsigned char*>(result.data_);
                     std::fill_n(ptr, result.numel(), value != 0 ? 1 : 0);
@@ -1575,9 +1579,13 @@ namespace lfs::core {
         // This is faster than transpose+contiguous+reduce because it avoids the copy.
         // Honor path override so microbench can A/B strided_fast vs transpose on 2D.
         {
+#if LFS_HAS_CUDA
             using RP = tensor_ops::ReducePathForTesting;
             const RP override = tensor_ops::reduce_path_override_for_testing();
             const bool force_w2 = (override == RP::StridedFast || override == RP::Transpose);
+#else
+            const bool force_w2 = false;
+#endif
             if (!force_w2 && args.axes.size() == 1 && device_ == Device::GPU &&
                 shape_.rank() == 2 && dtype_ == DataType::Float32 && is_contiguous_) {
                 int dim = args.axes[0];
@@ -1603,7 +1611,9 @@ namespace lfs::core {
                     internal::backend_ops_for(*this).column_reduce(
                         internal::storage_ref(*this), internal::storage_ref(result),
                         M, N, program, internal::ExecContext{result.stream()});
+#if LFS_HAS_CUDA
                     tensor_ops::set_reduce_last_path_for_testing(RP::Column);
+#endif
                     internal::lazy_ir_record_reduce(*this, result, op_name);
                     return result;
                 }
@@ -1635,6 +1645,7 @@ namespace lfs::core {
                 }
 
                 if (inner_size >= 256) {
+#if LFS_HAS_CUDA
                     using RP = tensor_ops::ReducePathForTesting;
                     const RP override = tensor_ops::reduce_path_override_for_testing();
                     bool use_strided =
@@ -1645,6 +1656,9 @@ namespace lfs::core {
                     } else if (override == RP::Transpose) {
                         use_strided = false;
                     }
+#else
+                    const bool use_strided = true;
+#endif
 
                     if (use_strided) {
                         std::vector<size_t> out_dims;
@@ -1669,7 +1683,9 @@ namespace lfs::core {
                             internal::storage_ref(*this), internal::storage_ref(result),
                             outer_size, reduce_size, inner_size, program,
                             internal::ExecContext{result.stream()});
+#if LFS_HAS_CUDA
                         tensor_ops::set_reduce_last_path_for_testing(RP::StridedFast);
+#endif
                         internal::lazy_ir_record_reduce(*this, result, op_name);
                         return result;
                     }
@@ -1684,7 +1700,9 @@ namespace lfs::core {
                     perm.push_back(dim);
 
                     Tensor transposed = this->permute(perm).contiguous();
+#if LFS_HAS_CUDA
                     tensor_ops::set_reduce_last_path_for_testing(RP::Transpose);
+#endif
 
                     ReduceArgs new_args = args;
                     new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1};

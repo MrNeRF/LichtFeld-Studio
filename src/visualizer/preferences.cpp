@@ -596,7 +596,11 @@ namespace lfs::vis {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         impl_->values["tensor_backend"] = {
+#if LFS_HAS_CUDA
             {"backend", state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda"},
+#else
+            {"backend", "vulkan"},
+#endif
             {"vulkan_device", state.options.vulkan_device},
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},

@@ -735,12 +735,21 @@ namespace lfs::io::project::detail {
 #ifdef _WIN32
         return sync_all();
 #else
+#ifdef __APPLE__
+        if (::fsync(fd_) != 0) {
+#else
         if (::fdatasync(fd_) != 0) {
+#endif
             const int error = errno;
             return status_failure(project_error(
                 native_error_code(error, true), "The project data could not be made durable.",
+#ifdef __APPLE__
+                std::format("fsync failed: {}", std::strerror(error)), path_, std::nullopt,
+                "fsync", error, std::strerror(error)));
+#else
                 std::format("fdatasync failed: {}", std::strerror(error)), path_, std::nullopt,
                 "fdatasync", error, std::strerror(error)));
+#endif
         }
         return {};
 #endif

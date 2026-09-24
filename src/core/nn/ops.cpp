@@ -2,14 +2,52 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn/ops.hpp"
+#if !LFS_HAS_CUDA
+#include "core/nn/models/romav1.hpp"
+#endif
 
 #include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "nn_kernels.hpp"
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan_ops.hpp"
+#endif
+
+#if !LFS_HAS_CUDA
+namespace lfs::core::nn::models {
+    namespace {
+        lfs::Error roma_unavailable() {
+            return lfs::make_error({
+                .code = lfs::ErrorCode::Unsupported,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = "RoMa v1 inference is unavailable",
+                .detail = "RoMa v1 requires CUDA, which is not compiled into this build",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+    } // namespace
+
+    lfs::Result<RomaV1> RomaV1::load(const std::filesystem::path&, Device,
+                                     std::optional<DataType>, int) {
+        return roma_unavailable();
+    }
+
+    lfs::Result<std::shared_ptr<RomaV1Image>> RomaV1::prepare(const Tensor&) {
+        return roma_unavailable();
+    }
+
+    lfs::Result<RomaMatch> RomaV1::match(const RomaV1Image&, const RomaV1Image&) {
+        return roma_unavailable();
+    }
+
+    lfs::Result<RomaMatch> RomaV1::match_with_grid(const RomaV1Image&, const RomaV1Image&) {
+        return roma_unavailable();
+    }
+
+} // namespace lfs::core::nn::models
 #endif
 
 #include <algorithm>
@@ -48,12 +86,12 @@ namespace lfs::core::nn {
 
         const void* raw(const Tensor& t) {
             return t.dtype() == DataType::Float16
-                       ? static_cast<const void*>(t.ptr<__half>())
+                       ? static_cast<const void*>(t.ptr<detail::tensor_half_t>())
                        : static_cast<const void*>(t.ptr<float>());
         }
 
         void* raw_mut(Tensor& t) {
-            return t.dtype() == DataType::Float16 ? static_cast<void*>(t.ptr<__half>())
+            return t.dtype() == DataType::Float16 ? static_cast<void*>(t.ptr<detail::tensor_half_t>())
                                                   : static_cast<void*>(t.ptr<float>());
         }
 
@@ -761,11 +799,15 @@ namespace lfs::core::nn {
                               static_cast<long long>(cout_g) * kdim,
                               static_cast<long long>(m) * cout_g, 1, false, true, nullptr, 0,
                               in_c.dtype(), stream);
+#if LFS_HAS_CUDA
                 LFS_CUDA_CHECK(cudaMemcpy2DAsync(
                     static_cast<char*>(raw_mut(nhwc)) + static_cast<std::size_t>(g * cout_g) * elem,
                     static_cast<std::size_t>(cout) * elem, raw(group_out),
                     static_cast<std::size_t>(cout_g) * elem, static_cast<std::size_t>(cout_g) * elem,
                     static_cast<std::size_t>(m), cudaMemcpyDeviceToDevice, stream));
+#else
+                throw std::runtime_error("CUDA grouped convolution is unavailable in this build");
+#endif
             }
         }
 
@@ -1394,3 +1436,81 @@ namespace lfs::core::nn {
     }
 
 } // namespace lfs::core::nn
+
+#if !LFS_HAS_CUDA
+namespace lfs::core::nn::kernels {
+    namespace {
+        [[noreturn]] void unavailable() {
+            throw std::runtime_error("CUDA neural-network kernels are unavailable in this build");
+        }
+    } // namespace
+
+#define LFS_CUDA_NN_UNAVAILABLE(name, ...) \
+    void name(__VA_ARGS__) { unavailable(); }
+
+    LFS_CUDA_NN_UNAVAILABLE(gemm, const void*, const void*, void*, int, int, int, long long,
+                            long long, long long, int, bool, bool, const void*, int, DataType,
+                            cudaStream_t, bool, const void*, const void*, int, int)
+    void conv2d_implicit(const void*, const void*, const void*, const void*, void*, void*,
+                         int, int, int, int, int, int, int, int, int,
+                         int, int, int, int, int, int, int, int, DataType, cudaStream_t) {
+        unavailable();
+    }
+    std::size_t conv2d_weight_scratch_bytes(int, int, DataType) { unavailable(); }
+    LFS_CUDA_NN_UNAVAILABLE(layer_norm, const void*, const void*, const void*, void*, int, int,
+                            float, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(rms_norm, const void*, const void*, void*, int, int, float, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(softmax, const void*, const void*, void*, int, int, long long,
+                            long long, bool, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(attention, const void*, const void*, const void*, const void*, void*,
+                            int, int, int, int, int, float, long long, long long, long long,
+                            long long, bool, DataType, cudaStream_t)
+    void im2col(const void*, void*, int, int, int, int, int, int, int, int,
+                int, int, int, int, int, int, int, int, int, DataType, cudaStream_t) {
+        unavailable();
+    }
+    void col2im(const void*, void*, int, int, int, int, int, int, int, int,
+                int, int, int, int, int, int, int, int, DataType, cudaStream_t) {
+        unavailable();
+    }
+    LFS_CUDA_NN_UNAVAILABLE(resize2d, const void*, void*, int, int, int, int, int, int, int, int,
+                            DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(max_pool2d, const void*, void*, int, int, int, int, int, int, int, int,
+                            int, int, int, int, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(avg_pool2d, const void*, void*, int, int, int, int, int, int, int, int,
+                            int, int, int, int, bool, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(gelu, const void*, void*, std::size_t, int, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(silu, const void*, void*, std::size_t, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(relu, const void*, void*, std::size_t, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(sigmoid, const void*, void*, std::size_t, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(window_partition_2d, const void*, void*, int, int, int, int, int, int,
+                            int, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(window_unpartition_2d, const void*, void*, int, int, int, int, int,
+                            int, int, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(fourier_pe_coords, const void*, const void*, void*, int, int, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(fourier_pe_grid, const void*, void*, int, int, int, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(channel_bias, void*, const void*, int, int, int, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(split_qkv, const void*, void*, void*, void*, int, int, int, int,
+                            DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(split_qkv_window_2d, const void*, void*, void*, void*, int, int, int,
+                            int, int, int, int, int, const void*, DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(merge_heads, const void*, void*, int, int, int, int, DataType,
+                            cudaStream_t)
+    void merge_heads_unwindow_2d(const void*, void*, int, int, int, int, int, int, int, int,
+                                 DataType, cudaStream_t) { unavailable(); }
+    LFS_CUDA_NN_UNAVAILABLE(max_pool_heads_2d, const void*, void*, int, int, int, int, int,
+                            DataType, cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(max_pool2d_bhwc, const void*, void*, int, int, int, int, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(uv_grid, void*, int, int, float, float, float, float, DataType,
+                            cudaStream_t)
+    LFS_CUDA_NN_UNAVAILABLE(residual_scale, const void*, const void*, const void*, void*, int, int,
+                            DataType, cudaStream_t)
+
+#undef LFS_CUDA_NN_UNAVAILABLE
+} // namespace lfs::core::nn::kernels
+#endif

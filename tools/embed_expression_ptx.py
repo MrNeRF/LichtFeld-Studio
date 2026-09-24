@@ -8,11 +8,24 @@ from pathlib import Path
 import re
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--ptx', type=Path, required=True)
+parser.add_argument('--ptx', type=Path)
 parser.add_argument('--tensor', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--depfile', type=Path, required=True)
 args = parser.parse_args()
+if not args.ptx:
+    paths = {Path(__file__),
+             *args.tensor.glob('expression_*.cpp'), *args.tensor.glob('internal/expression_*.hpp'),
+             *args.tensor.glob('backend/cuda/*expression*.cpp'),
+             *args.tensor.glob('backend/vulkan/*expression*.cpp'),
+             args.tensor / 'backend/vulkan/spirv_module.cpp'}
+    hash_value = hashlib.sha256()
+    for path in sorted(paths):
+        hash_value.update(path.read_bytes())
+    args.output.write_text('#include "internal/expression_emitter.hpp"\nnamespace lfs::core::internal {\nstd::string_view expression_emitter_hash() { return "' + hash_value.hexdigest() + '"; }\n}')
+    escape = lambda path: str(path).replace(' ', '\\ ').replace('#', '\\#')
+    args.depfile.write_text(escape(args.output) + ': ' + ' '.join(escape(p) for p in sorted(paths)) + '\n')
+    raise SystemExit
 text = re.sub(r'//[^\n]*', '', args.ptx.read_text())
 header = '\n'.join(re.findall(r'^\.(?:version|target|address_size)[^\n]*', text, re.M)) + '\n'
 # The scalar catalog uses the PTX 8.0 instruction set on SM 70 through 90.

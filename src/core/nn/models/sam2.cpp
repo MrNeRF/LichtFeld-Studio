@@ -44,7 +44,7 @@ namespace lfs::core::nn::models {
         void configure_nn_mempool() {
             if (default_gpu_backend() != GpuBackend::CUDA)
                 return;
-#if CUDART_VERSION >= 11020
+#if LFS_HAS_CUDA && CUDART_VERSION >= 11020
             int device = 0;
             LFS_CUDA_CHECK(cudaGetDevice(&device));
             cudaMemPool_t pool = nullptr;
@@ -65,10 +65,14 @@ namespace lfs::core::nn::models {
                 return;
             }
             slot.set_stream(src.stream());
+#if LFS_HAS_CUDA
             if (src.bytes() > 0) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(slot.data_ptr(), src.data_ptr(), src.bytes(),
                                                cudaMemcpyDeviceToDevice, src.stream()));
             }
+#else
+            throw std::runtime_error("CUDA tensor recapture is unavailable in this build");
+#endif
         }
 
         Tensor concat_contiguous(const Tensor& a, const Tensor& b, int dim) {
@@ -104,11 +108,15 @@ namespace lfs::core::nn::models {
             auto out = Tensor::empty(TensorShape(out_dims), a_c.device(), a_c.dtype());
             out.set_stream(a_c.stream());
             const cudaStream_t stream = out.stream();
+#if LFS_HAS_CUDA
             LFS_CUDA_CHECK(cudaMemcpyAsync(out.data_ptr(), a_c.data_ptr(), a_c.bytes(),
                                            cudaMemcpyDeviceToDevice, stream));
             LFS_CUDA_CHECK(cudaMemcpyAsync(static_cast<char*>(out.data_ptr()) + a_c.bytes(),
                                            b_c.data_ptr(), b_c.bytes(), cudaMemcpyDeviceToDevice,
                                            stream));
+#else
+            throw std::runtime_error("CUDA tensor concatenation is unavailable in this build");
+#endif
             return out;
         }
 

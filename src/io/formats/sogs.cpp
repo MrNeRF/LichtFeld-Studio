@@ -1231,8 +1231,9 @@ namespace lfs::io {
             if (!images) {
                 return std::unexpected(images.error());
             }
-            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(*images)]() -> Result<SplatData> {
-                auto result = reconstruct_splat_data(meta, images);
+            auto shared_images = std::make_shared<DecodedImages>(std::move(*images));
+            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(shared_images)]() -> Result<SplatData> {
+                auto result = reconstruct_splat_data(meta, *images);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error());
                 return Result<SplatData>(std::move(*result));
@@ -1315,6 +1316,7 @@ namespace lfs::io {
     // SOG Save Implementation
     // ============================================================================
 
+#if LFS_HAS_CUDA
     namespace {
 
         double log_transform(double value) {
@@ -2452,12 +2454,28 @@ namespace lfs::io {
                               options.output_path);
         }
     }
+#else
+    Result<void> encode_sog(const SplatData&, const SogEncodeOptions& options, SogSink&) {
+        return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                          "SOG export requires CUDA, which is unavailable in this build",
+                          options.output_path);
+    }
+#endif
 
     std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path) {
+#if LFS_HAS_CUDA
         return std::make_unique<SogArchive>(path);
+#else
+        return {};
+#endif
     }
 
     Result<void> save_sog(const SplatData& data, const SogSaveOptions& options) {
+#if !LFS_HAS_CUDA
+        return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                          "SOG export requires CUDA, which is unavailable in this build",
+                          options.output_path);
+#else
         try {
             ScopedAtomicOutputFile output(options.output_path);
             SogArchive sink(output.temp_path());
@@ -2469,9 +2487,15 @@ namespace lfs::io {
         } catch (const std::exception& e) {
             return make_error(ErrorCode::ENCODING_FAILED, e.what(), options.output_path);
         }
+#endif
     }
 
     Result<void> encode_sog_directory(const SplatData& data, const SogEncodeOptions& options) {
+#if !LFS_HAS_CUDA
+        return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                          "SOG export requires CUDA, which is unavailable in this build",
+                          options.output_path);
+#else
         class DirectorySink final : public SogSink {
             std::filesystem::path directory_;
 
@@ -2493,6 +2517,7 @@ namespace lfs::io {
         } catch (const std::exception& e) {
             return make_error(ErrorCode::WRITE_FAILURE, e.what(), options.output_path);
         }
+#endif
     }
 
 } // namespace lfs::io

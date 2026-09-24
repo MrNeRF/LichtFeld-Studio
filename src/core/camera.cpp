@@ -3,19 +3,25 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#if LFS_HAS_CUDA
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/cuda_error_typed.hpp"
+#endif
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor_cuda_interop.hpp"
+#endif
 #include <algorithm>
 #include <array>
 #include <cassert>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <format>
 #include <stdexcept>
 
@@ -137,6 +143,7 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
 
+#if LFS_HAS_CUDA
         // Camera metadata and Vulkan viewing do not need a CUDA image stream.
         if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
             return;
@@ -164,15 +171,18 @@ namespace lfs::core {
                 stream_create_site);
             _stream = nullptr;
         }
+#endif
     }
 
     Camera::~Camera() {
+#if LFS_HAS_CUDA
         // Destroy CUDA stream if it was created
         if (_stream) {
             release_cuda_stream(_stream);
             LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             _stream = nullptr;
         }
+#endif
     }
 
     Camera::Camera(Camera&& other) noexcept
@@ -232,11 +242,13 @@ namespace lfs::core {
 
     Camera& Camera::operator=(Camera&& other) noexcept {
         if (this != &other) {
+#if LFS_HAS_CUDA
             // Destroy our current stream
             if (_stream) {
                 release_cuda_stream(_stream);
                 LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             }
+#endif
 
             // Move all members
             _FoVx = other._FoVx;
@@ -326,6 +338,7 @@ namespace lfs::core {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
 
+#if LFS_HAS_CUDA
         if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
             return;
         }
@@ -352,6 +365,7 @@ namespace lfs::core {
                 stream_create_site);
             _stream = nullptr;
         }
+#endif
     }
 
     void Camera::to_backend(const GpuBackend backend) {
@@ -416,9 +430,11 @@ namespace lfs::core {
 
         if (image.device() != Device::GPU) {
             image = image.to(Device::GPU, _stream);
+#if LFS_HAS_CUDA
             if (_stream) {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "image upload sync");
             }
+#endif
         }
 
         return image;
@@ -580,9 +596,11 @@ namespace lfs::core {
             mask = _in_memory_mask_raw;
             if (mask.device() != Device::GPU) {
                 mask = mask.to(Device::GPU, _stream);
+#if LFS_HAS_CUDA
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
+#endif
             }
             if (mask.dtype() == DataType::UInt8) {
                 mask = mask.to(DataType::Float32).div(255.0f);
@@ -606,9 +624,11 @@ namespace lfs::core {
 
             if (mask.device() != Device::GPU) {
                 mask = mask.to(Device::GPU, _stream);
+#if LFS_HAS_CUDA
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
+#endif
             }
 
             // Convert RGB [C,H,W] to grayscale [H,W]
@@ -633,6 +653,7 @@ namespace lfs::core {
             mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
+#if LFS_HAS_CUDA
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
@@ -641,6 +662,7 @@ namespace lfs::core {
                 max_width);
             mask = undistort_mask(mask, scaled, _stream);
         }
+#endif
 
         if (binarize) {
             mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
@@ -665,6 +687,7 @@ namespace lfs::core {
     }
 
     Tensor Camera::load_and_get_depth(const int resize_factor, const int max_width) {
+#if LFS_HAS_CUDA
         if (_depth_loaded && _cached_depth.is_valid()) {
             return _cached_depth;
         }
@@ -736,10 +759,14 @@ namespace lfs::core {
         LOG_DEBUG("Loaded depth for {}: [{},{}]", _image_name, _cached_depth.shape()[0], _cached_depth.shape()[1]);
 
         return _cached_depth;
+#else
+        throw std::runtime_error("Depth priors require CUDA");
+#endif
     }
 
     Tensor Camera::load_and_get_normal(const int resize_factor, const int max_width,
                                        const NormalPriorDecode& decode) {
+#if LFS_HAS_CUDA
         if (_normal_loaded && _cached_normal.is_valid()) {
             return _cached_normal;
         }
@@ -854,6 +881,9 @@ namespace lfs::core {
                   _cached_normal.shape()[1], _cached_normal.shape()[2]);
 
         return _cached_normal;
+#else
+        throw std::runtime_error("Normal priors require CUDA");
+#endif
     }
 
     float Camera::depth_prior_quantization_step() {
@@ -864,6 +894,7 @@ namespace lfs::core {
     }
 
     void Camera::precompute_undistortion(float blank_pixels) {
+#if LFS_HAS_CUDA
         if (_undistort_precomputed)
             return;
         if (!has_distortion())
@@ -876,6 +907,7 @@ namespace lfs::core {
             _camera_model_type, blank_pixels);
 
         _undistort_precomputed = true;
+#endif
     }
 
     void Camera::adopt_undistortion(const UndistortParams& params) noexcept {

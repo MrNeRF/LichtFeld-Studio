@@ -3,13 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_version.hpp"
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 namespace lfs::core {
 
     CudaVersionInfo check_cuda_version() {
         CudaVersionInfo info;
 
+#if LFS_HAS_CUDA
         if (cudaDriverGetVersion(&info.driver_version) != cudaSuccess) {
             info.query_failed = true;
             return info;
@@ -18,6 +21,9 @@ namespace lfs::core {
         info.major = info.driver_version / 1000;
         info.minor = (info.driver_version % 1000) / 10;
         info.supported = info.driver_version >= MIN_CUDA_VERSION;
+#else
+        info.query_failed = true;
+#endif
 
         return info;
     }

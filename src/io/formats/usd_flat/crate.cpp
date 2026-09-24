@@ -1192,7 +1192,7 @@ namespace lfs::io::usd_flat {
             constexpr std::size_t records_per_chunk = 1024;
             std::array<float, records_per_chunk * 4> chunk{};
             for (std::size_t first = 0; first < count; first += records_per_chunk) {
-                const auto records = std::min(records_per_chunk, count - first);
+                const auto records = std::min<std::uint64_t>(records_per_chunk, count - first);
                 for (std::size_t index = 0; index < records; ++index) {
                     const float* values = attribute.values.data() + (first + index) * 4;
                     float* ordered = chunk.data() + index * 4;

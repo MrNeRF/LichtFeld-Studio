@@ -1106,15 +1106,16 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             f12.shaderFloat16 == VK_TRUE && f11.storageBuffer16BitAccess == VK_TRUE;
     }
     if (supports_float16_storage_) {
+        const bool lean = deviceInfo.sharedSize < 48u * 1024u;
         create_optional(pipeline_macro_coverage, "macro_coverage");
         create_optional(pipeline_generate_macro_keys_wave, "generate_macro_keys_wave");
         create_optional(pipeline_macro_batch_prepare, "macro_batch_prepare");
         for (int i = 0; i < 2; ++i) {
             create_optional(pipeline_compute_macro_ranges[i], "compute_macro_ranges");
             create_optional(pipeline_macro_raster[i], "macro_raster");
-            create_optional(pipeline_macro_raster_fp32[i], "macro_raster_fp32");
-            create_optional(pipeline_macro_raster_overlays[i], "macro_raster_overlays");
-            create_optional(pipeline_macro_raster_overlays_fp32[i], "macro_raster_overlays_fp32");
+            create_optional(pipeline_macro_raster_fp32[i], lean ? "macro_raster_fp32_lean" : "macro_raster_fp32");
+            create_optional(pipeline_macro_raster_overlays[i], lean ? "macro_raster_overlays_lean" : "macro_raster_overlays");
+            create_optional(pipeline_macro_raster_overlays_fp32[i], lean ? "macro_raster_overlays_fp32_lean" : "macro_raster_overlays_fp32");
             create_optional(pipeline_macro_compose[i], "macro_compose");
             create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
         }

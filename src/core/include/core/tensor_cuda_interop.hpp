@@ -3,8 +3,7 @@
 
 #pragma once
 
-struct CUstream_st;
-using cudaStream_t = CUstream_st*;
+#include "core/cuda_types.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>

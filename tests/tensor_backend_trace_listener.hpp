@@ -5,7 +5,9 @@
 
 #include "core/tensor/backend/facade_trace.hpp"
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <gtest/gtest.h>
 
 #include <cstdio>
@@ -47,12 +49,15 @@ namespace lfs::testing {
                 first = false;
             }
             output_ << '}';
+#if LFS_HAS_CUDA
             const cudaError_t sticky = cudaGetLastError();
             if (sticky != cudaSuccess) {
                 output_ << ", \"cuda_sticky\": \"" << cudaGetErrorName(sticky) << '"';
             }
+#endif
             output_ << "}\n";
             output_.flush();
+#if LFS_HAS_CUDA
             if (sticky != cudaSuccess && cudaDeviceSynchronize() != cudaSuccess) {
                 std::fprintf(stderr,
                              "lichtfeld_tests: %s.%s left the CUDA context in sticky "
@@ -63,6 +68,7 @@ namespace lfs::testing {
                 std::fflush(stderr);
                 std::_Exit(3);
             }
+#endif
         }
 
     private:

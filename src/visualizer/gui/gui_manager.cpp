@@ -4557,7 +4557,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::applyUiScale(float scale) {
-        scale = std::clamp(scale, 1.0f, 4.0f);
         const float previous_scale = current_ui_scale_;
 
         rmlui_manager_.setDpRatio(scale);
@@ -4625,8 +4624,10 @@ namespace lfs::vis::gui {
 
         float saved_scale = lfs::vis::loadUiScalePreference();
         if (saved_scale <= 0.0f)
-            saved_scale = SDL_GetWindowDisplayScale(viewer_->getWindow());
-        current_ui_scale_ = std::clamp(saved_scale, 1.0f, 4.0f);
+            saved_scale = std::clamp(SDL_GetWindowDisplayScale(viewer_->getWindow()), 1.0f, 4.0f);
+        else
+            saved_scale = std::clamp(saved_scale, 1.0f, 4.0f) * SDL_GetWindowPixelDensity(viewer_->getWindow());
+        current_ui_scale_ = saved_scale;
 
         lfs::python::set_shared_dpi_scale(current_ui_scale_);
         lfs::vis::setThemeDpiScale(current_ui_scale_);
@@ -8590,16 +8591,18 @@ namespace lfs::vis::gui {
         });
 
         internal::DisplayScaleChanged::when([this](const auto& e) {
-            if (lfs::vis::loadUiScalePreference() <= 0.0f) {
+            const float saved_scale = lfs::vis::loadUiScalePreference();
+            if (saved_scale <= 0.0f)
                 pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
-            }
+            else
+                pending_ui_scale_ = std::clamp(saved_scale, 1.0f, 4.0f) * SDL_GetWindowPixelDensity(viewer_->getWindow());
         });
 
         internal::UiScaleChangeRequested::when([this](const auto& e) {
             if (e.scale <= 0.0f) {
                 pending_ui_scale_ = std::clamp(SDL_GetWindowDisplayScale(viewer_->getWindow()), 1.0f, 4.0f);
             } else {
-                pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
+                pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f) * SDL_GetWindowPixelDensity(viewer_->getWindow());
             }
             lfs::python::request_redraw();
         });

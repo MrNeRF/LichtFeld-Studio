@@ -25,7 +25,7 @@ target_include_directories(lfs_event_bridge
 
 target_link_libraries(lfs_event_bridge
     PUBLIC
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
     PRIVATE
         lfs_logger
         lfs_geometry

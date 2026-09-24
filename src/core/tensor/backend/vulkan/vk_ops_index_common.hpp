@@ -7,7 +7,7 @@
 #include "core/assert.hpp"
 #include "vk_ops_common.hpp"
 
-#include <cuda_fp16.h>
+#include "core/detail/tensor_half.hpp"
 
 #include <array>
 #include <cstdint>
@@ -71,7 +71,7 @@ namespace lfs::core::internal::vk_index {
             return {bits, 0};
         }
         case DataType::Float16: {
-            const __half converted = __float2half_rn(as_float);
+            const detail::tensor_half_t converted = detail::tensor_float_to_half(as_float);
             uint16_t bits = 0;
             std::memcpy(&bits, &converted, sizeof(bits));
             return {bits, 0};

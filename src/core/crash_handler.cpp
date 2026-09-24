@@ -3,7 +3,7 @@
 
 #include "core/crash_handler.hpp"
 
-#ifndef LFS_UNICODE_TEST_STANDALONE
+#if !defined(LFS_UNICODE_TEST_STANDALONE) && LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
 #include "core/device_fault.hpp"
 #endif
@@ -11,8 +11,10 @@
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#ifndef LFS_UNICODE_TEST_STANDALONE
+#if !defined(LFS_UNICODE_TEST_STANDALONE) && LFS_HAS_CUDA
 #include "core/pinned_memory_allocator.hpp"
+#endif
+#ifndef LFS_UNICODE_TEST_STANDALONE
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #endif
@@ -114,6 +116,7 @@ namespace lfs::core {
             // and CUDA context are still usable. After this returns, static/TLS
             // dtors must find empty holders — otherwise they free after the
             // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
+#if LFS_HAS_CUDA
             const bool cuda_usable = gpu_backend_available(GpuBackend::CUDA);
             if (cuda_usable) {
                 run_gpu_pre_shutdown_hooks_once();
@@ -132,6 +135,9 @@ namespace lfs::core {
             GlobalArenaManager::instance().shutdown();
             Tensor::shutdown_memory_pool();
             PinnedMemoryAllocator::instance().shutdown();
+#else
+            g_gpu_process_teardown_started.store(true, std::memory_order_release);
+#endif
         } catch (...) {
             // LFS-CENSUS-OK(empty-catch): subsystem teardown reports CUDA
             // failures internally; none may escape this sanctioned pre-exit step.

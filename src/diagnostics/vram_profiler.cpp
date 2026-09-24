@@ -3,14 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "diagnostics/vram_profiler.hpp"
+#include "core/cuda_types.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#if LFS_HAS_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 #include <deque>
 #include <iterator>
 #include <list>
@@ -241,6 +244,7 @@ namespace lfs::diagnostics {
         }
 
         bool cuda_context_live() {
+#if LFS_HAS_CUDA
             static const auto get_state = [] {
                 void* entry = nullptr;
                 if (cudaGetDriverEntryPointByVersion("cuDevicePrimaryCtxGetState", &entry, 7000,
@@ -253,10 +257,14 @@ namespace lfs::diagnostics {
             int active = 0;
             return get_state && cudaGetDevice(&device) == cudaSuccess &&
                    get_state(device, &flags, &active) == CUDA_SUCCESS && active != 0;
+#else
+            return false;
+#endif
         }
 
         [[nodiscard]] bool sample_cuda_used_bytes(std::size_t& used_bytes,
                                                   std::size_t* total_bytes = nullptr) {
+#if LFS_HAS_CUDA
             if (!cuda_context_live())
                 return false;
             std::size_t free_bytes = 0;
@@ -269,6 +277,9 @@ namespace lfs::diagnostics {
                 *total_bytes = total;
             }
             return true;
+#else
+            return false;
+#endif
         }
 
         [[nodiscard]] std::string method_label(const VramAllocationMethod method) {
@@ -841,6 +852,7 @@ namespace lfs::diagnostics {
     }
 
     std::int32_t VramProfiler::acquireGpuEventPair(std::string_view scope, void* stream) {
+#if LFS_HAS_CUDA
         if (!enabled() || !cuda_context_live()) {
             return -1;
         }
@@ -871,9 +883,13 @@ namespace lfs::diagnostics {
             return static_cast<std::int32_t>(i);
         }
         return -1;
+#else
+        return -1;
+#endif
     }
 
     void VramProfiler::releaseGpuEventPair(const std::int32_t pair, void* stream) {
+#if LFS_HAS_CUDA
         if (pair < 0 || static_cast<std::size_t>(pair) >= kGpuEventPoolSize) {
             return;
         }
@@ -890,9 +906,11 @@ namespace lfs::diagnostics {
             }
         }
         impl_->gpu_event_in_use[static_cast<std::size_t>(pair)] = false;
+#endif
     }
 
     void VramProfiler::drainGpuEvents() {
+#if LFS_HAS_CUDA
         if (!enabled()) {
             return;
         }
@@ -924,6 +942,7 @@ namespace lfs::diagnostics {
             impl_->gpu_event_in_use[idx] = false;
             it = impl_->gpu_event_pending.erase(it);
         }
+#endif
     }
 
     void VramProfiler::setGauge(std::string_view key, const double value) {
@@ -1121,6 +1140,7 @@ namespace lfs::diagnostics {
             process = impl_->process;
         }
 
+#if LFS_HAS_CUDA
         std::size_t free_bytes = 0;
         std::size_t total_bytes = 0;
         const bool cuda_live = cuda_context_live();
@@ -1145,6 +1165,7 @@ namespace lfs::diagnostics {
                 }
             }
         }
+#endif
 #endif
 
         {

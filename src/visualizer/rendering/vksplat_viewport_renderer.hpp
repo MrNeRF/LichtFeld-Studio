@@ -706,7 +706,11 @@ namespace lfs::vis {
         SelectionQuerySlot selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
         int current_input_sh_degree_ = -1;
+#if LFS_HAS_CUDA
         lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::CUDA;
+#else
+        lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::Vulkan;
+#endif
         std::size_t last_vram_report_signature_ = 0;
 
         struct SharedScratchArena {

@@ -36,6 +36,9 @@ target_link_libraries(lfs_mcp
     OpenSSL::SSL
     OpenSSL::Crypto
 )
+if(APPLE)
+    target_link_options(lfs_mcp PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 
 target_compile_features(lfs_mcp PUBLIC cxx_std_23)
 

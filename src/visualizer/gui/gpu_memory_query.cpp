@@ -6,12 +6,14 @@
 #include "core/gpu_device_info.hpp"
 #include "core/tensor_backend.hpp"
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #ifdef _WIN32
 #include <dxgi1_4.h>
 #include <windows.h>
-#else
+#elif defined(__linux__)
 #include <dlfcn.h>
 #include <unistd.h>
 #endif
@@ -26,7 +28,7 @@ namespace lfs::vis::gui {
             return name;
         }
 
-#ifdef _WIN32
+#if LFS_HAS_CUDA && defined(_WIN32)
         // Windows: DXGI QueryVideoMemoryInfo for per-process GPU memory.
         // NVML process memory returns NVML_VALUE_NOT_AVAILABLE under WDDM, but
         // device utilization rates work and are used for the GPU% meter.
@@ -149,6 +151,7 @@ namespace lfs::vis::gui {
         }
 #endif
 
+#if LFS_HAS_CUDA
         // NVML: process memory on Linux; utilization on Linux and Windows.
         using NvmlDevice = void*;
         enum { NVML_SUCCESS = 0 };
@@ -260,6 +263,7 @@ namespace lfs::vis::gui {
             static NvmlState s;
             return s;
         }
+#endif
 
     } // namespace
 
@@ -281,6 +285,9 @@ namespace lfs::vis::gui {
         if (!device) {
             return info;
         }
+#if !LFS_HAS_CUDA
+        return info;
+#else
         const auto memory = lfs::core::gpu_backend_memory_info(backend);
         info.total = memory.total_bytes;
         info.total_used = memory.total_bytes >= memory.free_bytes
@@ -297,13 +304,18 @@ namespace lfs::vis::gui {
             info.process_used = 0;
 
         return info;
+#endif
     }
 
     float queryGpuUtilization() {
         if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
             return -1.f;
         }
+#if LFS_HAS_CUDA
         return nvmlState().getUtilization();
+#else
+        return -1.f;
+#endif
     }
 
 } // namespace lfs::vis::gui

@@ -6,7 +6,9 @@
 #include "backend/tensor_vulkan_interop.hpp"
 #include "core/tensor_completion.hpp"
 
+#if LFS_HAS_CUDA
 #include "backend/cuda/runtime/cuda_event_pool.hpp"
+#endif
 #include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/gpu_device_info.hpp"
@@ -19,8 +21,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#if LFS_HAS_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 #include <exception>
 #include <format>
 #include <mutex>
@@ -30,10 +34,31 @@
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/gpu_backend_ops.hpp"
 #include "backend/vulkan/vk_context.hpp"
+#if LFS_HAS_CUDA
 #include "backend/vulkan/vk_cuda_bridge.hpp"
+#endif
 #include "backend/vulkan/vk_memory.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
 #endif
+
+namespace lfs::core::tensor_ops {
+    namespace {
+        std::atomic<uint64_t> g_tensor_kernel_launch_count{0};
+    }
+
+    void reset_tensor_kernel_launch_count() noexcept {
+        g_tensor_kernel_launch_count.store(0, std::memory_order_relaxed);
+    }
+
+    uint64_t tensor_kernel_launch_count() noexcept {
+        return g_tensor_kernel_launch_count.load(std::memory_order_relaxed);
+    }
+
+    void record_tensor_kernel_launch(uint64_t n) noexcept {
+        g_tensor_kernel_launch_count.fetch_add(n, std::memory_order_relaxed);
+        internal::telemetry_record_kernel_launch(n);
+    }
+} // namespace lfs::core::tensor_ops
 
 namespace lfs::core {
     Tensor Tensor::empty_like(const Tensor& other, const TensorShape& shape, DataType dtype) {
@@ -54,9 +79,15 @@ namespace lfs::core {
             auto& result = backends[static_cast<size_t>(backend)];
             if (!result) {
 #ifdef LFS_TENSOR_VULKAN
+#if LFS_HAS_CUDA
                 result = backend == GpuBackend::CUDA
                              ? internal::make_cuda_vulkan_interop(device)
                              : internal::make_vulkan_vulkan_interop(device);
+#else
+                if (backend == GpuBackend::CUDA)
+                    throw TensorError("CUDA tensor interop is not available in this build");
+                result = internal::make_vulkan_vulkan_interop(device);
+#endif
 #else
                 throw TensorError("Vulkan tensor interop is unavailable in this build");
 #endif
@@ -180,7 +211,11 @@ namespace lfs::core {
         if (output.numel() == 0)
             return;
         if (*backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
             internal::cuda_where_into(output, condition, value, source);
+#else
+            throw TensorError("CUDA tensor backend is unavailable");
+#endif
         } else {
 #ifdef LFS_TENSOR_VULKAN
             internal::vulkan_where_into(output, condition, value, source);
@@ -268,7 +303,7 @@ namespace lfs::core {
             }
 
             const GpuBackend selected = state == kUnconfigured
-                                            ? GpuBackend::CUDA
+                                            ? (LFS_HAS_CUDA ? GpuBackend::CUDA : GpuBackend::Vulkan)
                                             : configured_backend(state);
             if (process_backend_state.compare_exchange_weak(
                     state, static_cast<int>(selected),
@@ -317,6 +352,7 @@ namespace lfs::core {
 #endif
         }
 
+#if LFS_HAS_CUDA
         static const bool cuda_available = [] {
             int device_count = 0;
             const cudaError_t status = cudaGetDeviceCount(&device_count);
@@ -327,6 +363,9 @@ namespace lfs::core {
             return device_count > 0;
         }();
         return cuda_available;
+#else
+        return false;
+#endif
     }
 
     bool gpu_backend_live(const GpuBackend backend) {
@@ -337,6 +376,7 @@ namespace lfs::core {
             return false;
 #endif
         }
+#if LFS_HAS_CUDA
         if (!gpu_backend_available(GpuBackend::CUDA))
             return false;
         int ordinal = 0;
@@ -347,6 +387,9 @@ namespace lfs::core {
             cuDevicePrimaryCtxGetState(device, &flags, &active) != CUDA_SUCCESS || active == 0)
             return false;
         return true;
+#else
+        return false;
+#endif
     }
 
     std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor) {
@@ -367,7 +410,11 @@ namespace lfs::core {
 
     MemoryInfo gpu_backend_memory_info(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
             return MemoryInfo::cuda();
+#else
+            return {};
+#endif
         }
 #ifdef LFS_TENSOR_VULKAN
         return internal::backend_ops(GpuBackend::Vulkan).stats();
@@ -404,8 +451,10 @@ namespace lfs::core {
                     continue;
                 const auto storage = internal::storage_ref(*tensor);
                 if (*backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
                     if (std::find(streams.begin(), streams.end(), tensor->stream()) == streams.end())
                         streams.push_back(tensor->stream());
+#endif
                 }
 #ifdef LFS_TENSOR_VULKAN
                 if (*backend == GpuBackend::Vulkan) {
@@ -419,6 +468,7 @@ namespace lfs::core {
                 }
 #endif
             }
+#if LFS_HAS_CUDA
             for (const auto stream : streams) {
                 auto found = std::find_if(events.begin(), events.end(),
                                           [stream](const auto& event) { return event.first == stream; });
@@ -436,6 +486,7 @@ namespace lfs::core {
                 }
                 ensure_cuda_success(cudaEventRecord(found->second, stream), "cudaEventRecord(completion)", {}, LFS_SOURCE_SITE_CURRENT());
             }
+#endif
 #ifdef LFS_TENSOR_VULKAN
             if (pending != 0) {
                 context = internal::acquire_vulkan_context();
@@ -488,12 +539,14 @@ namespace lfs::core {
         std::lock_guard lock(impl_->mutex);
         if (std::ranges::any_of(impl_->backends, [](bool pending) { return pending; }))
             return false;
+#if LFS_HAS_CUDA
         for (const auto& [stream, event] : impl_->events) {
             const auto status = cudaEventQuery(event);
             if (status == cudaErrorNotReady)
                 return false;
             ensure_cuda_success(status, "cudaEventQuery(completion)", {}, LFS_SOURCE_SITE_CURRENT());
         }
+#endif
 #ifdef LFS_TENSOR_VULKAN
         if (impl_->device && impl_->point.value) {
             uint64_t completed = 0;
@@ -540,6 +593,7 @@ namespace lfs::core {
             if (std::exchange(impl_->backends[i], false))
                 settle([&] { internal::backend_ops(kGpuBackends[i]).synchronize_device(); });
         }
+#if LFS_HAS_CUDA
         for (const auto& [stream, event] : impl_->events) {
             settle([&] {
                 ensure_cuda_success(cudaEventSynchronize(event), "cudaEventSynchronize(completion)", {}, LFS_SOURCE_SITE_CURRENT());
@@ -547,6 +601,7 @@ namespace lfs::core {
             });
             CudaEventPool::instance().release(event);
         }
+#endif
         impl_->events.clear();
 #ifdef LFS_TENSOR_VULKAN
         if (impl_->device && impl_->point.value) {
@@ -591,6 +646,7 @@ namespace lfs::core {
     }
 
     TensorCompletion TensorCompletionAccess::cuda(cudaStream_t stream, VulkanTimelinePoint point) {
+#if LFS_HAS_CUDA
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
         result.impl_->point = std::move(point);
@@ -602,6 +658,9 @@ namespace lfs::core {
         result.impl_->events.emplace_back(stream, event);
         ensure_cuda_success(cudaEventRecord(event, stream), "cudaEventRecord(completion)", {}, LFS_SOURCE_SITE_CURRENT());
         return result;
+#else
+        throw TensorError("CUDA tensor completion is not available in this build");
+#endif
     }
 
     TensorCompletion TensorCompletionAccess::vulkan(uint64_t value) {
@@ -627,11 +686,15 @@ namespace lfs::core {
 
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
             int device = 0;
             if (cudaGetDevice(&device) != cudaSuccess) {
                 return std::nullopt;
             }
             return gpu_backend_device_info(backend, device);
+#else
+            return std::nullopt;
+#endif
         }
 #ifdef LFS_TENSOR_VULKAN
         if (backend == GpuBackend::Vulkan) {
@@ -691,6 +754,15 @@ namespace lfs::core {
 #endif
         return std::nullopt;
     }
+
+#if !LFS_HAS_CUDA
+    std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend,
+                                                         const int device_index) {
+        if (backend == GpuBackend::CUDA || device_index != 0)
+            return std::nullopt;
+        return gpu_backend_device_info(backend);
+    }
+#endif
 
     lfs::Status shutdown_gpu_backend(const GpuBackend backend) {
 #ifdef LFS_TENSOR_VULKAN
@@ -761,7 +833,7 @@ namespace lfs::core {
     }
 
     namespace {
-#ifdef LFS_TENSOR_VULKAN
+#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
         lfs::Error cuda_view_error(const lfs::ErrorCode code,
                                    const lfs::ErrorDomain domain,
                                    std::string message) {
@@ -799,7 +871,7 @@ namespace lfs::core {
     } // namespace
 
     bool vulkan_backend_exports_memory() {
-#ifdef LFS_TENSOR_VULKAN
+#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
         try {
             const auto context = internal::try_live_vulkan_context();
             if (!context || context->dead() || !context->cuda_imports()) {
@@ -820,7 +892,7 @@ namespace lfs::core {
 
     lfs::Result<Tensor> cuda_view_of_vulkan_tensor(const Tensor& tensor,
                                                    const cudaStream_t stream) {
-#ifdef LFS_TENSOR_VULKAN
+#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
         if (!tensor.is_valid()) {
             return cuda_view_error(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::Tensor,
                                    "CUDA view of a Vulkan tensor requires a valid tensor");

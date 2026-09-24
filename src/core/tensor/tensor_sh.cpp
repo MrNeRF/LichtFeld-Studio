@@ -5,7 +5,7 @@
 #include "core/sh_value_quant.hpp"
 #include "internal/sh_codec.hpp"
 #include "internal/tensor_impl.hpp"
-#include <cuda_fp16.h>
+#include "core/detail/tensor_half.hpp"
 #include <limits>
 #include <tbb/parallel_for.h>
 
@@ -204,7 +204,7 @@ namespace lfs::core {
                                                            : internal::sh::offset(row, c, p.source_rest, f == ShFormat::Q16);
             if (f == ShFormat::Q16)
                 return internal::sh::decode(static_cast<const uint16_t*>(source_data)[offset], bound_values[row / 256 * 2], bound_values[row / 256 * 2 + 1]);
-            return f == ShFormat::Float16 ? __half2float(static_cast<const __half*>(source_data)[offset]) : source_floats[offset];
+            return f == ShFormat::Float16 ? detail::tensor_half_to_float(static_cast<const detail::tensor_half_t*>(source_data)[offset]) : source_floats[offset];
         };
         if (p.destination_format == ShFormat::Q16) {
             tbb::parallel_for(size_t{0}, sh_value_quant::n_bounds_for_prims(p.count), [&](size_t block) {
@@ -236,7 +236,7 @@ namespace lfs::core {
                 const float value = padding ? 0 : read(sr, c);
                 const size_t offset = p.destination_format == ShFormat::Canonical ? dr * width + c : internal::sh::offset(dr, c, p.destination_rest, false);
                 if (p.destination_format == ShFormat::Float16)
-                    static_cast<__half*>(output_data)[offset] = __float2half_rn(value);
+                    static_cast<detail::tensor_half_t*>(output_data)[offset] = detail::tensor_float_to_half(value);
                 else
                     output_floats[offset] = value;
             }

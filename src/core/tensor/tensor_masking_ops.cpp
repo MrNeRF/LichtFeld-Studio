@@ -2,15 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/device_fault.hpp"
+#include "core/cuda_error.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <execution>
 #include <format>
 #include <limits>
 #include <numeric>
@@ -25,8 +24,8 @@ namespace lfs::core {
         }
 
         template <>
-        __half masked_fill_cast<__half>(float value) {
-            return __float2half(value);
+        detail::tensor_half_t masked_fill_cast<detail::tensor_half_t>(float value) {
+            return detail::tensor_float_to_half(value);
         }
 
         template <typename T>
@@ -146,7 +145,9 @@ namespace lfs::core {
         // §1.9 host entry: reject graph capture before checked index_select launch.
         void reject_index_select_graph_capture(const Tensor& tensor, const cudaStream_t stream) {
             if (internal::backend_ops_for(tensor).stream_is_capturing(internal::ExecContext{stream})) {
+#if LFS_HAS_CUDA
                 throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
+#endif
             }
         }
     } // namespace
@@ -269,7 +270,7 @@ namespace lfs::core {
                 masked_select_cpu(ptr<float>(), mask.ptr<unsigned char>(), result.ptr<float>(), numel());
                 break;
             case DataType::Float16:
-                masked_select_cpu(ptr<__half>(), mask.ptr<unsigned char>(), result.ptr<__half>(), numel());
+                masked_select_cpu(ptr<detail::tensor_half_t>(), mask.ptr<unsigned char>(), result.ptr<detail::tensor_half_t>(), numel());
                 break;
             case DataType::Int32:
                 masked_select_cpu(ptr<int32_t>(), mask.ptr<unsigned char>(), result.ptr<int32_t>(), numel());
@@ -342,7 +343,7 @@ namespace lfs::core {
                 masked_fill_cpu(ptr<float>(), mask_data, numel(), stored_value);
                 break;
             case DataType::Float16:
-                masked_fill_cpu(ptr<__half>(), mask_data, numel(), stored_value);
+                masked_fill_cpu(ptr<detail::tensor_half_t>(), mask_data, numel(), stored_value);
                 break;
             case DataType::Int32:
                 masked_fill_cpu(ptr<int32_t>(), mask_data, numel(), stored_value);
@@ -762,7 +763,7 @@ namespace lfs::core {
 
             // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
             // TBB worker threads don't have CUDA device context, causing cudaErrorInvalidDevice
-            std::transform(std::execution::seq,
+            std::transform(
                            idx, idx + indices_int32.numel(), dst,
                            [src, total](int pos) {
                                if (pos < 0)
@@ -1586,7 +1587,7 @@ namespace lfs::core {
                 } else {
                     // Element-wise assignment
                     size_t num_elements = numel();
-                    std::for_each(std::execution::seq,
+                    std::for_each(
                                   std::views::iota(size_t(0), idx.numel()).begin(),
                                   std::views::iota(size_t(0), idx.numel()).end(),
                                   [data, indices, values, num_elements](size_t i) {
@@ -2318,8 +2319,8 @@ namespace lfs::core {
                                    other.ptr<float>(), tensor_->numel());
                 break;
             case DataType::Float16:
-                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<__half>(), mask,
-                                   other.ptr<__half>(), tensor_->numel());
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<detail::tensor_half_t>(), mask,
+                                   other.ptr<detail::tensor_half_t>(), tensor_->numel());
                 break;
             case DataType::Int32:
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int32_t>(), mask,

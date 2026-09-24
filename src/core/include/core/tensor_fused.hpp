@@ -145,7 +145,7 @@ namespace lfs::core::fused {
         // it; empty outputs stand for allocated ones. Loading a CUDA module synchronizes the
         // CUDA context, so call this during setup rather than per frame.
         void prepare(const std::vector<size_t>& domain, const std::vector<Tensor>& inputs,
-                     const std::vector<Tensor>& outputs = {}) const;
+                     const std::vector<Tensor>& outputs) const;
 
     private:
         struct Compiled;

@@ -4,11 +4,11 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/tensor_fwd.hpp"
 
 #include <cmath>
 #include <cstdint>
-#include <cuda_fp16.h>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -17,6 +17,12 @@
 
 namespace lfs::core::detail {
 
+#if defined(__CUDACC__)
+#define LFS_TENSOR_DTYPE_HD __host__ __device__
+#else
+#define LFS_TENSOR_DTYPE_HD
+#endif
+
     template <typename Function>
     void dispatch_dtype(const DataType dtype, Function&& function) {
         switch (dtype) {
@@ -24,7 +30,7 @@ namespace lfs::core::detail {
             std::forward<Function>(function).template operator()<float>();
             return;
         case DataType::Float16:
-            std::forward<Function>(function).template operator()<__half>();
+            std::forward<Function>(function).template operator()<detail::tensor_half_t>();
             return;
         case DataType::Int32:
             std::forward<Function>(function).template operator()<int32_t>();
@@ -106,7 +112,7 @@ namespace lfs::core::detail {
                    static_cast<double>(std::numeric_limits<int32_t>::max());
     }
 
-    __host__ __device__ inline uint8_t torch_uint8_cast(const float value) {
+    LFS_TENSOR_DTYPE_HD inline uint8_t torch_uint8_cast(const float value) {
 #ifdef __CUDA_ARCH__
         if (!isfinite(value)) {
             return 0;
@@ -124,14 +130,16 @@ namespace lfs::core::detail {
         return static_cast<uint8_t>(wrapped);
     }
 
-    __host__ __device__ inline uint8_t torch_uint8_cast(const __half value) {
-        return torch_uint8_cast(__half2float(value));
+    LFS_TENSOR_DTYPE_HD inline uint8_t torch_uint8_cast(const detail::tensor_half_t value) {
+        return torch_uint8_cast(detail::tensor_half_to_float(value));
     }
 
     template <typename T>
         requires std::is_integral_v<T>
-    __host__ __device__ inline uint8_t torch_uint8_cast(const T value) {
+    LFS_TENSOR_DTYPE_HD inline uint8_t torch_uint8_cast(const T value) {
         return static_cast<uint8_t>(value);
     }
+
+#undef LFS_TENSOR_DTYPE_HD
 
 } // namespace lfs::core::detail

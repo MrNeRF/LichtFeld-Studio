@@ -283,7 +283,7 @@ target_link_libraries(lfs_visualizer
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
         OpenSSL::Crypto
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         Freetype::Freetype
         nfd::nfd
         vterm
@@ -383,14 +383,20 @@ if(NOT WIN32)
     add_library(lfs_rmlui SHARED "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp")
 
     find_package(lunasvg CONFIG REQUIRED)
-    target_link_libraries(lfs_rmlui PRIVATE
-        -Wl,--whole-archive
-        $<TARGET_FILE:RmlUi::Core>
-        $<TARGET_FILE:RmlUi::Debugger>
-        -Wl,--no-whole-archive
-        Freetype::Freetype
-        lunasvg::lunasvg
-    )
+    if(APPLE)
+        target_link_libraries(lfs_rmlui PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,RmlUi::Core,RmlUi::Debugger>"
+            Freetype::Freetype
+            lunasvg::lunasvg)
+    else()
+        target_link_libraries(lfs_rmlui PRIVATE
+            -Wl,--whole-archive
+            $<TARGET_FILE:RmlUi::Core>
+            $<TARGET_FILE:RmlUi::Debugger>
+            -Wl,--no-whole-archive
+            Freetype::Freetype
+            lunasvg::lunasvg)
+    endif()
 
     get_target_property(_rmlui_includes RmlUi::Core INTERFACE_INCLUDE_DIRECTORIES)
     if(_rmlui_includes)

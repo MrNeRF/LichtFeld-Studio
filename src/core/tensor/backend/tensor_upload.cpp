@@ -2,26 +2,34 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_upload.hpp"
 #include "../internal/tensor_impl.hpp"
+#if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
+#endif
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_HAS_CUDA
 #include "cuda/runtime/memory_pool.hpp"
+#endif
 #include "tensor_completion.hpp"
 #include "vulkan/vk_context.hpp"
+#if LFS_HAS_CUDA
 #include "vulkan/vk_cuda_bridge.hpp"
+#endif
 #include "vulkan/vk_recorder.hpp"
 #include <algorithm>
 #include <stdexcept>
-#ifndef _WIN32
+#if LFS_HAS_CUDA && !defined(_WIN32)
 #include <unistd.h>
 #endif
 namespace lfs::core {
+#if LFS_HAS_CUDA
     namespace {
         void check(cudaError_t e) {
             if (e != cudaSuccess)
                 throw std::runtime_error(cudaGetErrorString(e));
         }
     } // namespace
+#endif
     struct TensorUpload::Impl {
         Tensor source, destination;
         TensorCompletion completion;
@@ -106,10 +114,13 @@ namespace lfs::core {
         cudaStream_t stream = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VkSemaphore ready = VK_NULL_HANDLE, consumer = VK_NULL_HANDLE;
+#if LFS_HAS_CUDA
         cudaExternalSemaphore_t ready_cuda = nullptr, consumer_cuda = nullptr;
+#endif
         uint64_t counter = 0;
         TensorCompletion last;
         ~Impl() {
+#if LFS_HAS_CUDA
             if (stream) {
                 (void)cudaStreamSynchronize(stream);
                 CudaMemoryPool::instance().release_stream(stream);
@@ -121,7 +132,9 @@ namespace lfs::core {
                 (void)cudaDestroyExternalSemaphore(consumer_cuda);
             if (ready && backend == GpuBackend::CUDA)
                 vkDestroySemaphore(device, ready, nullptr);
+#endif
         }
+#if LFS_HAS_CUDA
         cudaExternalSemaphore_t import(VkSemaphore semaphore) {
             cudaExternalSemaphoreHandleDesc desc{};
 #ifdef _WIN32
@@ -157,6 +170,7 @@ namespace lfs::core {
 #endif
             return result;
         }
+#endif
     };
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* device, void* consumer) : impl_(std::make_unique<Impl>()) {
         auto& s = *impl_;
@@ -167,6 +181,7 @@ namespace lfs::core {
             s.ready = internal::acquire_vulkan_context()->timeline();
             return;
         }
+#if LFS_HAS_CUDA
         check(cudaStreamCreateWithFlags(&s.stream, cudaStreamNonBlocking));
         if (!s.device)
             return;
@@ -182,6 +197,9 @@ namespace lfs::core {
         s.ready_cuda = s.import(s.ready);
         if (s.consumer)
             s.consumer_cuda = s.import(s.consumer);
+#else
+        throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
+#endif
     }
     TensorWorkQueue::~TensorWorkQueue() {
         try {
@@ -199,9 +217,13 @@ namespace lfs::core {
         uint64_t consumer_completion = 0;
         if (value && s.consumer) {
             if (s.backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
                 cudaExternalSemaphoreWaitParams params{};
                 params.params.fence.value = value;
                 check(cudaWaitExternalSemaphoresAsync(&s.consumer_cuda, &params, 1, s.stream));
+#else
+                throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
+#endif
             } else {
                 const auto ctx = internal::acquire_vulkan_context();
                 consumer_completion = ctx->recorders().wait_external({}, s.consumer, value, {});
@@ -211,6 +233,7 @@ namespace lfs::core {
         try {
             commands();
             if (s.backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
                 ++s.counter;
                 if (s.ready_cuda) {
                     cudaExternalSemaphoreSignalParams params{};
@@ -218,15 +241,21 @@ namespace lfs::core {
                     check(cudaSignalExternalSemaphoresAsync(&s.ready_cuda, &params, 1, s.stream));
                 }
                 result = TensorCompletionAccess::cuda(s.stream, {s.ready, s.counter, {}});
+#else
+                throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
+#endif
             } else {
                 result = TensorCompletionAccess::vulkan(
                     std::max(consumer_completion, internal::acquire_vulkan_context()->recorders().flush_current()));
             }
         } catch (...) {
-            if (s.backend == GpuBackend::CUDA)
+            if (s.backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
                 (void)cudaStreamSynchronize(s.stream);
-            else
+#endif
+            } else {
                 internal::acquire_vulkan_context()->recorders().wait_all();
+            }
             throw;
         }
         s.last = result;

@@ -8,7 +8,9 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "vk_context.hpp"
+#if LFS_HAS_CUDA
 #include "vk_cuda_bridge.hpp"
+#endif
 #include "vk_recorder.hpp"
 
 #include <algorithm>
@@ -85,6 +87,7 @@ namespace lfs::core::internal {
             });
         }
 
+#if LFS_HAS_CUDA
         bool storage_buffer_exportable(const VkPhysicalDevice physical) {
             VkPhysicalDeviceExternalBufferInfo info{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
@@ -98,6 +101,7 @@ namespace lfs::core::internal {
                        0 &&
                    (external.compatibleHandleTypes & kVulkanExportMemoryHandleType) != 0;
         }
+#endif
     } // namespace
 
     struct VulkanMemory::AllocationRecord {
@@ -156,9 +160,11 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::create_pool() {
+#if LFS_HAS_CUDA
         VkExternalMemoryBufferCreateInfo external_buffer{
             VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
         external_buffer.handleTypes = kVulkanExportMemoryHandleType;
+#endif
         VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_info.size = 256;
         buffer_info.usage = kStorageUsage;
@@ -166,10 +172,16 @@ namespace lfs::core::internal {
         VmaAllocationCreateInfo allocation_info{};
         allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#if LFS_HAS_CUDA
         const bool want_export = context_.external_memory_enabled() &&
                                  storage_buffer_exportable(context_.physical_device());
+#else
+        constexpr bool want_export = false;
+#endif
         if (want_export) {
+#if LFS_HAS_CUDA
             buffer_info.pNext = &external_buffer;
+#endif
         }
         uint32_t memory_type = 0;
         VkResult find_result = vmaFindMemoryTypeIndexForBufferInfo(
@@ -184,11 +196,13 @@ namespace lfs::core::internal {
         pool_info.memoryTypeIndex = memory_type;
         pool_info.blockSize = kPoolBlockSize;
         if (want_export && buffer_info.pNext != nullptr) {
+#if LFS_HAS_CUDA
             export_alloc_info_.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
             export_alloc_info_.pNext = nullptr;
             export_alloc_info_.handleTypes = kVulkanExportMemoryHandleType;
             pool_info.pMemoryAllocateNext = &export_alloc_info_;
             exports_memory_ = true;
+#endif
         }
         VkResult pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
         if (exports_memory_ && pool_result != VK_SUCCESS) {
@@ -355,9 +369,11 @@ namespace lfs::core::internal {
             record->cacheable = cacheable;
             record->host_visible = host_visible;
 
+#if LFS_HAS_CUDA
             VkExternalMemoryBufferCreateInfo external_buffer{
                 VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
             external_buffer.handleTypes = kVulkanExportMemoryHandleType;
+#endif
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
@@ -368,7 +384,9 @@ namespace lfs::core::internal {
             const bool pooled_export =
                 exports_memory_ && !host_visible && record->allocated_size <= kPoolBlockSize;
             if (pooled_export) {
+#if LFS_HAS_CUDA
                 buffer_info.pNext = &external_buffer;
+#endif
             }
             VmaAllocationCreateInfo allocation_info{};
             VmaAllocationInfo mapping_info{};

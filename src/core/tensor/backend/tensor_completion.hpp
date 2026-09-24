@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/tensor/internal/private_access.hpp"
+#include "core/cuda_types.hpp"
 #include "core/tensor_completion.hpp"
-#include <cuda_runtime.h>
 
 namespace lfs::core {
     struct TensorCompletionAccess {

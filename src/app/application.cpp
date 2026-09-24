@@ -64,8 +64,10 @@
 #include "visualizer/preferences.hpp"
 #include <cmath>
 #include <condition_variable>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #include <curand.h>
+#endif
 #include <format>
 #include <future>
 #include <mutex>
@@ -80,7 +82,7 @@
 #include <windows.h>
 #endif
 
-#ifndef LFS_MIN_SM
+#if LFS_HAS_CUDA && !defined(LFS_MIN_SM)
 #error "LFS_MIN_SM must be defined by the build (CMakeLists.txt)"
 #endif
 
@@ -1278,8 +1280,10 @@ namespace lfs::app {
 
         // Only an accurate paraphrase of SM 7.5 — Turing also covers the GTX 16-series and T4,
         // so this must not say "RTX only". Drop the hint if the floor ever moves.
+#if LFS_HAS_CUDA
         constexpr std::string_view kMinGpuHint =
             LFS_MIN_SM == 75 ? " Cards from the GTX 16-series, RTX 20-series and newer qualify." : "";
+#endif
 
         // English literals on purpose: this runs before the visualizer exists, so
         // LocalizationManager has no catalog loaded yet. Do not convert to LOC(...).
@@ -1322,6 +1326,13 @@ namespace lfs::app {
                 show_dialog);
             return false;
         }
+#if !LFS_HAS_CUDA
+        reportFatalStartupError(
+            "LichtFeld Studio - No usable GPU",
+            "CUDA is not compiled into this build; select the Vulkan tensor backend.",
+            show_dialog);
+        return false;
+#else
         const bool cuda_usable =
             lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
         const bool vulkan_usable =
@@ -1396,10 +1407,12 @@ namespace lfs::app {
             return false;
         }
         return true;
+#endif
     }
 
     namespace {
 
+#if LFS_HAS_CUDA
         std::future<void>& cudaWarmupFuture() {
             static std::future<void> fut;
             return fut;
@@ -1439,6 +1452,7 @@ namespace lfs::app {
                 profiler.captureCudaWarmupDelta();
             });
         }
+#endif
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const bool safe_mode = params->safe_mode ||
@@ -1506,10 +1520,12 @@ namespace lfs::app {
             // module memory (the cuda.modules row). Without it the modules land in the
             // unattributed NVML residual. The pre-flight gate in run_mode covers
             // hardware compatibility before this warmup starts.
+#if LFS_HAS_CUDA
             if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
                 lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
                 warmupCudaAsync();
             }
+#endif
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
@@ -1602,8 +1618,10 @@ namespace lfs::app {
             if (params->import_cameras_path ||
                 params->resume_checkpoint ||
                 startup_project) {
+#if LFS_HAS_CUDA
                 if (auto& fut = cudaWarmupFuture(); fut.valid())
                     fut.wait();
+#endif
             }
 
             if (params->import_cameras_path) {

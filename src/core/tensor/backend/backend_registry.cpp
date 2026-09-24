@@ -17,8 +17,13 @@ namespace lfs::core::internal {
 
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
             static CudaBackendOps* const cuda_ops = new CudaBackendOps();
             return *cuda_ops;
+#else
+            LFS_ASSERT_MSG(false, "GPU backend 'CUDA' is not compiled into this build");
+            std::unreachable();
+#endif
         }
 
 #ifdef LFS_TENSOR_VULKAN

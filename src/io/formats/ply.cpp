@@ -572,7 +572,9 @@ namespace lfs::io {
             if (size > ply_constants::FILE_SIZE_THRESHOLD_MB * 1024 * 1024) {
                 madvise(data, size, MADV_SEQUENTIAL);
                 madvise(data, size, MADV_WILLNEED);
+#if defined(__linux__)
                 posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+#endif
             }
 
             return true;

@@ -6,7 +6,9 @@
 # ============================================================================
 
 # Tensor CUDA kernels (STATIC, linked privately)
-add_subdirectory(tensor)
+if(LFS_HAS_CUDA)
+    add_subdirectory(tensor)
+endif()
 
 option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" ON)
 if(LFS_TENSOR_VULKAN)
@@ -14,10 +16,14 @@ if(LFS_TENSOR_VULKAN)
 endif()
 
 # Neural inference kernels (STATIC, linked privately)
-add_subdirectory(nn)
+if(LFS_HAS_CUDA)
+    add_subdirectory(nn)
+endif()
 
 # Core CUDA library (STATIC, linked privately)
-add_subdirectory(cuda)
+if(LFS_HAS_CUDA)
+    add_subdirectory(cuda)
+endif()
 
 # Event bridge shared library
 add_subdirectory(event_bridge)
@@ -105,11 +111,16 @@ set(TENSOR_SOURCES
         nn/models/romav1.cpp
 )
 
+if(NOT LFS_HAS_CUDA)
+    list(FILTER TENSOR_SOURCES EXCLUDE REGEX "tensor/backend/cuda/")
+    list(APPEND TENSOR_SOURCES tensor/backend/cuda/runtime/pinned_memory_allocator.cpp)
+    list(REMOVE_ITEM TENSOR_SOURCES nn/models/romav1.cpp)
+endif()
+
 if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
         tensor/backend/vulkan/vk_context.cpp
         tensor/backend/vulkan/vk_memory.cpp
-        tensor/backend/vulkan/vk_cuda_bridge.cpp
         tensor/backend/vulkan/vk_recorder.cpp
         tensor/backend/vulkan/vk_pipelines.cpp
         tensor/backend/vulkan/vk_ops_pointwise.cpp
@@ -134,6 +145,9 @@ if(LFS_TENSOR_VULKAN)
         tensor/backend/vulkan/vk_ops_filters.cpp
         tensor/backend/vulkan/vk_services.cpp
     )
+    if(LFS_HAS_CUDA)
+        list(APPEND TENSOR_SOURCES tensor/backend/vulkan/vk_cuda_bridge.cpp)
+    endif()
 endif()
 
 # Core module sources
@@ -142,9 +156,11 @@ set(CORE_SOURCES
         alloc_counter.cpp
         crash_handler.cpp
         training_churn_metrics.cpp
+        cuda_diagnostic_modes.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp
+        validated_index_token.cpp
         error.cpp
         error_bus.cpp
         exif.cpp
@@ -194,6 +210,21 @@ set(CORE_SOURCES
         legacy_settings_migration.cpp
 )
 
+if(NOT LFS_HAS_CUDA)
+    list(REMOVE_ITEM CORE_SOURCES
+        cuda_error.cpp
+        cuda_error_typed.cpp
+        device_fault.cpp
+        cuda/memory_arena_owner.cpp
+        cuda/vmm_device_buffer.cpp
+        splat_exportable_storage.cpp)
+    list(APPEND CORE_SOURCES
+        cuda_error_no_cuda.cpp
+        splat_exportable_storage_no_cuda.cpp)
+    list(APPEND TENSOR_SOURCES
+        tensor/tensor_cuda_interop_no_cuda.cpp)
+endif()
+
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
 if(LFS_TENSOR_VULKAN)
@@ -223,6 +254,8 @@ target_include_directories(lfs_core SYSTEM PRIVATE
 )
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(_expression_catalog "${CMAKE_CURRENT_BINARY_DIR}/expression_catalog.cpp")
+if(LFS_HAS_CUDA)
 add_library(lfs_expression_catalog OBJECT tensor/backend/cuda/expression_catalog.cu)
 set_target_properties(lfs_expression_catalog PROPERTIES
     CUDA_PTX_COMPILATION ON
@@ -234,7 +267,6 @@ target_compile_options(lfs_expression_catalog PRIVATE --keep-device-functions
     "$<TARGET_PROPERTY:lfs_tensor_kernels,COMPILE_OPTIONS>")
 target_compile_definitions(lfs_expression_catalog PRIVATE
     "$<TARGET_PROPERTY:lfs_tensor_kernels,COMPILE_DEFINITIONS>")
-set(_expression_catalog "${CMAKE_CURRENT_BINARY_DIR}/expression_catalog.cpp")
 add_custom_command(OUTPUT "${_expression_catalog}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_expression_ptx.py"
         --ptx $<TARGET_OBJECTS:lfs_expression_catalog>
@@ -246,6 +278,17 @@ add_custom_command(OUTPUT "${_expression_catalog}"
             "${CMAKE_SOURCE_DIR}/tools/embed_expression_ptx.py"
     COMMAND_EXPAND_LISTS VERBATIM)
 target_sources(lfs_core PRIVATE "${_expression_catalog}" tensor/backend/cuda/expression_ptx.cpp)
+else()
+    add_custom_command(OUTPUT "${_expression_catalog}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_expression_ptx.py"
+            --tensor "${CMAKE_CURRENT_SOURCE_DIR}/tensor"
+            --output "${_expression_catalog}"
+            --depfile "${_expression_catalog}.d"
+        DEPFILE "${_expression_catalog}.d"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/embed_expression_ptx.py"
+        VERBATIM)
+    target_sources(lfs_core PRIVATE "${_expression_catalog}")
+endif()
 if(LFS_TENSOR_VULKAN)
     target_sources(lfs_core PRIVATE tensor/backend/vulkan/expression_spirv.cpp)
     target_link_libraries(lfs_core PRIVATE lfs_tensor_spirv)
@@ -261,15 +304,15 @@ target_link_libraries(lfs_core
         nlohmann_json::nlohmann_json
         glm::glm
         Threads::Threads
-        CUDA::cudart
-        CUDA::curand
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
     PRIVATE
-        lfs_core_cuda
-        lfs_tensor_kernels
-        lfs_nn_kernels
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_tensor_kernels>
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_nn_kernels>
         taywee::args
         JPEG::JPEG
         PNG::PNG
@@ -287,7 +330,7 @@ endif()
 
 # Platform-specific settings
 if(UNIX)
-    target_link_libraries(lfs_core PUBLIC dl)
+    target_link_libraries(lfs_core PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
 if(WIN32)

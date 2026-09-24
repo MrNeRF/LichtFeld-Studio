@@ -145,6 +145,10 @@ class PreferencesPanel(Panel):
                 lambda key=key: lf.ui.get_tensor_backend_preferences()[key],
                 lambda value, key=key: self._set_tensor_preference(key, value),
             )
+        model.bind_func(
+            "tensor_cuda_available",
+            lambda: bool(lf.ui.get_tensor_backend_preferences()["cuda_available"]),
+        )
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)

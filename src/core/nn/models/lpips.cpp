@@ -83,10 +83,14 @@ namespace lfs::core::nn::models {
                 return;
             }
             slot.set_stream(src.stream());
+#if LFS_HAS_CUDA
             if (src.bytes() > 0) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(slot.data_ptr(), src.data_ptr(), src.bytes(),
                                                cudaMemcpyDeviceToDevice, src.stream()));
             }
+#else
+            throw std::runtime_error("CUDA tensor recapture is unavailable in this build");
+#endif
         }
     } // namespace
 
@@ -198,6 +202,7 @@ namespace lfs::core::nn::models {
         if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan)
             return crop_h * crop_w * kExactBytesPerPixel;
 
+#if LFS_HAS_CUDA
         // Count new allocations, including pool rounding. Existing buffers are
         // already reflected in cudaMemGetInfo; they need no second reservation.
         constexpr std::size_t driver_reserve = 64ULL * 1024 * 1024;
@@ -219,6 +224,9 @@ namespace lfs::core::nn::models {
                 bytes += cuda_allocation_size(taps_bytes);
         }
         return bytes;
+#else
+        return crop_h * crop_w * kExactBytesPerPixel;
+#endif
     }
 
     std::size_t Lpips::weights_bytes() const {
@@ -358,6 +366,7 @@ namespace lfs::core::nn::models {
 
     lfs::Result<float> Lpips::run_fast(const Tensor& pred, const Tensor& target,
                                        const InputScaling scaling) {
+#if LFS_HAS_CUDA
         if (auto error = validate_pair(pred, target))
             return std::move(*error);
         Tensor x_in = as_batch(pred).contiguous();
@@ -534,6 +543,10 @@ namespace lfs::core::nn::models {
         if (!std::isfinite(total))
             return lpips_error(lfs::ErrorCode::Internal, "LPIPS produced a non-finite value");
         return total;
+#else
+        return lpips_error(lfs::ErrorCode::Unsupported,
+                           "the CUDA LPIPS fast path is unavailable in this build");
+#endif
     }
 
     lfs::Result<float> Lpips::run_tiled(const Tensor& pred, const Tensor& target,

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/cuda_types.hpp"
 #include "core/tensor/internal/private_access.hpp"
 
 #include "core/error.hpp"
@@ -109,12 +110,14 @@ namespace lfs::core::internal {
         [[nodiscard]] bool external_semaphore_enabled() const noexcept {
             return caps_.external_semaphore;
         }
+#if LFS_HAS_CUDA
         [[nodiscard]] VulkanCudaImportRegistry* cuda_imports() noexcept {
             return cuda_imports_.get();
         }
         [[nodiscard]] const VulkanCudaImportRegistry* cuda_imports() const noexcept {
             return cuda_imports_.get();
         }
+#endif
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
@@ -173,7 +176,9 @@ namespace lfs::core::internal {
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
         std::mutex shutdown_mutex_;
+#if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
+#endif
         std::unique_ptr<VulkanMemory> memory_;
         std::unique_ptr<VulkanRecorderRegistry> recorders_;
         std::unique_ptr<VulkanPipelines> pipelines_;

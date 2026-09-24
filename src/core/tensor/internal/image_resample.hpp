@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "core/cuda/undistort/undistort.hpp"
+#include "core/tensor_image.hpp"
+
+#include <algorithm>
 #include "core/tensor/internal/private_access.hpp"
 #include <cmath>
 namespace lfs::core::internal::image_math {

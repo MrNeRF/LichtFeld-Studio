@@ -5455,11 +5455,16 @@ namespace lfs::python {
             result["vulkan_validation"] = state.options.vulkan_validation;
             result["force_fp32_half"] = state.options.force_fp32_half;
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
+            result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
                   if (backend != "cuda" && backend != "vulkan")
                       throw nb::value_error("Backend must be cuda or vulkan");
+                  if constexpr (!LFS_HAS_CUDA) {
+                    if (backend == "cuda")
+                      throw nb::value_error("CUDA is not compiled into this build");
+                  }
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{
@@ -5467,7 +5472,9 @@ namespace lfs::python {
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
+                  vis::UserPreferences::instance().setTensorBackend(state); },
+              nb::arg("backend") = LFS_HAS_CUDA ? "cuda" : "vulkan",
+              nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

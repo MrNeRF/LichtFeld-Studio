@@ -42,7 +42,11 @@ namespace lfs::io {
     Result<void> encode_sog(const SplatData&, const SogEncodeOptions&, SogSink&);
     Result<void> encode_sog_directory(const SplatData&, const SogEncodeOptions&);
     // CPU-only I/O and WebP decode. Invoke the returned closure on the owning CUDA thread.
+#if defined(__cpp_lib_move_only_function)
     using SogDirectoryReconstruct = std::move_only_function<Result<SplatData>()>;
+#else
+    using SogDirectoryReconstruct = std::function<Result<SplatData>()>;
+#endif
     // Bounded entry access shared by directory and bundle readers.
     using SogEntryReader = std::function<Result<std::vector<uint8_t>>(const std::string&, size_t)>;
     Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader&, const std::string& prefix);

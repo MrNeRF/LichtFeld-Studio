@@ -3,8 +3,10 @@
 
 #include "core/error.hpp"
 #include "core/tensor.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#endif
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
@@ -799,6 +801,7 @@ namespace {
         }
     }
 
+#if LFS_HAS_CUDA
     TEST_P(TensorIndexBounds, CrossStreamInt64FaultReachesReadback) {
         if (std::get<0>(GetParam()) != GpuBackend::CUDA)
             GTEST_SKIP() << "CUDA stream ordering";
@@ -830,6 +833,7 @@ namespace {
         EXPECT_EQ(cudaStreamDestroy(consumer), cudaSuccess);
         EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
     }
+#endif
 
     std::string index_bounds_name(const testing::TestParamInfo<std::tuple<GpuBackend, int>>& info) {
         constexpr const char* names[]{"Gather", "Scatter", "IndexCopy", "IndexAdd", "ScatterAdd", "ScatterScalar"};

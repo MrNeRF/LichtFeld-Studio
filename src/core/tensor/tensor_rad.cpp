@@ -62,7 +62,11 @@ namespace lfs::core {
 #endif
             return;
         }
+#if LFS_HAS_CUDA
         internal::cuda_rad_page_dequant(packed, desc, pool, page);
+#else
+        throw std::runtime_error("CUDA tensor backend is unavailable");
+#endif
     }
     void rad_page_quantize(const RadPageSources& src, const RadPagePool& pool, uint32_t page) {
         const auto backend = validate_pool(pool, page);
@@ -96,6 +100,10 @@ namespace lfs::core {
 #endif
             return;
         }
+#if LFS_HAS_CUDA
         internal::cuda_rad_page_quantize(src, pool, page);
+#else
+        throw std::runtime_error("CUDA tensor backend is unavailable");
+#endif
     }
 } // namespace lfs::core

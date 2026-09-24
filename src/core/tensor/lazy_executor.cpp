@@ -4,9 +4,12 @@
 #include "internal/lazy_executor.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/detail/fused_pointwise.hpp"
 #include "core/logger.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#endif
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_ir.hpp"
 #include "internal/tensor_impl.hpp"
@@ -474,11 +477,13 @@ namespace lfs::core::internal {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
                 // prepare_inputs_for_stream only takes initializer_list; pin source then each rhs.
+#if LFS_HAS_CUDA
                 cudaStream_t execution_stream = prepare_inputs_for_stream({&source});
                 for (const auto& r : rhs_storage) {
                     execution_stream = prepare_inputs_for_stream({&r}, execution_stream);
                 }
                 CUDAStreamGuard guard(execution_stream);
+#endif
                 Tensor out = internal::allocate_like(
                     source, source.shape(), DataType::Float32);
                 float* out_ptr = out.ptr<float>();

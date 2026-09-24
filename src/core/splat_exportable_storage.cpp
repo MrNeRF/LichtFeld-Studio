@@ -599,38 +599,6 @@ namespace lfs::core {
         return live;
     }
 
-    Q16BindPtrs resolve_q16_bind_ptrs(const SplatData& model) {
-        Q16BindPtrs out{};
-        if (!model.shN_value_quantized()) {
-            return out;
-        }
-        const Tensor& codes = model.shN_raw();
-        const Tensor& bounds = model.shN_value_bounds();
-        if (!codes.is_valid() || codes.numel() == 0) {
-            return out;
-        }
-        out.codes = static_cast<const float*>(resolve_exportable_device_ptr(codes));
-        if (bounds.is_valid() && bounds.numel() > 0) {
-            out.bounds = static_cast<const float*>(resolve_exportable_device_ptr(bounds));
-        }
-        out.n_cells_per_prim = static_cast<unsigned>(
-            sh_value_quant::n_value_cells_per_prim(
-                static_cast<std::uint32_t>(model.max_sh_coeffs_rest())));
-        if (codes.has_exportable_provenance()) {
-            out.generation = codes.exportable_bound_generation();
-            out.generation_checked = true;
-            // Codes + bounds must share the same live generation (0.15 alt).
-            if (bounds.is_valid() && bounds.has_exportable_provenance() &&
-                bounds.exportable_bound_generation() != codes.exportable_bound_generation()) {
-                LOG_ERROR(
-                    "q16 codes/bounds generation pair mismatch: codes_gen={} bounds_gen={}",
-                    codes.exportable_bound_generation(),
-                    bounds.exportable_bound_generation());
-            }
-        }
-        return out;
-    }
-
     std::expected<void, std::string>
     SplatExportableStorage::rebindSplatData(SplatData& model,
                                             SplatTensorAllocator allocator) const {

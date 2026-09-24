@@ -75,19 +75,24 @@ namespace lfs::core {
         return result;
     }
 
+    inline void enable_vulkan_device_portability(
+        VkPhysicalDevice device, std::vector<const char*>& extensions);
+
     inline VkResult create_vulkan_device(VkPhysicalDevice physical_device,
                                          const std::vector<VkDeviceQueueCreateInfo>& queues,
                                          const std::vector<const char*>& extensions,
                                          const void* feature_chain,
                                          const VkPhysicalDeviceFeatures* features,
                                          VkDevice* device) {
+        std::vector<const char*> enabled_extensions = extensions;
+        enable_vulkan_device_portability(physical_device, enabled_extensions);
         VkDeviceCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         info.pNext = feature_chain;
         info.queueCreateInfoCount = static_cast<uint32_t>(queues.size());
         info.pQueueCreateInfos = queues.data();
-        info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-        info.ppEnabledExtensionNames = extensions.data();
+        info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
+        info.ppEnabledExtensionNames = enabled_extensions.data();
         info.pEnabledFeatures = features;
         return vkCreateDevice(physical_device, &info, nullptr, device);
     }
@@ -190,16 +195,34 @@ namespace lfs::core {
         });
     }
 
+    inline void enable_vulkan_device_portability(
+        VkPhysicalDevice device, std::vector<const char*>& extensions) {
+        uint32_t count = 0;
+        if (vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr) != VK_SUCCESS)
+            return;
+        std::vector<VkExtensionProperties> available(count);
+        if (vkEnumerateDeviceExtensionProperties(
+                device, nullptr, &count, available.data()) != VK_SUCCESS)
+            return;
+        constexpr std::string_view portability_subset = "VK_KHR_portability_subset";
+        if (std::ranges::any_of(available, [portability_subset](const auto& extension) {
+                return std::string_view(extension.extensionName) == portability_subset;
+            }) &&
+            std::ranges::none_of(extensions, [portability_subset](const char* extension) {
+                return std::string_view(extension) == portability_subset;
+            })) {
+            extensions.push_back(portability_subset.data());
+        }
+    }
+
     inline VkResult create_vulkan_instance(const VkApplicationInfo& application,
                                            const std::vector<const char*>& extensions,
                                            const std::vector<const char*>& layers,
                                            const void* next,
                                            VkInstanceCreateFlags flags,
-                                           VkInstance* instance,
-                                           bool portability_enumeration = false) {
+                                           VkInstance* instance) {
         std::vector<const char*> enabled_extensions = extensions;
-        if (portability_enumeration &&
-            vulkan_instance_extension_available(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) &&
+        if (vulkan_instance_extension_available(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) &&
             std::ranges::find_if(enabled_extensions, [](const char* extension) {
                 return std::string_view(extension) == VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
             }) == enabled_extensions.end()) {
