@@ -1598,7 +1598,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         for key in transform_toolbar_tooltip_keys:
             assert data.get("toolbar", {}).get(key), f"{locale_path.name} missing toolbar.{key}"
         for key in utility_toolbar_tooltip_keys:
-            assert data.get(f"toolbar.{key}"), f"{locale_path.name} missing toolbar.{key}"
+            assert data.get("toolbar", {}).get(key), f"{locale_path.name} missing toolbar.{key}"
     assert "Space: {{transform_space_label}}" not in rml
     assert "Pivot: {{transform_pivot_label}}" not in rml
     assert 'id="transform-block"' not in rendering_rml
