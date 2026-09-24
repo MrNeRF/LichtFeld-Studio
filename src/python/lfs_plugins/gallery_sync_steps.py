@@ -18,12 +18,12 @@ from . import gallery_preparation
 
 
 class LocalUpdateSteps:
-    """staging -> importing -> save_before_backup -> backup -> applying -> save_updated -> linking.
+    """staging -> save_before_backup -> backup -> importing -> applying -> save_updated -> linking.
 
-    Import may add a hidden preview, and save_before_backup may save the
-    existing project. Old splats and the view are replaced only after the
-    backup is ready and the saved generation and stamp still match. Cancel
-    through backup removes the owned preview, leaving the baseline save.
+    The user's project is saved and backed up before a gallery preview enters
+    the live scene. Old splats and the view are replaced only after the backup
+    is ready and the saved generation and stamp still match. Cancel through
+    backup leaves the saved project and its file untouched.
     Apply is synchronous; failure reopens that saved file. Cancel after the
     updated save keeps the updated project and recovery copy. A submitted link
     may still complete and must be checked by refreshing the gallery.
@@ -31,7 +31,7 @@ class LocalUpdateSteps:
 
     def __init__(self, service, app, clock, *, project_identity, current_identity,
                  visible_splats, staged_nodes, acquire_native_use, save_project,
-                 save_pending, link_saved_download, refresh_model, schedule_poll,
+                 save_pending, cancel_save, link_saved_download, refresh_model, schedule_poll,
                  apply_update, recover_update, set_undo_pull, message_changed):
         self.service = service
         self.app = app
@@ -43,6 +43,7 @@ class LocalUpdateSteps:
         self.acquire_native_use = acquire_native_use
         self.save_project = save_project
         self.save_pending = save_pending
+        self.cancel_save = cancel_save
         self.link_saved_download = link_saved_download
         self.refresh_model = refresh_model
         self.schedule_poll = schedule_poll
@@ -55,6 +56,7 @@ class LocalUpdateSteps:
         self.started = None
         self.overrides = None
         self.progress = 0
+        self.save_in_progress = False
         self.__message = ""
 
     @property
@@ -74,6 +76,8 @@ class LocalUpdateSteps:
         if self.pending and self.pending.get("_update"):
             update = self.pending["_update"]
             update["canceled"] = True
+            if update["phase"] == "save_before_backup" and self.save_in_progress:
+                self.cancel_save()
             if update["phase"] == "importing" and Path(update.get("path", "")).suffix == ".scene":
                 self.app.ui.cancel_gallery_import()
 
@@ -112,6 +116,7 @@ class LocalUpdateSteps:
             _update={"project": project, "phase": "staging", "stage_id": stage_id})
         self.detached = False
         self.started = self.clock()
+        self.save_in_progress = False
         self._message = "Preparing the gallery update…"
         self.schedule_poll()
 
@@ -168,13 +173,31 @@ class LocalUpdateSteps:
             update["path"] = stage["path"]
             if scene.get_node(Path(stage["path"]).stem):
                 raise ValueError("The update preview already exists. Download the gallery item again.")
-            if Path(stage["path"]).suffix == ".scene":
-                self.app.load_gallery_scene(self.staged_nodes(stage["path"]), Path(stage["path"]).stem,
-                    hidden=True)
-            elif Path(stage["path"]).suffix == ".licht":
-                self.app.load_file(stage["path"])
-            else:
+            if Path(stage["path"]).suffix not in (".scene", ".licht"):
                 raise ValueError("The downloaded project identity or path changed. Prepare the download again.")
+            update["phase"] = "save_before_backup"
+            self._message = "Saving your current project…"
+            return
+        if update["phase"] == "save_before_backup":
+            if self.app.project_is_dirty():
+                if not self.save_in_progress:
+                    self.save_in_progress = True
+                    self.save_project(lambda: self.prepare_backup(job), expected_project=project)
+            else:
+                self.prepare_backup(job)
+            return
+        if update["phase"] == "backup":
+            backup = current_job.get("localUpdate", {})
+            if backup.get("id") != update.get("backup_id") or backup.get("state") != "ready":
+                raise ValueError(backup.get("message") or self.service.message)
+            if (self.app.project_is_dirty() or self.app.project_poll_write()["generation"] != update["generation"] or
+                    file_stamp(project[1]) != update["stamp"]):
+                raise ValueError("Your local project changed during preparation. Its splats were kept. Review it and try the update again.")
+            path = update["path"]
+            if Path(path).suffix == ".scene":
+                self.app.load_gallery_scene(self.staged_nodes(path), Path(path).stem, hidden=True)
+            else:
+                self.app.load_file(path)
             update["phase"] = "importing"
             self.started = self.clock()
             return
@@ -186,13 +209,11 @@ class LocalUpdateSteps:
             self.app.ui.dismiss_import()
             update["incoming"] = incoming.uuid
             update["old_nodes"] = [n.uuid for n in self.visible_splats() if n.uuid != incoming.uuid]
-            update["phase"] = "save_before_backup"
-            self.save_project(lambda: self.prepare_backup(job), expected_project=project)
-            return
+            update["phase"] = "applying"
         backup = current_job.get("localUpdate", {})
         if backup.get("id") != update["backup_id"] or backup.get("state") != "ready":
             raise ValueError(backup.get("message") or self.service.message)
-        if (self.app.project_is_dirty() or self.app.project_poll_write()["generation"] != update["generation"] or
+        if (self.app.project_poll_write()["generation"] != update["generation"] or
                 file_stamp(project[1]) != update["stamp"]):
             raise ValueError("Your local project changed during preparation. Its splats were kept. Review it and try the update again.")
         incoming = scene.get_node_by_uuid(update["incoming"])
@@ -212,6 +233,7 @@ class LocalUpdateSteps:
         update["generation"] = self.app.project_poll_write()["generation"]
         update["stamp"] = file_stamp(project[1])
         update["backup_id"] = self.service.prepare_local_update(job["id"], project[0], project[1], update["stamp"])
+        self.save_in_progress = False
         update["phase"] = "backup"
         self._message = "Keeping a recovery copy before replacing local splats…"
 

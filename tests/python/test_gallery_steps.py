@@ -84,19 +84,26 @@ def test_update_success_order_characterization(update_case, monkeypatch):
     monkeypatch.setattr(panel, "_staged_nodes", lambda path: [])
     monkeypatch.setattr(module.lf, "load_gallery_scene", lambda *args, **kwargs: nodes.update(preview=SimpleNamespace(name="preview", uuid="incoming")), raising=False)
     monkeypatch.setattr(module.lf.ui, "dismiss_import", lambda: actions.append("dismiss import"))
-    monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(uuid="old")])
+    monkeypatch.setattr(panel, "_visible_splats", lambda: [n for n in nodes.values() if n.uuid != "incoming"])
+    dirty = [True]
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: dirty[0], raising=False)
     saves = []
-    monkeypatch.setattr(panel, "_save_current_project", lambda continuation, **kwargs: saves.append(continuation))
+    def save(continuation, **kwargs):
+        assert "preview" not in nodes
+        saves.append(continuation)
+    monkeypatch.setattr(panel, "_save_current_project", save)
     panel.service.prepare_local_update = lambda *args: actions.append("backup requested") or "backup"
     monkeypatch.setattr(panel, "_apply_local_update", lambda *args: actions.append("apply"))
     panel.service.link_download = lambda *args, **kwargs: actions.append("link requested") or "link"
     panel._finish_local_update(job)
-    assert update["phase"] == "importing" and actions == []
+    assert update["phase"] == "save_before_backup" and actions == [] and "preview" not in nodes
     panel._finish_local_update(job)
-    assert update["phase"] == "save_before_backup" and actions == ["hide preview", "dismiss import"]
-    assert project_path.read_bytes() == backup_path.read_bytes() and journal["localUpdate"]["state"] == "ready"
+    assert update["phase"] == "save_before_backup" and len(saves) == 1 and "preview" not in nodes
+    dirty[0] = False
     saves.pop()()
     assert update["phase"] == "backup" and actions[-1] == "backup requested"
+    panel._finish_local_update(job)
+    assert update["phase"] == "importing" and "preview" in nodes
     panel._finish_local_update(job)
     assert update["phase"] == "save_updated" and actions[-1] == "apply"
     poll["generation"] = 4
@@ -127,7 +134,8 @@ def test_update_failure_characterization(update_case, monkeypatch, phase):
     elif phase == "backup":
         journal["localUpdate"].update(state="failed", message="backup failed")
     elif phase == "applying":
-        update["phase"] = "backup"
+        update["phase"] = "applying"
+        update.update(path=str(preview_path), incoming="incoming", old_nodes=["old"], backup_id="backup")
         monkeypatch.setattr(panel, "_apply_local_update", lambda *args: (_ for _ in ()).throw(OSError("apply failed")))
     elif phase == "save_updated":
         poll["error"] = "save failed"
@@ -148,7 +156,7 @@ def test_update_waits_for_ready_backup_before_replacing_local_content(update_cas
     panel, state, actions, nodes, update, poll, project_path, preview_path, backup_path, journal = update_case
     module = import_module("lfs_plugins.gallery_sync_steps")
     nodes["local"] = SimpleNamespace(name="local", uuid="local")
-    update["phase"] = "backup"
+    update.update(phase="backup", path=str(preview_path))
     journal["localUpdate"]["state"] = "preparing"
     panel.service.busy = True
     monkeypatch.setattr(module, "restore_view", lambda *args, **kwargs: pytest.fail("Changed the view before backup"))

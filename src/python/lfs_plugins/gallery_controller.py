@@ -81,6 +81,7 @@ class GalleryController:
             acquire_native_use=lambda job_id: self._acquire_native_use(job_id),
             save_project=lambda continuation, **kwargs: self._save_current_project(continuation, **kwargs),
             save_pending=lambda: bool(self._save_pending),
+            cancel_save=lambda: self._cancel_current_project_save(),
             link_saved_download=lambda *args, **kwargs: self._link_saved_download(*args, **kwargs),
             refresh_model=lambda: self._refresh_model(),
             schedule_poll=lambda: self._schedule_poll(),
@@ -1221,6 +1222,10 @@ class GalleryController:
         if (poll.get("generation") != pending["generation"] or self._project_identity() != pending["project"] or lf.project_is_dirty()):
             raise ValueError("The project changed while saving. Your gallery operation was stopped; review your work and try again.")
         pending["continuation"]()
+
+    def _cancel_current_project_save(self):
+        if self._save_pending:
+            self._save_pending["canceled"] = True
 
     def _review_publish(self, scene, details, upload_format, publish_as_new, *, update=False, expected_commit=None):
         project = self._project_identity()

@@ -248,7 +248,7 @@ def test_update_link_failure_reports_already_saved_project(gallery, monkeypatch,
     project = ("project", str(source))
     incoming = SimpleNamespace(uuid="incoming", name="preview")
     native_scene = SimpleNamespace(get_node=lambda name: incoming, get_node_by_uuid=lambda identifier: incoming)
-    update = {"project": project, "phase": "backup", "path": str(tmp_path / "preview.scene"),
+    update = {"project": project, "phase": "applying", "path": str(tmp_path / "preview.scene"),
         "incoming": "incoming", "generation": 3, "stamp": module.file_stamp(source), "backup_id": "backup"}
     job = {"id": "download", "_update": update}
     state["jobs"] = [{"id": "download", "localUpdate": {"id": "backup", "state": "ready"}}]
@@ -736,7 +736,7 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
     panel, state, _ = gallery
     module = import_module("lfs_plugins.gallery_controller")
     project = ("project", "/project.licht")
-    update = {"project": project, "phase": "backup", "backup_id": "backup",
+    update = {"project": project, "phase": "applying", "backup_id": "backup",
         "generation": 3, "stamp": [1, 2], "incoming": "incoming"}
     job = {"id": "download", "_update": update}
     state["jobs"] = [{"id": "download", "localUpdate": {"id": "backup", "state": "ready"}}]
