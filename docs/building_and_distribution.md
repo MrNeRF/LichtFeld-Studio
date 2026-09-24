@@ -55,13 +55,26 @@ If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_
 
 ## macOS Apple Silicon viewer build
 
-Install the host tools and Vulkan driver with Homebrew:
+Install Xcode Command Line Tools, then the host tools and Vulkan driver with Homebrew:
 
 ```bash
+xcode-select --install
 brew install cmake ninja autoconf autoconf-archive automake libtool vulkan-loader molten-vk
 ```
 
-With `VCPKG_ROOT` set to a vcpkg checkout, build the native viewer:
+Clone the source with its submodule and use the vcpkg revision recorded in
+`vcpkg.json`. Skip these clone steps when both checkouts already exist:
+
+```bash
+git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio.git
+cd LichtFeld-Studio
+git clone https://github.com/microsoft/vcpkg.git ../vcpkg
+git -C ../vcpkg checkout c3867e714dd3a51c272826eea77267876517ed99
+../vcpkg/bootstrap-vcpkg.sh -disableMetrics
+export VCPKG_ROOT="$(cd ../vcpkg && pwd)"
+```
+
+From the repository root, configure, compile and launch the viewer:
 
 ```bash
 cmake --preset macos-release -DAPPLE=ON
@@ -113,10 +126,10 @@ same platform share the dependency recipe and can reuse compatible binary
 cache entries; the first Release-only install may rebuild packages. The
 standard `build` and `debug` presets remain available, with tests opt-in.
 
-See the [developer build guide](docs/development/build.md#release-only-dependency-profiles)
+See the [developer build guide](docs/docs/development/build.md#release-only-dependency-profiles)
 for all commands, cache behavior and dependency-symbol coverage. To keep an
 existing `cmake --build build ...` command, follow the
-[existing Ninja directory migration](docs/development/build.md#keeping-an-existing-ninja-build-directory),
+[existing Ninja directory migration](docs/docs/development/build.md#keeping-an-existing-ninja-build-directory),
 including `-B build` and `-DBUILD_TESTS=ON` when building `lichtfeld_tests`.
 The [test prerequisites](#tests) still apply.
 
