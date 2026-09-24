@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+if(NOT DEFINED LFS_HAS_CUDA)
+    set(LFS_HAS_CUDA ON)
+endif()
+
 foreach(_lfs_required_variable IN ITEMS
         LFS_SOURCE_DIR
         LFS_CORE_ABI_TEMPLATE
