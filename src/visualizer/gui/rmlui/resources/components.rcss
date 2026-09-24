@@ -284,6 +284,7 @@ selectbox {
     border-color: #45475a;
     position: absolute;
     z-index: 10000;
+    min-width: 100%;
 }
 
 selectbox option {

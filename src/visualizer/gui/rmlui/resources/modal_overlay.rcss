@@ -212,13 +212,9 @@ body {
 }
 .form-modal select selectbox {
     box-sizing: border-box;
-    min-width: 100%;
-    width: 100%;
-    max-width: 100%;
     max-height: 280dp;
     margin: 0;
     padding: 0;
-    overflow-x: hidden;
     overflow-y: auto;
 }
 .form-modal select option {
@@ -230,8 +226,6 @@ body {
     line-height: 28dp;
     padding: 0 8dp;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 .modal-option-name { display: block; font-size: 12dp; line-height: 14dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .modal-option-meaning { display: block; font-size: 10dp; line-height: 12dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
