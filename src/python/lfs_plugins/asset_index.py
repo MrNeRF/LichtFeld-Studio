@@ -53,6 +53,7 @@ _PROJECT_STORAGE_FIELDS = frozenset(
         "name",
         "path",
         "folder_id",
+        "pinned",
         "size",
         "mtime_ns",
         "fallback_preview_path",
@@ -355,6 +356,7 @@ class Project:
     name: str
     path: str
     folder_id: str
+    pinned: bool = False
     file_uuid: str = ""
     commit_uuid: str = ""
     generation: int = 0
@@ -406,6 +408,8 @@ class Project:
             "stat_identity": dict(self.stat_identity),
             "inspection": dict(self.inspection),
         }
+        if self.pinned:
+            record["pinned"] = True
         if self.name_origin == "user":
             record["name"] = self.name
         if self.inspection_verified or self.inspection_restored:
@@ -1035,7 +1039,8 @@ class AssetIndex:
                     chosen = items[0]
                     self._project_by_path.pop(current_key, None)
                     project.path = chosen.path
-                    project.folder_id = chosen.folder_id or project.folder_id
+                    if chosen.folder_id:
+                        project.folder_id = chosen.folder_id
                     current_observation = chosen
                     changed = True
                 elif project.folder_id != current_observation.folder_id and current_observation.folder_id:
@@ -1313,8 +1318,11 @@ class AssetIndex:
 
             normalized = normalized or path != stored_path
             stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
+            pinned = value.get("pinned") is True
             folder_id = self._folder_id_for_path(path)
-            if folder_id is None:
+            if pinned:
+                folder_id = folder_id or DEFAULT_FOLDER_ID
+            elif folder_id is None:
                 folder_id = self._add_folder_record(str(Path(path).parent)).id
                 normalized = True
             if folder_id != stored_folder_id:
@@ -1336,6 +1344,7 @@ class AssetIndex:
                 name=raw_name,
                 path=path,
                 folder_id=folder_id,
+                pinned=pinned,
                 name_origin=name_origin,
                 previous_project_uuid=str(value.get("previous_project_uuid") or ""),
                 aliases=[dict(alias) for alias in value.get("aliases", []) if isinstance(alias, dict)],
@@ -1717,7 +1726,14 @@ class AssetIndex:
         previous_state = self._snapshot_state(
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
-        removed_ids = [project.project_uuid for project in self._projects.values() if project.folder_id == folder_id]
+        removed_ids = [
+            project.project_uuid
+            for project in self._projects.values()
+            if project.folder_id == folder_id and not project.pinned
+        ]
+        for project in self._projects.values():
+            if project.folder_id == folder_id and project.pinned:
+                project.folder_id = DEFAULT_FOLDER_ID
         for identifier in removed_ids:
             project = self._projects[identifier]
             self._remember_identity(project.path, identifier, allow_missing=True)
@@ -1796,7 +1812,11 @@ class AssetIndex:
         for project in self._projects.values():
             resolved_folder = self._folder_id_for_path(project.path)
             if resolved_folder is None:
-                resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
+                resolved_folder = (
+                    DEFAULT_FOLDER_ID
+                    if project.pinned
+                    else self._add_folder_record(str(Path(project.path).parent)).id
+                )
             project.folder_id = resolved_folder
         if self.save():
             return True
@@ -1888,6 +1908,7 @@ class AssetIndex:
         adopt_existing: bool = True,
         save: bool = True,
         inspection: Any = None,
+        pin: bool = False,
     ) -> Tuple[Optional[Project], bool]:
         path = _normalize_path(project_path)
         planned_path = ProjectPathIdentity.capture(path)
@@ -1909,8 +1930,10 @@ class AssetIndex:
                 self._snapshot_state(project_ids=[project_uuid]) if save else None
             )
             target_folder_id = self._folder_id_for_path(path)
-            if target_folder_id is None:
+            if target_folder_id is None and not pin:
                 target_folder_id = self._add_folder_record(str(Path(path).parent)).id
+            if target_folder_id is None:
+                target_folder_id = DEFAULT_FOLDER_ID
 
             path_key = self._path_key(path)
             stale_uuid = self._project_by_path.get(path_key)
@@ -1928,6 +1951,7 @@ class AssetIndex:
                     name=name or self._inspection_name(path),
                     path=path,
                     folder_id=target_folder_id,
+                    pinned=pin,
                     name_origin="user" if name is not None else "stem",
                     previous_project_uuid=(stale_uuid or ""),
                 )
@@ -1939,6 +1963,13 @@ class AssetIndex:
                 self._apply_inspection(project, inspection)
             else:
                 use_observed_path = adopt_existing or self._path_key(project.path) == path_key
+                if pin:
+                    if not project.pinned:
+                        project.pinned = True
+                        persisted_changed = True
+                    if project.folder_id != target_folder_id:
+                        project.folder_id = target_folder_id
+                        persisted_changed = True
                 if use_observed_path:
                     old_path_key = self._path_key(project.path)
                     if old_path_key != path_key:
@@ -2018,7 +2049,11 @@ class AssetIndex:
         previous_state = self._snapshot_state(project_ids=[asset_id])
         folder_id = self._folder_id_for_path(path)
         if folder_id is None:
-            folder_id = self._add_folder_record(str(Path(path).parent)).id
+            folder_id = (
+                DEFAULT_FOLDER_ID
+                if project.pinned
+                else self._add_folder_record(str(Path(path).parent)).id
+            )
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
         project.folder_id = folder_id

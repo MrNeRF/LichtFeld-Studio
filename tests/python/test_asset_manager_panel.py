@@ -833,8 +833,8 @@ def test_import_registers_only_selected_licht_project(panel_module):
     panel_module.lf._test_state.dialog_path = asset["path"]
     panel._selected_folder_id = "default"
     panel._asset_index = _index(
-        register_licht_asset=lambda path, folder_id=None: (
-            calls.append((path, folder_id)) or SimpleNamespace(id=asset["id"]),
+        register_licht_asset=lambda path, folder_id=None, pin=False: (
+            calls.append((path, folder_id, pin)) or SimpleNamespace(id=asset["id"]),
             True,
         ),
 
@@ -843,7 +843,7 @@ def test_import_registers_only_selected_licht_project(panel_module):
 
     panel.on_import_project()
 
-    assert calls == [(asset["path"], None)]
+    assert calls == [(asset["path"], None, True)]
     assert panel.get_selected_asset_id() == asset["id"]
 
 

@@ -2363,6 +2363,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             project, _created = self._library_command(
                 "register_licht_asset",
                 path,
+                pin=True,
             )
             if project is not None:
                 self._set_asset_selection({project.id}, cursor=project.id, anchor=project.id)
