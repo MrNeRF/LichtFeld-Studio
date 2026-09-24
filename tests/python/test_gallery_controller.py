@@ -1460,6 +1460,84 @@ def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
     assert 'data-attr-title="part.values"' not in conflict_rml
 
 
+@pytest.mark.parametrize("field", ["position", "target", "up", "fov", "orthoScale",
+    "background", "exposure", "environment_exposure", "environment_rotation",
+    "path_position", "path_rotation", "path_time", "path_focal_length", "path_duration",
+    "path_playback_speed"])
+def test_gallery_view_float_roundtrip_does_not_create_review_group(gallery, field):
+    from lfs_plugins.gallery_controller import conflict_groups, asset_sync_state
+    local_number = -0.24827615916728973
+    gallery_number = -0.2482761557071908
+    local_view = {"camera": {"position": [0, 2, 3], "target": [0, 0, 0],
+                             "up": [0, 1, 0], "fov": 60, "orthoScale": 6},
+                  "background": [0.2, 0.3, 0.4], "exposure": 1.2,
+                  "environment": {"exposure": 1.0, "rotation": 45.0},
+                  "cameraPath": {"duration": 2.0, "playbackSpeed": 1.0,
+                                 "keyframes": [{"position": [1, 2, 3], "rotation": [1, 0, 0, 0],
+                                                "time": 1.0, "focal_length_mm": 35.0}]}}
+    remote_view = copy.deepcopy(local_view)
+    if field in ("position", "target", "up"):
+        if field == "up":
+            local_view["camera"][field] = [local_number, 0.9363321661949158, local_number]
+            remote_view["camera"][field] = [gallery_number, 0.9363321531457293, gallery_number]
+        else:
+            local_view["camera"][field][0] = local_number
+            remote_view["camera"][field][0] = gallery_number
+    elif field in ("fov", "orthoScale"):
+        local_view["camera"][field] = 60 + local_number
+        remote_view["camera"][field] = 60 + gallery_number
+    elif field == "background":
+        local_view[field][0] = local_number
+        remote_view[field][0] = gallery_number
+    elif field == "exposure":
+        local_view[field] = 1 + local_number
+        remote_view[field] = 1 + gallery_number
+    elif field == "environment_exposure":
+        local_view["environment"]["exposure"] = 1 + local_number
+        remote_view["environment"]["exposure"] = 1 + gallery_number
+    elif field == "environment_rotation":
+        local_view["environment"]["rotation"] = 45 + local_number
+        remote_view["environment"]["rotation"] = 45 + gallery_number
+    elif field == "path_position":
+        local_view["cameraPath"]["keyframes"][0]["position"][0] = local_number
+        remote_view["cameraPath"]["keyframes"][0]["position"][0] = gallery_number
+    elif field == "path_time":
+        local_view["cameraPath"]["keyframes"][0]["time"] = 1 + local_number
+        remote_view["cameraPath"]["keyframes"][0]["time"] = 1 + gallery_number
+    elif field == "path_rotation":
+        local_view["cameraPath"]["keyframes"][0]["rotation"][1] = local_number
+        remote_view["cameraPath"]["keyframes"][0]["rotation"][1] = gallery_number
+    elif field == "path_focal_length":
+        local_view["cameraPath"]["keyframes"][0]["focal_length_mm"] = 35 + local_number
+        remote_view["cameraPath"]["keyframes"][0]["focal_length_mm"] = 35 + gallery_number
+    elif field == "path_duration":
+        local_view["cameraPath"]["duration"] = 2 + local_number
+        remote_view["cameraPath"]["duration"] = 2 + gallery_number
+    else:
+        local_view["cameraPath"]["playbackSpeed"] = 1 + local_number
+        remote_view["cameraPath"]["playbackSpeed"] = 1 + gallery_number
+    base = scene(viewerSettings=remote_view)
+    remote = dict(base, metadataRevision="new")
+    link = dict(sceneId=base["id"], commitUuid="saved", sharedFields={
+        "title": base["title"], "description": base["description"], "viewerSettings": remote_view},
+        localFields={"title": base["title"], "description": base["description"], "viewerSettings": local_view},
+        contentRevision=base["contentRevision"], metadataRevision=base["metadataRevision"])
+    assert conflict_groups({"commit_uuid": "saved"}, link,
+        dict(base, viewerSettings=local_view), remote, apply_only=True) == []
+    facts = asset_sync_state({"id": "project", "commit_uuid": "saved"}, link, base)
+    assert facts["freshness"] == "equal"
+
+
+def test_gallery_view_real_camera_move_still_creates_review_group(gallery):
+    from lfs_plugins.gallery_controller import conflict_groups
+    local = scene(viewerSettings={"camera": {"position": [1, 2, 3]}})
+    remote = scene(viewerSettings={"camera": {"position": [1.01, 2, 3]}})
+    link = dict(sharedFields={"viewerSettings": local["viewerSettings"]},
+                contentRevision=remote["contentRevision"], commitUuid="saved")
+    rows = conflict_groups({"commit_uuid": "saved"}, link, local, remote, apply_only=True)
+    assert [row["id"] for row in rows] == ["view"]
+
+
 def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")

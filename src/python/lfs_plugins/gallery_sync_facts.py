@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import math
 
 import lichtfeld as lf
 from .gallery_actions import gallery_actions
@@ -23,6 +24,26 @@ _LOCAL_FILE_PROBLEM_LABELS = {
     "REPAIR_ONLY": "projects.status.needs_repair",
     "UNSUPPORTED_NEWER": "projects.status.newer_version",
 }
+
+_VIEW_FLOAT_TOLERANCE = 1e-6
+
+
+def _same_view(a, b):
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_view(a[key], b[key]) for key in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same_view(x, y) for x, y in zip(a, b))
+    if (type(a) in (int, float) and type(b) in (int, float)
+            and (type(a) is float or type(b) is float)):
+        return math.isclose(a, b, rel_tol=_VIEW_FLOAT_TOLERANCE,
+                            abs_tol=_VIEW_FLOAT_TOLERANCE)
+    return a == b
+
+
+def _same_shared_fields(a, b):
+    return (a.keys() == b.keys()
+            and all(_same_view(a[key], b[key]) if key == "viewerSettings" else a[key] == b[key]
+                    for key in a))
 
 def stored_local_scene(link, details=None):
     """Last saved Studio fields for a linked item, without opening the project."""
@@ -58,7 +79,8 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False, saved_stamp
     def text(value):
         return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(", ", ": "))
     for identifier, mine, gallery, base in parts:
-        if mine == gallery:
+        same = _same_view(mine, gallery) if identifier in ("view", "track") else mine == gallery
+        if same:
             continue
         mine_value = tr("conflict.saved_view_changed") if saved_view_changed and identifier in ("view", "track") else text(mine)
         gallery_value = text(gallery)
@@ -75,7 +97,7 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False, saved_stamp
                              "background": "main_panel.background", "antialiasing": "main_panel.mip_filter", "shDegree": "main_panel.sh_degree",
                              "renderMode": "main_panel.raster_backend", "environment": "main_panel.environment", "verticalFov": "main_panel.fov"}
             names = [lf.ui.tr(native_labels[key]) if key in native_labels else tr("conflict.camera" if key == "camera" else "conflict.view")
-                     for key in sorted(set(mine) | set(gallery)) if mine.get(key) != gallery.get(key)]
+                     for key in sorted(set(mine) | set(gallery)) if not _same_view(mine.get(key), gallery.get(key))]
             difference = tr("conflict.changed_settings", parts=", ".join(dict.fromkeys(names)))
         elif identifier == "track":
             difference = tr("conflict.track_counts", mine=len((mine or {}).get("keyframes", [])),
@@ -86,7 +108,8 @@ def conflict_groups(asset, link, local, remote, *, apply_only=False, saved_stamp
         rows.append(dict(id=identifier, label=tr({"text": "conflict.text", "view": "conflict.view", "track": "conflict.track"}[identifier]),
             mine_value=mine_value, gallery_value=gallery_value, fields=fields,
             difference=difference, values=values,
-            choice="gallery" if apply_only or (mine == base and not (saved_view_changed and identifier in ("view", "track"))) else "mine",
+            choice="gallery" if apply_only or ((_same_view(mine, base) if identifier in ("view", "track") else mine == base)
+                and not (saved_view_changed and identifier in ("view", "track"))) else "mine",
             can_both=identifier == "track" and bool(mine and gallery)))
     content_changed = (link.get("contentRevision") != remote.get("contentRevision")
         or (not apply_only and (not link.get("commitUuid") or asset.get("commit_uuid") != link.get("commitUuid"))
@@ -127,7 +150,7 @@ def asset_sync_state(project=None, link=None, scene=None, jobs=(), *, checked=Fa
                 and gallery_view["cameraPath"] is None):
             local_fields = dict(local_fields, viewerSettings=dict(local_view, cameraPath=None))
         local = (project["commit_uuid"] != link["commitUuid"] or
-                 "localFields" in link and local_fields != gallery_fields)
+                 "localFields" in link and not _same_shared_fields(local_fields, gallery_fields))
         remote = any(scene[key] != link[key] for key in ("contentRevision", "metadataRevision"))
         freshness = "diverged" if local and remote else "local" if local else "remote" if remote else "equal"
     scene_id = (link or scene or {}).get("sceneId", (scene or {}).get("id"))
