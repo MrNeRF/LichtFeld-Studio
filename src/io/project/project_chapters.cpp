@@ -4,7 +4,6 @@
  */
 
 #include "io/project_chapters.hpp"
-#include "io/filesystem_utils.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -105,7 +104,10 @@ namespace lfs::io::project {
                                         (end == std::string::npos ? text.size() : end) - start);
             if (const size_t colon = line.find(':'); colon != std::string::npos) {
                 std::string key(*trim_valid_utf8(line.substr(0, colon)));
-                lfs::io::detail::ascii_lower_inplace(key);
+                for (char& ch : key) {
+                    if (ch >= 'A' && ch <= 'Z')
+                        ch = static_cast<char>(ch - 'A' + 'a');
+                }
                 const auto value = *trim_valid_utf8(line.substr(colon + 1));
                 if (key == "license" && !license_field)
                     license_field = std::string(value);
