@@ -367,6 +367,29 @@ namespace {
         lfs::python::set_keymap_bindings(nullptr);
     }
 
+    // Catches a visible tooltip that never hides once the pointer leaves its
+    // context for another one (the next hover then skips the show delay): a
+    // pointer move over the viewport must still produce a frame while any
+    // context has an active tooltip, and must not when none has.
+    TEST_F(MenuBarTitleTest, PointerMoveElsewhereRendersWhileATooltipIsActive) {
+        Rml::Context* viewport = Rml::CreateContext("menu_bar_title_viewport", {1600, 260}, &renderer_);
+        ASSERT_NE(viewport, nullptr);
+        ASSERT_NE(viewport->LoadDocumentFromMemory("<rml><body></body></rml>"), nullptr);
+        viewport->Update();
+        viewport->ProcessMouseMove(800, 160, 0);
+        viewport->Update();
+        lfs::vis::gui::RmlUIManager manager;
+        manager.trackContextFrame(context_, 0, 0);
+        manager.trackContextFrame(viewport, 0, 40);
+
+        EXPECT_FALSE(manager.passiveMouseMoveNeedsRender(800.0f, 200.0f));
+        manager.setContextNeedsPassiveMouseMoveFrames(context_, true);
+        EXPECT_TRUE(manager.passiveMouseMoveNeedsRender(800.0f, 200.0f));
+        manager.setContextNeedsPassiveMouseMoveFrames(context_, false);
+        EXPECT_FALSE(manager.passiveMouseMoveNeedsRender(800.0f, 200.0f));
+        ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_viewport"));
+    }
+
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {
         const std::filesystem::path path =
             std::filesystem::path{"/projects"} / "long folder" / "<b>scan &amp; capture.licht";

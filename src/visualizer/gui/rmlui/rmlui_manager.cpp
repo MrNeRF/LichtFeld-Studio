@@ -538,12 +538,14 @@ namespace lfs::vis::gui {
         const TrackedContextFrame* top_overlay_context = nullptr;
         const TrackedContextFrame* top_context = nullptr;
         bool any_active_context = false;
+        bool any_tooltip_context = false;
         for (const auto& [_, frame] : tracked_context_frames_) {
             auto* const context = frame.context;
             if (!context)
                 continue;
 
             auto* const hover = context->GetHoverElement();
+            any_tooltip_context |= frame.needs_passive_mouse_move_frames;
             if (frame.needs_passive_mouse_move_frames ||
                 (hover && hover->GetTagName() != "body")) {
                 any_active_context = true;
@@ -573,6 +575,10 @@ namespace lfs::vis::gui {
         if (top_overlay_context)
             top_context = top_overlay_context;
 
+        // A tooltip anywhere must see the pointer leave so it can hide, even
+        // when another context is under the pointer.
+        if (any_tooltip_context)
+            return true;
         if (!top_context)
             return any_active_context;
 

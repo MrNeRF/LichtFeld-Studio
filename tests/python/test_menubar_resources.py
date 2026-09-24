@@ -236,7 +236,8 @@ def test_rml_tooltips_request_only_pending_animation_frames():
     assert "tooltip_.revealDue()" in viewport_header
     assert "tooltip_.hasActiveState()" in viewport_cpp
     assert "applyFrameTooltip()" in viewport_cpp
-    assert "setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame())" in viewport_cpp
+    # A visible tooltip keeps asking for pointer-move frames so it can hide.
+    assert "setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState())" in viewport_cpp
     assert "rml_viewport_overlay_.needsAnimationFrame()" in gui_manager_cpp
 
 
