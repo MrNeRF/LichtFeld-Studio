@@ -3404,6 +3404,14 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
 
 
+def test_gallery_only_filter_keeps_only_gallery_rows_without_local_projects(panel_module):
+    panel, _local, _remote = _gallery_fixture(panel_module)
+    panel.select_gallery_scope()
+    panel._active_filter = "gallery"
+
+    assert [row["id"] for row in panel._filtered_assets()] == ["remote:remote-only"]
+
+
 def test_projects_menu_returns_from_gallery_without_resetting_local_scope(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()

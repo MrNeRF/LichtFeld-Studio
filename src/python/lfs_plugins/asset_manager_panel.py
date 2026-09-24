@@ -1574,7 +1574,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if active == "dataset":
             return bool((asset.get("inspection") or {}).get("has_dataset"))
         if active == "gallery":
-            return bool(scene or asset.get("remote_only") or facts.get("relationship") not in (None, "unlinked"))
+            return bool(asset.get("remote_only"))
         return True
 
     def _repair_selection(self) -> None:
