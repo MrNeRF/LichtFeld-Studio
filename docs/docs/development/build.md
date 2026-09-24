@@ -55,17 +55,19 @@ training again. Builds without training hide the training panel and reject
 training commands. Saved models, project metadata, dataset viewing, appearance
 settings and video export still use their shared application code.
 
-The CUDA toolkit and libraries are still required by the current viewer
-dependencies. This flag controls training; it does not yet select a CUDA-free
-application. With `BUILD_TESTS=ON`, the build without training provides
-`lichtfeld_viewer_tests`; the full build retains `lichtfeld_tests`.
+On Windows and Linux, this flag alone does not remove CUDA from the viewer
+dependencies. The macOS Apple Silicon viewer uses the Vulkan tensor backend
+without CUDA; use the `macos-release` preset described below. With
+`BUILD_TESTS=ON`, the build without training provides `lichtfeld_viewer_tests`;
+the full build retains `lichtfeld_tests`.
 
 ## Release-only dependency profiles
 
-Native x64 Windows and Linux builds can opt into Release-only vcpkg packages.
-Release and RelWithDebInfo use the same dependency recipe, with separate build
-and installation directories so switching presets preserves each application's
-objects and configuration:
+Native Windows, Linux and Apple Silicon builds can opt into Release-only vcpkg
+packages. Windows and Linux provide both Release and RelWithDebInfo presets
+using the same dependency recipe, with separate build and installation
+directories so switching presets preserves each application's objects and
+configuration:
 
 | Platform | Configure and build preset | Application configuration | Build directory |
 | --- | --- | --- | --- |
@@ -73,10 +75,11 @@ objects and configuration:
 | Windows x64 | `windows-relwithdebinfo` | RelWithDebInfo | `build-windows-relwithdebinfo/` |
 | Linux x64 | `linux-release` | Release | `build-linux-release/` |
 | Linux x64 | `linux-relwithdebinfo` | RelWithDebInfo | `build-linux-relwithdebinfo/` |
+| macOS arm64 | `macos-release` | Release | `build-macos-release/` |
 
-CMake only lists the profiles for the current host OS. These profiles require
-the same compiler, CUDA toolkit and system dependencies as the standard build;
-they do not install or change the development environment.
+CMake only lists the profiles for the current host OS. Windows and Linux still
+require their CUDA toolchain; macOS uses Apple Clang and MoltenVK without CUDA.
+The presets do not install or change the development environment.
 
 On Windows, from the existing x64 MSVC/CUDA development shell:
 
@@ -96,14 +99,31 @@ cmake --preset linux-relwithdebinfo
 cmake --build --preset linux-relwithdebinfo
 ```
 
+On macOS Apple Silicon, install the Homebrew tools and MoltenVK listed in the
+[source build guide](../../building_and_distribution.md#macos-apple-silicon-viewer-build),
+then run from the repository root with `VCPKG_ROOT` set:
+
+```sh
+cmake --preset macos-release -DAPPLE=ON
+cmake --build --preset macos-release
+./build-macos-release/LichtFeld-Studio
+```
+
+This viewer build does not require CUDA. The macOS preset disables tests and
+limits both vcpkg and Ninja to two concurrent jobs. The application selects
+Homebrew's MoltenVK manifest automatically unless a Vulkan driver variable is
+already set.
+
 The profiles select `cmake/triplets/release-only/` as a vcpkg triplet overlay.
-It retains the standard `x64-windows` / `x64-linux` names and linkage policies,
+It retains the standard `x64-windows`, `x64-linux` and `arm64-osx` names and
+linkage policies,
 and sets `VCPKG_BUILD_TYPE` to `release` inside the triplet. Both target and
 host tools use that recipe; host tools do not introduce another Debug package
 graph. The installed vcpkg checkout and its built-in triplets are not edited.
 
-All application features remain enabled, with tests off and the same compiler
-cache and parallelism settings as `build`. RelWithDebInfo retains the normal
+Tests remain off by default. The macOS profile builds the viewer without
+training and limits parallelism to two jobs. Windows and Linux retain the
+standard compiler cache and parallelism settings. RelWithDebInfo retains the normal
 developer defaults, including Vulkan validation and shader debug information.
 Consequently, its first configure may install additional validation packages.
 RelWithDebInfo adds symbols to the application; it does not automatically add

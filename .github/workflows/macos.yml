@@ -1,0 +1,59 @@
+name: macOS Apple Silicon Build
+
+on:
+  push:
+    branches: [dev, master, feat/viewer-tensor-backends]
+  pull_request:
+    branches: [dev, master, feat/viewer-tensor-backends]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/../vcpkg-cache
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk
+          cmake --version
+          ninja --version
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-macos-arm64-release-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**', 'cmake/triplets/release-only/arm64-osx.cmake') }}
+          restore-keys: vcpkg-macos-arm64-release-
+
+      - name: Set up pinned vcpkg
+        run: |
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          # The vcpkg tool checkout must include the versions used by our overlays;
+          # vcpkg.json separately pins the baseline for registry dependencies.
+          git -C "$VCPKG_ROOT" checkout dc1232a6e05dcc49703091e83743e3b4df9b9b7c
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Configure
+        run: cmake --preset macos-release -DAPPLE=ON
+
+      - name: Remove vcpkg build intermediates
+        run: |
+          rm -rf "$VCPKG_ROOT/buildtrees" "$VCPKG_ROOT/downloads" "$VCPKG_ROOT/packages"
+          rm -rf build-macos-release/vcpkg_installed/vcpkg/blds build-macos-release/vcpkg_installed/vcpkg/pkgs
+          df -h .
+
+      - name: Build
+        run: cmake --build --preset macos-release
