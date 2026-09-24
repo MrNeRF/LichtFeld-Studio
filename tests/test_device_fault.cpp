@@ -4,6 +4,7 @@
 // Device-fault reference kernel and ValidatedIndexToken coverage for the ABI,
 // graph capture, first-fault handling, and device traps.
 
+#include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/error.hpp"
 #include "core/tensor.hpp"

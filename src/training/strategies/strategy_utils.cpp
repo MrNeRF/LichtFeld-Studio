@@ -5,6 +5,7 @@
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"

@@ -46,11 +46,11 @@ namespace lfs::core::tensor_ops {
         std::atomic<uint64_t> g_tensor_kernel_launch_count{0};
     }
 
-    void reset_tensor_kernel_launch_count() noexcept {
+    LFS_CORE_API void reset_tensor_kernel_launch_count() noexcept {
         g_tensor_kernel_launch_count.store(0, std::memory_order_relaxed);
     }
 
-    uint64_t tensor_kernel_launch_count() noexcept {
+    LFS_CORE_API uint64_t tensor_kernel_launch_count() noexcept {
         return g_tensor_kernel_launch_count.load(std::memory_order_relaxed);
     }
 

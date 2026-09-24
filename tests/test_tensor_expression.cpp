@@ -780,7 +780,7 @@ namespace {
             bias_cpu.ptr<float>()[0] = 3;
             auto input = a_cpu.to(Device::GPU).slice(1, 0, n);
             auto bias_gpu = bias_cpu.to(Device::GPU);
-            kernel.prepare({n, n}, {input, bias_gpu, gain_cpu});
+            kernel.prepare({n, n}, {input, bias_gpu, gain_cpu}, {});
             if (n == 3)
                 warmed = expression_cache_stats(backend());
             auto actual = kernel({n, n}, {input, bias_gpu, gain_cpu})[0].cpu().to_vector();
@@ -840,7 +840,7 @@ namespace {
                     data[i] = i % 5;
                 auto input = host(data, DataType::Int32).reshape({3, int(n)}).to(Device::GPU);
                 auto old_gpu = host({99, 99, 99}, DataType::Int32).to(Device::GPU);
-                kernel.prepare({3, n}, {input, old_gpu});
+                kernel.prepare({3, n}, {input, old_gpu}, {});
                 if (n <= 65)
                     warmed = expression_cache_stats(backend());
                 auto actual = kernel({3, n}, {input, old_gpu})[0].cpu();
@@ -905,7 +905,7 @@ namespace {
             for (size_t i = 0; i < n; ++i)
                 values[i] = uint32_t(i + 1);
             auto input = host(values, DataType::Int32).gpu();
-            kernel.prepare({2, 65}, {input});
+            kernel.prepare({2, 65}, {input}, {});
             auto outputs = kernel({2, 65}, {input});
             for (size_t o = 0; o < outputs.size(); ++o) {
                 int32_t expected = 0;
@@ -973,7 +973,7 @@ namespace {
         auto allowed = b.input(DataType::Int32, 1);
         b.output(fused::where(allowed.gather({index}) != 0, value, 0.f), DataType::Float32);
         fused::Kernel kernel(b);
-        kernel.prepare({6}, {input, indices, table});
+        kernel.prepare({6}, {input, indices, table}, {});
         const auto output = kernel({6}, {input, indices, table})[0].cpu();
         const uint32_t expected[]{0, 0x80000000u, 0x7fc12345u, 0, 0, 0};
         EXPECT_EQ(std::memcmp(output.data_ptr(), expected, sizeof(expected)), 0);
@@ -993,7 +993,7 @@ namespace {
         b.output(fused::where(mask, -20.f, source), DataType::Float16);
         fused::Kernel kernel(b);
         auto condition = Tensor::zeros({count}, Device::GPU, DataType::Bool);
-        kernel.prepare({count}, {input, condition});
+        kernel.prepare({count}, {input, condition}, {});
         auto output = kernel({count}, {input, condition})[0].cpu();
         EXPECT_EQ(std::memcmp(host.data_ptr(), output.data_ptr(), count * 2), 0);
         auto selected = Tensor::empty({count}, Device::CPU, DataType::Bool);
@@ -1226,7 +1226,7 @@ namespace {
         fused::Kernel kernel(coordinates);
         ExpressionCacheStats warmed;
         for (size_t n : {2, 3, 7, 13, 31}) {
-            kernel.prepare({3, 5, n, 11}, {});
+            kernel.prepare({3, 5, n, 11}, {}, {});
             if (n == 2)
                 warmed = expression_cache_stats(backend());
             auto output = kernel({3, 5, n, 11}, {});
