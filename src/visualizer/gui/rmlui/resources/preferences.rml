@@ -12,6 +12,7 @@
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
+      <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
     </div>
 
     <div class="preferences-content">
@@ -101,6 +102,31 @@
             <select class="preferences-select" data-value="gallery_uploadFormat"><option value="studio">@tr:projects.gallery.format.studio</option><option value="sog">SOG</option><option value="ssog">SSOG</option><option value="spz">SPZ</option></select></div>
           <div class="preferences-row"><span class="preferences-label">@tr:preferences.gallery.cache</span><input class="preferences-select" type="text" data-value="gallery_posterCacheMiB" /></div>
           <span class="preferences-description">{{gallery_preferences_error}}</span>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_portal">
+        <div class="section-header text-accent"><span>@tr:preferences.portal</span></div>
+        <div class="section-content">
+          <div class="preferences-row"><span class="preferences-label">@tr:portal.preferences.status</span><span class="preferences-description">{{portal_connection_status}}</span></div>
+          <div class="preferences-row" data-if="portal_disconnect_visible"><span class="preferences-label">@tr:portal.preferences.connected_since</span><span class="preferences-description">{{portal_connection_since}}</span></div>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--primary" data-if="portal_connect_visible" data-event-click="portal_connect">@tr:portal.status.connect</button>
+            <button class="btn btn--primary" data-if="portal_turn_on_visible" data-event-click="portal_turn_on">@tr:portal.status.turn_on</button>
+            <button class="btn btn--secondary" data-if="portal_disconnect_visible" data-event-click="portal_disconnect">@tr:portal.status.disconnect</button>
+            <button class="btn btn--secondary" data-if="portal_linking" data-event-click="portal_cancel">@tr:portal.status.cancel</button>
+          </div>
+          <div class="preferences-portal-link" data-if="portal_code_visible">
+            <div>
+              <div class="preferences-description">@tr:portal.preferences.code</div>
+              <strong class="preferences-portal-code">{{portal_user_code}}</strong>
+              <div class="preferences-inline-actions">
+                <button class="btn btn--secondary" data-event-click="portal_copy_code">@tr:portal.preferences.copy_code</button>
+                <button class="btn btn--secondary" data-event-click="portal_open">@tr:portal.preferences.open_portal</button>
+              </div>
+            </div>
+            <img class="preferences-portal-qr" data-attr-src="portal_verification_qr" data-attr-alt="portal_qr_alt" />
+          </div>
         </div>
       </div>
 

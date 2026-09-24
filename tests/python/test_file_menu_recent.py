@@ -345,7 +345,9 @@ def test_file_menu_publishes_current_project_from_review_without_asset_index(
     )
     controller = SimpleNamespace(
         upload_format="sog",
-        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account")),
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"),
+            account=SimpleNamespace(snapshot=lambda: SimpleNamespace(signed_in=True, authorized=True,
+                linking=False, disconnecting=False))),
         snapshot=lambda: {"links": {}, "scenes": []},
     )
     opened = []
@@ -373,6 +375,50 @@ def test_file_menu_publishes_current_project_from_review_without_asset_index(
     assert review["expected_project_path"] == str(project.resolve())
 
 
+def test_file_menu_publish_connects_then_opens_review_after_gallery_check(monkeypatch, tmp_path):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(inspect_project_card=lambda _path: SimpleNamespace(
+        project_uuid="project-id", commit_uuid="commit-id", file_uuid="file-id",
+        title=None, physical_file_size=5, has_preview=False))
+    connected = [False]
+    callbacks = []
+    account = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(signed_in=connected[0], authorized=connected[0],
+                                         linking=False, disconnecting=False),
+        run_after_connection=lambda callback: callbacks.append(callback) or True,
+    )
+    state = {"links": {}, "scenes": []}
+    refreshes = []
+    controller = SimpleNamespace(
+        upload_format="sog", service=SimpleNamespace(account=account, identity=lambda: "account"),
+        snapshot=lambda: state, _check_identity=lambda: False,
+        refresh=lambda **kwargs: refreshes.append(kwargs), _after_service=None,
+    )
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+    controller_module = ModuleType("lfs_plugins.gallery_controller")
+    controller_module.get_gallery_controller = lambda: controller
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_controller", controller_module)
+
+    file_menu._publish_current_project_to_gallery()
+    assert opened == []
+    assert len(callbacks) == 1
+    connected[0] = True
+    callbacks.pop()()
+    assert refreshes == [{"force": True}]
+    assert opened == []
+    state["checkedAt"] = 1
+    controller._after_service()
+    assert len(opened) == 1
+    assert opened[0]["action"] == "publish"
+
+
 @pytest.mark.parametrize(
     "state_name,expected",
     [("local", "update"), ("remote", "apply"), ("diverged", "resolve"),
@@ -395,7 +441,9 @@ def test_file_menu_linked_project_uses_gallery_primary_action(monkeypatch, tmp_p
     calls = []
     controller = SimpleNamespace(
         upload_format="sog",
-        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False),
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False,
+            account=SimpleNamespace(snapshot=lambda: SimpleNamespace(signed_in=True, authorized=True,
+                linking=False, disconnecting=False))),
         snapshot=lambda: {"links": {"project-id": link}, "scenes": [scene]},
         refresh=lambda: calls.append(("check",)),
         resolve_asset=lambda asset, details, **kwargs: calls.append(("resolve", kwargs)),
@@ -456,7 +504,9 @@ def _linked_file_publish_harness(monkeypatch, tmp_path, snapshot):
     calls = []
     controller = SimpleNamespace(
         upload_format="sog",
-        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False),
+        service=SimpleNamespace(identity=lambda: ("https://gallery.test", "account"), busy=False,
+            account=SimpleNamespace(snapshot=lambda: SimpleNamespace(signed_in=True, authorized=True,
+                linking=False, disconnecting=False))),
         snapshot=lambda: snapshot,
         refresh=lambda: calls.append("refresh"),
         resolve_asset=lambda asset, details, **kwargs: calls.append(("resolve", kwargs)),

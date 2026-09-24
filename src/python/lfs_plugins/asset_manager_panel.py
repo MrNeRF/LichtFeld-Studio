@@ -714,7 +714,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func(
             "check_gallery_tooltip",
             lambda: " · ".join(filter(None, (
-                tr("projects.action.check_gallery"), self._gallery_checked_label(), self._gallery_quota(),
+                self._gallery_check_label(), self._gallery_checked_label(), self._gallery_quota(),
             ))),
         )
         model.bind_func("is_compact", lambda: self._layout_class == "compact")
@@ -946,7 +946,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "scope_all_label": "projects.sidebar.all_projects",
             "view_menu_label": "projects.toolbar.view",
             "filter_label": "projects.toolbar.filter",
-            "check_gallery_label": "projects.action.check_gallery",
             "no_folders_label": "projects.status.no_folders",
             "empty_folder_label": "projects.status.empty_folder",
             "thumbnail_size_label": "projects.toolbar.thumbnail_size",
@@ -967,6 +966,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }
         for field, key in labels.items():
             model.bind_func(field, lambda key=key: tr(key))
+        model.bind_func("check_gallery_label", self._gallery_check_label)
 
         model.bind_record_list("folders")
         model.bind_record_list("assets")

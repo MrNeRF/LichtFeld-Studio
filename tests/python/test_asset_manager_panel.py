@@ -3605,6 +3605,11 @@ def _gallery_fixture(panel_module):
     panel._gallery_state = dict(identity='account',signed_in=True,connected=True,checkedAt=1,
         links={local['id']:dict(sceneId='scene',revision='r1',commitUuid='saved',sharedFields=shared_fields(remote), contentRevision='r1', metadataRevision='r1')},
         scenes=[remote,dict(remote,id='remote-only',title='Remote only')],jobs=[])
+    panel._portal_account_snapshot = lambda: SimpleNamespace(
+        signed_in=panel._gallery_state.get("signed_in", False),
+        authorized=panel._gallery_state.get("signed_in", False),
+        linking=False, disconnecting=False,
+    )
     return panel,local,remote
 
 
@@ -4055,6 +4060,7 @@ def test_signed_out_gallery_never_claims_offline_or_checked(panel_module):
     panel.on_bind_model(_BindingContext(model))
     assert not {'gallery_account', 'gallery_account_reason', 'gallery_has_account_reason'} & model.func_bindings.keys()
     panel._gallery_state['signed_in'] = True
+    panel._portal_connection_state = lambda: "connected"
     assert panel._gallery_checked_label().endswith('sidebar.offline')
     panel._gallery_state['relink_required'] = True
     assert panel._gallery_checked_label().endswith('sidebar.not_checked')
@@ -4533,11 +4539,96 @@ def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module
     assert model.func_bindings['catalog_loading']() is False
     panel._backend_load_active = True
     assert model.func_bindings['catalog_loading']() is True
-    assert model.func_bindings['check_gallery_tooltip']().startswith('projects.action.check_gallery')
+    assert model.func_bindings['check_gallery_tooltip']().startswith('portal.status.connect')
     panel._gallery_state['message'] = 'Sign in'
     assert panel._gallery_notice_text() == ''
     panel._gallery_state['signed_in'] = True
+    panel._portal_connection_state = lambda: "connected"
     assert panel._gallery_notice_text() == 'Sign in'
+
+
+def test_portal_connection_labels_share_one_snapshot_and_state(panel_module, monkeypatch):
+    from lfs_plugins.gallery_actions import gallery_actions
+    from lfs_plugins.portal_connection_ui import connection_state
+    states = (
+        (SimpleNamespace(signed_in=False, authorized=False, linking=False, disconnecting=False,
+                         display_name="", connected_since=""), "portal.status.connect"),
+        (SimpleNamespace(signed_in=False, authorized=True, linking=False, disconnecting=False,
+                         display_name="", connected_since=""), "portal.status.turn_on"),
+        (SimpleNamespace(signed_in=False, authorized=False, linking=True, disconnecting=False,
+                         display_name="", connected_since=""), "portal.status.busy"),
+        (SimpleNamespace(signed_in=True, authorized=True, linking=False, disconnecting=False,
+                         display_name="A Long Display Name", connected_since="2026-09-24"),
+         "portal.status.connected_as"),
+    )
+    for snapshot, expected_key in states:
+        reads = []
+        account = SimpleNamespace(snapshot=lambda: reads.append(snapshot) or snapshot)
+        controller = SimpleNamespace(service=SimpleNamespace(account=account))
+        panel = panel_module.AssetManagerPanel()
+        panel._gallery_state["signed_in"] = snapshot.signed_in
+        monkeypatch.setattr(panel, "_controller", lambda: controller)
+        model = _BindingModel()
+        panel.on_bind_model(_BindingContext(model))
+
+        assert model.func_bindings["gallery_connection_action_label"]() == expected_key
+        assert len(reads) == 1
+        if not snapshot.signed_in:
+            assert panel._gallery_check_label() == expected_key
+            assert model.func_bindings["check_gallery_label"]() == expected_key
+            assert model.func_bindings["check_gallery_tooltip"]().startswith(expected_key)
+            action = gallery_actions(
+                {"id": "project", "exists": True, "status": "AVAILABLE"},
+                {"state": "unlinked", "relationship": "unlinked",
+                 "connection_state": connection_state(snapshot),
+                 "signed_in": False, "source_formats": ["licht"]},
+            )[0]
+            assert action["label"] == expected_key
+        else:
+            assert panel._gallery_check_label() == "projects.action.check_gallery"
+            assert model.func_bindings["check_gallery_label"]() == "projects.action.check_gallery"
+
+
+def test_publish_resume_waits_for_gallery_session_snapshot(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._gallery_state = {"identity": "old", "signed_in": False, "scenes": [], "links": {}, "jobs": []}
+    busy = [False]
+    polls = []
+    commands = []
+    selections = []
+    controller = SimpleNamespace(_panel_busy=lambda: busy[0], _schedule_poll=lambda: polls.append(True))
+    monkeypatch.setattr(panel, "_controller", lambda: controller)
+    monkeypatch.setattr(panel, "_portal_connection_state", lambda: "connected")
+    monkeypatch.setattr(panel, "_asset_dict", lambda identifier: {"id": identifier})
+    monkeypatch.setattr(panel, "_select_asset_id", lambda identifier: selections.append(identifier))
+    monkeypatch.setattr(panel, "_gallery_command", lambda action: commands.append(action))
+    monkeypatch.setattr(panel, "_gallery_completions", lambda *_: None)
+    monkeypatch.setattr(panel, "_repair_selection", lambda: None)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **_: None)
+    monkeypatch.setattr(panel, "_request_model_update", lambda: None)
+
+    panel._resume_gallery_action("project", "publish")
+    assert commands == []
+    assert selections == []
+    assert polls
+
+    busy[0] = True
+    panel._gallery_changed({"identity": "new", "signed_in": True, "scenes": [], "links": {}, "jobs": []})
+    assert commands == []
+    busy[0] = False
+    panel._gallery_changed({"identity": "new", "signed_in": True, "scenes": [], "links": {}, "jobs": []})
+    assert commands == []
+    panel._gallery_changed({"identity": "new", "signed_in": True, "checkedAt": 1,
+                            "scenes": [], "links": {}, "jobs": []})
+    assert commands == ["publish"]
+    assert selections == ["project"]
+
+    panel._gallery_state["signed_in"] = False
+    panel._resume_gallery_action("project", "publish")
+    monkeypatch.setattr(panel, "_portal_connection_state", lambda: "not_connected")
+    panel._gallery_changed({"identity": "new", "signed_in": False, "scenes": [], "links": {}, "jobs": []})
+    assert commands == ["publish"]
+    assert panel._gallery_connection_resume is None
 
 
 def test_gallery_review_keeps_typing_and_delete_out_of_projects(panel_module, monkeypatch):
@@ -4846,7 +4937,9 @@ def test_failed_owned_upload_retry_opens_review_after_discard(panel_module, monk
     job = {'id': 'job', 'project': 'project', 'status': 'error', 'requiresPreparation': True,
            'metadata': {'title': 'Project'}}
     calls = []
-    service = SimpleNamespace(identity=lambda: 'account', snapshot=lambda: {'jobs': [job]},
+    account_snapshot = SimpleNamespace(signed_in=True, authorized=True, linking=False, disconnecting=False)
+    account = SimpleNamespace(snapshot=lambda: account_snapshot)
+    service = SimpleNamespace(account=account, identity=lambda: 'account', snapshot=lambda: {'jobs': [job]},
         discard=lambda identifier: calls.append(('discard', identifier)))
     controller = SimpleNamespace(service=service, _schedule_poll=lambda: None)
     monkeypatch.setattr(panel, '_controller', lambda: controller)

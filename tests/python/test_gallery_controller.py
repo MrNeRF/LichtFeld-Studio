@@ -61,6 +61,20 @@ def test_live_project_publication_has_no_commit_conflict_or_followup_action(comm
     assert actions == []
 
 
+def test_new_gallery_subscriber_does_not_consume_existing_subscribers_update(gallery):
+    controller, state, _actions = gallery
+    first = []
+    second = []
+    controller.subscribe(lambda snapshot: first.append(snapshot["signed_in"]))
+    last_broadcast = copy.deepcopy(controller._last_snapshot)
+    state["signed_in"] = False
+    controller.subscribe(lambda snapshot: second.append(snapshot["signed_in"]))
+
+    assert first == [True]
+    assert second == [False]
+    assert controller._last_snapshot == last_broadcast
+
+
 def test_gallery_update_removes_only_groups_emptied_by_replaced_splats(gallery, monkeypatch, tmp_path):
     panel, _, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
@@ -1481,10 +1495,14 @@ def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery)
     from lfs_plugins.gallery_actions import gallery_actions, gallery_eligibility
     asset = {"id": "project", "exists": True, "status": "AVAILABLE"}
     facts = dict(state="local", relationship="linked", linked=True, sceneReady=True,
-                 signed_in=True, established=True, source_formats=["licht"])
+                 signed_in=True, connection_state="connected", established=True,
+                 source_formats=["licht"])
     assert gallery_actions(asset, facts)[0]["id"] == "update"
-    disabled = gallery_actions(asset, dict(facts, signed_in=False))[0]
-    assert not disabled["enabled"] and disabled["reason"].endswith("eligibility.connect")
+    assert gallery_actions(asset, dict(facts, signed_in=False))[0]["label"] == gallery_actions(asset, facts)[0]["label"]
+    disabled = gallery_actions(asset, dict(facts, signed_in=False, connection_state="not_connected"))[0]
+    assert disabled["enabled"] and not disabled["reason"]
+    assert disabled["label"].endswith("portal.status.connect")
+    assert gallery_actions(asset, dict(facts, signed_in=False, connection_state="switched_off"))[0]["label"].endswith("portal.status.turn_on")
     assert gallery_actions(dict(asset, status="UNREADABLE"), facts) == []
     cached = dict(facts, cachedUnverified=True)
     assert gallery_actions(dict(asset, status="UNREADABLE"), cached) == []
@@ -1496,7 +1514,7 @@ def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery)
     assert gallery_actions(asset, dict(facts, activity="applying", active=True)) == []
     completed = dict(facts, job={"id": "done", "status": "completed"}, undoAvailable=True)
     assert [a["id"] for a in gallery_actions(asset, completed)] == ["undo"]
-    assert not gallery_actions(asset, dict(completed, signed_in=False))[0]["enabled"]
+    assert not gallery_actions(asset, dict(completed, signed_in=False, connection_state="not_connected"))[0]["enabled"]
     assert gallery_actions(asset, dict(facts, viewingCopy=True, state="equal"))[0]["id"] == "publish_new"
     assert gallery_actions(asset, dict(facts, viewingCopy=True, state="remote"))[0]["id"] == "publish_new"
     queued = dict(facts, activity="queued", active=True, job={"id": "j", "status": "queued"})
@@ -1508,6 +1526,21 @@ def test_gallery_action_table_uses_file_activity_and_account_precedence(gallery)
     assert gallery_eligibility(dict(asset, embedded_dataset_complete=False), facts)["status"] == "not_checked"
     reasons = gallery_eligibility(dict(asset, publication={"visibleSplats": 0, "externalPayloads": True}), facts)
     assert reasons["reasons"] == ["no_splats", "external_payloads"]
+
+
+def test_disconnected_unlinked_project_keeps_publish_intent_until_gallery_check(gallery):
+    from lfs_plugins.gallery_actions import gallery_actions
+
+    asset = {"id": "project", "exists": True, "status": "AVAILABLE"}
+    facts = {"state": "not_checked", "relationship": "unlinked", "signed_in": False,
+             "connection_state": "not_connected"}
+    action = gallery_actions(asset, facts)[0]
+    assert action["id"] == "publish"
+    assert action["enabled"]
+    assert action["label"].endswith("portal.status.connect")
+    assert gallery_actions(asset, dict(facts, connection_state="switched_off"))[0]["id"] == "publish"
+    assert gallery_actions(asset, dict(facts, connection_state="connected"))[0]["id"] == "check"
+    assert gallery_actions(asset, dict(facts, relationship="linked"))[0]["id"] == "check"
 
 
 def test_presentation_metadata_and_scene_content_have_separate_relationships(gallery):

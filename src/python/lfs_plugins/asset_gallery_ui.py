@@ -16,6 +16,7 @@ from .gallery_controller import asset_sync_state, get_gallery_controller
 from .gallery_sync_facts import needs_attention
 from .gallery_actions import gallery_actions, gallery_quota
 from .asset_index import display_name, last_known_gallery_label, previous_scene_for, resolve_default_asset_directory
+from .portal_connection_ui import connection_action, connection_state
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
@@ -50,6 +51,7 @@ class GalleryAssetMixin:
         self._gallery_batch = []
         self._gallery_batch_waiting = False
         self._gallery_batch_asset = None
+        self._gallery_connection_resume = None
         self._gallery_notice = ""
         self._gallery_undo = None
         self._gallery_undo_kind = ""
@@ -61,6 +63,14 @@ class GalleryAssetMixin:
         self._gallery_completion_id = None
         self._gallery_toast = None
         self._gallery_toast_timer = None
+
+    def _portal_account_snapshot(self):
+        controller = self._controller()
+        account = getattr(getattr(controller, "service", None), "account", None)
+        return account.snapshot() if account is not None else None
+
+    def _portal_connection_state(self):
+        return connection_state(self._portal_account_snapshot())
 
     def _controller(self):
         if self._gallery_controller is None:
@@ -145,6 +155,13 @@ class GalleryAssetMixin:
                 identifier, action = self._gallery_batch.pop(0)
                 self._select_asset_id(identifier)
                 self._begin_gallery_publish(self._get_selected_asset(), action)
+        if self._gallery_connection_resume:
+            if self._portal_connection_state() != "connected":
+                self._gallery_connection_resume = None
+            elif self._gallery_connection_ready():
+                identifier, action = self._gallery_connection_resume
+                self._gallery_connection_resume = None
+                self._resume_gallery_action(identifier, action)
         if self._handle:
             self._handle.dirty_all()
         self._request_model_update()
@@ -202,6 +219,8 @@ class GalleryAssetMixin:
             if key in self._gallery_state:
                 facts[key] = self._gallery_state[key]
         facts["attention"] = needs_attention(facts)
+        account_snapshot = self._portal_account_snapshot()
+        facts["connection_state"] = connection_state(account_snapshot)
         previous = None if explicitly_unlinked else previous_scene_for(asset, self._gallery_state)
         acknowledged = self._gallery_state.get("replacementAcknowledgments", {}).get(asset.get("id"), {})
         if previous and not link and (acknowledged.get("oldProject") != asset.get("previous_project_uuid")
@@ -351,18 +370,45 @@ class GalleryAssetMixin:
                 "missing": sum(not self._project_available(a) for a in selected)}
 
     def _gallery_checked_label(self):
-        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
+        if self._portal_connection_state() != "connected" or self._gallery_state.get("relink_required"):
             return tr("sidebar.not_checked")
         if self._gallery_state.get("offline"):
             return tr("sidebar.offline")
         checked = self._gallery_state.get("checkedAt", 0)
         return tr("sidebar.checked_relative", time=relative_time(checked)) if checked else tr("sidebar.not_checked")
 
+    def _gallery_check_label(self):
+        state = self._portal_connection_state()
+        if state != "connected":
+            _action, label_key = connection_action(state)
+            return lf.ui.tr(label_key)
+        return lf.ui.tr("projects.action.check_gallery")
+
+    def _resume_gallery_action(self, identifier, action):
+        if self._portal_connection_state() != "connected":
+            self._gallery_connection_resume = None
+            return
+        if not self._gallery_connection_ready():
+            self._gallery_connection_resume = (identifier, action)
+            self._controller()._schedule_poll()
+            return
+        asset = self._asset_dict(identifier)
+        if asset:
+            self._select_asset_id(identifier)
+            self._gallery_command(action)
+
+    def _gallery_connection_ready(self):
+        controller = self._controller()
+        return (self._gallery_state.get("signed_in") and self._gallery_state.get("checkedAt")
+                and not controller._panel_busy()
+                and not getattr(controller, "_refresh_pending", False)
+                and not getattr(controller, "_refresh_requested", False))
+
     def _gallery_notice_text(self):
         from .gallery_messages import localize_message
         if self._gallery_notice:
             return localize_message(self._gallery_notice)
-        if not self._gallery_state.get("signed_in") or self._gallery_state.get("relink_required"):
+        if self._portal_connection_state() != "connected" or self._gallery_state.get("relink_required"):
             return ""
         return localize_message(self._gallery_state.get("message", ""))
 
@@ -377,8 +423,11 @@ class GalleryAssetMixin:
             model.bind_func("selected_" + name, lambda name=name: self._selected_gallery_badge_value(name))
         values = {
             "gallery_supported": lambda: not self._gallery_state.get("unsupported", False),
-            "gallery_signed_in": lambda: self._gallery_state.get("signed_in", False) and not self._gallery_state.get("relink_required", False),
+            "gallery_signed_in": lambda: self._portal_connection_state() == "connected" and not self._gallery_state.get("relink_required", False),
             "gallery_checked": self._gallery_checked_label,
+            "gallery_needs_connection": lambda: connection_action(self._portal_connection_state())[0] is not None,
+            "gallery_connection_action_label": lambda: lf.ui.tr(
+                connection_action(self._portal_connection_state())[1]),
             "gallery_quota": self._gallery_quota,
             "gallery_has_toast": lambda: bool(self._gallery_toast),
             "gallery_toast": lambda: (self._gallery_toast or {}).get("text", ""),
@@ -495,7 +544,14 @@ class GalleryAssetMixin:
                 self._controller().update_all(self._gallery_update_candidates())
                 return
             if action == "refresh":
-                self._controller().refresh(force=True)
+                account = getattr(getattr(self._controller(), "service", None), "account", None)
+                if account is None:
+                    self._controller().refresh(force=True)
+                    return
+                if self._portal_connection_state() != "connected":
+                    account.run_after_connection(lambda: self._controller().refresh(force=True))
+                else:
+                    self._controller().refresh(force=True)
                 return
             if action == "open_recovery":
                 self._controller().command("show_recovery_folder")
@@ -523,6 +579,14 @@ class GalleryAssetMixin:
                 action = self._selected_gallery_action()
             aliases = {"pause_transfer": "pause", "cancel_transfer": "cancel"}
             action = aliases.get(action, action)
+            account = getattr(getattr(self._controller(), "service", None), "account", None)
+            connection = connection_state(self._portal_account_snapshot())
+            if account and action in ("check", "publish", "update", "publish_new", "publish_again") \
+                    and connection != "connected":
+                identifier = asset["id"]
+                if account.run_after_connection(lambda: self._resume_gallery_action(identifier, action)):
+                    self._gallery_notice = lf.ui.tr("projects.portal.connection_pending")
+                return
             offered = next((item for item in facts["actions"] if item["id"] == action), None)
             self._gallery_notice = ""
             if offered and not offered["enabled"]:

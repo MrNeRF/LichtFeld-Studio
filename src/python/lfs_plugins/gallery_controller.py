@@ -746,7 +746,6 @@ class GalleryController:
         except Exception as exc:
             log_failure("subscriber_callback", exc)
             self._message = friendly_error(exc)
-        self._last_snapshot = copy.deepcopy(initial)
         return lambda: self._subscribers.pop(callback, None)
 
     def snapshot(self):

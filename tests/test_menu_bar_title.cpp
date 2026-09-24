@@ -6,6 +6,7 @@
 #include "gui/rml_menu_bar.hpp"
 #include "input/input_bindings.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <RmlUi/Core.h>
@@ -43,6 +44,7 @@ namespace lfs::vis::gui {
             bar.project_title_el_ = doc->GetElementById("project-title-content");
         }
         static RmlTooltipController& tooltip(RmlMenuBar& bar) { return bar.tooltip_; }
+        static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
             bar.updateProjectTitleLayout(width, dp);
         }
@@ -107,11 +109,16 @@ namespace {
     protected:
         static void SetUpTestSuite() {
             ASSERT_TRUE(Rml::Initialise());
+            ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
             ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
                                            "src/visualizer/gui/assets/fonts/Inter-Regular.ttf")
                                               .string()));
         }
-        static void TearDownTestSuite() { Rml::Shutdown(); }
+        static void TearDownTestSuite() {
+            lfs::event::LocalizationManager::getInstance().reset();
+            Rml::Shutdown();
+        }
         void SetUp() override {
             context_ = Rml::CreateContext("menu_bar_title_test", {1600, 300}, &renderer_);
             ASSERT_NE(context_, nullptr);
@@ -184,6 +191,53 @@ namespace {
             EXPECT_EQ(element->GetComputedValues().overflow_x(), Rml::Style::Overflow::Hidden);
             EXPECT_EQ(element->GetComputedValues().text_overflow(), Rml::Style::TextOverflow::Ellipsis);
         }
+    }
+
+    TEST_F(MenuBarTitleTest, PortalStatusKeepsLongNameInTooltipAtNarrowWidth) {
+        auto& store = lfs::vis::app_store();
+        const auto previous = store.account_state.get();
+        const std::string name = "Katharina Theodora Extremely Long Display Name Example";
+        store.account_state.set(lfs::vis::AppStore::AccountState{
+            .signed_in = true,
+            .authorized = true,
+            .label = "KE",
+            .display_name = name,
+        });
+        RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
+        resize(1280);
+        EXPECT_EQ(textContent(el("menu-portal-connection")), "KE · Portal");
+        const auto tooltip = el("menu-portal-connection")->GetAttribute<Rml::String>("title", "");
+        EXPECT_NE(tooltip.find("Portal connected as " + name), std::string::npos);
+        EXPECT_EQ(textContent(el("menu-portal-connection")).find(name), std::string::npos);
+        store.account_state.set(previous);
+    }
+
+    TEST_F(MenuBarTitleTest, PortalStatusShowsSpecificTransitionLabels) {
+        auto& store = lfs::vis::app_store();
+        const auto previous_account = store.account_state.get();
+        const auto previous_gallery = store.gallery_state.get();
+        store.gallery_state.set({});
+        const auto label_for = [&](lfs::vis::AppStore::AccountState state) {
+            store.account_state.set(std::move(state));
+            RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
+            context_->Update();
+            return textContent(el("menu-portal-connection"));
+        };
+        EXPECT_EQ(label_for({}), "Portal: Not connected");
+        EXPECT_EQ(label_for({.authorized = true}), "Portal connected, switched off");
+        EXPECT_EQ(label_for({.linking = true, .label = "ABCD-EFGH"}), "Portal: Connecting… ABCD-EFGH");
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .disconnecting = true, .label = "KT", .display_name = "Kay Test"}),
+                  "Portal: Disconnecting…");
+        auto approval_gallery = previous_gallery;
+        approval_gallery.relink_required = true;
+        store.gallery_state.set(approval_gallery);
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
+                  "Portal: Approval needed");
+        store.gallery_state.set({});
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
+                  "KT · Portal");
+        store.account_state.set(previous_account);
+        store.gallery_state.set(previous_gallery);
     }
 
     TEST_F(MenuBarTitleTest, AccountsForPendingToolbarPlacementInTheSameFrame) {

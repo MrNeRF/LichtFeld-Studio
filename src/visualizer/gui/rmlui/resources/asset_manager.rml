@@ -134,7 +134,7 @@
               <button class="btn btn--secondary" data-if="gallery_toast_open" data-event-click="gallery_toast_open">{{g_action_open_local}}</button>
             </div>
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
-            <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}}</div>
+            <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}} <button class="btn btn--secondary asset-button--toolbar24" data-if="gallery_needs_connection" data-event-click="gallery_refresh">{{gallery_connection_action_label}}</button></div>
             <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
             <div class="gallery-empty" data-if="no_folders">{{no_folders_label}}</div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>

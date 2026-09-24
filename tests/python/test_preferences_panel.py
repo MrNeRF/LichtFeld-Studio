@@ -460,6 +460,45 @@ def test_project_folders_preferences_add_remove_and_protect_default(preferences_
     assert calls[-2:] == [("remove", "extra"), ("rescan", {"scan_folders": True})]
 
 
+def test_portal_section_does_not_offer_settings_reset(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "portal"
+    dialogs = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
+    panel._on_reset_current_section(None, None, None)
+
+    assert dialogs == []
+    assert panel._show_section_reset() is False
+
+
+def test_preferences_portal_status_uses_shared_connection_state(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    translations = {
+        "portal.status.connect": "Connect to Portal",
+        "portal.status.turn_on": "Turn on Portal",
+        "portal.status.busy": "Portal: Working…",
+        "portal.status.switched_off": "Portal connected, switched off",
+        "portal.status.disconnected": "Portal: Not connected",
+        "portal.status.connected_as": "Portal connected as {name}",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translations.get(key, key), raising=False)
+    snapshots = (
+        (SimpleNamespace(signed_in=False, authorized=False, linking=False, disconnecting=False,
+                         display_name=""), "Portal: Not connected"),
+        (SimpleNamespace(signed_in=False, authorized=True, linking=False, disconnecting=False,
+                         display_name=""), "Portal connected, switched off"),
+        (SimpleNamespace(signed_in=False, authorized=False, linking=True, disconnecting=False,
+                         display_name=""), "Portal: Working…"),
+        (SimpleNamespace(signed_in=True, authorized=True, linking=False, disconnecting=False,
+                         display_name="A Long Display Name"), "Portal connected as A Long Display Name"),
+    )
+    for snapshot, expected in snapshots:
+        monkeypatch.setattr(panel, "_portal_connection_snapshot", lambda snapshot=snapshot: snapshot)
+        assert panel._portal_connection_status() == expected
+
+
 def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()

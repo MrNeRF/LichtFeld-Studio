@@ -50,6 +50,10 @@ body.floating-panel {
     opacity: 0.8;
 }
 
+.preferences-portal-link { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16dp; margin-top: 16dp; }
+.preferences-portal-code { display: block; margin-top: 5dp; font-size: 30dp; letter-spacing: 3dp; }
+.preferences-portal-qr { width: 180dp; height: 180dp; }
+
 .preferences-warning,
 .preferences-error {
     margin: 4dp 0 8dp 0;
