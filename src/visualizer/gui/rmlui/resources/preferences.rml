@@ -53,6 +53,23 @@
           </div>
           </div>
         </div>
+        <div class="section-header text-accent" data-class-is-expanded="project_folders_expanded" data-event-click="toggle_section('project_folders')">
+          <span class="section-arrow text-accent" data-class-is-expanded="project_folders_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.project_folders</span>
+        </div>
+        <div class="section-content" data-if="project_folders_expanded">
+          <div class="preferences-project-folder" data-for="folder : project_folders">
+            <div class="preferences-project-folder-details">
+              <span>{{folder.label}}</span>
+              <span class="preferences-description">{{folder.path}}</span>
+            </div>
+            <button class="btn btn--secondary" data-if="folder.can_remove" data-event-click="remove_project_folder(folder.id)">@tr:projects.action.remove_folder</button>
+          </div>
+          <div class="preferences-project-folder-actions">
+            <button class="btn btn--secondary" data-event-click="add_project_folder">@tr:projects.action.add_folder</button>
+            <button class="btn btn--secondary" data-event-click="rescan_project_folders">@tr:projects.action.rescan_folders</button>
+          </div>
+        </div>
         <div class="section-header text-accent" data-class-is-expanded="project_manager_expanded" data-event-click="toggle_section('project_manager')">
           <span class="section-arrow text-accent" data-class-is-expanded="project_manager_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.project_manager_title</span>

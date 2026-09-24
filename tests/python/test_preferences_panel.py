@@ -4,11 +4,30 @@
 
 from enum import IntEnum
 from importlib import import_module
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
 
 import pytest
+
+
+def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
+    expected = {
+        "de": "Ordner entfernen",
+        "en": "Remove folder",
+        "es": "Quitar carpeta",
+        "fr": "Retirer le dossier",
+        "it": "Rimuovi cartella",
+        "ja": "フォルダーを外す",
+        "ko": "폴더 제거",
+        "nl": "Map verwijderen",
+        "pl": "Usuń folder",
+        "zh": "移除文件夹",
+    }
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    assert {path.stem: json.loads(path.read_text())["projects"]["action.remove_folder"]
+            for path in locales.glob("*.json")} == expected
 
 
 @pytest.fixture
@@ -406,6 +425,39 @@ def test_project_manager_preferences_round_trip_and_reset(preferences_panel_modu
         "openAtStartup": True,
         "rememberState": True,
     }
+
+
+def test_project_folders_preferences_add_remove_and_protect_default(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._handle = SimpleNamespace(
+        update_record_list=lambda name, rows: records.__setitem__(name, rows),
+        dirty=lambda _name: None,
+    )
+    folders = {"default": {"name": "Projects", "path": "/tmp/projects"}}
+    calls = []
+    backend = SimpleNamespace(
+        _asset_index=object(),
+        _asset_index_folders=lambda: folders,
+        _add_folder_from_path=lambda path, recursive: calls.append((path, recursive)) or folders.__setitem__("extra", {"name": "Extra", "path": path}),
+        on_delete_folder=lambda _h, _e, args: calls.append(("remove", args[0])),
+        refresh_catalog=lambda **kwargs: calls.append(("rescan", kwargs)),
+    )
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: backend, raising=False)
+    monkeypatch.setattr(module.lf.ui, "open_folder_dialog", lambda *_: "/tmp/extra")
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda _title, _message, buttons, callback: callback(buttons[1]), raising=False)
+
+    panel._refresh_project_folders()
+    assert records["project_folders"][0]["id"] == "default"
+    assert records["project_folders"][0]["can_remove"] is False
+    panel._on_add_project_folder()
+    assert calls == [("/tmp/extra", True)]
+    panel._on_remove_project_folder(args=["default"])
+    assert len(calls) == 1
+    panel._on_remove_project_folder(args=["extra"])
+    panel._on_rescan_project_folders()
+    assert calls[-2:] == [("remove", "extra"), ("rescan", {"scan_folders": True})]
 
 
 def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):

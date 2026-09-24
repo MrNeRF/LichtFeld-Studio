@@ -83,7 +83,6 @@
 
 .asset-refresh-button img,
 .asset-toolbar-view img,
-.asset-folder-menu img,
 .asset-card-menu img {
     image-color: @{alpha(text,0.90)};
 }
@@ -96,14 +95,9 @@
 
 .asset-refresh-button:hover img,
 .asset-toolbar-view:hover img,
-.asset-folder-menu:hover img,
 .asset-card-menu:hover img,
 .inspector-more:hover img {
     image-color: @{text};
-}
-
-.asset-add-folder-glyph {
-    color: @{text};
 }
 
 .asset-import-button {
@@ -140,58 +134,9 @@
     border-color: @{primary};
 }
 
-/* ── Sidebar ─────────────────────────────────────────────── */
-
-#asset-sidebar {
+#asset-scope-controls {
     background-color: @{alpha(background,0.32)};
     border-bottom-color: @{border};
-}
-
-.asset-sidebar-global {
-    border-bottom-color: @{border};
-}
-
-.asset-sidebar-title {
-    color: @{text_dim};
-}
-
-.asset-sidebar-title .section-arrow {
-    color: @{alpha(text_dim,0.72)};
-}
-
-.asset-sidebar-title:hover .section-arrow,
-.asset-sidebar-title .section-arrow.is-expanded {
-    color: @{text};
-}
-
-.asset-filter-row:hover {
-    background-color: @{lighten(surface_bright,0.06)};
-}
-
-.asset-filter-row.is-drag-over,
-.asset-filter-row.is-active {
-    background-color: @{alpha(primary,0.20)};
-}
-
-.asset-filter-row.is-active .asset-row-label {
-    color: @{primary};
-}
-
-.asset-row-label {
-    color: @{text};
-}
-
-.asset-row-count {
-    color: @{text_dim};
-}
-
-.asset-folder-menu {
-    background-color: transparent;
-    border-color: transparent;
-}
-
-.asset-folder-menu:hover {
-    background-color: @{alpha(surface_bright,0.94)};
 }
 
 .asset-resize-handle:hover,
@@ -409,3 +354,4 @@
 .gallery-activity > progress, .gallery-activity > progress fill { background-color: transparent; border-width: 0; }
 
 .gallery-activity > progress, .gallery-activity > progress fill { decorator: none; }
+#asset-scope-select.is-drag-over { border-color: @{primary}; background-color: @{alpha(primary,0.20)}; }

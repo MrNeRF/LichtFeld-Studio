@@ -30,9 +30,6 @@
             <input id="asset-search-input" type="text" data-attr-aria-label="search_placeholder" data-value="search_query"/>
             <span class="asset-search-placeholder text-muted" data-if="search_is_empty">{{search_placeholder}}</span>
           </div>
-          <button class="asset-button asset-button--text asset-toolbar-filter" data-event-click="open_filter_menu" data-attr-title="active_filter_label">
-            <span class="asset-button-text">{{filter_menu_label}}</span>
-          </button>
           <button class="asset-button asset-button--text asset-sort-button" data-event-click="open_sort_menu" data-attr-title="sort_tooltip">
             <span class="asset-button-text">{{sort_label}}</span>
           </button>
@@ -63,6 +60,11 @@
             <span class="asset-button-text">{{check_gallery_label}}</span>
             <span class="gallery-checked text-muted">{{gallery_checked}}</span>
           </button>
+          <span class="asset-toolbar-quota text-muted" data-if="gallery_signed_in">{{gallery_quota}}</span>
+          <button class="asset-button asset-button--text asset-update-all" data-if="gallery_update_all_visible"
+                  data-event-click="gallery_update_all" data-attr-title="gallery_update_all_label">
+            <span class="asset-button-text">{{gallery_update_all_label}}</span>
+          </button>
           <button class="asset-button asset-button--icon asset-toolbar-view" data-event-click="open_view_menu"
                   data-tooltip="common.more" aria-label="{{view_menu_label}}">
             <img src="../icon/more-vertical.png"/>
@@ -84,77 +86,26 @@
         </div>
       </div>
 
-      <div id="asset-main-row" data-style-min-height="main_min_height">
-        <nav id="asset-sidebar" class="asset-navigator" data-style-width="navigator_style_width">
-          <div class="asset-navigator-scope">
-            <select id="asset-scope-select" data-value="selected_folder_id" aria-label="{{panel_label}}">
-              <option value="__all__">{{scope_all_label}}</option>
-              <option value="__local__">{{scope_local_label}}</option>
-              <option value="__recent__">{{scope_recent_label}}</option>
-              <option value="__gallery__">{{scope_published_label}}</option>
-            </select>
-          </div>
-          <div class="asset-sidebar-inner">
-            <div id="asset-sidebar-local-scroll">
-              <div id="asset-sidebar-local-content">
-                <div class="asset-sidebar-global">
-                  <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="all_assets_selected" data-folder-id="__all__">
-                    <span class="asset-row-label" data-attr-title="scope_all_label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
-                  </button>
-                  <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__local__'" data-folder-id="__local__">
-                    <span class="asset-row-label" data-attr-title="scope_local_label">{{scope_local_label}}</span><span class="asset-row-count">{{local_assets_count}}</span>
-                  </button>
-                  <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__recent__'" data-folder-id="__recent__">
-                    <span class="asset-row-label" data-attr-title="scope_recent_label">{{scope_recent_label}}</span>
-                  </button>
-                </div>
-                <div class="asset-sidebar-section">
-                  <div class="asset-sidebar-title">
-                    <button class="asset-button asset-button--text asset-sidebar-title-main" type="button" data-sidebar-action="toggle_folders" data-event-click="toggle_folders_collapsed">
-                    <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
-                    <span>{{folders_title}}</span>
-                    </button>
-                    <button class="asset-button asset-button--small-icon asset-folder-menu"
-                            data-event-click="add_asset_folder" data-tooltip="projects.action.add_folder"
-                            aria-label="{{import_project_label}}"><span class="asset-add-folder-glyph">+</span></button>
-                  </div>
-                  <div class="section-content collapsed" data-class-collapsed="!folders_expanded">
-                  <div data-for="folder : folders">
-                      <div class="asset-filter-row" data-class-is-active="folder.id == selected_folder_id" data-attr-data-folder-id="folder.id">
-                        <button class="asset-button asset-button--text asset-row-main" type="button" data-attr-data-folder-id="folder.id">
-                        <span class="asset-row-label">{{folder.name}}</span>
-                        </button>
-                        <div class="asset-folder-row-right">
-                          <span class="asset-row-count">{{folder.project_count}}</span>
-                          <button class="asset-button asset-button--small-icon asset-folder-menu" data-if="folder.can_manage"
-                                  data-attr-data-folder-id="folder.id" data-folder-action="menu"
-                                  data-tooltip="common.more" aria-label="{{view_menu_label}}">
-                            <img src="../icon/more-horizontal.png"/>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="asset-sidebar-section asset-sidebar-gallery" id="asset-sidebar-gallery">
-              <div class="asset-sidebar-title gallery-sidebar-heading" data-attr-title="gallery_quota">
-                <span>{{g_sidebar_title}}</span>
-                <button class="asset-button asset-button--small-icon gallery-refresh" data-event-click="gallery_refresh"
-                        data-attr-title="check_gallery_tooltip" aria-label="{{check_gallery_label}}"><span class="asset-refresh-glyph">&#x21BB;</span></button>
-              </div>
-              <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery__'" data-folder-id="__gallery__">
-                <span class="asset-row-label" data-attr-title="g_sidebar_published">{{g_sidebar_published}}</span><span class="asset-row-count">{{gallery_published_count}}</span>
-              </button>
-              <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__gallery_attention__'" data-folder-id="__gallery_attention__">
-                <span class="asset-row-label" data-attr-title="g_sidebar_attention">{{g_sidebar_attention}}</span><span class="asset-row-count">{{gallery_attention_count}}</span>
-              </button>
-            </div>
-          </div>
-        </nav>
-        <div class="asset-resize-handle asset-resize-handle--vertical" data-resize="navigator" tabindex="0" aria-label="{{resize_navigator_label}}"></div>
+      <div id="asset-scope-controls">
+        <select id="asset-scope-select" data-value="selected_folder_id"
+                data-attr-data-gallery-drop-target="selected_drop_target" aria-label="{{scope_all_label}}">
+          <option value="__all__">{{scope_all_label}}</option>
+          <option data-for="folder : folders" data-attr-value="folder.id">{{folder.scope_name}}</option>
+        </select>
+        <select id="asset-filter-select" data-value="active_filter" aria-label="{{filter_menu_label}}">
+          <option value="all">@tr:projects.filter.clear</option>
+          <option value="local">@tr:projects.filter.local</option>
+          <option value="published">@tr:projects.filter.published</option>
+          <option value="not_published">@tr:projects.filter.not_published</option>
+          <option value="attention">@tr:projects.filter.attention</option>
+          <option value="missing">@tr:projects.filter.missing</option>
+          <option value="checkpoint">@tr:projects.filter.checkpoint</option>
+          <option value="dataset">@tr:projects.filter.dataset</option>
+          <option value="gallery">@tr:projects.filter.gallery</option>
+        </select>
+      </div>
 
+      <div id="asset-main-row" data-style-min-height="main_min_height">
         <div class="asset-results-stack">
         <section id="asset-gallery" data-class-is-loading="catalog_loading">
           <div id="asset-results-header" class="asset-gallery-header">
@@ -184,10 +135,9 @@
             <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
             <div class="asset-gallery-notice" data-if="gallery_has_notice">{{gallery_notice}}</div>
             <div class="asset-gallery-notice" data-if="gallery_needs_recovery"><button class="btn btn--secondary asset-button--toolbar24" data-event-click="transfer_open_recovery('journal')">{{g_action_open_recovery}}</button></div>
-            <div class="gallery-empty" data-if="no_folders">{{no_folders_label}} <button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:projects.action.add_folder</button></div>
+            <div class="gallery-empty" data-if="no_folders">{{no_folders_label}}</div>
             <div class="gallery-empty" data-if="empty_folder">{{empty_folder_label}}</div>
             <div class="gallery-empty" data-if="gallery_empty">@tr:projects.gallery.empty.published</div>
-            <div class="gallery-empty" data-if="gallery_local_empty"><button class="btn btn--secondary" data-event-click="add_asset_folder">@tr:projects.action.add_folder</button></div>
           </div>
           <div class="asset-catalog-loading" data-if="catalog_loading" role="status">
             <span class="asset-loading-label">@tr:status.loading</span>
@@ -370,7 +320,7 @@
                       <img class="inspector-disclosure" data-class-is-expanded="inspector_gallery_expanded" src="../icon/dropdown-arrow.png"/><span>{{gallery_section_title}}</span>
                     </button>
                     <div class="inspector-section-body" data-if="inspector_gallery_expanded">
-                      <div class="parameter-row"><span class="parameter-label">{{g_sidebar_title}}</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
+                      <div class="parameter-row"><span class="parameter-label">@tr:projects.gallery.sidebar.title</span><span class="parameter-value" data-attr-title="selected_gallery_tooltip">{{gallery_selected_state}}</span></div>
                       <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.title</span><span class="parameter-value">{{inspector_gallery_title}}</span></div>
                       <div class="parameter-row inspector-gallery-detail-row"><span class="parameter-label">@tr:projects.gallery.details.description</span><span class="parameter-value">{{inspector_gallery_description}}</span></div>
                       <button class="btn btn--secondary" data-if="inspector_can_edit_gallery_details" data-event-click="open_gallery_details">@tr:projects.gallery.details.edit</button>
