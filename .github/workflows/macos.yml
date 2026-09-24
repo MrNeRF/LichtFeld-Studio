@@ -4,7 +4,7 @@ on:
   push:
     branches: [dev, master, feat/viewer-tensor-backends]
   pull_request:
-    branches: [dev, master]
+    branches: [dev, master, feat/viewer-tensor-backends]
   workflow_dispatch:
 
 permissions:
