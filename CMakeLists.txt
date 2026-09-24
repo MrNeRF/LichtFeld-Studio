@@ -94,7 +94,8 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-if(APPLE)
+# APPLE is only defined after project(); the host variable exists before it.
+if(CMAKE_HOST_APPLE)
     project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C)
     set(LFS_HAS_CUDA OFF)
 else()

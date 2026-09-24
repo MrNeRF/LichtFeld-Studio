@@ -47,7 +47,7 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release -DAPPLE=ON
+        run: cmake --preset macos-release
 
       - name: Remove vcpkg build intermediates
         run: |

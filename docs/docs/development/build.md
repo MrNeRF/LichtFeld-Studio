@@ -104,7 +104,7 @@ On macOS Apple Silicon, install the Homebrew tools and MoltenVK listed in the
 then run from the repository root with `VCPKG_ROOT` set:
 
 ```sh
-cmake --preset macos-release -DAPPLE=ON
+cmake --preset macos-release
 cmake --build --preset macos-release
 ./build-macos-release/LichtFeld-Studio
 ```

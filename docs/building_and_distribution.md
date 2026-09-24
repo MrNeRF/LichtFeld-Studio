@@ -79,7 +79,7 @@ export VCPKG_ROOT="$(cd ../vcpkg && pwd)"
 From the repository root, configure, compile and launch the viewer:
 
 ```bash
-cmake --preset macos-release -DAPPLE=ON
+cmake --preset macos-release
 cmake --build --preset macos-release
 ./build-macos-release/LichtFeld-Studio
 ```
