@@ -1939,7 +1939,7 @@
     "reload_all": "Ricarica tutto",
     "clear_all": "Cancella tutto",
     "no_scripts_loaded": "Nessuno script Python caricato.",
-    "load_hint": "Usa --python-script <percorso> per caricare script.",
+    "load_hint": "Usa --python-script &lt;percorso&gt; per caricare script.",
     "loaded_scripts": "Script caricati:",
     "path": "Percorso",
     "error": "Errore",

@@ -1939,7 +1939,7 @@
     "reload_all": "Przeładuj wszystko",
     "clear_all": "Wyczyść wszystko",
     "no_scripts_loaded": "Brak załadowanych skryptów Pythona.",
-    "load_hint": "Użyj --python-script <ścieżka>, aby załadować skrypty.",
+    "load_hint": "Użyj --python-script &lt;ścieżka&gt;, aby załadować skrypty.",
     "loaded_scripts": "Załadowane skrypty:",
     "path": "Ścieżka",
     "error": "Błąd",

@@ -1939,7 +1939,7 @@
     "reload_all": "Alles herladen",
     "clear_all": "Alles wissen",
     "no_scripts_loaded": "Geen Python-scripts geladen.",
-    "load_hint": "Gebruik --python-script <pad> om scripts te laden.",
+    "load_hint": "Gebruik --python-script &lt;pad&gt; om scripts te laden.",
     "loaded_scripts": "Geladen scripts:",
     "path": "Pad",
     "error": "Fout",

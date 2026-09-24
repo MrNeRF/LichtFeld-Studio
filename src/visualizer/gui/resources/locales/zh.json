@@ -1939,7 +1939,7 @@
     "reload_all": "全部重新加载",
     "clear_all": "全部清除",
     "no_scripts_loaded": "未加载 Python 脚本。",
-    "load_hint": "使用 --python-script <路径> 加载脚本。",
+    "load_hint": "使用 --python-script &lt;路径&gt; 加载脚本。",
     "loaded_scripts": "已加载的脚本：",
     "path": "路径",
     "error": "错误",

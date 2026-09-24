@@ -1939,7 +1939,7 @@
     "reload_all": "すべて再読み込み",
     "clear_all": "すべてクリア",
     "no_scripts_loaded": "Python スクリプトが読み込まれていません。",
-    "load_hint": "--python-script <path> を使用してスクリプトを読み込んでください。",
+    "load_hint": "--python-script &lt;path&gt; を使用してスクリプトを読み込んでください。",
     "loaded_scripts": "読み込み済みスクリプト:",
     "path": "パス",
     "error": "エラー",

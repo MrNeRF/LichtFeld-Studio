@@ -1939,7 +1939,7 @@
     "reload_all": "Alle neu laden",
     "clear_all": "Alle löschen",
     "no_scripts_loaded": "Keine Python-Skripte geladen.",
-    "load_hint": "Verwenden Sie --python-script <path>, um Skripte zu laden.",
+    "load_hint": "Verwenden Sie --python-script &lt;path&gt;, um Skripte zu laden.",
     "loaded_scripts": "Geladene Skripte:",
     "path": "Pfad",
     "error": "Fehler",

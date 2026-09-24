@@ -1939,7 +1939,7 @@
     "reload_all": "Recargar todo",
     "clear_all": "Limpiar todo",
     "no_scripts_loaded": "No hay scripts de Python cargados.",
-    "load_hint": "Usa --python-script <ruta> para cargar scripts.",
+    "load_hint": "Usa --python-script &lt;ruta&gt; para cargar scripts.",
     "loaded_scripts": "Scripts cargados:",
     "path": "Ruta",
     "error": "Error",

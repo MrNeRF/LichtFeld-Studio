@@ -1939,7 +1939,7 @@
     "reload_all": "Tout recharger",
     "clear_all": "Tout effacer",
     "no_scripts_loaded": "Aucun script Python chargé.",
-    "load_hint": "Utilisez --python-script <chemin> pour charger des scripts.",
+    "load_hint": "Utilisez --python-script &lt;chemin&gt; pour charger des scripts.",
     "loaded_scripts": "Scripts chargés :",
     "path": "Chemin",
     "error": "Erreur",

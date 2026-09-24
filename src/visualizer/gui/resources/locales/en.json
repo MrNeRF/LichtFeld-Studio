@@ -1937,7 +1937,7 @@
     "reload_all": "Reload All",
     "clear_all": "Clear All",
     "no_scripts_loaded": "No Python scripts loaded.",
-    "load_hint": "Use --python-script <path> to load scripts.",
+    "load_hint": "Use --python-script &lt;path&gt; to load scripts.",
     "loaded_scripts": "Loaded Scripts:",
     "path": "Path",
     "error": "Error",
