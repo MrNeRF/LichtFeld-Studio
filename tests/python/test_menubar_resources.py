@@ -554,7 +554,7 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
         ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
         ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
-        ".asset-refresh-button img,\n.asset-toolbar-view img,\n.asset-folder-menu img,\n.asset-card-menu img": (
+        ".asset-refresh-button img,\n.asset-toolbar-view img,\n.asset-card-menu img": (
             "@{alpha(text,0.90)}",
         ),
         ".asset-quick-look": ("@{modal.backdrop}",),
@@ -567,7 +567,7 @@ def test_asset_manager_palette_is_fully_theme_driven():
             "@{alpha(primary,0.18)}",
         ),
         ".contents-remove img": ("@{text}",),
-        "#asset-sidebar": ("@{alpha(background,0.32)}", "@{border}"),
+        "#asset-scope-controls": ("@{alpha(background,0.32)}", "@{border}"),
         ".asset-card": ("@{surface_bright}", "@{border}"),
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
     }
@@ -576,7 +576,7 @@ def test_asset_manager_palette_is_fully_theme_driven():
         for token in expected_tokens:
             assert token in body
 
-    assert 'class="asset-add-folder-glyph"' in rml
+    assert 'id="asset-scope-select"' in rml
     assert "stroke=" not in rml
 
 

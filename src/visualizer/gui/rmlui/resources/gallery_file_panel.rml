@@ -23,7 +23,11 @@
     </div>
     <div class="gallery-file-fields" data-if="is_pull">
       <span class="gallery-explanation">@tr:projects.gallery.review.viewing_copy</span>
-      <label>{{g_info_folder}}</label><input type="text" data-value="pull_folder" data-attr-title="pull_folder"/>
+      <label>{{g_info_folder}}</label>
+      <div class="gallery-folder-row">
+        <select data-value="pull_folder" data-event-change="choose_pull_folder(ev.value)" data-attr-title="pull_folder"><option data-for="folder : pull_folders" data-attr-value="folder.path" data-attr-title="folder.path">{{folder.name}}</option></select>
+        <button class="btn btn--secondary" data-event-click="browse_pull_folder" title="@tr:projects.gallery.review.browse_folder">@tr:projects.gallery.review.browse_folder</button>
+      </div>
       <label>{{g_info_filename}}</label><input type="text" data-value="pull_name" data-attr-title="pull_name"/>
     </div>
     <div class="gallery-conflict" data-if="is_conflict">

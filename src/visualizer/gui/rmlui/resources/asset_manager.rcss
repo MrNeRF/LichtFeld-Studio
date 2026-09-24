@@ -206,7 +206,6 @@
     gap: 0;
     padding: 0;
     border-bottom-width: 0;
-    height: 40dp;
     min-height: 40dp;
 }
 
@@ -219,7 +218,7 @@
 }
 
 .toolbar-row-primary {
-    flex: 1;
+    flex: 0 0 auto;
 }
 
 .asset-search-box {
@@ -314,134 +313,10 @@
     overflow: hidden;
 }
 
-#asset-sidebar {
-    height: auto;
-    min-height: 0;
-    box-sizing: border-box;
-    border-bottom-width: 1dp;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    flex-shrink: 0;
-}
-
-.asset-sidebar-inner {
-    flex: 1;
-    min-height: 0;
-    padding: 8dp;
-    overflow-y: auto;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-}
-
-.asset-sidebar-section {
-    flex-shrink: 0;
-    margin-bottom: 8dp;
-}
-
-.asset-sidebar-global {
-    flex-shrink: 0;
-    margin-bottom: 6dp;
-    padding-bottom: 6dp;
-    border-bottom-width: 1dp;
-}
-
-.asset-sidebar-title {
-    font-size: 12dp;
-    font-weight: bold;
-    margin-bottom: 8dp;
-    letter-spacing: 0.2dp;
-}
-
-.asset-sidebar-title .section-arrow {
-    display: inline-block;
-    width: 10dp;
-    font-size: 10dp;
-    text-align: center;
-    transform: rotate(0deg);
-    transition: transform 0.18s cubic-out, color 0.18s cubic-out;
-}
-
-.asset-sidebar-title-main,
-.asset-row-main {
-    background-color: transparent;
-    border-width: 0;
-    text-align: left;
-}
-
-.asset-sidebar-title-main {
-    display: flex;
-    align-items: center;
-    gap: 4dp;
-    padding: 0;
-    flex: 1;
-    height: auto;
-    min-height: 20dp;
-    max-height: none;
-    border-radius: 0;
-    min-width: 0;
-}
-
-.asset-sidebar-title .section-arrow.is-expanded {
-    transform: rotate(90deg);
-}
-
 .section-content {
     overflow: hidden;
     opacity: 1;
     transition: opacity 0.18s cubic-out;
-}
-
-.asset-filter-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    padding: 4dp 6dp;
-    margin-bottom: 2dp;
-    cursor: pointer;
-    border-radius: 3dp;
-    background-color: transparent;
-    border-width: 0;
-    text-align: left;
-    width: 100%;
-}
-
-.asset-row-label {
-    font-size: 12dp;
-}
-
-.asset-row-count {
-    font-size: 12dp;
-}
-
-.asset-folder-row-right {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 4dp;
-}
-
-.asset-row-main {
-    min-width: 0;
-    padding: 0;
-    flex: 1;
-    height: auto;
-    min-height: 20dp;
-    max-height: none;
-    border-radius: 0;
-    min-width: 0;
-}
-
-.asset-folder-menu {
-    background-color: transparent;
-    border-color: transparent;
-}
-
-.asset-folder-menu img {
-    width: 14dp;
-    height: 14dp;
 }
 
 #asset-gallery {
@@ -837,9 +712,6 @@
     font-size: 12dp;
 }
 
-/* Gallery shares the catalog geometry; status and action slots never grow. */
-.gallery-sidebar-heading { display: flex; align-items: center; gap: 4dp; flex-wrap: wrap; }
-
 .gallery-checked { padding: 2dp 8dp; }
 
 .gallery-list-icon { width: 12dp; height: 12dp; margin-right: 4dp; }
@@ -858,17 +730,6 @@
 .gallery-progress-fill.is-indeterminate { animation: gallery-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 .asset-col-name { flex-direction: column; justify-content: center; }
 
-.asset-sidebar-title { margin-bottom: 6dp; }
-
-/* Local folders yield to the always-visible Gallery scopes. */
-#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto; flex: 0 1 auto; }
-#asset-sidebar-local-content { flex-shrink: 0; }
-#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }
-.asset-sidebar-inner { overflow: hidden; }
-#asset-sidebar .asset-filter-row { box-sizing: border-box; min-height: 24dp; line-height: 16dp; flex-shrink: 0; }
-#asset-sidebar-gallery .asset-filter-row { height: 24dp; }
-.gallery-sidebar-heading { height: 28dp; flex-wrap: nowrap; }
-.gallery-sidebar-heading .btn { box-sizing: border-box; height: 28dp; min-height: 28dp; padding: 0 6dp; }
 .gallery-checked { box-sizing: border-box; height: 20dp; line-height: 16dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Inline gallery approval and nonmodal completion actions. */
@@ -897,13 +758,12 @@
 .toolbar-row-primary {
     box-sizing: border-box;
     position: relative;
-    height: 40dp;
     min-height: 40dp;
     display: flex;
     align-items: center;
     gap: 8dp;
     padding: 8dp 40dp 8dp 8dp;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
 }
 
 .toolbar-row-primary > .asset-button,
@@ -963,7 +823,6 @@
     pointer-events: none;
 }
 
-.asset-toolbar-filter { display: inline-flex; }
 .asset-toolbar-view { display: none; }
 .asset-shell.gallery-review-open { pointer-events: none; }
 .asset-check-gallery { display: flex; align-items: center; flex: 0 0 auto; max-width: none; }
@@ -1002,32 +861,7 @@
 
 .asset-results-stack { display: flex; flex: 1 1 0dp; min-width: 0; min-height: 0; overflow: hidden; }
 
-.asset-navigator {
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 auto;
-    min-width: 0;
-    padding: 12dp 8dp;
-    overflow: hidden;
-}
-
-.asset-navigator-scope { display: none; padding-bottom: 8dp; }
-.asset-navigator-scope select { width: 100%; height: 24dp; }
-.asset-sidebar-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-#asset-sidebar-local-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-#asset-sidebar-gallery { flex: 0 0 auto; min-height: 0; max-height: none; overflow: visible; }
-.asset-sidebar-section { min-width: 0; }
-.asset-sidebar-title { display: flex; align-items: center; gap: 4dp; min-height: 24dp; margin: 0; white-space: nowrap; overflow: hidden; }
-.asset-sidebar-title .section-arrow { width: 12dp; flex: 0 0 12dp; font-size: 8dp; }
-.asset-sidebar-title > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
-.asset-sidebar-title .asset-folder-menu, .asset-sidebar-title .gallery-refresh { margin-left: auto; flex: 0 0 auto; }
-.asset-filter-row { display: flex; align-items: center; gap: 8dp; height: 24dp; min-height: 24dp; padding: 0 8dp; border-radius: 3dp; }
-.asset-row-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.asset-row-count { margin-left: auto; font-family: "JetBrains Mono"; }
-.asset-folder-row-right { display: flex; align-items: center; gap: 4dp; margin-left: auto; }
-
 .asset-resize-handle { flex: 0 0 auto; z-index: 2; background-color: transparent; }
-.asset-resize-handle--vertical { width: 12dp; min-width: 12dp; margin: 0 -2dp; cursor: ew-resize; }
 .asset-resize-handle--horizontal { display: none; position: relative; width: 100%; height: 12dp; min-height: 12dp; flex: 0 0 12dp; margin: 0; z-index: 20; cursor: resize-vertical; }
 .asset-resize-handle-line { position: absolute; left: 0; right: 0; top: 5dp; height: 1dp; pointer-events: none; }
 #asset-gallery { display: flex; flex-direction: column; flex: 1 1 0dp; min-width: 0; min-height: 0; }
@@ -1163,7 +997,6 @@
 .asset-shell.is-wide #asset-main-row { flex-direction: row; }
 .asset-shell.is-wide .asset-results-stack { flex-direction: row; }
 .asset-shell.is-floating #asset-popup { min-width: 260dp; min-height: 360dp; }
-.asset-shell.is-wide .asset-navigator { flex: 0 0 auto; height: auto; border-right-width: 1dp; border-bottom-width: 0; }
 .asset-shell.is-wide .inspector-resize-handle { display: none; }
 .asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector {
     position: relative;
@@ -1178,21 +1011,11 @@
 .asset-shell.is-wide .asset-info-asset-layout,
 .asset-shell.is-narrow .asset-info-asset-layout,
 .asset-shell.is-compact .asset-info-asset-layout { flex-direction: column; }
-.asset-shell.is-medium #asset-main-row { flex-direction: column; }
 .asset-shell.is-medium .asset-results-stack { flex-direction: row; }
-.asset-shell.is-medium .asset-navigator { display: flex; flex: 0 0 32dp; width: auto; padding: 4dp 8dp; border-right-width: 0; border-bottom-width: 1dp; }
-.asset-shell.is-medium .asset-sidebar-inner { display: none; }
-.asset-shell.is-medium .asset-navigator-scope { display: block; }
-.asset-shell.is-medium .asset-resize-handle--vertical { display: none; }
 .asset-shell.is-medium .asset-info-asset-layout { flex-direction: column; }
 
 .asset-shell.is-medium .inspector-resize-handle { display: none; }
-.asset-shell.is-narrow #asset-main-row, .asset-shell.is-compact #asset-main-row { flex-direction: column; }
 .asset-shell.is-narrow .asset-results-stack, .asset-shell.is-compact .asset-results-stack { flex-direction: column; }
-.asset-shell.is-narrow .asset-navigator, .asset-shell.is-compact .asset-navigator { display: flex; flex: 0 0 32dp; width: auto; padding: 4dp 8dp; }
-.asset-shell.is-narrow .asset-sidebar-inner, .asset-shell.is-compact .asset-sidebar-inner { display: none; }
-.asset-shell.is-narrow .asset-navigator-scope, .asset-shell.is-compact .asset-navigator-scope { display: block; }
-.asset-shell.is-narrow .asset-resize-handle--vertical, .asset-shell.is-compact .asset-resize-handle--vertical { display: none; }
 .asset-shell.inspector-expanded.is-narrow .asset-resize-handle--horizontal,
 .asset-shell.inspector-expanded.is-compact .asset-resize-handle--horizontal {
     display: block;
@@ -1211,12 +1034,12 @@
 .asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }
 .asset-shell.is-narrow .asset-inspector-content, .asset-shell.is-compact .asset-inspector-content { display: flex; }
 .asset-shell.is-narrow #asset-info-thumbnail, .asset-shell.is-compact #asset-info-thumbnail { align-self: center; }
-.asset-shell.is-compact .asset-toolbar-filter, .asset-shell.is-compact .asset-sort-button { display: none; }
+.asset-shell.is-compact .asset-sort-button { display: none; }
 .asset-shell.is-compact .asset-toolbar-view { display: inline-flex; }
-.asset-shell.is-compact .asset-thumbnail-slider, .asset-shell.is-compact .asset-check-gallery { display: none; }
+.asset-shell.is-compact .asset-thumbnail-slider { display: none; }
 .asset-shell.is-compact .asset-import-button { display: none; }
 .asset-shell.is-compact .asset-add-existing-icon { display: block; }
-.asset-shell.is-narrow .asset-toolbar-filter, .asset-shell.is-narrow .asset-sort-button { display: none; }
+.asset-shell.is-narrow .asset-sort-button { display: none; }
 .asset-shell.is-narrow .asset-toolbar-view { display: inline-flex; }
 .asset-shell.is-narrow .asset-thumbnail-slider { display: none; }
 .asset-shell.is-narrow .asset-check-gallery,
@@ -1231,14 +1054,14 @@
 .asset-shell.is-narrow .asset-import-button { display: none; }
 .asset-shell.is-narrow .asset-add-existing-icon { display: block; }
 
-.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { flex-wrap: wrap; height: 80dp; min-height: 80dp; column-gap: 4dp; row-gap: 16dp; }
+.asset-shell.is-compact .toolbar-row-primary, .asset-shell.is-narrow .toolbar-row-primary { min-height: 80dp; column-gap: 4dp; row-gap: 16dp; }
 .asset-shell.is-compact .toolbar-row-primary { column-gap: 2dp; }
 .asset-shell.is-compact .asset-search-box, .asset-shell.is-narrow .asset-search-box { flex-basis: 100%; min-width: 0; }
 .asset-shell.is-compact .asset-view-toggle-icons { gap: 2dp; }
 .asset-shell.is-narrow .asset-view-toggle-icons { gap: 4dp; }
 
 .asset-shell.is-narrow #asset-popup-toolbar,
-.asset-shell.is-compact #asset-popup-toolbar { height: 80dp; min-height: 80dp; }
+.asset-shell.is-compact #asset-popup-toolbar { min-height: 80dp; }
 .asset-shell.is-medium .asset-import-button { display: none; }
 .asset-shell.is-medium .asset-add-existing-icon { display: inline-flex; }
 
@@ -1303,3 +1126,18 @@
 .asset-shell.is-compact .inspector-section { padding-left: 8dp; padding-right: 8dp; }
 .asset-shell.is-compact .contents-row { gap: 2dp; }
 .asset-shell.is-compact .contents-action { padding-left: 4dp; padding-right: 4dp; }
+
+#asset-scope-controls {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    gap: 4dp;
+    padding: 6dp 8dp;
+    border-bottom-width: 1dp;
+}
+#asset-scope-controls select { box-sizing: border-box; width: 100%; height: 24dp; min-height: 24dp; }
+.asset-toolbar-quota { flex: 0 0 auto; white-space: nowrap; }
+.asset-shell.is-narrow .asset-toolbar-quota,
+.asset-shell.is-compact .asset-toolbar-quota { display: none; }
+.asset-shell.is-narrow .asset-update-all .asset-button-text,
+.asset-shell.is-compact .asset-update-all .asset-button-text { overflow: hidden; text-overflow: ellipsis; max-width: 90dp; }

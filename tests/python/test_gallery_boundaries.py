@@ -331,8 +331,8 @@ def test_native_registry_exposes_defaults_and_preferences_rows():
         assert f'case Action::{name}: return "{name.lower()}"' in source
     assert 'LAST_ACTION = Action::ASSET_REFRESH' in source
 
-@pytest.mark.parametrize('kind,reason', [('diverged', 'Review changes first'), ('remote', 'Already in your gallery')])
-def test_published_drop_has_localized_reason(convenience, kind, reason):
+@pytest.mark.parametrize('kind', ['diverged', 'remote'])
+def test_gallery_target_does_not_accept_card_drops(convenience, kind):
     panel, local, remote = convenience
     if kind == 'diverged':
         local['commit_uuid'] = 'local change'
@@ -346,10 +346,10 @@ def test_published_drop_has_localized_reason(convenience, kind, reason):
     event = _Event(shell, target)
     panel._gallery_drag = (identifier, 'account')
     panel._on_gallery_drag_over(event)
-    assert target.is_class_set('is-drag-over')
+    assert not target.is_class_set('is-drag-over')
     panel._on_gallery_drop(event)
-    assert panel._gallery_drag is None and not target.is_class_set('is-drag-over')
-    assert panel._gallery_toast['text'] == reason
+    assert panel._gallery_drag == (identifier, 'account')
+    assert not target.is_class_set('is-drag-over')
 
 @pytest.mark.parametrize('record', [{'localUpdate': {'backupPath': '/backup.licht'}},
     {'stagedImport': {'path': '/imports/a.licht'}}, {'recoveryPath': '/recovery/a.licht'},

@@ -57,6 +57,7 @@ class GalleryFilePanel(Panel):
         self._unsubscribe = None
         self._submitting = False
         self._description_focused = False
+        self._pull_folders = []
 
     def poll(self, _context):
         return self._review is not None
@@ -70,7 +71,7 @@ class GalleryFilePanel(Panel):
     def show(self, *, controller, asset, scene, action, fields, includes="", quota="",
              warning="", publish_new=False, open_after=False, on_done=None,
              mode="publish", groups=(), on_submit=None, apply_only=False,
-             expected_project_path=None, unlinked=False):
+             expected_project_path=None, unlinked=False, pull_folders=()):
         identity = controller.service.identity()
         key = (identity, asset["id"], action, publish_new, open_after, expected_project_path, mode, apply_only, unlinked)
         if self._review and self._review["key"] == key:
@@ -88,6 +89,7 @@ class GalleryFilePanel(Panel):
         open_project = bool(current_path and Path(current_path).resolve() == Path(asset["path"]).resolve())
         self._review["open_project"] = bool(open_project)
         self._fields = dict(fields)
+        self._pull_folders = deepcopy(list(pull_folders)) if action == "pull" else []
         self._fields.setdefault("use_cover", False)
         if open_project:
             self._fields.setdefault("save_project", bool(lf.project_is_dirty()))
@@ -120,6 +122,7 @@ class GalleryFilePanel(Panel):
     def _dirty(self):
         if self._handle:
             self._handle.update_record_list("choices", (self._review or {}).get("groups", []))
+            self._handle.update_record_list("pull_folders", self._pull_folders)
             self._handle.dirty_all()
         lf.ui.request_redraw()
 
@@ -137,6 +140,17 @@ class GalleryFilePanel(Panel):
 
     def _is_pull(self):
         return bool(self._review and self._review["action"] == "pull")
+
+    def _browse_pull_folder(self):
+        if not self._is_pull():
+            return
+        directory = lf.ui.open_folder_dialog(
+            tr("review.choose_folder"), self._fields.get("pull_folder", ""))
+        if directory:
+            path = str(directory)
+            if not any(row["path"] == path for row in self._pull_folders):
+                self._pull_folders.append({"name": Path(path).name or path, "path": path})
+            self._set("pull_folder", path)
 
     def _can_submit(self):
         if not self._review or self._submitting or self._state.get("busy"):
@@ -199,8 +213,10 @@ class GalleryFilePanel(Panel):
         model = ctx.create_data_model("gallery_file")
         if model is None:
             return
-        for name in ("title", "description", "upload_format", "pull_folder", "pull_name", "use_cover", "save_project"):
+        for name in ("title", "description", "upload_format", "pull_name", "use_cover", "save_project"):
             model.bind(name, lambda n=name: self._fields.get(n, False if n in ("use_cover", "save_project") else ""), lambda v, n=name: self._set(n, v))
+        # Rebuilding options can write back the old selection. Accept only the change event.
+        model.bind("pull_folder", lambda: self._fields.get("pull_folder", ""), lambda _value: None)
         values = {
             "panel_label": self._panel_label,
             "file_name": lambda: (self._review or {}).get("asset", {}).get("name", ""),
@@ -235,8 +251,11 @@ class GalleryFilePanel(Panel):
         for name, getter in values.items():
             model.bind_func(name, getter)
         model.bind_record_list("choices")
+        model.bind_record_list("pull_folders")
         model.bind_event("choose", lambda _h, _e, args: self._choose(args))
         model.bind_event("replacement", lambda _h, _e, args: self._replacement(args))
+        model.bind_event("choose_pull_folder", lambda _h, _e, args: self._set("pull_folder", args[0]) if args else None)
+        model.bind_event("browse_pull_folder", lambda _h, _e, _args: self._browse_pull_folder())
         model.bind_func("cancel_label", lambda: tr("replacement.later") if (self._review or {}).get("mode") == "replacement" else tr("action.cancel"))
         for key in ("review.title", "review.description", "review.upload_as",
                     "format.studio", "format.sog", "format.ssog", "format.spz", "info.folder", "info.filename", "action.cancel"):

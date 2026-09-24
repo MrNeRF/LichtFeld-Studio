@@ -237,6 +237,128 @@ def _inspection(
     )
 
 
+def test_single_file_project_is_persisted_without_watching_parent(monkeypatch, tmp_path):
+    project_dir = tmp_path / "three-projects"
+    project_dir.mkdir()
+    project_path = project_dir / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library_path = tmp_path / "library.json"
+
+    index = AssetIndex(library_path, tmp_path / "default")
+    assert index.load()
+    project, created = index.register_licht_asset(str(project_path), pin=True)
+    assert created and project is not None
+    assert set(index.folders) == {"default"}
+    assert project.to_dict()["pinned"] is True
+
+    restarted = AssetIndex(library_path, tmp_path / "default")
+    assert restarted.load()
+    assert set(restarted.folders) == {"default"}
+    restored = restarted.get_asset(project.id)
+    assert restored is not None and restored.to_dict()["pinned"] is True
+    assert restarted.verify_asset(project.id).status == "AVAILABLE"
+
+    project_path.unlink()
+    assert restarted.verify_asset(project.id).status == "MISSING"
+    assert restarted.delete_asset(project.id)
+    assert restarted.list_projects() == []
+
+
+def test_changing_default_folder_does_not_watch_pinned_project_parent(monkeypatch, tmp_path):
+    project_dir = tmp_path / "external-projects"
+    project_dir.mkdir()
+    project_path = project_dir / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+
+    assert index.set_default_folder_path(str(tmp_path / "new-default"))
+    assert set(index.folders) == {"default"}
+    assert index.get_asset(project.id).folder_id == "default"
+
+
+def test_pinned_project_scanned_from_watched_folder_is_not_duplicated(monkeypatch, tmp_path):
+    from lfs_plugins import asset_watch
+
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    project_path = watched / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+
+    monkeypatch.setattr(asset_watch, "iter_licht_projects", lambda *_args, **_kwargs: iter([str(project_path)]))
+    asset_watch.scan_asset_folder(index, folder.id, str(watched))
+    assert len(index.list_projects()) == 1
+    assert index.get_asset(project.id).to_dict()["pinned"] is True
+    assert index.get_asset(project.id).folder_id == folder.id
+
+
+def test_loading_pinned_project_uses_matching_watched_folder(monkeypatch, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    project_path = watched / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library_path = tmp_path / "library.json"
+
+    index = AssetIndex(library_path, tmp_path / "default")
+    assert index.load()
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+    assert project.folder_id == folder.id
+    project.folder_id = "default"
+    assert index.save()
+
+    restarted = AssetIndex(library_path, tmp_path / "default")
+    assert restarted.load()
+    restored = restarted.get_asset(project.id)
+    assert restored is not None and restored.pinned is True
+    assert restored.folder_id == folder.id
+    assert set(restarted.folders) == {"default", folder.id}
+
+
+def test_removing_watched_folder_keeps_pinned_project_in_default_scope(monkeypatch, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    pinned_path = watched / "pinned.licht"
+    ordinary_path = watched / "ordinary.licht"
+    pinned_path.write_bytes(b"pinned project")
+    ordinary_path.write_bytes(b"ordinary project")
+    pinned_inspection = _inspection(str(uuid.uuid4()))
+    ordinary_inspection = _inspection(str(uuid.uuid4()))
+    _install_inspections(
+        monkeypatch,
+        {pinned_path.name: pinned_inspection, ordinary_path.name: ordinary_inspection},
+    )
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+    pinned, _ = index.register_licht_asset(str(pinned_path), pin=True)
+    ordinary, _ = index.register_licht_asset(str(ordinary_path))
+    assert pinned.folder_id == folder.id and pinned.pinned
+    assert ordinary.folder_id == folder.id and not ordinary.pinned
+
+    assert index.delete_folder(folder.id) == 1
+    assert index.list_projects() == [pinned]
+    assert pinned.folder_id == "default"
+    assert pinned.pinned is True
+    assert set(index.folders) == {"default"}
+
+
 def _legacy_backup_path(library_path: Path) -> Path:
     return library_path.with_name(library_path.name + ".legacy.bak")
 
