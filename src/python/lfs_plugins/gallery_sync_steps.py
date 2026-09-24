@@ -282,9 +282,20 @@ class LocalUpdateSteps:
         # Native remove_node(keep_children=True) keeps child-local transforms.
         # Reparent retained children explicitly first to preserve their world pose.
         removed_ids = set(update["old_nodes"])
+        old_groups = {}
         for node_id in update["old_nodes"]:
             node = scene.get_node_by_uuid(node_id)
             if node is not None:
+                parent_id = node.parent_id
+                depth = 0
+                while parent_id != -1:
+                    parent = scene.get_node_by_id(parent_id)
+                    if parent is None:
+                        break
+                    if parent.type == lf.scene.NodeType.GROUP:
+                        old_groups[parent_id] = max(depth, old_groups.get(parent_id, -1))
+                    parent_id = parent.parent_id
+                    depth += 1
                 for child_id in list(node.children):
                     child = scene.get_node_by_id(child_id)
                     if child is not None and child.uuid not in removed_ids:
@@ -294,6 +305,10 @@ class LocalUpdateSteps:
             node = scene.get_node_by_uuid(node_id)
             if node is not None:
                 scene.remove_node(node.name, keep_children=True)
+        for group_id in sorted(old_groups, key=old_groups.get):
+            group = scene.get_node_by_id(group_id)
+            if group is not None and group.type == lf.scene.NodeType.GROUP and not group.children:
+                scene.remove_node(group.name)
         self.app.set_node_visibility(incoming.name, True)
         title = metadata["title"]
         if scene.get_node(title) is not None:

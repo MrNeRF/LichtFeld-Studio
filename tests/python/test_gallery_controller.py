@@ -44,6 +44,53 @@ def scene(**fields):
         visibility="private", revision="original", status="ready", **fields, contentRevision="original", metadataRevision="original")
 
 
+def test_gallery_update_removes_only_groups_emptied_by_replaced_splats(gallery, monkeypatch, tmp_path):
+    panel, _, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "project.licht"
+    path.write_bytes(b"saved")
+    project = ("project", str(path))
+    panel._project_identity = lambda: project
+    panel.service.environment_path = lambda _: None
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "restore_view", lambda *a, **kw: None)
+    monkeypatch.setattr(module.lf, "project_save", lambda **kw: actions.append("saved") or True, raising=False)
+    monkeypatch.setattr(module.lf, "set_node_visibility", lambda *a: None, raising=False)
+    monkeypatch.setattr(module.lf.scene, "NodeType", SimpleNamespace(SPLAT=0, GROUP=1))
+
+    def node(identifier, name, kind, parent=-1, children=()):
+        return SimpleNamespace(id=identifier, uuid=str(identifier), name=name, type=kind,
+            parent_id=parent, children=list(children))
+
+    nodes = {n.id: n for n in (
+        node(1, "Pull probe", 1, children=(2,)), node(2, "old splat", 0, parent=1),
+        node(3, "My notes", 1, children=(4, 5)), node(4, "other splat", 0, parent=3),
+        node(5, "annotation", 2, parent=3), node(6, "incoming", 1, children=(7,)),
+        node(7, "new splat", 0, parent=6))}
+
+    class Scene:
+        def get_node_by_uuid(self, value):
+            return next((n for n in nodes.values() if n.uuid == value), None)
+        def get_node_by_id(self, value):
+            return nodes.get(value)
+        def get_node(self, name):
+            return next((n for n in nodes.values() if n.name == name), None)
+        def remove_node(self, name, keep_children=False):
+            current = self.get_node(name)
+            assert current is not None and not current.children
+            if current.parent_id in nodes:
+                nodes[current.parent_id].children.remove(current.id)
+            del nodes[current.id]
+        def rename_node(self, old, new):
+            self.get_node(old).name = new
+
+    panel._apply_local_update(Scene(), nodes[6], {"result": {"title": "Pull probe"}},
+        {"old_nodes": ["2", "4"], "project": project, "stamp": module.file_stamp(path)})
+    assert 1 not in nodes
+    assert nodes[6].name == "Pull probe"
+    assert nodes[3].children == [5]
+    assert actions == ["saved"]
+
+
 @pytest.mark.parametrize("operation", ["contents", "settings"])
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_gallery_apply_rechecks_project_after_scene_changes(gallery, monkeypatch, tmp_path, operation, swap):
