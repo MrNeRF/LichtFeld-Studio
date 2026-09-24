@@ -1225,17 +1225,54 @@ def test_metadata_update_sets_cover_after_patch_and_reports_failure(tmp_path, mo
         assert service.scenes == [updated]
         assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
                                 service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
-        assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+        assert service.snapshot()['actionFailure']['message'] == 'projects.gallery.warning.cover_failed'
         monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
         covered = dict(updated, presentationRevision='covered', posterRevision='covered')
         monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
-        service.set_cover('project', updated, b'thumbnail')
+        service.edit('scene', {'contentRevision': 'old', 'metadataRevision': 'new'}, {'title': 'Updated'},
+                     project_id='project', cover_png=b'thumbnail')
         finish(service)
         assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+        assert service.snapshot()['actionFailure'] is None
     else:
         assert service.snapshot()['links']['project']['metadataRevision'] == 'new'
         assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'new'
         assert service.snapshot()['actionFailure'] is None
+
+
+def test_cover_rejection_after_publish_is_a_retryable_warning(tmp_path, monkeypatch):
+    import base64
+    from lfs_plugins.portal_account import PortalHTTPError
+    service = connected(tmp_path, monkeypatch)
+    original = dict(id='scene', title='Original', contentRevision='old', metadataRevision='old',
+                    presentationRevision='old', posterRevision='old')
+    service._bucket()['links']['project'] = gallery_sync.exchange_link(original, 'saved')
+    path = tmp_path / 'project.licht'
+    path.write_bytes(b'prepared project')
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=')
+    updated = dict(original, contentRevision='new', metadataRevision='new', presentationRevision='new', posterRevision='new')
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs: {'scene': updated}, raising=False)
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: (_ for _ in ()).throw(
+        PortalHTTPError(413, 'Request is too large.')), raising=False)
+    metadata = dict(title='Updated', replaceSceneId='scene', baseRevisions={'content': 'old', 'metadata': 'old'},
+                    useEmbeddedPreview=True, _previewPng=base64.b64encode(png).decode('ascii'), _commitUuid='saved')
+    job = service.queue_upload(path, metadata, 'project')
+    finish(service)
+    saved_job = service._job(job)
+    assert saved_job['status'] == 'completed'
+    assert saved_job['message'] == 'Uploaded'
+    assert service.snapshot()['links']['project']['contentRevision'] == 'new'
+    failure = service.snapshot()['actionFailure']
+    assert failure['message'] == 'projects.gallery.warning.cover_failed'
+    assert 'too_large' not in failure['message']
+    assert service.snapshot()['message'] == 'projects.gallery.warning.cover_failed'
+    covered = dict(updated, presentationRevision='covered', posterRevision='covered')
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
+    monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
+    service.set_cover('project', updated, png)
+    finish(service)
+    assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+    assert service.snapshot()['actionFailure'] is None
 
 
 def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch):
@@ -1266,7 +1303,7 @@ def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch)
     from lfs_plugins.gallery_controller import asset_sync_state
     assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
                             service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
-    assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+    assert service.snapshot()['actionFailure']['message'] == 'projects.gallery.warning.cover_failed'
     covered = dict(updated, presentationRevision='covered', posterRevision='covered')
     monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
     monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
@@ -1274,6 +1311,7 @@ def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch)
     finish(service)
     assert uploads == [True]
     assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+    assert service.snapshot()['actionFailure'] is None
 
 def test_publish_as_new_keeps_old_pair_until_success(tmp_path, monkeypatch):
     service=connected(tmp_path,monkeypatch)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,8 @@ _log = logging.getLogger(__name__)
 BUG_REPORT_PATH = "/api/v1/bugs/"
 CLIENT_NAME = "LichtFeld Studio"
 LOG_MAX_BYTES = 1_048_576
+# Control characters expand sixfold inside a JSON string. Two full logs must still fit.
+BUG_REPORT_JSON_MAX_BYTES = 8 * 1024 * 1024
 CATEGORY_DETAIL_MAX_LENGTH = 120
 
 CATEGORIES = ("crash", "training", "ui", "performance", "export", "other")
@@ -414,6 +417,44 @@ def _redacted_detail(detail: object) -> dict[str, object]:
     return result
 
 
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+
+
+def _fit_bug_report(payload: Mapping[str, object]) -> dict[str, object]:
+    """Keep the newest log tail that still fits the gallery JSON ceiling."""
+    fitted = {key: (dict(value) if isinstance(value, Mapping) else value) for key, value in payload.items()}
+    if len(_json_bytes(fitted)) <= BUG_REPORT_JSON_MAX_BYTES:
+        return fitted
+    while len(_json_bytes(fitted)) > BUG_REPORT_JSON_MAX_BYTES:
+        shrunk = False
+        for key in ("previous_log", "log"):
+            entry = fitted.get(key)
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            entry = dict(entry)
+            keep = len(text) - max(1, len(text) // 8)
+            shortened = text[max(0, keep):]
+            if keep > 0:
+                newline = shortened.find("\n")
+                if 0 <= newline < len(shortened) - 1:
+                    shortened = shortened[newline + 1 :]
+            if shortened == text:
+                shortened = ""
+            entry["text"] = shortened
+            fitted[key] = entry
+            shrunk = True
+        if not shrunk:
+            break
+    if len(_json_bytes(fitted)) > BUG_REPORT_JSON_MAX_BYTES:
+        fitted.pop("log", None)
+        fitted.pop("previous_log", None)
+    return fitted
+
+
 def submit_report(
     payload: Mapping[str, object],
     *,
@@ -426,6 +467,7 @@ def submit_report(
     loss window in exchange for keeping shutdown non-blocking.
     """
     account = service if service is not None else get_portal_account_service()
+    payload = _fit_bug_report(payload)
     try:
         response = account.request_json_authenticated("POST", BUG_REPORT_PATH, payload)
     except PortalHTTPError as exc:

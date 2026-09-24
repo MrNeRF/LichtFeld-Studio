@@ -213,3 +213,34 @@ def test_saved_publication_metadata_uses_embedded_hdr_without_live_view(tmp_path
     assert result['exposure'] == pytest.approx(0.7)
     assert result['camera']['position'] == [-2.0, 2.0, -6.0]
     assert result['verticalFov'] is True
+
+
+def test_publication_preview_cover_fits_the_gallery_json_limit():
+    import base64
+    import json
+    import struct
+    import zlib
+    base = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=")
+    size = 2 * 1024 * 1024
+    keyword = b"Comment\0"
+    data_len = size - len(base) - 12
+    data = keyword + b"x" * (data_len - len(keyword))
+    chunk_type = b"tEXt"
+    crc = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
+    png = base[:-12] + struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", crc) + base[-12:]
+    assert len(png) == size
+    bounded = gallery_preparation.publication_preview(png)
+    assert bounded == png
+    from lfs_plugins.portal_gallery import GALLERY_COVER_JSON_MAX_BYTES
+    envelope = len(json.dumps({
+        "baseRevisions": {"presentation": "0" * 64, "poster": "0" * 64},
+        "imageBase64": "", "mimeType": "image/png",
+    }, separators=(",", ":")).encode())
+    limit = ((5 * 1024 * 1024 + 2) // 3) * 4 + envelope
+    assert limit == GALLERY_COVER_JSON_MAX_BYTES
+    body = {"baseRevisions": {"presentation": "a" * 64, "poster": "b" * 64},
+            "imageBase64": base64.b64encode(bounded).decode("ascii"), "mimeType": "image/png"}
+    encoded = json.dumps(body, separators=(",", ":")).encode()
+    assert len(encoded) <= limit
+    assert len(encoded) > 1024 * 1024

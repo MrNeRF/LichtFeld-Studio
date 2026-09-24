@@ -159,6 +159,9 @@ def _validate_journal(data):
     return data
 
 
+COVER_WARNING = "projects.gallery.warning.cover_failed"
+
+
 def friendly_error(exc):
     import lichtfeld as lf
 
@@ -1060,11 +1063,13 @@ class GallerySync:
                             link["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
                             job["result"] = updated
                             self._completion["scene"] = copy.deepcopy(updated)
+                            if self._action_failure and self._action_failure["message"] == COVER_WARNING:
+                                self._action_failure = None
                         self._save()
                     except Exception as exc:
                         log_failure("cover_after_upload", exc, project_id=job["project"])
                         with self._lock:
-                            self.message = friendly_error(exc)
+                            self.message = COVER_WARNING
                             self._action_failure = dict(id=str(uuid.uuid4()), identity=identity, message=self.message)
 
             try:
@@ -1880,14 +1885,22 @@ class GallerySync:
                             link["contentStamp"] = content_stamp
             self._save()
             if cover_png is not None:
-                client.set_cover(scene_id, scene, cover_png)
-                updated = client.scene(scene_id)
-                with self._lock:
-                    self.scenes = [updated if item["id"] == scene_id else item for item in self.scenes]
-                    bucket["links"][project_id]["metadata"] = copy.deepcopy(updated)
-                    bucket["links"][project_id]["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
-                    self._completion["scene"] = copy.deepcopy(updated)
-                self._save()
+                try:
+                    client.set_cover(scene_id, scene, cover_png)
+                    updated = client.scene(scene_id)
+                    with self._lock:
+                        self.scenes = [updated if item["id"] == scene_id else item for item in self.scenes]
+                        bucket["links"][project_id]["metadata"] = copy.deepcopy(updated)
+                        bucket["links"][project_id]["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
+                        self._completion["scene"] = copy.deepcopy(updated)
+                        if self._action_failure and self._action_failure["message"] == COVER_WARNING:
+                            self._action_failure = None
+                    self._save()
+                except Exception as exc:
+                    log_failure("cover_after_update", exc, project_id=project_id or "")
+                    with self._lock:
+                        self.message = COVER_WARNING
+                        self._action_failure = dict(id=str(uuid.uuid4()), identity=self.identity(), message=self.message)
         self._launch_metadata(action)
 
 
@@ -2167,7 +2180,10 @@ class GallerySync:
             self.scenes = [item for item in self.scenes if item["id"] != scene["id"]] + [updated]
             link["acknowledgedPresentationRevision"] = updated.get("presentationRevision", "")
             self._save()
-            self.message = "projects.gallery.info.cover"
+            with self._lock:
+                self.message = "projects.gallery.info.cover"
+                if self._action_failure and self._action_failure["message"] == COVER_WARNING:
+                    self._action_failure = None
         self._launch_metadata(action)
 
 

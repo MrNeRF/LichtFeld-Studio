@@ -29,6 +29,43 @@ from .gallery_logging import failure as log_failure, safe_text, safe_url, stage 
 
 API = "/api/gallery/v1"
 UNSUPPORTED_PORTAL = "This portal version does not support gallery sync"
+GALLERY_JSON_MAX_BYTES = 2 * 1024 * 1024
+GALLERY_CAMERA_PATH_MAX_KEYFRAMES = 4096
+GALLERY_COVER_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
+
+def gallery_cover_json_max_bytes():
+    """Byte cap for a cover JSON body: base64 of the 5 MiB image plus the fixed envelope."""
+    envelope = len(json.dumps({
+        "baseRevisions": {"presentation": "0" * 64, "poster": "0" * 64},
+        "imageBase64": "",
+        "mimeType": "image/png",
+    }, separators=(",", ":")).encode())
+    return ((GALLERY_COVER_IMAGE_MAX_BYTES + 2) // 3) * 4 + envelope
+
+
+GALLERY_COVER_JSON_MAX_BYTES = gallery_cover_json_max_bytes()
+
+
+def _camera_frames(body):
+    if not isinstance(body, dict):
+        return None
+    view = body.get("viewerSettings")
+    if not isinstance(view, dict):
+        return None
+    path = view.get("cameraPath")
+    if not isinstance(path, dict):
+        return None
+    frames = path.get("keyframes")
+    return frames if isinstance(frames, list) else None
+
+
+def _reject_oversized_gallery_json(body):
+    frames = _camera_frames(body)
+    if frames is not None and len(frames) > GALLERY_CAMERA_PATH_MAX_KEYFRAMES:
+        raise ValueError("projects.gallery.error.camera_path")
+    if len(json.dumps(dict(body), separators=(",", ":")).encode("utf-8")) > GALLERY_JSON_MAX_BYTES:
+        raise ValueError("projects.gallery.error.camera_path" if frames is not None else "projects.gallery.error.too_large")
 
 
 class GalleryTransferCanceled(RuntimeError):
@@ -284,15 +321,18 @@ class PortalGalleryClient:
         tokens = {name: scene.get(name + "Revision") for name in ("presentation", "poster")}
         if not all(isinstance(value, str) and value for value in tokens.values()):
             raise PortalProtocolError("Missing gallery cover revision tokens")
-        return self._request("PUT", f"/splats/{_identifier(scene_id)}/cover", {
-            "baseRevisions": tokens, "imageBase64": base64.b64encode(image).decode("ascii"),
-            "mimeType": mime_type})
+        body = {"baseRevisions": tokens, "imageBase64": base64.b64encode(image).decode("ascii"),
+                "mimeType": mime_type}
+        if len(json.dumps(body, separators=(",", ":")).encode("utf-8")) > GALLERY_COVER_JSON_MAX_BYTES:
+            raise ValueError("projects.gallery.error.cover_size")
+        return self._request("PUT", f"/splats/{_identifier(scene_id)}/cover", body)
 
     def update(self, scene_id, baseline, **metadata):
         view = metadata.get("viewerSettings", {})
         domains = ("content", "metadata") if any(key in view for key in ("camera", "cameraPath", "environment")) else ("metadata",)
-        return self._request("PATCH", f"/splats/{_identifier(scene_id)}",
-                                     {**metadata, **self.guards(baseline, domains)})
+        body = {**metadata, **self.guards(baseline, domains)}
+        _reject_oversized_gallery_json(body)
+        return self._request("PATCH", f"/splats/{_identifier(scene_id)}", body)
 
     def delete(self, scene_id, baseline):
         return self._request("DELETE", f"/splats/{_identifier(scene_id)}",
@@ -690,6 +730,7 @@ class PortalGalleryClient:
                 raise ValueError("The account, export or details changed. Start a new upload.")
         check_canceled()
         create = {**request, "idempotencyKey": checkpoint["idempotencyKey"]}
+        _reject_oversized_gallery_json(create)
         try:
             upload = self._request("POST", "/splats/uploads", create)
         except Exception as exc:
