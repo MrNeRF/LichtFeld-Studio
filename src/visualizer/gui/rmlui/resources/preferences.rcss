@@ -364,3 +364,8 @@ body.floating-panel {
 .preferences-conflict-buttons .btn {
     min-width: 80dp;
 }
+
+.preferences-project-folder { display: flex; align-items: center; gap: 8dp; padding: 6dp 0; border-bottom-width: 1dp; }
+.preferences-project-folder-details { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
+.preferences-project-folder-details > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preferences-project-folder-actions { display: flex; gap: 8dp; padding: 8dp 0; }

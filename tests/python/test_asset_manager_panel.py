@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
 import inspect
+import math
 import re
 import shutil
 import sys
@@ -517,6 +518,247 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
 
+def test_asset_catalog_snapshot_is_reused_for_the_current_epoch(panel_module):
+    project = _project()
+    folders = {"default": {"id": "default", "name": "Projects"}}
+    epoch = [7]
+
+    class _Library:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot(self):
+            self.calls += 1
+            return {"projects": {project["id"]: project}, "folders": folders, "epoch": epoch[0]}
+
+    library = _Library()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        catalog_epoch=lambda: epoch[0],
+        iter_project_ids=lambda: [project["id"]],
+    )
+    panel._library_service = library
+
+    assert panel._asset_index_assets()[project["id"]]["id"] == project["id"]
+    assert panel._asset_index_folders()["default"]["name"] == "Projects"
+    panel._asset_index_assets()
+
+    operation_asset = panel._asset_dict(project["id"])
+    operation_asset["name"] = "Operation copy"
+    assert panel._asset_index_assets()[project["id"]]["name"] == project["name"]
+
+    assert library.calls == 1
+
+    epoch[0] += 1
+    panel._asset_index_assets()
+    assert library.calls == 2
+
+
+def test_filtered_rows_follow_in_place_gallery_update(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(catalog_epoch=lambda: 1)
+    panel._active_filter = "gallery"
+    first = panel._filtered_assets()
+    assert first == []
+
+    state = panel._gallery_state
+    state["scenes"].append({"id": "remote", "title": "Remote", "status": "ready"})
+    panel._gallery_changed(state)
+
+    assert [asset["id"] for asset in panel._filtered_assets()] == ["remote:remote"]
+
+
+def test_filtered_rows_invalidate_after_inspection_error(panel_module):
+    asset = _project()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset}, catalog_epoch=lambda: 1)
+    first = panel._filtered_assets()
+
+    panel._on_inspection_result(asset["id"], "card", None, ValueError("unreadable"))
+
+    assert panel._filtered_assets() is not first
+
+
+def test_filtered_rows_invalidate_after_folder_records_change(panel_module):
+    asset = _project()
+    folder = {"id": "default", "name": "Old name"}
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, folders={"default": folder}, catalog_epoch=lambda: 1
+    )
+    panel._selected_folder_id = "default"
+    first = panel._filtered_assets()
+
+    folder["name"] = "New name"
+    panel._handle = _Handle()
+    panel._refresh_records(folders=True)
+
+    assert panel._filtered_assets() is not first
+
+
+def test_saved_catalog_is_prefetched_before_panel_mount(panel_module, monkeypatch, tmp_path):
+    project = _project()
+    preview = {"projects": {project["id"]: project}, "folders": {}}
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda _id: None, raising=False)
+    monkeypatch.setattr(panel_module, "resolve_asset_manager_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(panel_module, "read_catalog_preview", lambda _path: preview)
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(panel_module.threading, "Thread", InlineThread)
+    panel = panel_module.AssetManagerPanel()
+
+    assert panel._asset_index_assets()[project["id"]]["name"] == project["name"]
+    assert panel._asset_index is None
+
+
+def test_cached_catalog_preview_uses_persisted_card_metadata(panel_module, tmp_path):
+    from lfs_plugins.asset_index import read_catalog_preview, SCHEMA_VERSION
+
+    project_id = str(uuid.uuid4())
+    library = tmp_path / "library.json"
+    library.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "folders": {"local": {"path": str(tmp_path / "local")}},
+        "projects": {project_id: {
+            "path": str(tmp_path / "local" / "sample.licht"),
+            "folder_id": "local", "name": "Saved title", "name_origin": "user",
+            "has_preview": True, "preview_width": 230, "preview_height": 256,
+            "file_size_bytes": 3000, "status": "AVAILABLE",
+        }},
+    }))
+
+    preview = read_catalog_preview(library)
+    card = preview["projects"][project_id]
+    assert card["name"] == "Saved title"
+    assert card["has_preview"] is True
+    assert card["preview_width"] == 230
+    assert preview["folders"]["local"]["name"] == "local"
+
+
+def test_locale_width_texts_are_collected_without_ui_calls(panel_module, tmp_path):
+    (tmp_path / "en.json").write_text(json.dumps({
+        "projects": {
+            "gallery": {"state": {"ready": "Ready {percent}%", "other": "Needs {name}"}},
+            "property": {"size": "Size"},
+        },
+    }))
+
+    gallery, labels = panel_module._load_locale_measure_texts(tmp_path)
+
+    assert gallery == ["Ready 100%"]
+    assert labels == ["Size"]
+
+
+def test_inspected_card_title_is_saved_for_the_next_panel_session(panel_module, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex, Project, read_catalog_preview
+
+    library = tmp_path / "library.json"
+    index = AssetIndex(library_path=library, default_folder_path=tmp_path / "projects")
+    assert index.load()
+    project_id = str(uuid.uuid4())
+    index._projects[project_id] = Project(
+        project_uuid=project_id,
+        name="sample",
+        path=str(tmp_path / "projects" / "sample.licht"),
+        folder_id="default",
+    )
+
+    assert index.cache_display_names({project_id: "Saved card title"})
+    first_epoch = index.catalog_epoch()
+    assert index.cache_display_names({project_id: "Saved card title"})
+
+    assert index.catalog_epoch() == first_epoch
+    assert read_catalog_preview(library)["projects"][project_id]["display_name"] == "Saved card title"
+
+
+def test_inspection_result_refresh_is_batched_on_ui_turn(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    refreshed = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule", lambda callback: None, raising=False)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **kwargs: refreshed.append(kwargs))
+
+    panel._schedule_visible_records_refresh()
+    panel._schedule_visible_records_refresh()
+
+    assert panel._asset_window_refresh_pending is True
+    assert refreshed == []
+
+
+def test_filtered_rows_are_reused_until_catalog_or_filter_changes(panel_module, monkeypatch):
+    first = _project(name="First")
+    second = _project(project_id="22222222-2222-4222-8222-222222222222", name="Second")
+    epoch = [1]
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={first["id"]: first, second["id"]: second})
+    panel._asset_index.catalog_epoch = lambda: epoch[0]
+    original = panel._asset_index_assets
+    reads = []
+
+    def counted():
+        reads.append(True)
+        return original()
+
+    monkeypatch.setattr(panel, "_asset_index_assets", counted)
+    assert len(panel._filtered_assets()) == 2
+    first_read_count = len(reads)
+    panel._asset_window_client_width = 500.0
+    assert len(panel._filtered_assets()) == 2
+    panel._asset_window_client_width = 540.0
+    assert len(panel._filtered_assets()) == 2
+    assert len(reads) == first_read_count
+
+    panel._search_query = "First"
+    assert [row["name"] for row in panel._filtered_assets()] == ["First"]
+    search_read_count = len(reads)
+    assert search_read_count > first_read_count
+    panel._search_query = ""
+    panel._active_filter = "missing"
+    assert panel._filtered_assets() == []
+    filter_read_count = len(reads)
+    assert filter_read_count > search_read_count
+    panel._active_filter = "all"
+    epoch[0] += 1
+    assert len(panel._filtered_assets()) == 2
+    assert len(reads) > filter_read_count
+
+
+def test_thumbnail_cleanup_reads_detached_catalog_without_index_lock(panel_module):
+    project = _project()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        catalog_epoch=lambda: 1,
+        iter_project_ids=lambda: (_ for _ in ()).throw(AssertionError("locked index read")),
+    )
+    panel._library_service = SimpleNamespace(snapshot=lambda: {
+        "projects": {project["id"]: project}, "folders": {}, "epoch": 1,
+    })
+
+    panel._release_obsolete_thumbnail_sources()
+
+
+def test_gallery_window_only_keeps_one_row_near_the_viewport(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._view_mode = "gallery"
+    panel._layout_class = "narrow"
+    panel._asset_window_client_width = 500.0
+    panel._asset_window_client_height = 400.0
+    panel._asset_window_scroll_top = 0.0
+    columns, _slot_width, row_height = panel._gallery_window_metrics(500.0)
+    assets = [{"id": str(i)} for i in range(150)]
+
+    window = panel._window_assets(assets)
+
+    visible_rows = math.ceil(400.0 / row_height)
+    assert len(window) <= columns * (visible_rows + 2)
+
+
 def test_project_card_name_uses_project_filename_not_assets_parent(panel_module):
     asset = _project(
         name="project",
@@ -833,8 +1075,8 @@ def test_import_registers_only_selected_licht_project(panel_module):
     panel_module.lf._test_state.dialog_path = asset["path"]
     panel._selected_folder_id = "default"
     panel._asset_index = _index(
-        register_licht_asset=lambda path, folder_id=None: (
-            calls.append((path, folder_id)) or SimpleNamespace(id=asset["id"]),
+        register_licht_asset=lambda path, folder_id=None, pin=False: (
+            calls.append((path, folder_id, pin)) or SimpleNamespace(id=asset["id"]),
             True,
         ),
 
@@ -843,7 +1085,7 @@ def test_import_registers_only_selected_licht_project(panel_module):
 
     panel.on_import_project()
 
-    assert calls == [(asset["path"], None)]
+    assert calls == [(asset["path"], None, True)]
     assert panel.get_selected_asset_id() == asset["id"]
 
 
@@ -922,18 +1164,12 @@ def test_filter_menu_names_the_all_option_as_a_clear_action(panel_module):
     menu["on_action"]("all")
     assert panel._active_filter == "all"
 
-    panel.open_view_menu()
-    view_menu = panel_module.lf._test_state.context_menus[-1]
-    assert any(
-        item.get("label") == "projects.filter.clear" and item.get("action") == "filter:all"
-        for item in view_menu["items"]
-    )
-    assert panel.get_filter_label() == "projects.toolbar.filter"
+    assert panel.get_filter_label() == "projects.filter.clear"
 
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "asset_manager.rml").read_text()
-    assert 'data-attr-title="active_filter_label"' in rml
-    assert '<span class="asset-button-text">{{filter_menu_label}}</span>' in rml
+    assert '<select id="asset-filter-select" data-value="active_filter"' in rml
+    assert '<option value="local">@tr:projects.filter.local</option>' in rml
 
 
 def test_filter_summary_explains_empty_results_with_scope_count_and_filter(panel_module, monkeypatch):
@@ -941,18 +1177,33 @@ def test_filter_summary_explains_empty_results_with_scope_count_and_filter(panel
     panel._selected_folder_id = "default"
     panel._active_filter = "missing"
     translations = {
-        "projects.filter.missing": "Missing files",
-        "projects.status.showing_filtered_projects.other": (
-            "Showing {count}/{total} projects, filtered by: {filter}"
-        ),
+        "projects.status.showing_filtered_projects.one": "Showing {count}/{total} project",
+        "projects.status.showing_filtered_projects.other": "Showing {count}/{total} projects",
     }
     monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: translations.get(key, key))
 
     panel._filtered_assets()
 
-    assert panel.get_asset_results_summary() == (
-        "Showing 0/1 projects, filtered by: Missing files"
-    )
+    assert panel.get_asset_results_summary() == "Showing 0/1 project"
+
+
+def test_filtered_results_plural_uses_total_count(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._active_filter = "local"
+    panel._last_asset_match_count = 1
+    panel._last_asset_scope_count = 5
+    translations = {
+        "projects.status.showing_filtered_projects.one": "Showing {count}/{total} project",
+        "projects.status.showing_filtered_projects.other": "Showing {count}/{total} projects",
+        "projects.status.showing_filtered_projects.few": "Pokazano {count}/{total} projekty",
+    }
+    monkeypatch.setattr(panel_module.lf.ui, "tr", lambda key: translations.get(key, key))
+
+    assert panel.get_asset_results_summary() == "Showing 1/5 projects"
+
+    monkeypatch.setattr(panel_module.lf.ui, "get_current_language", lambda: "pl")
+    panel._last_asset_scope_count = 3
+    assert panel.get_asset_results_summary() == "Pokazano 1/3 projekty"
 
 
 def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
@@ -982,19 +1233,49 @@ def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     assert all(row["can_manage"] for row in folders)
     assert panel.get_all_assets_count() == 2
 
-def test_published_sidebar_click_selects_gallery_scope(panel_module):
+def test_scope_dropdown_has_all_projects_and_watched_folders(panel_module):
     panel = panel_module.AssetManagerPanel()
-    panel._asset_index = _index()
-    shell = _Element()
-    row = _Element({"data-folder-id": "__gallery__"}, shell)
-    label = _Element({}, row)
-
-    panel._on_asset_manager_click(_Event(shell, label))
-
-    assert panel._selected_folder_id == "__gallery__"
+    panel._asset_index = _index(folders={
+        "other": {"id": "other", "name": "Other", "path": "/tmp/other"},
+        "default": {"id": "default", "name": "Projects", "path": "/tmp/projects"},
+    })
+    assert [row["id"] for row in panel.get_folder_list()] == ["default", "other"]
+    assert panel._select_folder_id("other")
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
-    assert 'class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == \'__gallery__\'" data-folder-id="__gallery__"' in rml
-    assert 'data-event-click="select_folder"' not in rml
+    assert '<select id="asset-scope-select" data-value="selected_folder_id"' in rml
+    assert '<option data-for="folder : folders" data-attr-value="folder.id">{{folder.scope_name}}</option>' in rml
+    assert 'id="asset-sidebar"' not in rml
+
+
+def test_scope_and_filter_select_bindings_combine(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    first = _project(name="First", folder_id="default")
+    second = _project(project_id="22222222-2222-4222-8222-222222222222", name="Second", folder_id="other")
+    panel._asset_index = _index(
+        assets={first["id"]: first, second["id"]: second},
+        folders={"default": {"name": "Projects"}, "other": {"name": "Other"}},
+    )
+    bindings = {}
+    model = _BindingModel()
+    model.bind = lambda name, getter, setter=None: bindings.__setitem__(name, (getter, setter))
+    panel.on_bind_model(_BindingContext(model))
+    bindings["selected_folder_id"][1]("other")
+    bindings["active_filter"][1]("missing")
+    assert bindings["selected_folder_id"][0]() == "other"
+    assert bindings["active_filter"][0]() == "missing"
+    assert panel._filtered_assets() == []
+    bindings["active_filter"][1]("all")
+    assert [row["id"] for row in panel._filtered_assets()] == [second["id"]]
+
+
+def test_drag_targets_remain_available_without_sidebar(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    shell = _Element()
+    folder_target = _Element({"data-gallery-drop-target": "default"}, shell)
+    panel._gallery_drag = (local["id"], "account")
+    assert panel._gallery_drop_target(_Event(shell, _Element({"data-gallery-drop-target": "__gallery__"}, shell))) is None
+    panel._gallery_drag = ("remote:remote-only", "account")
+    assert panel._gallery_drop_target(_Event(shell, folder_target)) is folder_target
 
 def test_recent_scope_and_shift_click_select_a_range(panel_module):
     assets = {
@@ -2042,20 +2323,13 @@ def test_gallery_status_is_available_on_icons_without_label_text(panel_module):
     panel._layout_class = "compact"
     assert panel._asset_window_viewport_signature(0.0, 100.0, 320.0)[1] == 40.0
 
-def test_sidebar_rows_and_disclosure_activate_from_keyboard(panel_module):
+def test_old_sidebar_controls_are_gone(panel_module):
     panel = panel_module.AssetManagerPanel()
-    panel._asset_index = _index()
-    shell = _Element()
-    row = _Element({"data-folder-id": "__gallery__"}, shell)
-    title = _Element({"data-sidebar-action": "toggle_folders"}, shell)
-    panel._on_asset_manager_keydown(_Event(shell, row, {"key_identifier": str(panel_module.KI_RETURN)}))
-    assert panel._selected_folder_id == "__gallery__"
-    panel._folders_collapsed = False
-    panel._on_asset_manager_keydown(_Event(shell, title, {"key_identifier": "32"}))
-    assert panel._folders_collapsed is True
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
-    assert 'class="asset-button asset-button--text asset-filter-row" type="button"' in rml
-    assert 'data-sidebar-action="toggle_folders"' in rml
+    assert 'data-sidebar-action=' not in rml
+    assert 'data-resize="navigator"' not in rml
+    assert 'data-event-click="add_asset_folder"' not in rml
+    assert "navigator_width" not in panel.capture_chrome()
 
 def test_precise_scroll_moves_gallery_container(panel_module):
     panel = panel_module.AssetManagerPanel()
@@ -3334,6 +3608,35 @@ def _gallery_fixture(panel_module):
     return panel,local,remote
 
 
+def test_gallery_pull_review_defaults_to_project_location_with_other_watched_folder(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins import asset_gallery_ui, gallery_file_panel
+
+    panel, _local, remote = _gallery_fixture(panel_module)
+    default = tmp_path / "default"
+    other = tmp_path / "other"
+    default.mkdir()
+    other.mkdir()
+    panel._asset_index.folders = {
+        "default": {"id": "default", "name": "default", "path": str(default)},
+        "other": {"id": "other", "name": "other", "path": str(other)},
+    }
+    panel._gallery_last_folder = "other"
+    monkeypatch.setattr(asset_gallery_ui, "resolve_default_asset_directory", lambda: default)
+    monkeypatch.setattr(asset_gallery_ui, "tr", lambda key, **values: f"{values['name']} (default)" if key == "review.default_folder" else key)
+    panel._gallery_scene = lambda _asset: remote
+    panel._controller = lambda: SimpleNamespace(safe_filename=lambda _title: "download.licht", upload_format="sog")
+    reviews = []
+    monkeypatch.setattr(gallery_file_panel, "open_gallery_file_panel", lambda **kwargs: reviews.append(kwargs))
+
+    panel._pull_gallery_asset({"id": "remote:remote-only"})
+
+    assert reviews[0]["fields"]["pull_folder"] == str(default)
+    assert reviews[0]["pull_folders"] == [
+        {"name": "default (default)", "path": str(default)},
+        {"name": "other", "path": str(other)},
+    ]
+
+
 def test_gallery_details_prefill_uses_unpublished_catalog_draft(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project(name="project-a", gallery_details_draft={"title": "Gallery title", "description": "Prepared text"})
@@ -3501,6 +3804,8 @@ def test_file_menu_publish_review_prefills_unpublished_draft(panel_module, monke
 def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel, local, remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()
+    assert panel._selected_folder_id == '__all__'
+    assert panel._active_filter == 'published'
     rows = panel._filtered_assets()
     assert {r['id'] for r in rows} == {local['id'],'remote:remote-only'}
     assert panel.get_all_assets_count() == 2
@@ -3522,11 +3827,77 @@ def test_all_projects_scope_includes_gallery_only_rows(panel_module):
     assert panel.get_local_assets_count() == 1
 
 
+def test_count_getters_use_detached_catalog_during_verification(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(count=lambda: pytest.fail("count waited on index lock"))
+    panel._library_service = SimpleNamespace(
+        snapshot=lambda: pytest.fail("count rebuilt catalog snapshot")
+    )
+    panel._catalog_snapshot = {"projects": {asset["id"]: asset}, "folders": {}}
+    panel._catalog_snapshot_epoch = None
+
+    assert panel.get_all_assets_count() == 1
+    assert panel.get_local_assets_count() == 1
+
+
+def test_mount_does_not_write_unchanged_project_manager_state(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    for name in (
+        "_invalidate_recent_scope_cache", "_subscribe_gallery", "_repair_selection",
+        "_bind_dom_event_listeners", "_subscribe_reactive_state", "_sync_panel_space_state",
+        "_sync_panel_layout", "_sync_asset_window_viewport", "_request_layout_recheck",
+        "_refresh_records", "_subscribe_catalog", "_sync_default_folder_path",
+        "_refresh_after_project_write", "_start_catalog_verify", "_start_inspection_refresh",
+    ):
+        monkeypatch.setattr(panel, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(panel, "_catalog_epoch", lambda: 1)
+    monkeypatch.setattr(panel_module, "_folder_scan_completed_in_process", True)
+    monkeypatch.setattr(panel, "_persist_project_manager_state",
+                        lambda: pytest.fail("mount wrote unchanged state"))
+
+    panel.on_mount(SimpleNamespace())
+
+
 def test_local_projects_scope_keeps_only_local_rows(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
     assert panel._select_folder_id("__local__") is True
 
     assert [row["id"] for row in panel._filtered_assets()] == [local["id"]]
+
+
+def test_local_projects_filter_combines_with_all_projects(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    panel._set_filter("local")
+    assert [row["id"] for row in panel._filtered_assets()] == [local["id"]]
+    assert panel._last_asset_scope_count == 2
+
+
+def test_missing_files_filter_excludes_gallery_only_rows(panel_module):
+    panel, _local, _remote = _gallery_fixture(panel_module)
+    panel._set_filter("missing")
+    assert panel._filtered_assets() == []
+
+
+@pytest.mark.parametrize("old_scope,expected_filter", [
+    ("__local__", "local"),
+    ("__gallery__", "published"),
+    ("__gallery_attention__", "attention"),
+    ("__recent__", "all"),
+])
+def test_old_scope_migrates_to_filter(panel_module, old_scope, expected_filter):
+    panel = panel_module.AssetManagerPanel()
+    panel._apply_chrome_payload({"selected_folder_id": old_scope})
+    assert panel._selected_folder_id == "__all__"
+    assert panel._active_filter == expected_filter
+
+
+def test_corrupt_old_scope_and_filter_fall_back_to_all_projects(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._apply_chrome_payload({"selected_folder_id": [], "active_filter": {}})
+    assert panel._selected_folder_id == "__all__"
+    assert panel._active_filter == "all"
 
 
 def test_gallery_only_filter_keeps_only_gallery_rows_without_local_projects(panel_module):
@@ -3540,10 +3911,12 @@ def test_gallery_only_filter_keeps_only_gallery_rows_without_local_projects(pane
 def test_projects_menu_returns_from_gallery_without_resetting_local_scope(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()
-    assert panel._selected_folder_id == panel_module.SCOPE_PUBLISHED
+    assert panel._selected_folder_id == panel_module.SCOPE_ALL
+    assert panel._active_filter == 'published'
 
     panel.select_projects_scope()
     assert panel._selected_folder_id == panel_module.SCOPE_ALL
+    assert panel._active_filter == 'all'
     assert {asset['id'] for asset in panel._filtered_assets()} == {local['id'], 'remote:remote-only'}
 
     panel._selected_folder_id = "default"
@@ -3601,6 +3974,52 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
 
+def test_needs_attention_filter_only_shows_card_attention_states(panel_module):
+    panel, equal, _remote = _gallery_fixture(panel_module)
+    clean_local = _project("clean-local")
+    unpublished = _project("unpublished")
+    missing = _project("missing", status="MISSING", exists=False, available=False)
+    diverged = _project("diverged", commit_uuid="local-edit")
+    failed_upload = _project("failed-upload")
+    panel._asset_index.assets.update({
+        clean_local["id"]: clean_local,
+        unpublished["id"]: unpublished,
+        missing["id"]: missing,
+        diverged["id"]: diverged,
+        failed_upload["id"]: failed_upload,
+    })
+    panel._gallery_state["links"][diverged["id"]] = {
+        **panel._gallery_state["links"][equal["id"]], "sceneId": "scene",
+        "commitUuid": "saved",
+    }
+    panel._gallery_state["scenes"].append({
+        **_remote, "id": "diverged-scene", "originProjectUuid": diverged["id"],
+        "contentRevision": "r2", "metadataRevision": "r1",
+    })
+    panel._gallery_state["links"][diverged["id"]]["sceneId"] = "diverged-scene"
+    panel._gallery_state["jobs"] = [{
+        "id": "failed", "project": failed_upload["id"], "status": "completed",
+        "kind": "upload", "localUpdate": {"state": "failed"}, "message": "Upload failed",
+    }]
+    panel._active_filter = "attention"
+    assert panel._gallery_facts(unpublished)["action"] == "publish"
+    assert {a["id"] for a in panel._asset_index.assets.values()
+            if panel._asset_matches_filter(a)} == {missing["id"], diverged["id"], failed_upload["id"]}
+
+def test_relink_required_does_not_mark_clean_projects_as_attention(panel_module):
+    panel, equal, _remote = _gallery_fixture(panel_module)
+    clean_local = _project("clean-local")
+    unpublished = _project("unpublished")
+    panel._asset_index.assets.update({
+        clean_local["id"]: clean_local,
+        unpublished["id"]: unpublished,
+    })
+    panel._gallery_state["relink_required"] = True
+    panel._active_filter = "attention"
+
+    assert panel._gallery_facts(equal)["relink_required"] is True
+    assert panel._filtered_assets() == []
+
 def test_update_all_visibility_matches_visible_candidates(panel_module):
     panel, local, _remote = _gallery_fixture(panel_module)
     panel.select_gallery_scope()
@@ -3640,11 +4059,10 @@ def test_signed_out_gallery_never_claims_offline_or_checked(panel_module):
     panel._gallery_state['relink_required'] = True
     assert panel._gallery_checked_label().endswith('sidebar.not_checked')
 
-def test_sidebar_restores_old_heights_with_room_for_gallery(panel_module):
+def test_old_sidebar_geometry_is_ignored(panel_module):
     panel = panel_module.AssetManagerPanel()
-    assert panel._sidebar_height == 280
-    panel.apply_chrome({'sidebar_height': 176})
-    assert panel._sidebar_height == 280
+    panel.apply_chrome({'sidebar_height': 176, 'navigator_width': 240, 'folders_collapsed': True})
+    assert not {'sidebar_height', 'navigator_width', 'folders_collapsed'} & panel.capture_chrome().keys()
 
 def test_remote_double_click_routes_to_explicit_pull_open(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
@@ -3665,7 +4083,8 @@ def test_pull_completion_reloads_catalog_and_selects_new_card(panel_module, monk
     panel._gallery_changed(dict(panel._gallery_state, pulledProject={'id':'pulled','jobId':'job','path':new['path']},
         links={**panel._gallery_state['links'], 'pulled':{'sceneId':'remote-only'}}))
     assert panel.get_selected_asset_id() == 'pulled'
-    assert panel._selected_folder_id == '__gallery__'
+    assert panel._selected_folder_id == '__all__'
+    assert panel._active_filter == 'published'
     assert panel._gallery_notice.endswith('info.pulled')
 
 def test_removed_scene_keeps_unlink_action(panel_module):
@@ -3698,50 +4117,18 @@ def test_D1_undo_window_rearms_after_worker_failure(panel_module, monkeypatch):
     assert panel._gallery_undo is None and panel._gallery_notice == 'gone'
 
 # Moved from test_gallery_controller: the Asset Manager owns the editor/open flow.
-@pytest.mark.parametrize('height', [600, 720, 1000])
-@pytest.mark.parametrize('folder_count', [2, 40])
-@pytest.mark.parametrize('restored_info', [220, 1000])
-def test_A4_small_panel_reserves_results_and_all_gallery_rows(panel_module, monkeypatch, height, folder_count, restored_info):
-    from lfs_plugins.asset_layout import panel_layout
+def test_project_panel_layout_ignores_old_sidebar_state(panel_module):
     panel = panel_module.AssetManagerPanel()
-    scale = 1.5
-    monkeypatch.setattr(panel_module.lf.ui, 'get_ui_scale', lambda: scale, raising=False)
-    monkeypatch.setattr(panel, 'get_folder_list', lambda: [{}] * folder_count)
-    content = 16 + 77 + 34 * folder_count + 140
-    panel._doc = _Document({
-        'asset-popup': SimpleNamespace(client_height=height * scale),
-        'asset-popup-toolbar': SimpleNamespace(client_height=114 * scale),
-        'asset-results-header': SimpleNamespace(client_height=48 * scale),
-        'asset-sidebar-local-content': SimpleNamespace(scroll_height=(77 + 34 * folder_count) * scale),
-        'asset-sidebar-gallery': SimpleNamespace(client_height=132 * scale),
-    })
-    panel.apply_chrome({'sidebar_height': 1000, 'bottom_panel_height': restored_info, 'folders_collapsed': False})
-    layout = panel_layout(height, folder_count=folder_count, info_height=min(500, restored_info))
-    assert panel._sidebar_height == layout['sidebar'] == min(content, height * .4)
-    assert panel._bottom_panel_height == layout['info']
-    # Subtract the actual bound chrome; this must be usable results height, not
-    # an artificial minimum on an overflowing/clipped child.
-    results = height - 115 - 49 - 20 - panel._sidebar_height - panel._bottom_panel_height
-    assert results >= 160
-    assert panel._main_min_height + panel._bottom_panel_height + 115 + 10 <= height
-    # Gallery's fixed 140 dp block is below the shrinking local scroll area.
-    gallery_top = panel._sidebar_height - 8 - 140
-    for row in range(3):
-        top = gallery_top + 34 + 20 + row * 26
-        assert top >= 8 and top + 24 <= panel._sidebar_height - 8
-    assert not panel._sync_panel_layout()  # Stable geometry does not dirty every tick.
-
-def test_A4_short_panel_starts_folders_collapsed_and_keeps_info_preference(panel_module):
-    panel = panel_module.AssetManagerPanel()
-    popup = SimpleNamespace(client_height=600)
+    popup = SimpleNamespace(client_height=600, client_width=640)
     panel._doc = _Document({'asset-popup': popup})
-    panel._sync_panel_layout()
-    assert panel._folders_collapsed
-    assert panel._bottom_panel_height < 220
-    assert panel.capture_chrome()['bottom_panel_height'] == 220
+    panel.apply_chrome({'sidebar_height': 1000, 'folders_collapsed': True,
+                        'navigator_width': 240, 'bottom_panel_height': 220})
+    assert not panel._sync_panel_layout()
+    assert panel._main_min_height == 0
+    assert not panel._sync_panel_layout()
     popup.client_height = 1000
-    panel._sync_panel_layout()
-    assert panel._bottom_panel_height == 220
+    assert panel._sync_panel_layout()
+    assert panel.capture_chrome()['bottom_panel_height'] == 220
 
 def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
@@ -3769,6 +4156,37 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     panel._sync_panel_layout()
     assert panel._layout_class == "compact"
     assert panel._main_min_height == 0.0
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+@pytest.mark.parametrize("width,expected", [
+    (260, "compact"), (360, "narrow"), (480, "narrow"),
+    (700, "medium"), (900, "medium"),
+])
+def test_projects_toolbar_layout_class_uses_dock_dp(panel_module, monkeypatch, scale, width, expected):
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel_module.lf.ui, "get_ui_scale", lambda: scale, raising=False)
+    shell = SimpleNamespace(client_width=width * scale)
+    popup = SimpleNamespace(client_width=width * scale, client_height=700 * scale)
+    panel._doc = _Document({"asset-shell": shell, "asset-popup": popup})
+
+    panel._sync_panel_layout()
+
+    assert panel._content_width == pytest.approx(width)
+    assert panel._layout_class == expected
+
+
+def test_projects_toolbar_rows_grow_with_wrapped_content():
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "asset_manager.rcss").read_text()
+    toolbar_rules = re.findall(r"#asset-popup-toolbar\s*\{([^}]+)\}", rcss)
+    row_rules = re.findall(r"\.toolbar-row-primary\s*\{([^}]+)\}", rcss)
+    assert toolbar_rules and row_rules
+    assert all(not any(decl.strip() in ("height: 40dp", "height: 80dp")
+                       for decl in rule.split(";")) for rule in toolbar_rules)
+    assert all(not any(decl.strip() in ("height: 40dp", "height: 80dp")
+                       for decl in rule.split(";")) for rule in row_rules)
+    assert "flex-wrap: wrap" in row_rules[0] or "flex-wrap: wrap" in row_rules[1]
 
 
 @pytest.mark.parametrize("height,expected", [(200.0, "180.0dp"), (700.0, "350.0dp"), (1440.0, "720.0dp")])
@@ -3986,10 +4404,10 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
     panel.open_view_menu()
 
     actions = {item["action"] for item in captured["items"]}
-    assert {
-        "filter:all", "sort:name", "gallery", "list", "thumbnail",
-        "check_gallery", "rescan_folders",
-    }.issubset(actions)
+    assert {"sort:name", "gallery", "list", "thumbnail"}.issubset(actions)
+    assert not any(action.startswith("filter:") for action in actions)
+    assert "check_gallery" not in actions
+    assert "rescan_folders" not in actions
 
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "asset_manager.rml").read_text()
@@ -4018,15 +4436,11 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
     assert "top: 8dp" in close_rule
     assert "right: 8dp" in close_rule
     assert "z-index: 1" in close_rule
-    compact_rules = rcss.split(
-        ".asset-shell.is-compact .asset-toolbar-filter", 1
-    )[1].split(".asset-shell.is-medium", 1)[0]
-    assert ".asset-shell.is-compact .asset-view-toggle-icons" in compact_rules
-    icon_rule = compact_rules.split(
-        ".asset-shell.is-compact .asset-view-toggle-icons", 1
+    icon_rule = rcss.split(
+        ".asset-shell.is-compact .asset-view-toggle-icons {", 1
     )[1].split("}", 1)[0]
     assert "display: none" not in icon_rule
-    search_rule = compact_rules.split(
+    search_rule = rcss.split(
         ".asset-shell.is-compact .asset-search-box", 1
     )[1].split("}", 1)[0]
     assert "flex-basis: 100%" in search_rule
@@ -4035,18 +4449,17 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
     assert ".asset-shell.is-compact .asset-view-toggle-icons { gap: 2dp; }" in rcss
 
 
-def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
+def test_scope_and_filter_controls_are_above_results():
     import xml.etree.ElementTree as ET
     resources = Path(__file__).resolve().parents[2] / 'src/visualizer/gui/rmlui/resources'
     root = ET.fromstring((resources / 'asset_manager.rml').read_text())
-    local = root.find('.//*[@id="asset-sidebar-local-scroll"]')
-    gallery = root.find('.//*[@id="asset-sidebar-gallery"]')
-    assert gallery not in list(local.iter())
-    assert {e.get('data-folder-id') for e in gallery.iter() if e.get('data-folder-id')} == {
-        '__gallery__', '__gallery_attention__'}
-    rcss = (resources / 'asset_manager.rcss').read_text()
-    assert '#asset-sidebar-local-scroll { min-height: 0; overflow-y: auto;' in rcss
-    assert '#asset-sidebar-gallery { flex-shrink: 1; min-height: 140dp; max-height: 100%; overflow-y: auto; }' in rcss
+    controls = root.find('.//*[@id="asset-scope-controls"]')
+    assert controls is not None
+    assert [child.get('id') for child in controls] == ['asset-scope-select', 'asset-filter-select']
+    assert controls.find('.//*[@id="asset-scope-select"]') is not None
+    assert controls.find('.//*[@data-gallery-drop-target="__gallery__"]') is None
+    assert root.find('.//*[@id="asset-sidebar"]') is None
+    assert root.find('.//*[@data-resize="navigator"]') is None
 
 @pytest.mark.parametrize('size,expected', [(0, '0.0 B'), (9, '9.0 B'), (10, '10 B'), (1024, '1.0 KB'),
     (137114, '134 KB'), (10 * 1024, '10 KB'), (1024**2, '1.0 MB'), (42 * 1024**2, '42 MB'), (1024**3, '1.0 GB')])

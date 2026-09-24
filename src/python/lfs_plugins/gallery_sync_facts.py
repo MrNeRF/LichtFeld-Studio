@@ -28,6 +28,11 @@ _LOCAL_FILE_PROBLEM_LABELS = {
 _VIEW_FLOAT_TOLERANCE = 1e-6
 
 
+def needs_attention(facts):
+    """Whether this project has a health or gallery attention state."""
+    return bool(facts.get("health_icon") or facts.get("attention"))
+
+
 def _same_view(a, b):
     if isinstance(a, dict) and isinstance(b, dict):
         return a.keys() == b.keys() and all(_same_view(a[key], b[key]) for key in a)

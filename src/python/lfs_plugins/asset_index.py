@@ -37,6 +37,56 @@ SCHEMA_VERSION = 6
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
 
+
+def read_catalog_preview(library_path: Path) -> Dict[str, Any]:
+    """Read saved card facts without verifying project files.
+
+    Call from a worker. AssetIndex.load() remains the authority for normalized
+    paths, availability and current inspection results.
+    """
+    try:
+        with library_path.open("r", encoding="utf-8") as stream:
+            stored = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(stored, dict) or stored.get("schema_version") != SCHEMA_VERSION:
+        return {}
+    saved_folders = stored.get("folders")
+    saved_projects = stored.get("projects")
+    if not isinstance(saved_folders, dict) or not isinstance(saved_projects, dict):
+        return {}
+    folders = {}
+    for folder_id, value in saved_folders.items():
+        if not isinstance(folder_id, str) or not isinstance(value, dict):
+            continue
+        folder_path = str(value.get("path") or "")
+        if folder_path:
+            folders[folder_id] = {
+                "id": folder_id, "path": folder_path,
+                "name": Path(folder_path).name or folder_path,
+                "is_default": folder_id == DEFAULT_FOLDER_ID,
+            }
+    projects = {}
+    for project_id, value in saved_projects.items():
+        if not isinstance(project_id, str) or not isinstance(value, dict):
+            continue
+        project_path = str(value.get("path") or "")
+        if not project_path.lower().endswith(SUPPORTED_ASSET_EXTENSION):
+            continue
+        status = str(value.get("status") or "READING")
+        projects[project_id] = {
+            **value,
+            "id": project_id,
+            "project_uuid": project_id,
+            "name": str(value.get("name") or Path(project_path).stem),
+            "path": project_path,
+            "exists": status != "MISSING",
+            "available": status not in ("MISSING", "UNREADABLE", "UNSUPPORTED_NEWER"),
+            "status": status,
+            "file_size_bytes": int(value.get("file_size_bytes") or value.get("size") or 0),
+        }
+    return {"folders": folders, "projects": projects}
+
 HEALTH_FIX_ACTIONS = {
     "AVAILABLE": None,
     "READING": None,
@@ -53,6 +103,7 @@ _PROJECT_STORAGE_FIELDS = frozenset(
         "name",
         "path",
         "folder_id",
+        "pinned",
         "size",
         "mtime_ns",
         "fallback_preview_path",
@@ -355,6 +406,7 @@ class Project:
     name: str
     path: str
     folder_id: str
+    pinned: bool = False
     file_uuid: str = ""
     commit_uuid: str = ""
     generation: int = 0
@@ -406,6 +458,8 @@ class Project:
             "stat_identity": dict(self.stat_identity),
             "inspection": dict(self.inspection),
         }
+        if self.pinned:
+            record["pinned"] = True
         if self.name_origin == "user":
             record["name"] = self.name
         if self.inspection_verified or self.inspection_restored:
@@ -669,6 +723,32 @@ class AssetIndex:
     @_synchronized
     def catalog_epoch(self) -> int:
         return self._catalog_epoch
+
+    def peek_catalog_epoch(self) -> int:
+        """Read the immutable integer epoch without waiting for file inspection."""
+        return self._catalog_epoch
+
+    @_synchronized
+    def cache_display_names(self, names: Dict[str, str]) -> bool:
+        """Persist titles discovered by card inspection in one catalog write."""
+        previous = {}
+        for project_id, title in names.items():
+            project = self._projects.get(project_id)
+            title = str(title or "").strip()
+            if project is None or not title or project.extra.get("display_name") == title:
+                continue
+            previous[project_id] = project.extra.get("display_name")
+            project.extra["display_name"] = title
+        if not previous:
+            return True
+        if self.save():
+            return True
+        for project_id, title in previous.items():
+            if title is None:
+                self._projects[project_id].extra.pop("display_name", None)
+            else:
+                self._projects[project_id].extra["display_name"] = title
+        return False
 
     def _apply_inspection(self, project: Project, inspection: Any) -> None:
         if self._projects.get(project.project_uuid) is project:
@@ -1035,7 +1115,8 @@ class AssetIndex:
                     chosen = items[0]
                     self._project_by_path.pop(current_key, None)
                     project.path = chosen.path
-                    project.folder_id = chosen.folder_id or project.folder_id
+                    if chosen.folder_id:
+                        project.folder_id = chosen.folder_id
                     current_observation = chosen
                     changed = True
                 elif project.folder_id != current_observation.folder_id and current_observation.folder_id:
@@ -1313,8 +1394,11 @@ class AssetIndex:
 
             normalized = normalized or path != stored_path
             stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
+            pinned = value.get("pinned") is True
             folder_id = self._folder_id_for_path(path)
-            if folder_id is None:
+            if pinned:
+                folder_id = folder_id or DEFAULT_FOLDER_ID
+            elif folder_id is None:
                 folder_id = self._add_folder_record(str(Path(path).parent)).id
                 normalized = True
             if folder_id != stored_folder_id:
@@ -1336,6 +1420,7 @@ class AssetIndex:
                 name=raw_name,
                 path=path,
                 folder_id=folder_id,
+                pinned=pinned,
                 name_origin=name_origin,
                 previous_project_uuid=str(value.get("previous_project_uuid") or ""),
                 aliases=[dict(alias) for alias in value.get("aliases", []) if isinstance(alias, dict)],
@@ -1717,7 +1802,14 @@ class AssetIndex:
         previous_state = self._snapshot_state(
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
-        removed_ids = [project.project_uuid for project in self._projects.values() if project.folder_id == folder_id]
+        removed_ids = [
+            project.project_uuid
+            for project in self._projects.values()
+            if project.folder_id == folder_id and not project.pinned
+        ]
+        for project in self._projects.values():
+            if project.folder_id == folder_id and project.pinned:
+                project.folder_id = DEFAULT_FOLDER_ID
         for identifier in removed_ids:
             project = self._projects[identifier]
             self._remember_identity(project.path, identifier, allow_missing=True)
@@ -1796,7 +1888,11 @@ class AssetIndex:
         for project in self._projects.values():
             resolved_folder = self._folder_id_for_path(project.path)
             if resolved_folder is None:
-                resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
+                resolved_folder = (
+                    DEFAULT_FOLDER_ID
+                    if project.pinned
+                    else self._add_folder_record(str(Path(project.path).parent)).id
+                )
             project.folder_id = resolved_folder
         if self.save():
             return True
@@ -1888,6 +1984,7 @@ class AssetIndex:
         adopt_existing: bool = True,
         save: bool = True,
         inspection: Any = None,
+        pin: bool = False,
     ) -> Tuple[Optional[Project], bool]:
         path = _normalize_path(project_path)
         planned_path = ProjectPathIdentity.capture(path)
@@ -1909,8 +2006,10 @@ class AssetIndex:
                 self._snapshot_state(project_ids=[project_uuid]) if save else None
             )
             target_folder_id = self._folder_id_for_path(path)
-            if target_folder_id is None:
+            if target_folder_id is None and not pin:
                 target_folder_id = self._add_folder_record(str(Path(path).parent)).id
+            if target_folder_id is None:
+                target_folder_id = DEFAULT_FOLDER_ID
 
             path_key = self._path_key(path)
             stale_uuid = self._project_by_path.get(path_key)
@@ -1928,6 +2027,7 @@ class AssetIndex:
                     name=name or self._inspection_name(path),
                     path=path,
                     folder_id=target_folder_id,
+                    pinned=pin,
                     name_origin="user" if name is not None else "stem",
                     previous_project_uuid=(stale_uuid or ""),
                 )
@@ -1939,6 +2039,13 @@ class AssetIndex:
                 self._apply_inspection(project, inspection)
             else:
                 use_observed_path = adopt_existing or self._path_key(project.path) == path_key
+                if pin:
+                    if not project.pinned:
+                        project.pinned = True
+                        persisted_changed = True
+                    if project.folder_id != target_folder_id:
+                        project.folder_id = target_folder_id
+                        persisted_changed = True
                 if use_observed_path:
                     old_path_key = self._path_key(project.path)
                     if old_path_key != path_key:
@@ -2018,7 +2125,11 @@ class AssetIndex:
         previous_state = self._snapshot_state(project_ids=[asset_id])
         folder_id = self._folder_id_for_path(path)
         if folder_id is None:
-            folder_id = self._add_folder_record(str(Path(path).parent)).id
+            folder_id = (
+                DEFAULT_FOLDER_ID
+                if project.pinned
+                else self._add_folder_record(str(Path(path).parent)).id
+            )
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
         project.folder_id = folder_id

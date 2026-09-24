@@ -91,21 +91,20 @@ def test_update_all_candidates_exclude_equal_remote_and_conflicts(convenience):
     remote['metadataRevision'] = 'metadata-edited'
     assert panel._gallery_update_candidates() == []
 
-def test_local_drop_reuses_primary_validation_and_equal_hint(convenience, monkeypatch):
+def test_gallery_drop_does_not_publish_local_projects(convenience, monkeypatch):
     panel, local, _ = convenience
     calls = []
     monkeypatch.setattr(panel, '_gallery_command', lambda action: calls.append(action))
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert panel._gallery_toast['text'] == 'Already up to date'
     assert calls == []
     local['commit_uuid'] = 'changed'
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert calls == ['update']
+    assert calls == []
     panel._gallery_state['links'] = {}
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert calls == ['update', 'publish']
+    assert calls == []
     panel._gallery_drop_asset(local['id'], '__gallery__', 'other')
-    assert calls == ['update', 'publish']
+    assert calls == []
 
 def test_remote_drag_has_only_origin_owner_scene_id(convenience):
     panel, _, _ = convenience
@@ -267,14 +266,14 @@ def test_viewport_drop_handoff_validates_identity_before_shared_pull_open(conven
         assert not panel.gallery_viewport_drop(json.dumps(bad))
     assert calls == ['pull_open']
 
-def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, panel_module, monkeypatch):
-    panel, local, _ = convenience
+def test_folder_drag_hover_drop_consumes_payload_before_drag_end(convenience, panel_module, monkeypatch):
+    panel, _local, _remote = convenience
     calls = []
     shell = _Element()
-    target = _Element({'data-folder-id':'__gallery__'}, shell)
+    target = _Element({'data-gallery-drop-target':'default'}, shell)
     child = _Element({}, target)
     event = _Event(shell, child)
-    panel._gallery_drag = (local['id'], 'account')
+    panel._gallery_drag = ('remote:remote-only', 'account')
     panel._drag_payload_token = 42
     monkeypatch.setattr(panel, '_gallery_drop_asset', lambda *args: calls.append(args))
     panel._on_gallery_drag_over(event)
@@ -282,7 +281,7 @@ def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, p
     panel._on_gallery_drop(event)
     panel._on_asset_drag_end(event)
     assert not target.is_class_set('is-drag-over')
-    assert calls == [(local['id'], '__gallery__', 'account')]
+    assert calls == [('remote:remote-only', 'default', 'account')]
     assert panel_module.lf._test_state.drag_cancels == [42]
     assert panel_module.lf._test_state.drag_ends == []
     rcss = (Path(__file__).parents[2] / 'src/visualizer/gui/rmlui/resources/asset_manager.rcss').read_text()

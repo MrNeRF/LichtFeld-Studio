@@ -3,6 +3,10 @@
 """Application-level appearance and language preferences."""
 
 import lichtfeld as lf
+import threading
+
+from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
+from .asset_watch import scan_all_asset_folders, scan_asset_folder
 
 from .keymap_bindings import KeymapBindingsSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
@@ -65,6 +69,7 @@ class PreferencesPanel(Panel):
         "language",
         "project_location",
         "project_manager",
+        "project_folders",
         "gallery",
         "appearance",
         "scene_rendering",
@@ -96,6 +101,8 @@ class PreferencesPanel(Panel):
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
         self._project_location = ""
+        self._project_folders_index = None
+        self._project_folders_signature = None
         self._applied_project_location = ""
         self._document = None
         self._file_associations = []
@@ -198,6 +205,10 @@ class PreferencesPanel(Panel):
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
         model.bind("project_location", lambda: self._project_location, self._set_project_location_draft)
         model.bind_func("project_location_hint", self._project_location_hint)
+        model.bind_record_list("project_folders")
+        model.bind_event("add_project_folder", self._on_add_project_folder)
+        model.bind_event("rescan_project_folders", self._on_rescan_project_folders)
+        model.bind_event("remove_project_folder", self._on_remove_project_folder)
         model.bind(
             "project_manager_default_view",
             lambda: read_project_manager_preferences()["defaultView"],
@@ -277,6 +288,7 @@ class PreferencesPanel(Panel):
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
+        self._refresh_project_folders()
         self._load_mcp_preferences()
         self._consume_section_request()
         self._last_state = self._state()
@@ -296,6 +308,7 @@ class PreferencesPanel(Panel):
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
+        self._refresh_project_folders()
         self._consume_section_request()
         self._sync_mcp_runtime()
         self._ensure_keymap_rows_if_visible()
@@ -792,7 +805,119 @@ class PreferencesPanel(Panel):
         stored = lf.ui.get_project_location_preference()
         self._applied_project_location = stored or lf.ui.get_default_project_location()
         self._project_location = self._applied_project_location
+        if self._project_folders_index is not None:
+            self._project_folders_index.set_default_folder_path(self._applied_project_location)
+            self._project_folders_signature = None
         self._dirty_project_location()
+
+    def _project_folders_backend(self):
+        get_panel = getattr(lf.ui, "get_panel_object", None)
+        panel = get_panel("lfs.asset_manager") if callable(get_panel) else None
+        if panel is not None and getattr(panel, "_asset_index", None) is not None:
+            return panel, panel._asset_index_folders()
+        if self._project_folders_index is None:
+            path = resolve_asset_manager_storage_path()
+            path.mkdir(parents=True, exist_ok=True)
+            self._project_folders_index = AssetIndex(
+                library_path=path / "library.json",
+                default_folder_path=resolve_default_asset_directory(),
+            )
+            self._project_folders_index.load()
+        return self._project_folders_index, self._project_folders_index.folders
+
+    def _refresh_project_folders(self):
+        if not self._handle:
+            return
+        backend, folders = self._project_folders_backend()
+        signature = tuple(sorted((key, str(value.get("name")), str(value.get("path")))
+                                 for key, value in folders.items()))
+        if signature == self._project_folders_signature:
+            return
+        self._project_folders_signature = signature
+        rows = [
+            {
+                "id": key,
+                "name": str(value.get("name") or value.get("path") or key),
+                "label": str(value.get("name") or value.get("path") or key) + (
+                    f" ({lf.ui.tr('preferences.project_folders_default')})" if key == "default" else ""
+                ),
+                "path": str(value.get("path") or ""),
+                "is_default": key == "default",
+                "can_remove": key != "default",
+            }
+            for key, value in folders.items()
+        ]
+        rows.sort(key=lambda row: (row["id"] != "default", row["name"].casefold()))
+        self._handle.update_record_list("project_folders", rows)
+        self._handle.dirty("project_folders")
+
+    def _on_add_project_folder(self, _handle=None, _event=None, _args=None):
+        directory = lf.ui.open_folder_dialog(
+            lf.ui.tr("projects.dialog.select_folder"), str(resolve_default_asset_directory()))
+        if not directory:
+            return
+        folder_only = lf.ui.tr("projects.action.folder_only")
+        include_subfolders = lf.ui.tr("projects.action.include_subfolders")
+
+        def choose(button):
+            if button not in (folder_only, include_subfolders):
+                return
+            recursive = button == include_subfolders
+            backend, _folders = self._project_folders_backend()
+            if hasattr(backend, "_add_folder_from_path"):
+                backend._add_folder_from_path(str(directory), recursive=recursive)
+            else:
+                folder = backend.add_folder(str(directory), recursive=recursive)
+                if folder is not None:
+                    threading.Thread(
+                        target=scan_asset_folder,
+                        args=(backend, folder.id, str(directory)),
+                        kwargs={"recursive": recursive}, daemon=True,
+                    ).start()
+            self._refresh_project_folders()
+
+        lf.ui.confirm_dialog(
+            lf.ui.tr("projects.dialog.scan_depth"),
+            lf.ui.tr("projects.dialog.scan_depth_message"),
+            [folder_only, include_subfolders, lf.ui.tr("common.cancel")], choose,
+        )
+
+    def _on_remove_project_folder(self, _handle=None, _event=None, args=None):
+        folder_id = str((args or [""])[0])
+        backend, folders = self._project_folders_backend()
+        folder = folders.get(folder_id)
+        if folder_id == "default" or folder is None:
+            return
+        if hasattr(backend, "on_delete_folder"):
+            backend.on_delete_folder(None, None, [folder_id])
+            self._project_folders_signature = None
+            return
+        label = lf.ui.tr("projects.action.remove_folder")
+        count = sum(
+            project.get("folder_id") == folder_id
+            for project in backend.assets.values()
+        )
+
+        def confirmed(button):
+            if button == label:
+                backend.delete_folder(folder_id)
+                self._refresh_project_folders()
+        lf.ui.confirm_dialog(
+            lf.ui.tr("projects.dialog.remove_folder"),
+            lf.ui.tr("projects.dialog.remove_folder_message").format(
+                name=str(folder.get("name") or ""), count=count,
+            ),
+            [lf.ui.tr("common.cancel"), label], confirmed,
+        )
+
+    def _on_rescan_project_folders(self, _handle=None, _event=None, _args=None):
+        backend, _folders = self._project_folders_backend()
+        if hasattr(backend, "refresh_catalog"):
+            backend.refresh_catalog(scan_folders=True)
+        else:
+            threading.Thread(
+                target=scan_all_asset_folders, args=(backend,), daemon=True,
+            ).start()
 
     def _set_project_location_draft(self, value):
         self._project_location = str(value).strip()
