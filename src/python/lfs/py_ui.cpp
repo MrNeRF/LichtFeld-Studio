@@ -5489,6 +5489,10 @@ namespace lfs::python {
             },
             "Get effective MCP HTTP server preferences");
 
+        m.def("get_mcp_access_token", []() {
+            nb::gil_scoped_release release;
+            return mcp::mcpBearerToken(); }, "Get the local MCP network access token");
+
         m.def(
             "set_mcp_preferences",
             [](const bool enabled, const bool expose_network, const int port,
@@ -5630,6 +5634,9 @@ namespace lfs::python {
                     break;
                 case mcp::McpHttpErrorKind::ListenerFailed:
                     result["error_kind"] = "listener_failed";
+                    break;
+                case mcp::McpHttpErrorKind::CredentialFailed:
+                    result["error_kind"] = "credential_failed";
                     break;
                 }
                 result["error_address"] = status.error_address;

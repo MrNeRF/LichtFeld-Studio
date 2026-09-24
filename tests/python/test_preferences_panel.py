@@ -50,6 +50,7 @@ def preferences_panel_module(monkeypatch):
             "safe_mode": False,
         },
         set_mcp_calls=[],
+        clipboard_text="",
         file_associations=[],
         file_association_set_calls=[],
         panel_enabled_calls=[],
@@ -138,6 +139,8 @@ def preferences_panel_module(monkeypatch):
         get_ui_scale_preference=lambda: 0.0,
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_mcp_access_token=lambda: "test-token",
+        set_clipboard_text=lambda text: setattr(state, "clipboard_text", text),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
@@ -607,6 +610,16 @@ def test_mcp_port_is_drafted_until_explicit_confirmation(preferences_panel_modul
             "request_logging": False,
         }
     ]
+
+
+def test_mcp_access_token_copy_uses_displayed_value(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    assert panel._mcp_token_text() == "test-token"
+    panel._on_copy_mcp_token(None, None, None)
+
+    assert state.clipboard_text == "test-token"
 
 
 def test_invalid_mcp_port_blocks_application(preferences_panel_module):

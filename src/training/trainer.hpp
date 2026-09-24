@@ -76,6 +76,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
     class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
     class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -419,6 +420,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
         friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerRetryTestAccess;

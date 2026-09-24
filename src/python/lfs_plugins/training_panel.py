@@ -68,6 +68,10 @@ def _is_mrnf_strategy(strategy):
     return property_view.canonical_strategy_name(strategy) == "mrnf"
 
 
+def _trainer_run_is_finished():
+    return RuntimeState.trainer_state.value in ("completed", "stopped", "error")
+
+
 def _training_session_state():
     getter = getattr(lf, "project_training_session_state", None)
     if getter is None:
@@ -378,6 +382,9 @@ class TrainingPanel(Panel):
             "label_no_params", lambda: tr("training_panel.parameters_unavailable")
         )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
+        model.bind_func(
+            "label_start_training", lambda: tr("training_panel.start_training")
+        )
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
@@ -900,6 +907,8 @@ class TrainingPanel(Panel):
 
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
+            if _trainer_run_is_finished():
+                return False
             return not (
                 RuntimeState.trainer_state.value == "ready"
                 and RuntimeState.iteration.value == 0
@@ -2754,6 +2763,10 @@ class TrainingPanel(Panel):
         self._start_after_consent()
 
     def _start_after_consent(self):
+        # Consent starts a new run. A finished trainer cannot accept Start
+        # until Reset returns it to a fresh dataset.
+        if _trainer_run_is_finished():
+            lf.reset_training()
         params = lf.optimization_params()
         error = self._validation_error()
         if error:

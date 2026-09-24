@@ -835,6 +835,106 @@ def cleanup_download(service, *, backup=False):
     service._save()
     return job, path, stage
 
+@pytest.mark.parametrize("restart", [False, True])
+def test_update_stage_uses_only_temporary_import_and_cleans_on_finish_or_restart(tmp_path, monkeypatch, restart):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+
+    def unpack(root, source_path, target, *, progress):
+        target.mkdir(parents=True)
+        (target / "0.ply").write_bytes(b"node")
+    monkeypatch.setattr(gallery_preparation, "unpack_project", unpack)
+    import lichtfeld as lf
+    monkeypatch.setattr(lf.io, "restore_save", lambda *a: pytest.fail("Update must not create a project"))
+    stage_id = service.stage_download(identifier, for_update=True)
+    finish(service)
+    stage = job["stagedImport"]
+    assert stage["state"] == "ready"
+    assert stage["id"] == stage_id and "projectPath" not in stage
+    assert source.exists()
+
+    if restart:
+        restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    else:
+        service.finish_update_download(identifier, stage_id)
+        restarted = service
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert next(job for bucket in restarted._data["accounts"].values()
+        for job in bucket["jobs"] if job["id"] == identifier)["retired"]
+
+def test_canceled_update_stage_cleans_after_worker_finishes(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+    entered, resume = threading.Event(), threading.Event()
+
+    def unpack(root, source_path, target, *, progress):
+        target.mkdir(parents=True)
+        (target / "0.ply").write_bytes(b"node")
+        entered.set()
+        assert resume.wait(3)
+
+    monkeypatch.setattr(gallery_preparation, "unpack_project", unpack)
+    stage_id = service.stage_download(identifier, for_update=True)
+    assert entered.wait(3)
+    service.finish_update_download(identifier, stage_id)
+    assert source.exists()
+    resume.set()
+    finish(service)
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert job["retired"]
+
+def test_failed_update_stage_cleans_after_ui_finishes(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from lfs_plugins import gallery_preparation
+
+    service = connected(tmp_path, monkeypatch)
+    identifier = str(uuid4())
+    source = service.root / "downloads" / (identifier + ".licht")
+    source.parent.mkdir()
+    source.write_bytes(b"portable")
+    job = dict(id=identifier, kind="download", project="", status="completed",
+        path=str(source), sceneId="scene", result={"id": "scene", "title": "Scene"},
+        metadata={"title": "Scene"}, checkpoint=None, completed=8, total=8,
+        message="Downloaded")
+    service._bucket()["jobs"].append(job)
+    service._save()
+    monkeypatch.setattr(gallery_preparation, "unpack_project",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("broken package")))
+
+    stage_id = service.stage_download(identifier, for_update=True)
+    finish(service)
+    assert job["stagedImport"]["state"] == "failed"
+    service.finish_update_download(identifier, stage_id)
+    assert not source.exists()
+    assert not (service.root / "imports" / (stage_id + ".scene")).exists()
+    assert job["retired"]
+
 def test_clear_download_preserves_backup_and_project_link(tmp_path, monkeypatch):
     from pathlib import Path
     service = connected(tmp_path, monkeypatch)
@@ -1125,17 +1225,54 @@ def test_metadata_update_sets_cover_after_patch_and_reports_failure(tmp_path, mo
         assert service.scenes == [updated]
         assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
                                 service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
-        assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+        assert service.snapshot()['actionFailure']['message'] == 'projects.gallery.warning.cover_failed'
         monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
         covered = dict(updated, presentationRevision='covered', posterRevision='covered')
         monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
-        service.set_cover('project', updated, b'thumbnail')
+        service.edit('scene', {'contentRevision': 'old', 'metadataRevision': 'new'}, {'title': 'Updated'},
+                     project_id='project', cover_png=b'thumbnail')
         finish(service)
         assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+        assert service.snapshot()['actionFailure'] is None
     else:
         assert service.snapshot()['links']['project']['metadataRevision'] == 'new'
         assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'new'
         assert service.snapshot()['actionFailure'] is None
+
+
+def test_cover_rejection_after_publish_is_a_retryable_warning(tmp_path, monkeypatch):
+    import base64
+    from lfs_plugins.portal_account import PortalHTTPError
+    service = connected(tmp_path, monkeypatch)
+    original = dict(id='scene', title='Original', contentRevision='old', metadataRevision='old',
+                    presentationRevision='old', posterRevision='old')
+    service._bucket()['links']['project'] = gallery_sync.exchange_link(original, 'saved')
+    path = tmp_path / 'project.licht'
+    path.write_bytes(b'prepared project')
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jkWQAAAAASUVORK5CYII=')
+    updated = dict(original, contentRevision='new', metadataRevision='new', presentationRevision='new', posterRevision='new')
+    monkeypatch.setattr(Client, 'upload', lambda *_args, **_kwargs: {'scene': updated}, raising=False)
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: (_ for _ in ()).throw(
+        PortalHTTPError(413, 'Request is too large.')), raising=False)
+    metadata = dict(title='Updated', replaceSceneId='scene', baseRevisions={'content': 'old', 'metadata': 'old'},
+                    useEmbeddedPreview=True, _previewPng=base64.b64encode(png).decode('ascii'), _commitUuid='saved')
+    job = service.queue_upload(path, metadata, 'project')
+    finish(service)
+    saved_job = service._job(job)
+    assert saved_job['status'] == 'completed'
+    assert saved_job['message'] == 'Uploaded'
+    assert service.snapshot()['links']['project']['contentRevision'] == 'new'
+    failure = service.snapshot()['actionFailure']
+    assert failure['message'] == 'projects.gallery.warning.cover_failed'
+    assert 'too_large' not in failure['message']
+    assert service.snapshot()['message'] == 'projects.gallery.warning.cover_failed'
+    covered = dict(updated, presentationRevision='covered', posterRevision='covered')
+    monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
+    monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
+    service.set_cover('project', updated, png)
+    finish(service)
+    assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+    assert service.snapshot()['actionFailure'] is None
 
 
 def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch):
@@ -1166,7 +1303,7 @@ def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch)
     from lfs_plugins.gallery_controller import asset_sync_state
     assert asset_sync_state({'id': 'project', 'commit_uuid': 'saved', 'exists': True},
                             service.snapshot()['links']['project'], updated)['freshness'] == 'equal'
-    assert 'Cover upload failed' in service.snapshot()['actionFailure']['message']
+    assert service.snapshot()['actionFailure']['message'] == 'projects.gallery.warning.cover_failed'
     covered = dict(updated, presentationRevision='covered', posterRevision='covered')
     monkeypatch.setattr(Client, 'set_cover', lambda *_args: None, raising=False)
     monkeypatch.setattr(Client, 'scene', lambda _client, _scene_id: covered, raising=False)
@@ -1174,6 +1311,7 @@ def test_replacement_cover_failure_is_visible_on_transfer(tmp_path, monkeypatch)
     finish(service)
     assert uploads == [True]
     assert service.snapshot()['links']['project']['acknowledgedPresentationRevision'] == 'covered'
+    assert service.snapshot()['actionFailure'] is None
 
 def test_publish_as_new_keeps_old_pair_until_success(tmp_path, monkeypatch):
     service=connected(tmp_path,monkeypatch)
@@ -1298,6 +1436,40 @@ def test_saved_project_preparation_journals_source_commit_before_upload(tmp_path
     assert job['uploadFormat'] == 'ssog' and job['contentStamp'] == 'saved-content'
     assert job['preparation'] == str(staging)
     assert '_commitUuid' not in job['metadata']
+
+
+def test_unlinked_upload_has_no_project_origin_or_local_link(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'prepared.licht'
+    source.write_bytes(b'current scene')
+    def upload(_client, _path, metadata, **_kwargs):
+        assert 'originProjectUuid' not in metadata
+        return {'scene': {'id': 'gallery-scene', 'contentRevision': 'c',
+                          'metadataRevision': 'm', 'title': 'Scene'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    service.queue_upload(source, {'title': 'Scene', '_unlinked': True}, 'temporary')
+    finish(service)
+    assert service.snapshot()['links'] == {}
+    assert service.snapshot()['jobs'][0]['status'] == 'completed'
+    assert not (tmp_path / 'temporary.licht').exists()
+
+def test_live_project_upload_records_link_without_claiming_a_project_commit(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    source = tmp_path / 'prepared.licht'
+    source.write_bytes(b'current scene')
+    def upload(_client, _path, metadata, **_kwargs):
+        assert metadata['originProjectUuid'] == 'project'
+        assert 'originCommitUuid' not in metadata
+        return {'scene': {'id': 'gallery-scene', 'contentRevision': 'c',
+                          'metadataRevision': 'm', 'title': 'Scene'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    service.queue_upload(source, {'title': 'Scene', '_liveSnapshot': True}, 'project')
+    finish(service)
+    link = service.snapshot()['links']['project']
+    assert link['sceneId'] == 'gallery-scene'
+    assert link['commitUuid'] == ''
+    assert link['liveSnapshot'] is True
+
 
 def test_domain_exchange_tokens_survive_journal_reload(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)

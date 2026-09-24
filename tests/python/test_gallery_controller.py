@@ -44,6 +44,70 @@ def scene(**fields):
         visibility="private", revision="original", status="ready", **fields, contentRevision="original", metadataRevision="original")
 
 
+@pytest.mark.parametrize("commit_uuid", ["saved-commit", "later-save-commit"])
+def test_live_project_publication_has_no_commit_conflict_or_followup_action(commit_uuid):
+    facts_module = import_module("lfs_plugins.gallery_sync_facts")
+    asset = {"id": "project", "project_uuid": "project", "commit_uuid": commit_uuid,
+             "exists": True, "available": True, "publication": {"visibleSplats": 1}}
+    link = {"sceneId": "private-one", "commitUuid": "", "liveSnapshot": True}
+    published = scene()
+
+    state = facts_module.asset_sync_state(asset, link, published, checked=True)
+    actions = facts_module.gallery_actions(asset, state)
+
+    assert state["state"] == "live_snapshot"
+    assert state["relationship"] == "linked"
+    assert not state["attention"]
+    assert actions == []
+
+
+def test_gallery_update_removes_only_groups_emptied_by_replaced_splats(gallery, monkeypatch, tmp_path):
+    panel, _, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    path = tmp_path / "project.licht"
+    path.write_bytes(b"saved")
+    project = ("project", str(path))
+    panel._project_identity = lambda: project
+    panel.service.environment_path = lambda _: None
+    monkeypatch.setattr(import_module("lfs_plugins.gallery_sync_steps"), "restore_view", lambda *a, **kw: None)
+    monkeypatch.setattr(module.lf, "project_save", lambda **kw: actions.append("saved") or True, raising=False)
+    monkeypatch.setattr(module.lf, "set_node_visibility", lambda *a: None, raising=False)
+    monkeypatch.setattr(module.lf.scene, "NodeType", SimpleNamespace(SPLAT=0, GROUP=1))
+
+    def node(identifier, name, kind, parent=-1, children=()):
+        return SimpleNamespace(id=identifier, uuid=str(identifier), name=name, type=kind,
+            parent_id=parent, children=list(children))
+
+    nodes = {n.id: n for n in (
+        node(1, "Pull probe", 1, children=(2,)), node(2, "old splat", 0, parent=1),
+        node(3, "My notes", 1, children=(4, 5)), node(4, "other splat", 0, parent=3),
+        node(5, "annotation", 2, parent=3), node(6, "incoming", 1, children=(7,)),
+        node(7, "new splat", 0, parent=6))}
+
+    class Scene:
+        def get_node_by_uuid(self, value):
+            return next((n for n in nodes.values() if n.uuid == value), None)
+        def get_node_by_id(self, value):
+            return nodes.get(value)
+        def get_node(self, name):
+            return next((n for n in nodes.values() if n.name == name), None)
+        def remove_node(self, name, keep_children=False):
+            current = self.get_node(name)
+            assert current is not None and not current.children
+            if current.parent_id in nodes:
+                nodes[current.parent_id].children.remove(current.id)
+            del nodes[current.id]
+        def rename_node(self, old, new):
+            self.get_node(old).name = new
+
+    panel._apply_local_update(Scene(), nodes[6], {"result": {"title": "Pull probe"}},
+        {"old_nodes": ["2", "4"], "project": project, "stamp": module.file_stamp(path)})
+    assert 1 not in nodes
+    assert nodes[6].name == "Pull probe"
+    assert nodes[3].children == [5]
+    assert actions == ["saved"]
+
+
 @pytest.mark.parametrize("operation", ["contents", "settings"])
 @pytest.mark.parametrize("swap", ["identity", "path"])
 def test_gallery_apply_rechecks_project_after_scene_changes(gallery, monkeypatch, tmp_path, operation, swap):
@@ -481,10 +545,13 @@ def test_publish_without_save_prepares_saved_commit_and_live_view(gallery, monke
 
 @pytest.mark.parametrize("save_project", [False, True])
 def test_publish_dirty_open_project_respects_save_choice(gallery, monkeypatch, tmp_path, save_project):
-    panel, _, actions = gallery
+    panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
     path = tmp_path / "project-a.licht"
     path.write_bytes(b"saved project")
+    before = path.read_bytes()
+    state["source_formats"] = ["licht"]
+    panel.service.root = tmp_path
     monkeypatch.setattr(panel, "_project_identity", lambda: ("project", str(path)))
     monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(name="visible")])
     monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
@@ -495,14 +562,43 @@ def test_publish_dirty_open_project_respects_save_choice(gallery, monkeypatch, t
     monkeypatch.setattr(module, "capture_view", lambda _: {"camera": {"position": [4, 2, 4]}})
     monkeypatch.setattr(panel, "_save_current_project", lambda continuation: (actions.append("saved"), continuation()))
     monkeypatch.setattr(panel, "_publish_saved", lambda metadata, *args, **kwargs: actions.append((metadata, kwargs)))
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *args: actions.append(("live", args)), raising=False)
 
     panel._review_publish(None, {"title": "Current view", "description": "", "saveProject": save_project}, "sog", False)
 
     assert ("saved" in actions) is save_project
-    published = next(action for action in actions if isinstance(action, tuple) and isinstance(action[0], dict))
-    assert published[0]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
-    if not save_project:
-        assert published[1]["expected_commit"] == "saved"
+    if save_project:
+        published = next(action for action in actions if isinstance(action, tuple) and isinstance(action[0], dict))
+        assert published[0]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
+    else:
+        assert actions == [("live", (str(panel._publish_steps.pending[0]), "sog"))]
+        assert panel._publish_steps.pending[1]["viewerSettings"]["camera"]["position"] == [4, 2, 4]
+        assert panel._publish_steps.pending[1]["_liveSnapshot"] is True
+    assert path.read_bytes() == before
+
+
+def test_unlinked_scene_prepares_live_upload_without_saving(gallery, monkeypatch, tmp_path):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_controller")
+    state["source_formats"] = ["licht"]
+    panel.service.root = tmp_path
+    monkeypatch.setattr(panel, "_visible_splats", lambda: [SimpleNamespace(name="visible")])
+    monkeypatch.setattr(panel, "_schedule_poll", lambda: None)
+    monkeypatch.setattr(module, "capture_view", lambda _: {"camera": "current"})
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    monkeypatch.setattr(module.lf, "project_save", lambda **_: pytest.fail("Saved the project"), raising=False)
+    monkeypatch.setattr(module.lf, "project_save_as", lambda *_: pytest.fail("Opened Save As"), raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *args: actions.append(args), raising=False)
+
+    panel.publish_unlinked_scene({"name": "Scene"}, {"title": "Scene", "description": ""}, "studio")
+
+    export, metadata, project_id, _ = panel._publish_steps.pending
+    assert actions == [(str(export), "ply")]
+    assert metadata["_unlinked"] is True
+    assert metadata["viewerSettings"] == {"camera": "current"}
+    assert not list(tmp_path.glob("*.licht"))
 
 
 @pytest.mark.parametrize("open_project, dirty", [(True, False), (True, True), (False, False)])
@@ -529,6 +625,9 @@ def test_publish_review_save_choice_only_for_open_project(gallery, monkeypatch, 
     rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/gallery_file_panel.rml").read_text()
     assert 'data-if="show_save_project"' in rml
     assert 'data-if="show_unsaved_hint"' in rml
+    assert 'data-if="show_prepared_copy"' in rml
+    assert 'data-if="show_cover"' in rml
+    assert 'data-if="show_unlinked_hint">{{unlinked_copy}}' in rml
 
 
 def test_publish_without_save_rechecks_saved_commit(gallery, monkeypatch, tmp_path):
@@ -1413,6 +1512,84 @@ def test_conflict_groups_keep_both_values_and_default_content_to_mine(gallery):
     assert 'data-attr-title="part.values"' not in conflict_rml
 
 
+@pytest.mark.parametrize("field", ["position", "target", "up", "fov", "orthoScale",
+    "background", "exposure", "environment_exposure", "environment_rotation",
+    "path_position", "path_rotation", "path_time", "path_focal_length", "path_duration",
+    "path_playback_speed"])
+def test_gallery_view_float_roundtrip_does_not_create_review_group(gallery, field):
+    from lfs_plugins.gallery_controller import conflict_groups, asset_sync_state
+    local_number = -0.24827615916728973
+    gallery_number = -0.2482761557071908
+    local_view = {"camera": {"position": [0, 2, 3], "target": [0, 0, 0],
+                             "up": [0, 1, 0], "fov": 60, "orthoScale": 6},
+                  "background": [0.2, 0.3, 0.4], "exposure": 1.2,
+                  "environment": {"exposure": 1.0, "rotation": 45.0},
+                  "cameraPath": {"duration": 2.0, "playbackSpeed": 1.0,
+                                 "keyframes": [{"position": [1, 2, 3], "rotation": [1, 0, 0, 0],
+                                                "time": 1.0, "focal_length_mm": 35.0}]}}
+    remote_view = copy.deepcopy(local_view)
+    if field in ("position", "target", "up"):
+        if field == "up":
+            local_view["camera"][field] = [local_number, 0.9363321661949158, local_number]
+            remote_view["camera"][field] = [gallery_number, 0.9363321531457293, gallery_number]
+        else:
+            local_view["camera"][field][0] = local_number
+            remote_view["camera"][field][0] = gallery_number
+    elif field in ("fov", "orthoScale"):
+        local_view["camera"][field] = 60 + local_number
+        remote_view["camera"][field] = 60 + gallery_number
+    elif field == "background":
+        local_view[field][0] = local_number
+        remote_view[field][0] = gallery_number
+    elif field == "exposure":
+        local_view[field] = 1 + local_number
+        remote_view[field] = 1 + gallery_number
+    elif field == "environment_exposure":
+        local_view["environment"]["exposure"] = 1 + local_number
+        remote_view["environment"]["exposure"] = 1 + gallery_number
+    elif field == "environment_rotation":
+        local_view["environment"]["rotation"] = 45 + local_number
+        remote_view["environment"]["rotation"] = 45 + gallery_number
+    elif field == "path_position":
+        local_view["cameraPath"]["keyframes"][0]["position"][0] = local_number
+        remote_view["cameraPath"]["keyframes"][0]["position"][0] = gallery_number
+    elif field == "path_time":
+        local_view["cameraPath"]["keyframes"][0]["time"] = 1 + local_number
+        remote_view["cameraPath"]["keyframes"][0]["time"] = 1 + gallery_number
+    elif field == "path_rotation":
+        local_view["cameraPath"]["keyframes"][0]["rotation"][1] = local_number
+        remote_view["cameraPath"]["keyframes"][0]["rotation"][1] = gallery_number
+    elif field == "path_focal_length":
+        local_view["cameraPath"]["keyframes"][0]["focal_length_mm"] = 35 + local_number
+        remote_view["cameraPath"]["keyframes"][0]["focal_length_mm"] = 35 + gallery_number
+    elif field == "path_duration":
+        local_view["cameraPath"]["duration"] = 2 + local_number
+        remote_view["cameraPath"]["duration"] = 2 + gallery_number
+    else:
+        local_view["cameraPath"]["playbackSpeed"] = 1 + local_number
+        remote_view["cameraPath"]["playbackSpeed"] = 1 + gallery_number
+    base = scene(viewerSettings=remote_view)
+    remote = dict(base, metadataRevision="new")
+    link = dict(sceneId=base["id"], commitUuid="saved", sharedFields={
+        "title": base["title"], "description": base["description"], "viewerSettings": remote_view},
+        localFields={"title": base["title"], "description": base["description"], "viewerSettings": local_view},
+        contentRevision=base["contentRevision"], metadataRevision=base["metadataRevision"])
+    assert conflict_groups({"commit_uuid": "saved"}, link,
+        dict(base, viewerSettings=local_view), remote, apply_only=True) == []
+    facts = asset_sync_state({"id": "project", "commit_uuid": "saved"}, link, base)
+    assert facts["freshness"] == "equal"
+
+
+def test_gallery_view_real_camera_move_still_creates_review_group(gallery):
+    from lfs_plugins.gallery_controller import conflict_groups
+    local = scene(viewerSettings={"camera": {"position": [1, 2, 3]}})
+    remote = scene(viewerSettings={"camera": {"position": [1.01, 2, 3]}})
+    link = dict(sharedFields={"viewerSettings": local["viewerSettings"]},
+                contentRevision=remote["contentRevision"], commitUuid="saved")
+    rows = conflict_groups({"commit_uuid": "saved"}, link, local, remote, apply_only=True)
+    assert [row["id"] for row in rows] == ["view"]
+
+
 def test_settings_apply_waits_for_backup_and_never_replaces_geometry(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
@@ -1970,7 +2147,7 @@ def test_pull_keeps_remote_snapshot_separate_from_local_choices(gallery, monkeyp
     controller._visible_splats = lambda: []
     controller._acquire_native_use = lambda _: None
     controller._schedule_poll = lambda: None
-    controller.service.stage_download = lambda _: "stage"
+    controller.service.stage_download = lambda _, **kwargs: "stage"
     monkeypatch.setattr(module.lf, "is_training_active", lambda: False, raising=False)
     monkeypatch.setattr(module.lf.ui, "get_import_state", lambda: {"active": False}, raising=False)
     remote = scene(viewerSettings={"exposure": 0})

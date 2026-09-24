@@ -157,6 +157,19 @@ Getting started:
   </a>
 </p>
 
+<br>
+
+<p>
+  <a href="https://www.tersus-gnss.com/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/tersus-dark.svg">
+      <img src="docs/media/tersus.svg" alt="Tersus GNSS" height="80">
+    </picture>
+  </a>
+  <br>
+  <sub>Hardware sponsor</sub>
+</p>
+
 </div>
 
 ## Citation

@@ -3,7 +3,8 @@
   <div class="gallery-file-content">
     <span class="gallery-file-name text-muted" data-attr-title="file_name">{{file_name}}</span>
     <div class="gallery-file-fields" data-if="is_publish">
-      <span class="gallery-explanation">@tr:projects.gallery.review.prepared_copy</span>
+      <span class="gallery-explanation" data-if="show_prepared_copy">@tr:projects.gallery.review.prepared_copy</span>
+      <span class="gallery-explanation" data-if="show_unlinked_hint">{{unlinked_copy}}</span>
       <label for="gallery-file-title">{{g_review_title}}</label>
       <input id="gallery-file-title" type="text" maxlength="120" data-value="title" data-attr-title="title"/>
       <label for="gallery-file-description">{{g_review_description}}</label>
@@ -12,9 +13,10 @@
         <div class="setting-row"><span>{{g_review_upload_as}}</span><select data-value="upload_format"><option value="studio">{{g_format_studio}}</option><option value="sog">{{g_format_sog}}</option><option value="ssog">{{g_format_ssog}}</option><option value="spz">{{g_format_spz}}</option></select></div>
         <span class="text-muted">{{format_hint}}</span>
         <span class="text-muted" data-attr-title="estimate">{{estimate}}</span>
-        <label class="gallery-cover-option"><input type="checkbox" data-checked="use_cover" data-attrif-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
+        <label class="gallery-cover-option" data-if="show_cover"><input type="checkbox" data-checked="use_cover" data-attrif-disabled="!can_cover"/><span>@tr:projects.gallery.review.use_cover</span></label>
         <label class="gallery-cover-option" data-if="show_save_project"><input type="checkbox" data-checked="save_project"/><span>@tr:projects.gallery.review.save_project</span></label>
         <span class="text-muted" data-if="show_unsaved_hint">@tr:projects.gallery.review.unsaved_hint</span>
+        <span class="text-muted" data-if="show_unlinked_hint">@tr:projects.gallery.review.unlinked_hint</span>
         <span class="text-muted">{{includes}}</span>
         <span class="text-muted">{{eligibility_reason}}</span>
       </div>

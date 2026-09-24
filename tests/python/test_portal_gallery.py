@@ -669,3 +669,65 @@ def test_project_preparation_stops_at_its_deadline(tmp_path, monkeypatch):
     assert client.processing_deadline == 1002.0
     assert all(state == {"stage": "preparing_download", "completed": 0, "total": 0} for state in states)
     assert not list(tmp_path.iterdir())
+
+
+def _camera_path(count):
+    frames = [{"time": index + 0.1234567890123456,
+               "position": [-1.2345678901234567e-120, -1.2345678901234567e-120, -1.2345678901234567e-120],
+               "rotation": [-1.2345678901234567e-120, -1.2345678901234567e-120,
+                            -1.2345678901234567e-120, -0.4567890123456789],
+               "focal_length_mm": 35.123456789012345, "easing": 3}
+              for index in range(count)]
+    return {"version": 1, "duration": float(count) + 0.123456789012, "keyframes": frames,
+            "loopMode": "ping_pong", "playbackSpeed": 1.2345678901234567}
+
+
+def test_update_refuses_a_camera_path_past_the_gallery_keyframe_limit():
+    import json
+    calls = []
+
+    def request(method, path, body=None, **_kwargs):
+        calls.append((method, path, body))
+        if path.endswith("/me"):
+            return {"id": "11111111-1111-1111-1111-111111111111", "gallerySyncVersion": 1,
+                    "revisionDomains": 1, "sourceFormats": ["licht"], "maxFileBytes": 1024}
+        frames = ((body or {}).get("viewerSettings") or {}).get("cameraPath", {}).get("keyframes") or []
+        if len(frames) > 4096:
+            raise AssertionError("oversized camera path was sent")
+        return {}
+
+    client = portal_gallery.PortalGalleryClient(SimpleNamespace(request_json_authenticated=request))
+    scene = "11111111-1111-1111-1111-111111111111"
+    view = {"cameraPath": _camera_path(4097), "verticalFov": True}
+    with pytest.raises(ValueError, match="camera_path"):
+        client.update(scene, {"contentRevision": "content", "metadataRevision": "metadata"},
+                      title="T" * 120, description="D" * 5000, viewerSettings=view)
+    assert not any(method == "PATCH" for method, _path, _body in calls)
+    calls.clear()
+    client.update(scene, {"contentRevision": "content", "metadataRevision": "metadata"},
+                  viewerSettings={"cameraPath": _camera_path(4096), "verticalFov": True})
+    patched = [body for method, _path, body in calls if method == "PATCH"]
+    assert len(patched) == 1
+    raw = json.dumps(dict(patched[0]), separators=(",", ":")).encode("utf-8")
+    assert len(raw) > 1024 * 1024
+    assert len(raw) <= 2 * 1024 * 1024
+
+
+def test_upload_refuses_a_camera_path_past_the_gallery_keyframe_limit(tmp_path):
+    path = tmp_path / "scene.licht"
+    path.write_bytes(b"prepared")
+    calls = []
+
+    def request(method, url, body=None, **_kwargs):
+        calls.append(url)
+        if url.endswith("/me"):
+            return {"id": "11111111-1111-1111-1111-111111111111", "gallerySyncVersion": 1, "revisionDomains": 1,
+                    "sourceFormats": ["licht"], "maxFileBytes": 1024, "hdrBackgrounds": False}
+        raise AssertionError("oversized camera path was sent")
+
+    account = SimpleNamespace(base_url="http://127.0.0.1:9", request_json_authenticated=request,
+                              _client_version="test")
+    client = portal_gallery.PortalGalleryClient(account)
+    with pytest.raises(ValueError, match="camera_path"):
+        client.upload(path, {"title": "Scene", "viewerSettings": {"cameraPath": _camera_path(4097)}})
+    assert not any(url.endswith("/splats/uploads") for url in calls)

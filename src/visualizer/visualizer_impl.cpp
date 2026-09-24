@@ -4029,14 +4029,25 @@ namespace lfs::vis {
             return {};
         }
         if (!trainer_manager_->canStart()) {
-            if (trainer_manager_->isFinished()) {
-                return reject(std::format(
-                    "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
-                    trainer_manager_->getCurrentIteration()));
-            }
-            return reject(std::string(
-                trainer_manager_->getActionBlockedReason(
-                    TrainingAction::Start)));
+            const std::string message =
+                trainer_manager_->isFinished()
+                    ? std::format(
+                          "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
+                          trainer_manager_->getCurrentIteration())
+                    : std::string(
+                          trainer_manager_->getActionBlockedReason(
+                              TrainingAction::Start));
+            lfs::ErrorBus::instance().publish(makeFrameNotification(
+                lfs::ErrorCode::FailedPrecondition,
+                lfs::ErrorDomain::Training,
+                lfs::Severity::Error,
+                lfs::ErrorSurface::Modal,
+                message,
+                message,
+                {},
+                LFS_SOURCE_SITE_CURRENT(),
+                "training.start"));
+            return reject(message);
         }
         if (auto preflight =
                 trainer_manager_->preflightStartParameters();

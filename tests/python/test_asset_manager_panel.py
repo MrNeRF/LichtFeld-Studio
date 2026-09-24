@@ -2378,6 +2378,33 @@ def test_completed_project_save_reverifies_catalog_thumbnail(panel_module):
     assert verified == [asset["id"]]
     assert "rev=new" in panel._handle.records["assets"][0]["thumbnail_decorator"]
 
+
+def test_first_project_write_poll_reverifies_open_catalog_project(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    asset = _project(commit_uuid="old", generation=2)
+    project = SimpleNamespace(id=asset["id"])
+    verified = []
+
+    def verify_asset(asset_id):
+        verified.append(asset_id)
+        asset["commit_uuid"] = "new"
+        asset["generation"] = 3
+        return project
+
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        find_asset_by_path=lambda path: project if path == asset["path"] else None,
+        verify_asset=verify_asset,
+    )
+    panel_module.lf.project_poll_write = lambda: {
+        "running": False, "generation": 3, "path": asset["path"], "error": "",
+    }
+
+    assert panel._refresh_after_project_write() is True
+    assert verified == [asset["id"]]
+    assert "rev=new" in panel._handle.records["assets"][0]["thumbnail_decorator"]
+
 def test_drag_available_project_publishes_typed_payload(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()

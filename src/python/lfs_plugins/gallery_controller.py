@@ -319,6 +319,18 @@ class GalleryController:
                              expected_commit=str(asset.get("commit_uuid") or getattr(lf.io.inspect_project(path), "commit_uuid", "")))
         self._schedule_poll()
 
+    def publish_unlinked_scene(self, asset, details, upload_format):
+        self._check_identity()
+        self._refresh_model()
+        if self._panel_busy() or lf.project_poll_write().get("path"):
+            raise ValueError(tr("error.project_changed"))
+        metadata = self._details(details)
+        metadata["viewerSettings"] = capture_view(lf)
+        metadata["useEmbeddedPreview"] = bool(details.get("useEmbeddedPreview"))
+        self.upload_format = upload_format
+        self._publish_steps.start_live(metadata, upload_format, unlinked=True)
+
+
     def _publish_closed_asset(self, asset, details, upload_format, *, update, publish_as_new, handoff=None):
         return self._publish_steps.start_closed(asset, details, upload_format, update=update, publish_as_new=publish_as_new, handoff=handoff)
 
@@ -1130,6 +1142,7 @@ class GalleryController:
         self._check_identity()
         self._state = self.service.snapshot()
     def _advance_phases(self):
+        update_pending = self._local_update_steps.pending
         try:
             self._check_identity()
             if self._save_pending:
@@ -1161,6 +1174,12 @@ class GalleryController:
             self._failure_notice = self._message
             self._refresh_model()
         finally:
+            if update_pending and self._local_update_steps.pending is None:
+                update = update_pending.get("_update", {})
+                try:
+                    self.service.finish_update_download(update_pending["id"], update.get("stage_id"))
+                except Exception as exc:
+                    log_failure("update_download_cleanup", exc, job_id=update_pending["id"])
             self._release_native_use()
 
     def _discard_update_preview(self):

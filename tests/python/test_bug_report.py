@@ -368,6 +368,32 @@ def test_redact_scrubs_paths_identity_email_host_and_tokens(tmp_path, monkeypatc
     assert "Authorization: Bearer <token>" in redacted
 
 
+def test_bug_report_json_stays_within_eight_mib(fake_runtime):
+    import json
+    payload = bug_report.build_payload(valid_form(), consent_to_logs=False)
+    payload["log"] = {"file_name": "lichtfeld-session.log", "path": "lichtfeld.log",
+                      "text": "\x01" * bug_report.LOG_MAX_BYTES}
+    payload["previous_log"] = {"file_name": "lichtfeld-previous.log",
+                               "text": "\x01" * bug_report.LOG_MAX_BYTES}
+    original = json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+    assert len(original) > 8 * 1024 * 1024
+    seen = {}
+
+    def send(_method, _path, body, **_kwargs):
+        raw = json.dumps(dict(body), separators=(",", ":")).encode("utf-8")
+        seen["size"] = len(raw)
+        seen["log"] = body["log"]["text"]
+        seen["previous"] = body["previous_log"]["text"]
+        return {"url": "https://example.invalid/bugs/1/", "status": "submitted",
+                "completeness_problems": []}
+
+    state = bug_report.submit_report(payload, service=SimpleNamespace(request_json_authenticated=send))
+    assert state["success"] is True
+    assert seen["size"] <= 8 * 1024 * 1024
+    assert seen["log"] and seen["log"] == "\x01" * len(seen["log"])
+    assert seen["previous"] and seen["previous"] == "\x01" * len(seen["previous"])
+
+
 def test_log_tail_is_utf8_byte_capped_at_a_line_boundary(monkeypatch, fake_runtime):
     fake_lf = make_fake_lf()
     monkeypatch.setattr(bug_report, "lf", fake_lf)

@@ -161,7 +161,7 @@ def test_only_start_is_disabled_and_feedback_is_outside_search():
     ("starting", 0, ["pause", "stop"]),
     ("running", 12, ["pause", "save_project"]),
     ("paused", 12, ["resume", "save_project", "reset", "stop"]),
-    ("completed", 12, ["switch_edit", "reset", "clear"]),
+    ("completed", 12, ["start", "switch_edit", "reset", "clear"]),
     ("stopped", 12, ["switch_edit", "reset", "clear"]),
     ("error", 12, ["reset", "clear"]),
     ("stopping", 12, []),
@@ -2183,6 +2183,52 @@ def test_overwrite_and_start_still_starts_without_save_as(
 
     assert save_as_calls == []
     assert starts == [True]
+
+
+def test_finished_run_overwrite_resets_before_the_new_run_starts(
+    training_panel_module, monkeypatch
+):
+    """A completed run is a new training, so Overwrite must leave the finished trainer first."""
+    panel, dialogs, _starts, _save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    runtime = training_panel_module.RuntimeState
+    order = []
+
+    def reset_training():
+        order.append(("reset", runtime.trainer_state.value))
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+
+    def start_training():
+        order.append(("start", runtime.trainer_state.value))
+
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "training_start_overwrite_conflict",
+        lambda: 40,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "reset_training", reset_training, raising=False
+    )
+    monkeypatch.setattr(training_panel_module.lf, "start_training", start_training)
+
+    try:
+        runtime.trainer_state.value = "completed"
+        runtime.iteration.value = 40
+        panel._action_start()
+
+        assert len(dialogs) == 1
+        title, _message, buttons, callback = dialogs[0]
+        assert title == "training.overwrite.title"
+        assert buttons[0] == OVERWRITE_BTN
+        assert order == []
+
+        callback(OVERWRITE_BTN)
+        assert order == [("reset", "completed"), ("start", "ready")]
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
 
 
 def test_action_start_opens_overwrite_dialog_instead_of_starting(

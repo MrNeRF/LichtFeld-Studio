@@ -56,6 +56,7 @@
     </div>
     <div class="training-actions-group" data-if="show_ctrl_completed">
       <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action" data-attrif-disabled="start_blocked" data-attr-aria-label="label_start_training" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')"><img src="../icon/sequencer/play.png" /><span>{{label_start_training}}</span></button>
         <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_toolbar_edit" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
         <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
         <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>

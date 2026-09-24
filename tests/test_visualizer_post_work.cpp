@@ -15490,6 +15490,89 @@ namespace lfs::vis {
         EXPECT_FALSE(info->embedded_dataset_complete);
     }
 
+    TEST_F(VisualizerImplResetTest,
+           FinishedTrainingStartReportsOverwriteConflict) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl paused(options);
+            ASSERT_TRUE(paused.getParameterManager()
+                            ->ensureLoaded());
+            auto& scene = paused.getScene();
+            const auto cameras = scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            paused.getTrainerManager()->setTrainer(
+                std::make_unique<lfs::training::Trainer>(scene));
+            auto* const trainer = paused.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->current_iteration_.store(40);
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    paused.getTrainerManager()->getStateMachine());
+            if (state_machine.getState() == TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Paused));
+            EXPECT_FALSE(
+                paused.trainingStartOverwriteConflict()
+                    .has_value());
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto& scene = viewer.getScene();
+            const auto cameras = scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            trainer->current_iteration_.store(40);
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()->getStateMachine());
+            if (state_machine.getState() == TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionToFinished(
+                FinishReason::Completed));
+            ASSERT_TRUE(viewer.getTrainerManager()->isFinished());
+
+            const auto conflict =
+                viewer.trainingStartOverwriteConflict();
+            ASSERT_TRUE(conflict.has_value());
+            EXPECT_EQ(*conflict, 40);
+
+            CapturingErrorConsumer consumer;
+            auto subscription =
+                lfs::ErrorBus::instance().subscribe(consumer);
+            const auto rejected = viewer.startTraining();
+            ASSERT_FALSE(rejected);
+            EXPECT_NE(
+                rejected.error().find("overwrite consent"),
+                std::string::npos);
+            ASSERT_FALSE(consumer.user_messages.empty());
+            EXPECT_NE(
+                consumer.user_messages.back().find(
+                    "overwrite consent"),
+                std::string::npos);
+            (void)subscription;
+        }
+    }
+
 } // namespace lfs::vis
 
 namespace {

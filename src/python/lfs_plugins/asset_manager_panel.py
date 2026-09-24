@@ -4863,14 +4863,25 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return False
 
         previous_generation = self._last_project_write_generation
+        find_by_path = getattr(self._asset_index, "find_asset_by_path", None)
+        project = find_by_path(path) if path and callable(find_by_path) else None
+        first_poll_needs_refresh = False
+        if previous_generation is None and path:
+            if project is None:
+                first_poll_needs_refresh = True
+            else:
+                asset = self._asset_dict(project.id) or {}
+                first_poll_needs_refresh = generation != int(asset.get("generation") or 0)
         completed = (
-            previous_generation is not None
-            and not running
+            not running
             and not error
             and (
-                self._project_write_was_running
-                or generation != previous_generation
-                or path != self._last_project_write_path
+                first_poll_needs_refresh
+                or self._project_write_was_running
+                or (previous_generation is not None and (
+                    generation != previous_generation
+                    or path != self._last_project_write_path
+                ))
             )
         )
         self._last_project_write_generation = generation
@@ -4879,8 +4890,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not completed or not path:
             return False
 
-        find_by_path = getattr(self._asset_index, "find_asset_by_path", None)
-        project = find_by_path(path) if callable(find_by_path) else None
         if project is None:
             folder_id_for_path = getattr(self._asset_index, "folder_id_for_path", None)
             if not callable(folder_id_for_path) or folder_id_for_path(path) is None:
