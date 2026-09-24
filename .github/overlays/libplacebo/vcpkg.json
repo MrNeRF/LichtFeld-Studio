@@ -6,6 +6,10 @@
   "license": "LGPL-2.1-or-later",
   "supports": "(windows | linux | osx) & !uwp & !xbox",
   "dependencies": [
+    {
+      "name": "fast-float",
+      "platform": "osx"
+    },
     "shaderc",
     "vulkan",
     {

@@ -25,6 +25,11 @@ file(COPY "${JINJA_SOURCE}/src/"
      DESTINATION "${SOURCE_PATH}/3rdparty/jinja/src")
 file(COPY "${MARKUPSAFE_SOURCE}/src/"
      DESTINATION "${SOURCE_PATH}/3rdparty/markupsafe/src")
+# Apple's libc++ has no floating-point std::from_chars, so libplacebo needs its fast_float submodule there.
+if(VCPKG_TARGET_IS_OSX)
+    file(COPY "${CURRENT_INSTALLED_DIR}/include/fast_float"
+         DESTINATION "${SOURCE_PATH}/3rdparty/fast_float/include")
+endif()
 
 # libplacebo uses GNU C extensions; use clang-cl only for this Windows port.
 if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
