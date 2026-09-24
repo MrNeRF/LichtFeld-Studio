@@ -315,6 +315,7 @@ class PreferencesPanel(Panel):
 
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
+        state.pop("cuda_available", None)
         if key == "vulkan_validation":
             value = int(value)
         elif key in ("force_fp32_half", "force_no_atomic_float"):
