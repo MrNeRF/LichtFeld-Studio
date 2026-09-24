@@ -4887,6 +4887,20 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if region.startswith("list-column:"):
             self._resize_start_column = region.partition(":")[2]
             self._resize_start_column_width = self._list_column_width(self._resize_start_column)
+            minimum_name = 80.0
+            if self._resize_start_column == "name":
+                minimum_gallery = 32.0 if self._list_columns()["gallery"] == 32 else (self._text_column_metrics or {}).get("gallery", 32.0)
+                self._resize_column_min = minimum_name
+                self._resize_column_max = self._resize_start_column_width + max(
+                    0.0, self._list_column_width("gallery") - minimum_gallery
+                )
+            else:
+                self._resize_column_min = (self._text_column_metrics or {}).get(self._resize_start_column, 32.0)
+                self._resize_column_max = min(
+                    280.0,
+                    self._resize_start_column_width + max(0.0, self._list_column_width("name") - minimum_name),
+                )
+            self._resize_column_max = max(self._resize_column_min, self._resize_column_max)
         self._dirty_fields("bottom_panel_resize_dragging")
 
     def _reset_resize(self, region: str) -> None:
@@ -4939,17 +4953,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._stop_event(event)
         elif region.startswith("list-column:"):
             column = region.partition(":")[2]
-            minimum_name = 80.0
             if column == "name":
-                minimum_gallery = 32.0 if self._list_columns()["gallery"] == 32 else (self._text_column_metrics or {}).get("gallery", 32.0)
-                maximum = self._list_column_width("name") + max(0.0, self._list_column_width("gallery") - minimum_gallery)
-                minimum = minimum_name
                 self._list_column_overrides.pop("gallery", None)
             else:
-                maximum = min(280.0, self._list_column_width(column) + max(0.0, self._list_column_width("name") - minimum_name))
-                minimum = (self._text_column_metrics or {}).get(column, 32.0)
                 self._list_column_overrides.pop("name", None)
-            target = min(maximum, max(minimum, self._resize_start_column_width + delta_x))
+            target = min(self._resize_column_max, max(self._resize_column_min, self._resize_start_column_width + delta_x))
             self._list_column_overrides[column] = target
             self._dirty_fields(
                 "asset_list_wide", "asset_list_show_size", "asset_list_show_folder", "asset_list_gallery_compact",

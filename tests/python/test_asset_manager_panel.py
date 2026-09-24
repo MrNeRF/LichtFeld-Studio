@@ -4263,7 +4263,10 @@ def test_P13_inspector_follows_project_selection_and_closes_when_selection_is_cl
     assert ".asset-inspector-content {\n    background-color: @{surface};" in theme_rcss
     label_rule = rcss.split(".parameter-label {", 1)[1].split("}", 1)[0]
     assert "overflow: visible" not in label_rule
-    assert ".asset-shell.is-medium .inspector-resize-handle { display: none; }" in rcss
+    assert ".asset-shell.inspector-expanded.is-medium .inspector-resize-handle { display: block; }" in rcss
+    vertical_handle_rule = rcss.split(".inspector-resize-handle {", 1)[1].split("}", 1)[0]
+    assert "width: 8dp;" in vertical_handle_rule
+    assert "margin-left: -4dp; margin-right: -4dp;" in vertical_handle_rule
     assert ".asset-shell.is-narrow .inspector-resize-handle, .asset-shell.is-compact .inspector-resize-handle { display: none; }" in rcss
     side_inspector_rule = rcss.split(
         ".asset-shell.is-wide .asset-inspector, .asset-shell.is-medium .asset-inspector {",
