@@ -312,6 +312,13 @@
           </div>
           <span class="preferences-description preferences-warning">@tr:preferences.mcp_network_warning</span>
           <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.mcp_access_token</span>
+            <textarea id="mcp-token" class="preferences-value-selectable" data-value="mcp_token_value" rows="2" readonly="readonly"></textarea>
+          </div>
+          <div class="preferences-inline-actions">
+            <button class="btn" data-event-click="copy_mcp_token">@tr:preferences.mcp_copy_token</button>
+          </div>
+          <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.mcp_port</span>
             <div class="preferences-port-control">
               <input class="preferences-select preferences-port-input" type="text" data-value="mcp_port" maxlength="5"

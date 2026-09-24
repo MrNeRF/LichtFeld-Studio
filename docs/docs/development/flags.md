@@ -101,6 +101,7 @@ The standalone `scripts/lichtfeld_mcp_bridge.py` process uses the same prefix:
 | --- | --- | --- |
 | `LFS_EXECUTABLE` | Repo build directories | Explicit app executable. |
 | `LFS_MCP_ENDPOINT` | `http://127.0.0.1:45677/mcp` | HTTP endpoint proxied over stdio. |
+| `LFS_MCP_TOKEN` | Unset | Access token for an exposed MCP endpoint. |
 | `LFS_MCP_START_TIMEOUT_S` | `90` | App startup timeout in seconds. |
 | `LFS_MCP_BRIDGE_LOG` | `~/.codex/log/lichtfeld-mcp-bridge.log` | Bridge and launched-app log. |
 | `LFS_MCP_BRIDGE_LOCK` | `~/.codex/log/lichtfeld-mcp-bridge.lock` | Cross-process startup lock. |

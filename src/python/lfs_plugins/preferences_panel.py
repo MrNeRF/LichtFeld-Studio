@@ -210,6 +210,7 @@ class PreferencesPanel(Panel):
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
         model.bind("mcp_endpoint_value", self._mcp_endpoint_text, lambda _value: None)
+        model.bind("mcp_token_value", self._mcp_token_text, lambda _value: None)
         model.bind_func("mcp_error", self._mcp_error_text)
         model.bind_func("mcp_has_error", lambda: bool(self._mcp_error_text()))
         model.bind_func("mcp_log_file", self._mcp_log_file_text)
@@ -232,6 +233,7 @@ class PreferencesPanel(Panel):
         model.bind_event("browse_project_location", self._on_browse_project_location)
         model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
+        model.bind_event("copy_mcp_token", self._on_copy_mcp_token)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("set_theme_variant", self._set_theme_variant)
         model.bind_record_list("theme_families")
@@ -1048,6 +1050,15 @@ class PreferencesPanel(Panel):
     def _on_open_mcp_log_folder(self, _handle, _event, _args):
         lf.ui.open_url(lf.ui.get_mcp_log_directory())
 
+    def _on_copy_mcp_token(self, _handle, _event, _args):
+        token = self._mcp_token_text()
+        if token:
+            lf.ui.set_clipboard_text(token)
+
+    def _mcp_token_text(self):
+        getter = getattr(lf.ui, "get_mcp_access_token", None)
+        return getter() if getter else ""
+
     @staticmethod
     def _coerce_bool(value):
         if isinstance(value, str):
@@ -1131,6 +1142,7 @@ class PreferencesPanel(Panel):
             "mcp_safe_mode",
             "mcp_status",
             "mcp_endpoint_value",
+            "mcp_token_value",
             "mcp_error",
             "mcp_has_error",
             "mcp_log_file",

@@ -14,12 +14,17 @@
 #include "core/user_paths.hpp"
 
 #include <httplib/httplib.h>
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <exception>
+#include <fstream>
 #include <format>
 #include <iomanip>
 #include <mutex>
@@ -32,12 +37,16 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 
 #include <iphlpapi.h>
 #else
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace lfs::mcp {
@@ -49,6 +58,111 @@ namespace lfs::mcp {
         McpHttpServer* g_active_server = nullptr;
         std::optional<McpHttpConfig> g_pending_config;
         std::jthread g_config_worker;
+        std::mutex g_token_mutex;
+
+        std::string loadOrCreateToken() {
+            std::lock_guard lock(g_token_mutex);
+            const auto paths = core::UserPaths::resolve();
+            if (!paths)
+                return {};
+            const auto path = paths->configDir() / "mcp_token";
+            const auto read_existing = [&]() -> std::string {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return {};
+#ifndef _WIN32
+                const auto permissions = std::filesystem::status(path, error).permissions();
+                if (error || (permissions & (std::filesystem::perms::group_all |
+                                             std::filesystem::perms::others_all)) !=
+                                 std::filesystem::perms::none)
+                    return {};
+#endif
+                std::ifstream file(path, std::ios::binary);
+                std::string token;
+                std::getline(file, token);
+                return file && token.size() == 64 &&
+                               std::ranges::all_of(token, [](unsigned char c) {
+                                   return std::isxdigit(c) != 0;
+                               })
+                           ? token
+                           : std::string{};
+            };
+            if (std::filesystem::exists(path))
+                return read_existing();
+
+            std::error_code error;
+            std::filesystem::create_directories(paths->configDir(), error);
+            if (error)
+                return {};
+            std::array<unsigned char, 32> bytes{};
+            if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
+                return {};
+            constexpr char hex[] = "0123456789abcdef";
+            std::string token;
+            token.reserve(bytes.size() * 2);
+            for (const auto byte : bytes) {
+                token.push_back(hex[byte >> 4]);
+                token.push_back(hex[byte & 15]);
+            }
+#ifdef _WIN32
+            const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                            CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file == INVALID_HANDLE_VALUE)
+                return read_existing();
+            DWORD written = 0;
+            const bool saved = WriteFile(file, token.data(), static_cast<DWORD>(token.size()),
+                                         &written, nullptr) && written == token.size() &&
+                               FlushFileBuffers(file);
+            CloseHandle(file);
+#else
+            const int file = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+            if (file < 0)
+                return read_existing();
+            const bool saved = ::write(file, token.data(), token.size()) ==
+                                   static_cast<ssize_t>(token.size()) &&
+                               ::fsync(file) == 0;
+            ::close(file);
+#endif
+            if (!saved) {
+                std::filesystem::remove(path, error);
+                return {};
+            }
+            return token;
+        }
+
+        bool localAuthority(const std::string& value, const int port) {
+            return value == std::format("127.0.0.1:{}", port) ||
+                   value == std::format("localhost:{}", port) ||
+                   value == std::format("[::1]:{}", port);
+        }
+
+        bool localOrigin(const std::string& value, const int port) {
+            return value == std::format("http://127.0.0.1:{}", port) ||
+                   value == std::format("http://localhost:{}", port) ||
+                   value == std::format("http://[::1]:{}", port);
+        }
+
+        bool jsonContentType(std::string value) {
+            std::ranges::transform(value, value.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            const auto separator = value.find(';');
+            const auto media_type = value.substr(0, separator);
+            const auto begin = media_type.find_first_not_of(" \t");
+            const auto end = media_type.find_last_not_of(" \t");
+            return begin != std::string::npos &&
+                   media_type.substr(begin, end - begin + 1) ==
+                       "application/json";
+        }
+
+        bool validBearer(const httplib::Request& request, const std::string& token) {
+            if (token.empty() || request.get_header_value_count("Authorization") != 1)
+                return false;
+            const auto header = request.get_header_value("Authorization");
+            constexpr std::string_view prefix = "Bearer ";
+            return header.starts_with(prefix) && header.size() == prefix.size() + token.size() &&
+                   CRYPTO_memcmp(header.data() + prefix.size(), token.data(), token.size()) == 0;
+        }
 
         void configureSingleOwnerListenerSocket(const socket_t socket) {
 #ifdef _WIN32
@@ -338,6 +452,8 @@ namespace lfs::mcp {
         }
     } // namespace
 
+    std::string mcpBearerToken() { return loadOrCreateToken(); }
+
     McpHttpServer::McpHttpServer(const McpServerOptions& server_options)
         : mcp_server_(std::make_unique<McpServer>(server_options)),
           http_server_(std::make_unique<httplib::Server>()) {
@@ -347,6 +463,50 @@ namespace lfs::mcp {
         http_server_->Post("/mcp", [this](const httplib::Request& req, httplib::Response& res) {
             const auto request_started = std::chrono::steady_clock::now();
             request_count_.fetch_add(1, std::memory_order_relaxed);
+            const auto reject = [this, &req, &res, request_started](int status,
+                                                                     const char* reason) {
+                error_count_.fetch_add(1, std::memory_order_relaxed);
+                nlohmann::json event = {
+                    {"event", "request"},
+                    {"outcome", "error"},
+                    {"error_type", "http"},
+                    {"error_stage", "validation"},
+                    {"error_reason", reason},
+                    {"duration_ms", std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - request_started)
+                                        .count()},
+                };
+                appendTransportMetadata(event, req);
+                appendSessionLog(event);
+                res.status = status;
+                res.set_content("Request validation failed", "text/plain");
+            };
+            if (req.get_header_value_count("Content-Type") != 1 ||
+                !jsonContentType(req.get_header_value("Content-Type"))) {
+                reject(415, "unsupported_media_type");
+                return;
+            }
+            if (req.get_header_value_count("Origin") > 1 ||
+                (req.has_header("Origin") &&
+                 !localOrigin(req.get_header_value("Origin"), request_config_.port))) {
+                reject(403, "invalid_origin");
+                return;
+            }
+            const bool local_host = req.get_header_value_count("Host") == 1 &&
+                                    localAuthority(req.get_header_value("Host"), request_config_.port);
+            if (!request_config_.expose_network && !local_host) {
+                reject(421, "invalid_host");
+                return;
+            }
+            const bool local_peer = req.remote_addr == "127.0.0.1" ||
+                                    req.remote_addr == "::1" ||
+                                    req.remote_addr == "::ffff:127.0.0.1";
+            if (request_config_.expose_network &&
+                !(local_peer && local_host && !req.has_header("Origin")) &&
+                !validBearer(req, auth_token_)) {
+                reject(401, "authorization_required");
+                return;
+            }
             auto rpc_req = try_or_log("MCP request parse failed", [&] {
                 return parse_request(req.body);
             });
@@ -547,6 +707,19 @@ namespace lfs::mcp {
                 {"port", config.port},
             });
             return false;
+        }
+
+        request_config_ = config;
+        auth_token_.clear();
+        if (config.expose_network) {
+            auth_token_ = loadOrCreateToken();
+            if (auth_token_.empty()) {
+                std::lock_guard status_lock(status_mutex_);
+                status_.phase = McpHttpPhase::Failed;
+                status_.error = "Unable to load MCP access token";
+                status_.error_kind = McpHttpErrorKind::CredentialFailed;
+                return false;
+            }
         }
 
         const char* const bind_address = config.expose_network ? "0.0.0.0" : "127.0.0.1";
