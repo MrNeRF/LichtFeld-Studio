@@ -10,7 +10,6 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "core/detail/tensor_half.hpp"
 #include "nn_kernels.hpp"
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan_ops.hpp"

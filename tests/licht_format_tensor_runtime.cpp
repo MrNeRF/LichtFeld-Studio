@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/detail/tensor_half.hpp"
 #include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
