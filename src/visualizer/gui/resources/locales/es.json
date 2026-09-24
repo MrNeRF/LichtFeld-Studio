@@ -15,6 +15,7 @@
   "projects.action.rescan_folders": "Volver a explorar carpetas",
   "projects.action.clean_missing": "Limpiar entradas faltantes",
   "projects.sidebar.all_projects": "Todos los proyectos",
+  "projects.sidebar.local_projects": "Proyectos locales",
   "projects.sidebar.recent": "Recientes",
   "projects.toolbar.filter": "Filtrar",
   "projects.filter.clear": "Sin filtro",

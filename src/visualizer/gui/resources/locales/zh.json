@@ -15,6 +15,7 @@
   "projects.action.rescan_folders": "重新扫描文件夹",
   "projects.action.clean_missing": "清理缺失条目",
   "projects.sidebar.all_projects": "所有项目",
+  "projects.sidebar.local_projects": "本地项目",
   "projects.sidebar.recent": "最近",
   "projects.toolbar.filter": "筛选",
   "projects.filter.clear": "无筛选",

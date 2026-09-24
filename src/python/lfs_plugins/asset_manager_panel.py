@@ -82,6 +82,7 @@ _RML_PATH_SAFE_CHARS = "/:._-~"
 _THUMBNAIL_FIT_ALIGN = "cover center"
 _SELECTION_UNCHANGED = object()
 SCOPE_ALL = "__all__"
+SCOPE_LOCAL = "__local__"
 SCOPE_RECENT = "__recent__"
 PROJECT_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-project"
 _folder_scan_completed_in_process = False
@@ -304,7 +305,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._restore_project_manager_preferences()
 
     def capture_chrome(self) -> Dict[str, Any]:
-        folder_id = self._selected_folder_id if self._selected_folder_id in self._asset_index_folders() else SCOPE_ALL
+        folder_id = self._selected_folder_id
+        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_LOCAL}:
+            folder_id = SCOPE_ALL
         return {
             "view_mode": self._view_mode,
             "folders_collapsed": self._folders_collapsed,
@@ -414,7 +417,10 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     and isinstance(value, (int, float)) and math.isfinite(value)
                 }
             folder_id = payload.get("selected_folder_id")
-            self._selected_folder_id = str(folder_id) if folder_id in self._asset_index_folders() else SCOPE_ALL
+            if folder_id in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_LOCAL}:
+                self._selected_folder_id = str(folder_id)
+            else:
+                self._selected_folder_id = SCOPE_ALL
             # Old sidebar heights are superseded by content/viewport sizing.
             self._layout_signature = None
             self._sync_panel_layout()
@@ -581,6 +587,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         model.bind_func("folders_expanded", lambda: not self._folders_collapsed)
         model.bind_func("all_assets_selected", lambda: self._selected_folder_id == SCOPE_ALL)
         model.bind_func("all_assets_count", self.get_all_assets_count)
+        model.bind_func("local_assets_count", self.get_local_assets_count)
         model.bind_func("selected_asset_id", self.get_selected_asset_id)
         model.bind_func("selected_count", self.get_selected_count)
         model.bind_func("selected_count_text", self.get_selected_count_text)
@@ -838,6 +845,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             "operations_section_title": "projects.contents.title",
             "resume_button_label": "projects.action.resume_training",
             "scope_all_label": "projects.sidebar.all_projects",
+            "scope_local_label": "projects.sidebar.local_projects",
             "scope_recent_label": "projects.sidebar.recent",
             "scope_published_label": "projects.gallery.sidebar.published",
             "view_menu_label": "projects.toolbar.view",
@@ -1588,7 +1596,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if cursor not in assets:
             cursor = next(iter(selected), None)
         self._set_asset_selection(selected, cursor=cursor)
-        if self._selected_folder_id not in {*folders, SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES}:
+        if self._selected_folder_id not in {*folders, SCOPE_ALL, SCOPE_LOCAL, SCOPE_RECENT, *GALLERY_SCOPES}:
             self._selected_folder_id = SCOPE_ALL
         self._update_selection_type()
 
@@ -1874,10 +1882,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             source = self._recent_scope_assets()
         elif folder_id in GALLERY_SCOPES:
             source = self._gallery_rows(folder_id == SCOPE_ATTENTION)
+        elif folder_id == SCOPE_ALL:
+            source = self._all_display_assets().values()
         else:
             source = self._asset_index_assets().values()
         for asset in source:
-            if folder_id not in (None, SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
+            if folder_id not in (None, SCOPE_ALL, SCOPE_LOCAL, SCOPE_RECENT, *GALLERY_SCOPES) and asset.get("folder_id") != folder_id:
                 continue
             if not self._asset_matches_query(asset, query):
                 continue
@@ -1990,6 +2000,17 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         return sorted(folder_rows, key=lambda row: self._sort_text(row["name"]))
 
     def get_all_assets_count(self) -> int:
+        query = self._search_query.strip().casefold()
+        if not query:
+            count = getattr(self._asset_index, "count", None)
+            local_count = int(count()) if callable(count) else len(self._asset_index_assets())
+            return local_count + len(self._gallery_remote_assets())
+        return sum(
+            self._asset_matches_query(asset, query)
+            for asset in self._all_display_assets().values()
+        )
+
+    def get_local_assets_count(self) -> int:
         query = self._search_query.strip().casefold()
         if not query:
             count = getattr(self._asset_index, "count", None)
@@ -2352,7 +2373,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._set_catalog_notice(tr("projects.status.import_failed"))
 
     def _select_folder_id(self, folder_id: str) -> bool:
-        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_RECENT, *GALLERY_SCOPES}:
+        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL, SCOPE_LOCAL, SCOPE_RECENT, *GALLERY_SCOPES}:
             return False
         if folder_id in self._asset_index_folders():
             self._gallery_last_folder = folder_id

@@ -15,6 +15,7 @@
   "projects.action.rescan_folders": "폴더 다시 검색",
   "projects.action.clean_missing": "누락된 항목 정리",
   "projects.sidebar.all_projects": "모든 프로젝트",
+  "projects.sidebar.local_projects": "로컬 프로젝트",
   "projects.sidebar.recent": "최근",
   "projects.toolbar.filter": "필터",
   "projects.filter.clear": "필터 없음",

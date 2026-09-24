@@ -938,6 +938,7 @@ def test_filter_menu_names_the_all_option_as_a_clear_action(panel_module):
 
 def test_filter_summary_explains_empty_results_with_scope_count_and_filter(panel_module, monkeypatch):
     panel, _local, _remote = _gallery_fixture(panel_module)
+    panel._selected_folder_id = "default"
     panel._active_filter = "missing"
     translations = {
         "projects.filter.missing": "Missing files",
@@ -3437,7 +3438,7 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     panel.select_gallery_scope()
     rows = panel._filtered_assets()
     assert {r['id'] for r in rows} == {local['id'],'remote:remote-only'}
-    assert panel.get_all_assets_count() == 1
+    assert panel.get_all_assets_count() == 2
     assert set(panel._asset_index.assets) == {local['id']}
     assert panel._select_asset_id('remote:remote-only')
     panel._repair_selection()
@@ -3445,7 +3446,22 @@ def test_gallery_union_has_one_linked_pair_and_remote_projection(panel_module):
     badge = panel._gallery_badge(panel._asset_dict('remote:remote-only'))
     assert badge['gallery_state'] == 'remote_only' and badge['gallery_action'] == 'pull'
     panel._select_folder_id('__all__')
-    assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
+    assert {r['id'] for r in panel._filtered_assets()} == {local['id'], 'remote:remote-only'}
+
+
+def test_all_projects_scope_includes_gallery_only_rows(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+
+    assert [row["id"] for row in panel._filtered_assets()] == [local["id"], "remote:remote-only"]
+    assert panel.get_all_assets_count() == 2
+    assert panel.get_local_assets_count() == 1
+
+
+def test_local_projects_scope_keeps_only_local_rows(panel_module):
+    panel, local, _remote = _gallery_fixture(panel_module)
+    assert panel._select_folder_id("__local__") is True
+
+    assert [row["id"] for row in panel._filtered_assets()] == [local["id"]]
 
 
 def test_gallery_only_filter_keeps_only_gallery_rows_without_local_projects(panel_module):
@@ -3463,7 +3479,7 @@ def test_projects_menu_returns_from_gallery_without_resetting_local_scope(panel_
 
     panel.select_projects_scope()
     assert panel._selected_folder_id == panel_module.SCOPE_ALL
-    assert [asset['id'] for asset in panel._filtered_assets()] == [local['id']]
+    assert {asset['id'] for asset in panel._filtered_assets()} == {local['id'], 'remote:remote-only'}
 
     panel._selected_folder_id = "default"
     panel.select_projects_scope()

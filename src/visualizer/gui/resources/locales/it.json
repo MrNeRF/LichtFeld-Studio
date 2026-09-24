@@ -15,6 +15,7 @@
   "projects.action.rescan_folders": "Esegui nuovamente la scansione delle cartelle",
   "projects.action.clean_missing": "Pulisci voci mancanti",
   "projects.sidebar.all_projects": "Tutti i progetti",
+  "projects.sidebar.local_projects": "Progetti locali",
   "projects.sidebar.recent": "Recenti",
   "projects.toolbar.filter": "Filtra",
   "projects.filter.clear": "Nessun filtro",

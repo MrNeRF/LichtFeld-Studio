@@ -15,6 +15,7 @@
   "projects.action.rescan_folders": "Analyser à nouveau les dossiers",
   "projects.action.clean_missing": "Nettoyer les entrées manquantes",
   "projects.sidebar.all_projects": "Tous les projets",
+  "projects.sidebar.local_projects": "Projets locaux",
   "projects.sidebar.recent": "Récents",
   "projects.toolbar.filter": "Filtrer",
   "projects.filter.clear": "Aucun filtre",

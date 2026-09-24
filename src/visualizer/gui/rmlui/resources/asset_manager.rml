@@ -89,6 +89,7 @@
           <div class="asset-navigator-scope">
             <select id="asset-scope-select" data-value="selected_folder_id" aria-label="{{panel_label}}">
               <option value="__all__">{{scope_all_label}}</option>
+              <option value="__local__">{{scope_local_label}}</option>
               <option value="__recent__">{{scope_recent_label}}</option>
               <option value="__gallery__">{{scope_published_label}}</option>
             </select>
@@ -99,6 +100,9 @@
                 <div class="asset-sidebar-global">
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="all_assets_selected" data-folder-id="__all__">
                     <span class="asset-row-label" data-attr-title="scope_all_label">{{scope_all_label}}</span><span class="asset-row-count">{{all_assets_count}}</span>
+                  </button>
+                  <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__local__'" data-folder-id="__local__">
+                    <span class="asset-row-label" data-attr-title="scope_local_label">{{scope_local_label}}</span><span class="asset-row-count">{{local_assets_count}}</span>
                   </button>
                   <button class="asset-button asset-button--text asset-filter-row" type="button" data-class-is-active="selected_folder_id == '__recent__'" data-folder-id="__recent__">
                     <span class="asset-row-label" data-attr-title="scope_recent_label">{{scope_recent_label}}</span>
