@@ -147,7 +147,14 @@ body {
     margin: 0 0 8dp;
 }
 .modal-field--multiline { height: auto; min-height: 96dp; max-height: none; align-items: flex-start; }
-.modal-field--multiline textarea { flex: 1; min-width: 0; height: 88dp; }
+.form-modal .modal-field--multiline textarea {
+    flex: 1;
+    min-width: 0;
+    height: 88dp;
+    min-height: 88dp;
+    max-height: none;
+    overflow-y: auto;
+}
 .modal-field-label {
     display: block;
     width: 200dp;

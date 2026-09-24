@@ -3335,13 +3335,16 @@ def test_gallery_inspector_has_title_description_and_edit_action(panel_module):
 
 
 def test_gallery_inspector_reads_link_and_saves_pending_details(panel_module, monkeypatch):
+    from html.parser import HTMLParser
+
     panel, asset, scene = _gallery_fixture(panel_module)
+    description = 'first line\n"quoted" <tag> & 😀 https://example.com/a?x=1&y=2\n'
     panel._gallery_state["identity"] = "account"
     panel._gallery_state["links"][asset["id"]]["localFields"] = {
-        "title": "Local title", "description": "Local description", "viewerSettings": {"camera": 1}
+        "title": "Local title", "description": description, "viewerSettings": {"camera": 1}
     }
     panel._select_asset_id(asset["id"])
-    assert panel._gallery_details() == {"title": "Local title", "description": "Local description"}
+    assert panel._gallery_details() == {"title": "Local title", "description": description}
     assert panel._can_edit_gallery_details()
     forms = []
     monkeypatch.setattr(panel_module.lf.ui, "form_dialog", lambda *args, **kwargs: forms.append((args, kwargs)), raising=False)
@@ -3351,9 +3354,44 @@ def test_gallery_inspector_reads_link_and_saves_pending_details(panel_module, mo
     panel.open_gallery_details()
     assert 'name="gallery_title"' in forms[-1][0][2]
     assert 'name="gallery_description"' in forms[-1][0][2]
-    panel._read_project_form({"gallery_title": "Edited title", "gallery_description": "Edited description"})
+    markup = forms[-1][0][2]
+
+    class TextareaParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_textarea = False
+            self.value = []
+            self.attributes = {}
+
+        def handle_starttag(self, tag, attrs):
+            self.in_textarea = tag == "textarea"
+            if self.in_textarea:
+                self.attributes = dict(attrs)
+
+        def handle_endtag(self, tag):
+            if tag == "textarea":
+                self.in_textarea = False
+
+        def handle_data(self, value):
+            if self.in_textarea:
+                self.value.append(value)
+
+    parser = TextareaParser()
+    parser.feed(markup)
+    assert parser.attributes["value"] == description
+    assert "".join(parser.value) == ""
+
+    edited = 'edited\n"quotes" < > & 😀 https://example.com/?a=1&b=2\n'
+    panel._read_project_form({"gallery_title": "Edited title", "gallery_description": edited})
     panel.confirm_project_dialog()
-    assert saved == [(asset["id"], "Edited title", "Edited description")]
+    assert saved == [(asset["id"], "Edited title", edited)]
+
+
+def test_gallery_description_textarea_can_scroll_multiline(panel_module):
+    css = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/modal_overlay.rcss").read_text()
+    assert ".form-modal .modal-field--multiline textarea" in css
+    assert "max-height: none" in css
+    assert "overflow-y: auto" in css
 
 
 def test_recent_only_gallery_details_need_a_link(panel_module, monkeypatch):

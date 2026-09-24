@@ -368,6 +368,51 @@ def test_license_form_uses_chooser_and_escapes_custom_text():
         assert 'name="attribution"' not in body and 'name="license_text"' not in body
 
 
+def test_custom_license_textarea_round_trips_special_characters():
+    from html.parser import HTMLParser
+    from lfs_plugins.project_dialog import form_content
+    from lfs_plugins.project_inspector import license_value
+
+    notice = 'Tom & Jerry\'s "cut" <1> > https://example.org/?a=1&b=2'
+    body, _ = form_content(
+        'license',
+        dict(license_choice='custom', license_name='Notice', license_text=notice),
+        tr=lambda key: key,
+        confirm_label='Save',
+        busy=False,
+    )
+
+    class TextareaParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_textarea = False
+            self.attributes = {}
+            self.value = []
+
+        def handle_starttag(self, tag, attrs):
+            self.in_textarea = tag == 'textarea'
+            if self.in_textarea:
+                self.attributes = dict(attrs)
+
+        def handle_endtag(self, tag):
+            if tag == 'textarea':
+                self.in_textarea = False
+
+        def handle_data(self, value):
+            if self.in_textarea:
+                self.value.append(value)
+
+    parser = TextareaParser()
+    parser.feed(body)
+    assert parser.attributes['value'] == notice
+    assert ''.join(parser.value) == ''
+    identifier, saved_notice = license_value(
+        dict(license_choice='custom', license_name='Notice', license_text=parser.attributes['value'])
+    )
+    assert identifier == 'LicenseRef-Notice'
+    assert saved_notice == notice
+
+
 def test_queued_inspection_is_discarded_and_retried_after_cancel():
     callbacks, results = [], []
     pipeline = InspectionFactsPipeline(lambda _path: object(), lambda _path: object(),

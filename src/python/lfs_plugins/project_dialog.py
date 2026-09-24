@@ -60,7 +60,7 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
         body += '<div class="modal-note">' + label("projects.license.meaning_" + meaning) + '</div>'
         if selected == "custom":
             body += field("license_name", "projects.license.name")
-            body += form_row("projects.license.text", f'<textarea id="license_text" name="license_text" rows="1">{text(data.get("license_text", ""))}</textarea>', "license_text")
+            body += form_row("projects.license.text", f'<textarea id="license_text" name="license_text" rows="1" value="{text(data.get("license_text", ""))}"></textarea>', "license_text")
         if selected not in {"CC0-1.0", "LicenseRef-Proprietary"}:
             body += field("attribution", "projects.license.attribution")
     elif kind == "rename":
@@ -68,7 +68,7 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
     elif kind == "gallery_details":
         body += field("gallery_title", "projects.gallery.details.title")
         body += form_row("projects.gallery.details.description",
-                         f'<textarea id="gallery_description" name="gallery_description" rows="4">{text(data.get("gallery_description", ""))}</textarea>',
+                         f'<textarea id="gallery_description" name="gallery_description" rows="4" value="{text(data.get("gallery_description", ""))}"></textarea>',
                          "gallery_description", multiline=True)
     elif kind == "repair":
         body += field("destination", "projects.dialog.choose_destination")
