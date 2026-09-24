@@ -17,7 +17,7 @@
   "projects.sidebar.all_projects": "所有项目",
   "projects.sidebar.recent": "最近",
   "projects.toolbar.filter": "筛选",
-  "projects.filter.all": "All projects",
+  "projects.filter.clear": "无筛选",
   "projects.filter.attention": "Needs attention",
   "projects.filter.not_published": "Not published",
   "projects.filter.published": "Published",

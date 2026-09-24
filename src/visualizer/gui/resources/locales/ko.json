@@ -17,7 +17,7 @@
   "projects.sidebar.all_projects": "모든 프로젝트",
   "projects.sidebar.recent": "최근",
   "projects.toolbar.filter": "필터",
-  "projects.filter.all": "All projects",
+  "projects.filter.clear": "필터 없음",
   "projects.filter.attention": "Needs attention",
   "projects.filter.not_published": "Not published",
   "projects.filter.published": "Published",

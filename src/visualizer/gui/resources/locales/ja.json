@@ -17,7 +17,7 @@
   "projects.sidebar.all_projects": "すべてのプロジェクト",
   "projects.sidebar.recent": "最近使った項目",
   "projects.toolbar.filter": "絞り込み",
-  "projects.filter.all": "All projects",
+  "projects.filter.clear": "フィルターなし",
   "projects.filter.attention": "Needs attention",
   "projects.filter.not_published": "Not published",
   "projects.filter.published": "Published",

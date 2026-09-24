@@ -910,6 +910,32 @@ def test_project_filters_use_catalog_inspection_for_unselected_projects(panel_mo
         panel._active_filter = active
         assert [row["id"] for row in panel.get_filtered_assets()] == [checkpoint["id"]]
 
+
+def test_filter_menu_names_the_all_option_as_a_clear_action(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._active_filter = "missing"
+
+    panel.open_filter_menu()
+
+    menu = panel_module.lf._test_state.context_menus[-1]
+    assert menu["items"][0] == {"label": "projects.filter.clear", "action": "all"}
+    menu["on_action"]("all")
+    assert panel._active_filter == "all"
+
+    panel.open_view_menu()
+    view_menu = panel_module.lf._test_state.context_menus[-1]
+    assert any(
+        item.get("label") == "projects.filter.clear" and item.get("action") == "filter:all"
+        for item in view_menu["items"]
+    )
+    assert panel.get_filter_label() == "projects.toolbar.filter"
+
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "asset_manager.rml").read_text()
+    assert 'data-attr-title="active_filter_label"' in rml
+    assert '<span class="asset-button-text">{{filter_menu_label}}</span>' in rml
+
+
 def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     first = _project(name="Bicycle")
     second = _project(

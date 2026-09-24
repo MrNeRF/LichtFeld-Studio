@@ -17,7 +17,7 @@
   "projects.sidebar.all_projects": "Tutti i progetti",
   "projects.sidebar.recent": "Recenti",
   "projects.toolbar.filter": "Filtra",
-  "projects.filter.all": "All projects",
+  "projects.filter.clear": "Nessun filtro",
   "projects.filter.attention": "Needs attention",
   "projects.filter.not_published": "Not published",
   "projects.filter.published": "Published",

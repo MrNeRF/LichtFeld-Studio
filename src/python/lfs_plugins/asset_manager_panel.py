@@ -1049,7 +1049,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_filter_label(self) -> str:
         return tr({
-            "all": "projects.filter.all",
+            "all": "projects.toolbar.filter",
             "attention": "projects.filter.attention",
             "not_published": "projects.filter.not_published",
             "published": "projects.filter.published",
@@ -1061,7 +1061,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def open_filter_menu(self, _handle=None, _ev=None, _args=None):
         filters = [
-            ("projects.filter.all", "all"),
+            ("projects.filter.clear", "all"),
             ("projects.filter.attention", "attention"),
             ("projects.filter.not_published", "not_published"),
             ("projects.filter.published", "published"),
@@ -2219,7 +2219,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def open_view_menu(self, _handle=None, _ev=None, _args=None):
         items = [
-            {"label": tr("projects.filter.all"), "action": "filter:all"},
+            {"label": tr("projects.filter.clear"), "action": "filter:all"},
             {"label": tr("projects.filter.attention"), "action": "filter:attention"},
             {"label": tr("projects.filter.not_published"), "action": "filter:not_published"},
             {"label": tr("projects.filter.published"), "action": "filter:published"},
