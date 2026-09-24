@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
 import inspect
+import math
 import re
 import shutil
 import sys
@@ -577,6 +578,56 @@ def test_cached_catalog_preview_uses_persisted_card_metadata(panel_module, tmp_p
     assert preview["folders"]["local"]["name"] == "local"
 
 
+def test_locale_width_texts_are_collected_without_ui_calls(panel_module, tmp_path):
+    (tmp_path / "en.json").write_text(json.dumps({
+        "projects": {
+            "gallery": {"state": {"ready": "Ready {percent}%", "other": "Needs {name}"}},
+            "property": {"size": "Size"},
+        },
+    }))
+
+    gallery, labels = panel_module._load_locale_measure_texts(tmp_path)
+
+    assert gallery == ["Ready 100%"]
+    assert labels == ["Size"]
+
+
+def test_inspected_card_title_is_saved_for_the_next_panel_session(panel_module, tmp_path):
+    from lfs_plugins.asset_index import AssetIndex, Project, read_catalog_preview
+
+    library = tmp_path / "library.json"
+    index = AssetIndex(library_path=library, default_folder_path=tmp_path / "projects")
+    assert index.load()
+    project_id = str(uuid.uuid4())
+    index._projects[project_id] = Project(
+        project_uuid=project_id,
+        name="sample",
+        path=str(tmp_path / "projects" / "sample.licht"),
+        folder_id="default",
+    )
+
+    assert index.cache_display_names({project_id: "Saved card title"})
+    first_epoch = index.catalog_epoch()
+    assert index.cache_display_names({project_id: "Saved card title"})
+
+    assert index.catalog_epoch() == first_epoch
+    assert read_catalog_preview(library)["projects"][project_id]["display_name"] == "Saved card title"
+
+
+def test_inspection_result_refresh_is_batched_on_ui_turn(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    refreshed = []
+    monkeypatch.setattr(panel_module.lf.ui, "schedule", lambda callback: None, raising=False)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **kwargs: refreshed.append(kwargs))
+
+    panel._schedule_visible_records_refresh()
+    panel._schedule_visible_records_refresh()
+
+    assert panel._asset_window_refresh_pending is True
+    assert refreshed == []
+
+
 def test_filtered_rows_are_reused_until_catalog_or_filter_changes(panel_module, monkeypatch):
     first = _project(name="First")
     second = _project(project_id="22222222-2222-4222-8222-222222222222", name="Second")
@@ -613,6 +664,36 @@ def test_filtered_rows_are_reused_until_catalog_or_filter_changes(panel_module, 
     epoch[0] += 1
     assert len(panel._filtered_assets()) == 2
     assert len(reads) > filter_read_count
+
+
+def test_thumbnail_cleanup_reads_detached_catalog_without_index_lock(panel_module):
+    project = _project()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        catalog_epoch=lambda: 1,
+        iter_project_ids=lambda: (_ for _ in ()).throw(AssertionError("locked index read")),
+    )
+    panel._library_service = SimpleNamespace(snapshot=lambda: {
+        "projects": {project["id"]: project}, "folders": {}, "epoch": 1,
+    })
+
+    panel._release_obsolete_thumbnail_sources()
+
+
+def test_gallery_window_only_keeps_one_row_near_the_viewport(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._view_mode = "gallery"
+    panel._layout_class = "narrow"
+    panel._asset_window_client_width = 500.0
+    panel._asset_window_client_height = 400.0
+    panel._asset_window_scroll_top = 0.0
+    columns, _slot_width, row_height = panel._gallery_window_metrics(500.0)
+    assets = [{"id": str(i)} for i in range(150)]
+
+    window = panel._window_assets(assets)
+
+    visible_rows = math.ceil(400.0 / row_height)
+    assert len(window) <= columns * (visible_rows + 2)
 
 
 def test_project_card_name_uses_project_filename_not_assets_parent(panel_module):
@@ -3652,6 +3733,39 @@ def test_all_projects_scope_includes_gallery_only_rows(panel_module):
     assert [row["id"] for row in panel._filtered_assets()] == [local["id"], "remote:remote-only"]
     assert panel.get_all_assets_count() == 2
     assert panel.get_local_assets_count() == 1
+
+
+def test_count_getters_use_detached_catalog_during_verification(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(count=lambda: pytest.fail("count waited on index lock"))
+    panel._library_service = SimpleNamespace(
+        snapshot=lambda: pytest.fail("count rebuilt catalog snapshot")
+    )
+    panel._catalog_snapshot = {"projects": {asset["id"]: asset}, "folders": {}}
+    panel._catalog_snapshot_epoch = None
+
+    assert panel.get_all_assets_count() == 1
+    assert panel.get_local_assets_count() == 1
+
+
+def test_mount_does_not_write_unchanged_project_manager_state(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    for name in (
+        "_invalidate_recent_scope_cache", "_subscribe_gallery", "_repair_selection",
+        "_bind_dom_event_listeners", "_subscribe_reactive_state", "_sync_panel_space_state",
+        "_sync_panel_layout", "_sync_asset_window_viewport", "_request_layout_recheck",
+        "_refresh_records", "_subscribe_catalog", "_sync_default_folder_path",
+        "_refresh_after_project_write", "_start_catalog_verify", "_start_inspection_refresh",
+    ):
+        monkeypatch.setattr(panel, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(panel, "_catalog_epoch", lambda: 1)
+    monkeypatch.setattr(panel_module, "_folder_scan_completed_in_process", True)
+    monkeypatch.setattr(panel, "_persist_project_manager_state",
+                        lambda: pytest.fail("mount wrote unchanged state"))
+
+    panel.on_mount(SimpleNamespace())
 
 
 def test_local_projects_scope_keeps_only_local_rows(panel_module):

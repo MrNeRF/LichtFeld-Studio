@@ -728,6 +728,28 @@ class AssetIndex:
         """Read the immutable integer epoch without waiting for file inspection."""
         return self._catalog_epoch
 
+    @_synchronized
+    def cache_display_names(self, names: Dict[str, str]) -> bool:
+        """Persist titles discovered by card inspection in one catalog write."""
+        previous = {}
+        for project_id, title in names.items():
+            project = self._projects.get(project_id)
+            title = str(title or "").strip()
+            if project is None or not title or project.extra.get("display_name") == title:
+                continue
+            previous[project_id] = project.extra.get("display_name")
+            project.extra["display_name"] = title
+        if not previous:
+            return True
+        if self.save():
+            return True
+        for project_id, title in previous.items():
+            if title is None:
+                self._projects[project_id].extra.pop("display_name", None)
+            else:
+                self._projects[project_id].extra["display_name"] = title
+        return False
+
     def _apply_inspection(self, project: Project, inspection: Any) -> None:
         if self._projects.get(project.project_uuid) is project:
             self._remember_identity(project.path, project.project_uuid)

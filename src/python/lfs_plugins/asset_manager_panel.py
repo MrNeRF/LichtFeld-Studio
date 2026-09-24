@@ -73,8 +73,8 @@ PRECISE_SCROLL_STEP = 32.0
 ASSET_LIST_ROW_HEIGHT_DP = 40.0
 ASSET_GALLERY_ROW_HEIGHT_DP = 230.0
 ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
-ASSET_WINDOW_OVERSCAN_ROWS = 2
-ASSET_WINDOW_BATCH_ROWS = 4
+ASSET_WINDOW_OVERSCAN_ROWS = 1
+ASSET_WINDOW_BATCH_ROWS = 1
 ASSET_LIST_FALLBACK_ROWS = 24
 ASSET_GALLERY_FALLBACK_ROWS = 8
 _RML_PATH_SAFE_CHARS = "/:._-~"
@@ -158,6 +158,29 @@ def tr(key: str, **kwargs: Any) -> str:
     return result
 
 
+def _load_locale_measure_texts(directory: Path) -> tuple[list[str], list[str]]:
+    """Collect locale labels on a worker before any UI text measurement."""
+    gallery: list[str] = []
+    labels: list[str] = []
+
+    def visit(value: Any, prefix: str = "") -> None:
+        if not isinstance(value, dict):
+            return
+        for name, entry in value.items():
+            key = prefix + name
+            if isinstance(entry, dict):
+                visit(entry, key + ".")
+            elif isinstance(entry, str):
+                if key.startswith("projects.gallery.state.") and "{" not in entry.replace("{percent}", ""):
+                    gallery.append(entry.format(percent=100))
+                elif key.startswith("projects.property."):
+                    labels.append(entry)
+
+    for locale_file in sorted(directory.glob("*.json")):
+        visit(json.loads(locale_file.read_text(encoding="utf-8")))
+    return gallery, labels
+
+
 __lfs_panel_classes__ = ["AssetManagerPanel"]
 __lfs_panel_ids__ = ["lfs.asset_manager"]
 
@@ -179,6 +202,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._catalog_snapshot_epoch: Optional[int] = None
         self._catalog_snapshot: Optional[Dict[str, Any]] = None
         self._catalog_snapshot_refresh_active = False
+        self._title_cache_lock = threading.Lock()
+        self._title_cache_pending: Dict[str, str] = {}
+        self._title_cache_timer: Optional[threading.Timer] = None
         self._catalog_preview: Optional[Dict[str, Any]] = None
         self._filtered_cache_key: Optional[tuple] = None
         self._filtered_cache_rows: List[Dict[str, Any]] = []
@@ -201,6 +227,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._text_column_metrics = None
         self._text_measure_key = None
         self._text_locales = None
+        self._text_locales_loading = False
         self._inspector_label_width = 168.0
         self._inspector_width = INSPECTOR_COLUMN_MIN
         self._inspector_preferred_height = 1000.0
@@ -236,6 +263,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._asset_gallery_top_spacer_height = 0.0
         self._asset_gallery_bottom_spacer_height = 0.0
         self._asset_window_refresh_pending = False
+        self._folder_records_refresh_pending = False
         self._asset_scroll_event_suppressed = False
         self._asset_scroll_suppressed_top = -1.0
         self._last_asset_match_count = 0
@@ -1316,6 +1344,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
         def worker() -> None:
             try:
+                # Coalesce a burst of file verification updates before copying
+                # the catalog for the next visible card update.
+                time.sleep(0.05)
                 snapshot = service.snapshot()
             except Exception:
                 _log.exception("Projects catalog snapshot refresh failed")
@@ -1332,7 +1363,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     self._filtered_cache_key = None
                     self._invalidate_recent_scope_cache()
                     self._repair_selection()
-                    self._refresh_records(assets=True, folders=True)
+                    self._asset_window_refresh_pending = True
+                    self._folder_records_refresh_pending = True
+                    self._request_model_update()
                     self._dirty_selection()
                     self._start_inspection_refresh()
                 if self._catalog_snapshot_epoch != self._catalog_epoch():
@@ -1417,8 +1450,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return
         if error is not None:
             self._inspection_errors[asset_id] = str(error)
+            self._schedule_visible_records_refresh()
             self._dirty_fields(
-                "assets", "selected_has_problem", "selected_health_label",
+                "selected_has_problem", "selected_health_label",
                 "catalog_notice", "has_catalog_notice",
             )
             return
@@ -1436,8 +1470,43 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             iteration = self._details_iteration(result)
             if iteration is not None:
                 self._cache_iteration(asset_id, iteration)
-        self._refresh_records(assets=True)
+            title = str(getattr(getattr(result, "card", None), "title", "") or "").strip()
+            if title:
+                self._queue_cached_title(asset_id, title)
+        self._schedule_visible_records_refresh()
         self._dirty_selection()
+
+    def _queue_cached_title(self, asset_id: str, title: str) -> None:
+        current = self._asset_index_assets().get(asset_id, {})
+        if current.get("display_name") == title or self._library_service is None:
+            return
+        with self._title_cache_lock:
+            self._title_cache_pending[asset_id] = title
+            if self._title_cache_timer is not None:
+                return
+            timer = threading.Timer(0.4, self._flush_cached_titles)
+            timer.daemon = True
+            self._title_cache_timer = timer
+            timer.start()
+
+    def _flush_cached_titles(self) -> None:
+        with self._title_cache_lock:
+            titles = self._title_cache_pending
+            self._title_cache_pending = {}
+            self._title_cache_timer = None
+        if titles and self._library_service is not None:
+            try:
+                self._library_service._call("cache_display_names", titles)
+            except Exception:
+                _log.exception("Projects title cache update failed")
+
+    def _schedule_visible_records_refresh(self) -> None:
+        if callable(getattr(lf.ui, "schedule", None)):
+            if not self._asset_window_refresh_pending:
+                self._asset_window_refresh_pending = True
+                self._request_model_update()
+        else:
+            self._refresh_records(assets=True)
 
     @staticmethod
     def _details_iteration(details: Any) -> Optional[int]:
@@ -1939,8 +2008,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         }
 
     def _release_obsolete_thumbnail_sources(self) -> None:
-        ids = getattr(self._asset_index, "iter_project_ids", None)
-        live_ids = set(ids() if callable(ids) else self._asset_index_assets())
+        live_ids = set(self._asset_index_assets())
         live_ids.update(self._gallery_remote_assets())
         live_ids.update(self._recent_only_assets())
         stale_ids = set(self._thumbnail_sources_by_asset).difference(live_ids)
@@ -2120,8 +2188,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_all_assets_count(self) -> int:
         query = self._search_query.strip().casefold()
         if not query:
-            count = getattr(self._asset_index, "count", None)
-            local_count = int(count()) if callable(count) else len(self._asset_index_assets())
+            if self._catalog_snapshot is not None or self._catalog_preview is not None:
+                local_count = len(self._asset_index_assets())
+            else:
+                count = getattr(self._asset_index, "count", None)
+                local_count = int(count()) if callable(count) else len(self._asset_index_assets())
             return local_count + len(self._gallery_remote_assets())
         return sum(
             self._asset_matches_query(asset, query)
@@ -2131,6 +2202,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
     def get_local_assets_count(self) -> int:
         query = self._search_query.strip().casefold()
         if not query:
+            if self._catalog_snapshot is not None or self._catalog_preview is not None:
+                return len(self._asset_index_assets())
             count = getattr(self._asset_index, "count", None)
             if callable(count):
                 return int(count())
@@ -4677,30 +4750,21 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if not prose or not mono or not hasattr(prose, "measure_text"):
             return
         scale = self._ui_scale()
-        folders = tuple(sorted({self._folder_name(a.get("folder_id")) for a in self._asset_index_assets().values()}))
+        folder_records = self._asset_index_folders()
+        folders = tuple(sorted({
+            str(folder_records.get(str(a.get("folder_id")), {}).get("name") or "")
+            for a in self._asset_index_assets().values()
+        }))
         key = (scale, lf.ui.get_current_language(), folders)
         if key == self._text_measure_key:
             return
         if self._text_locales is None:
-            import json
-            lf.ui.get_languages()  # Load fallback glyphs before measuring every locale.
-            directory = Path(lf.ui.resource_directory()) / "locales"
-            def flatten(data, prefix=""):
-                result = {}
-                for name, value in data.items():
-                    full = prefix + name
-                    if isinstance(value, dict):
-                        result.update(flatten(value, full + "."))
-                    else:
-                        result[full] = value
-                return result
-            self._text_locales = [flatten(json.loads(path.read_text())) for path in sorted(directory.glob("*.json"))]
+            self._start_text_locales_load()
+            return
         def widest(element, texts):
             return max((element.measure_text(text) / scale for text in texts), default=0.0)
-        gallery = [value.format(percent=100) for locale in self._text_locales for name, value in locale.items()
-                   if name.startswith("projects.gallery.state.") and "{" not in value.replace("{percent}", "")]
-        labels = [value for locale in self._text_locales for name, value in locale.items()
-                  if name.startswith("projects.property.")]
+        lf.ui.get_languages()  # Load fallback glyphs before measuring every locale.
+        gallery, labels = self._text_locales
         self._inspector_label_width = math.ceil(widest(prose, labels))
         self._text_column_metrics = dict(
             gallery=math.ceil(widest(prose, gallery)) + 16.0 + 24.0,
@@ -4715,6 +4779,33 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             label.set_property("min-width", f"{self._inspector_label_width}dp")
             label.set_property("flex-basis", f"{self._inspector_label_width}dp")
         self._text_measure_key = key
+
+    def _start_text_locales_load(self) -> None:
+        if self._text_locales_loading:
+            return
+        self._text_locales_loading = True
+        directory = Path(lf.ui.resource_directory()) / "locales"
+        generation = self._mount_generation
+
+        def worker() -> None:
+            try:
+                texts = _load_locale_measure_texts(directory)
+            except (OSError, ValueError) as exc:
+                _log.warning("Projects locale width data unavailable: %s", exc)
+                texts = ([], [])
+
+            def complete() -> None:
+                self._text_locales_loading = False
+                if generation != self._mount_generation or not self._panel_mounted:
+                    return
+                self._text_locales = texts
+                self._text_measure_key = None
+                self._measure_text_columns()
+                self._dirty_list_layout_fields()
+
+            self._schedule_ui(complete)
+
+        threading.Thread(target=worker, daemon=True, name="AssetManagerLocaleWidths").start()
 
     def _list_column_width(self, column: str) -> float:
         return list_column_widths(
@@ -5024,7 +5115,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._start_inspection_refresh()
         if self._asset_index is not None and not _folder_scan_completed_in_process:
             self._scan_asset_folders()
-        self._persist_project_manager_state()
 
     def on_update(self, doc):
         self._drain_ui_callbacks()
@@ -5038,9 +5128,12 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             changed = True
         if self._publish_scan_progress():
             changed = True
-        if self._asset_window_refresh_pending or self._sync_asset_window_viewport(doc):
+        window_changed = self._sync_asset_window_viewport(doc)
+        if self._asset_window_refresh_pending or window_changed or self._folder_records_refresh_pending:
             self._asset_window_refresh_pending = False
-            self._refresh_records(assets=True)
+            folders = self._folder_records_refresh_pending
+            self._folder_records_refresh_pending = False
+            self._refresh_records(assets=True, folders=folders)
             changed = True
         return changed
 
