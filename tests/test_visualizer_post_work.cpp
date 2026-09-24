@@ -15492,6 +15492,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            FinishedTrainingStartReportsOverwriteConflict) {
+        LFS_CUDA_BACKEND_OR_RETURN();
         auto options = projectOptions();
         {
             VisualizerImpl paused(options);
