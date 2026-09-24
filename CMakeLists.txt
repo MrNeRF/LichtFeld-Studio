@@ -739,7 +739,7 @@ target_link_libraries(${PROJECT_NAME}
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
         taywee::args
-        SDL3::SDL3
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:SDL3::SDL3>
 )
 if(APPLE)
     target_link_libraries(${PROJECT_NAME} PRIVATE lfs_python_embed)

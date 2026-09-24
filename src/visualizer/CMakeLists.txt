@@ -6,8 +6,8 @@
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
-# SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
-if(WIN32)
+# SHARED on Windows and macOS to avoid singleton duplication across module boundaries
+if(WIN32 OR APPLE)
     set(LFS_VIS_LIB_TYPE SHARED)
 else()
     set(LFS_VIS_LIB_TYPE STATIC)
@@ -430,6 +430,9 @@ set_target_properties(lfs_visualizer PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+if(APPLE)
+    target_link_options(lfs_visualizer PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 if(WIN32)
     set_target_properties(lfs_visualizer PROPERTIES
         POSITION_INDEPENDENT_CODE ON
