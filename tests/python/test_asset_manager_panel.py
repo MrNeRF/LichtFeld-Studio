@@ -4158,6 +4158,37 @@ def test_P13_breakpoint_tracks_shell_width_and_panel_space(panel_module, monkeyp
     assert panel._main_min_height == 0.0
 
 
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+@pytest.mark.parametrize("width,expected", [
+    (260, "compact"), (360, "narrow"), (480, "narrow"),
+    (700, "medium"), (900, "medium"),
+])
+def test_projects_toolbar_layout_class_uses_dock_dp(panel_module, monkeypatch, scale, width, expected):
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel_module.lf.ui, "get_ui_scale", lambda: scale, raising=False)
+    shell = SimpleNamespace(client_width=width * scale)
+    popup = SimpleNamespace(client_width=width * scale, client_height=700 * scale)
+    panel._doc = _Document({"asset-shell": shell, "asset-popup": popup})
+
+    panel._sync_panel_layout()
+
+    assert panel._content_width == pytest.approx(width)
+    assert panel._layout_class == expected
+
+
+def test_projects_toolbar_rows_grow_with_wrapped_content():
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "asset_manager.rcss").read_text()
+    toolbar_rules = re.findall(r"#asset-popup-toolbar\s*\{([^}]+)\}", rcss)
+    row_rules = re.findall(r"\.toolbar-row-primary\s*\{([^}]+)\}", rcss)
+    assert toolbar_rules and row_rules
+    assert all(not any(decl.strip() in ("height: 40dp", "height: 80dp")
+                       for decl in rule.split(";")) for rule in toolbar_rules)
+    assert all(not any(decl.strip() in ("height: 40dp", "height: 80dp")
+                       for decl in rule.split(";")) for rule in row_rules)
+    assert "flex-wrap: wrap" in row_rules[0] or "flex-wrap: wrap" in row_rules[1]
+
+
 @pytest.mark.parametrize("height,expected", [(200.0, "180.0dp"), (700.0, "350.0dp"), (1440.0, "720.0dp")])
 def test_narrow_inspector_resize_reset_restores_readable_height(panel_module, height, expected):
     panel = panel_module.AssetManagerPanel()
