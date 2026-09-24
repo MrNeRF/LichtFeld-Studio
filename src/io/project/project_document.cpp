@@ -2831,7 +2831,7 @@ namespace lfs::io::project {
             if (!output)
                 return std::move(output).error();
             const auto copied = payload->visit_stream([&](std::istream& input, const uint64_t size) -> lfs::Result<void> {
-                std::array<std::byte, 1024 * 1024> buffer;
+                std::vector<std::byte> buffer(1024 * 1024);
                 uint64_t offset = 0;
                 while (offset < size) {
                     const auto count = static_cast<size_t>(std::min<uint64_t>(buffer.size(), size - offset));

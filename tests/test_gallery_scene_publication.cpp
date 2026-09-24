@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "gui/gallery_scene_publication.hpp"
@@ -297,6 +298,36 @@ TEST(GalleryScenePublicationStackTest, PublicationFitsWorkerStackAndPreservesEmb
             EXPECT_EQ(published.dsrc, bytes);
             EXPECT_EQ(read_file_bytes(request.path / "0.sog"), bytes);
             EXPECT_FALSE(request.materialized_payload);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
+// Opening a downloaded project materializes its embedded scene on the hydration worker. A copy buffer on the
+// stack overflows that worker (Windows threads default to 1 MiB) and ends the process without a log line.
+TEST(GalleryScenePublicationStackTest, EmbeddedAssetMaterializesOnWorkerStack) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto home = temporary.path / "home";
+            std::filesystem::create_directories(home);
+            ASSERT_TRUE(lfs::core::environment::set_value("LFS_HOME", home.string()));
+            const auto bytes = multi_buffer_asset();
+            auto request = base_request(temporary.path / "download.scene", ExportFormat::GALLERY_SOG);
+            GalleryScenePublishNode node;
+            node.snapshot.row_count = 8;
+            node.snapshot.active_sh_degree = 0;
+            node.snapshot.world_transform = glm::mat4{1.0f};
+            node.name = "encoded";
+            node.encoded = owned_asset("sog", bytes, fixed_uuid(113));
+            request.nodes.push_back(std::move(node));
+            writeGalleryScenePublication(request, {}, {});
+            const auto published = read_published_node(request.path);
+            auto document = require_result_ptr(ProjectDocument::open(request.path / "project.licht"));
+            std::filesystem::path materialized;
+            on_small_stack([&] { materialized = require_result(document->materialize_embedded_asset(published.uuid, "sog")); });
+            EXPECT_EQ(read_file_bytes(materialized), bytes);
         }(),
          std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
         ::testing::ExitedWithCode(EXIT_SUCCESS), "");
