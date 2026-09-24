@@ -5,7 +5,7 @@
 #include "core/gpu_device_info.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/vulkan_device_selection.hpp"
-#include "core/vulkan_shader_requirements.hpp"
+#include "core/vulkan_helpers.hpp"
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -52,13 +52,9 @@ namespace lfs::core {
     inline bool device_has_required_features(const VkPhysicalDevice physical,
                                              uint32_t* const queue_family,
                                              bool* const shader_float16,
-                                             bool* const shader_atomic_float) {
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(physical, &properties);
-        if (!vulkan_api_at_least_1_3(properties.apiVersion)) {
-            return false;
-        }
-
+                                             bool* const shader_atomic_float,
+                                             const bool viewer_shaders,
+                                             std::string* const missing = nullptr) {
         uint32_t queue_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &queue_count, nullptr);
         std::vector<VkQueueFamilyProperties> queues(queue_count);
@@ -74,43 +70,16 @@ namespace lfs::core {
             return false;
         }
 
-        VkPhysicalDeviceVulkan13Features features13{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-        VkPhysicalDeviceVulkan12Features features12{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-        VkPhysicalDeviceVulkan11Features features11{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
-        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-        features.pNext = &features11;
-        features11.pNext = &features12;
-        features12.pNext = &features13;
-        vkGetPhysicalDeviceFeatures2(physical, &features);
-
-        VkPhysicalDeviceFloatControlsProperties float_controls{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES};
-        VkPhysicalDeviceSubgroupProperties subgroup{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
-        VkPhysicalDeviceProperties2 properties2{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        properties2.pNext = &subgroup;
-        subgroup.pNext = &float_controls;
-        vkGetPhysicalDeviceProperties2(physical, &properties2);
-        const VkSubgroupFeatureFlags subgroup_required =
-            VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
-            VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-        const bool subgroup_supported =
-            (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-            (subgroup.supportedOperations & subgroup_required) == subgroup_required;
-        if (!features.features.shaderInt64 || !features.features.shaderInt16 ||
-            !features11.storageBuffer16BitAccess || !features12.storageBuffer8BitAccess ||
-            !features12.timelineSemaphore || !features12.bufferDeviceAddress ||
-            !features13.synchronization2 ||
-            !float_controls.shaderSignedZeroInfNanPreserveFloat32 || !subgroup_supported) {
+        const auto feature_check = check_vulkan_feature_requirements(
+            physical, {.viewer_shaders = viewer_shaders});
+        if (missing != nullptr)
+            *missing = feature_check.missing;
+        if (!feature_check.supported()) {
             return false;
         }
 
         *queue_family = *family;
-        *shader_float16 = features12.shaderFloat16 == VK_TRUE;
+        *shader_float16 = feature_check.shader_float16;
         *shader_atomic_float = false;
         if (has_device_extension(physical, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)) {
             VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float{
@@ -135,9 +104,7 @@ namespace lfs::core {
             application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
             application.pEngineName = "LichtFeld";
             application.apiVersion = VK_API_VERSION_1_3;
-            VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-            instance_info.pApplicationInfo = &application;
-            if (vkCreateInstance(&instance_info, nullptr, &device.instance_) != VK_SUCCESS) {
+            if (create_vulkan_instance(application, {}, {}, nullptr, 0, &device.instance_) != VK_SUCCESS) {
                 return std::nullopt;
             }
 
@@ -175,10 +142,11 @@ namespace lfs::core {
                 const auto candidate = physical_devices[index];
                 auto& support = features_by_device[index];
                 auto& info = candidates[index];
+                std::string missing;
                 info.required_features = device_has_required_features(
-                    candidate, &support.queue_family, &support.shader_float16, &support.shader_atomic_float);
+                    candidate, &support.queue_family, &support.shader_float16,
+                    &support.shader_atomic_float, push_descriptors, &missing);
                 if (push_descriptors) {
-                    const auto missing = missing_viewer_shader_features(candidate);
                     if (!missing.empty())
                         std::fprintf(stderr, "Skipping headless Vulkan device %zu: viewer shaders require %s\n", index, missing.c_str());
                     info.required_features &= missing.empty();
@@ -225,9 +193,11 @@ namespace lfs::core {
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
             atomic_float.shaderBufferFloat32AtomicAdd =
                 shader_atomic_float ? VK_TRUE : VK_FALSE;
-            VkPhysicalDeviceVulkan13Features features13{
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-            features13.synchronization2 = VK_TRUE;
+            VulkanDeviceFeatureEnableChain required_features;
+            auto& features = required_features.features;
+            auto& features11 = required_features.features11;
+            auto& features12 = required_features.features12;
+            auto& features13 = required_features.features13;
             if (push_descriptors) {
                 VkPhysicalDeviceVulkan13Features supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
                 VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
@@ -237,16 +207,7 @@ namespace lfs::core {
                 features13.computeFullSubgroups = supported.computeFullSubgroups;
             }
             features13.pNext = shader_atomic_float ? &atomic_float : nullptr;
-            VkPhysicalDeviceVulkan12Features features12{
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-            features12.storageBuffer8BitAccess = VK_TRUE;
-            features12.timelineSemaphore = VK_TRUE;
-            features12.bufferDeviceAddress = VK_TRUE;
             features12.shaderFloat16 = shader_float16 ? VK_TRUE : VK_FALSE;
-            features12.pNext = &features13;
-            VkPhysicalDeviceVulkan11Features features11{
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
-            features11.storageBuffer16BitAccess = VK_TRUE;
             features11.uniformAndStorageBuffer16BitAccess = push_descriptors ? VK_TRUE : VK_FALSE;
             VkPhysicalDeviceConditionalRenderingFeaturesEXT conditional_features{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT};
@@ -257,12 +218,8 @@ namespace lfs::core {
             } else {
                 features11.pNext = &features12;
             }
-            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-            features.features.shaderInt64 = VK_TRUE;
-            features.features.shaderInt16 = VK_TRUE;
             features.features.sparseBinding = external_interop &&
                                               headless_sparse_binding_supported(physical, queue_family);
-            features.pNext = &features11;
 
             const float priority = 1.0f;
             VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};

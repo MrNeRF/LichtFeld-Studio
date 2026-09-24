@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
+#include "core/vulkan_helpers.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -1172,9 +1173,8 @@ void main() {
                 app.engineVersion = VK_MAKE_VERSION(1, 0, 0);
                 app.apiVersion = VK_API_VERSION_1_0;
 
-                VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-                info.pApplicationInfo = &app;
-                const VkResult result = vkCreateInstance(&info, nullptr, &instance_);
+                const VkResult result = lfs::core::create_vulkan_instance(
+                    app, {}, {}, nullptr, 0, &instance_);
                 if (result != VK_SUCCESS) {
                     error = vkError("vkCreateInstance", result);
                     return false;

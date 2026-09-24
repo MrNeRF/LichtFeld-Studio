@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
+#include "core/vulkan_helpers.hpp"
 #include "vk_cuda_bridge.hpp"
 #include "vk_memory.hpp"
 #include "vk_pipelines.hpp"
@@ -206,22 +207,11 @@ namespace lfs::core::internal {
                 VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
                 VK_SUBGROUP_FEATURE_BALLOT_BIT |
                 VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-            const bool subgroup_supported =
-                (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-                (subgroup.supportedOperations & subgroup_required) == subgroup_required;
-            const bool available =
-                VK_API_VERSION_MAJOR(properties.properties.apiVersion) > 1 ||
-                (VK_API_VERSION_MAJOR(properties.properties.apiVersion) == 1 &&
-                 VK_API_VERSION_MINOR(properties.properties.apiVersion) >= 3);
+            const auto feature_check = check_vulkan_feature_requirements(device);
             // Every module declares SignedZeroInfNanPreserve for fp32 (plan D12);
             // a device that cannot honor it would run the shaders with
             // undefined NaN and signed-zero behaviour.
-            const bool required =
-                available && features.features.shaderInt64 &&
-                features.features.shaderInt16 && features11.storageBuffer16BitAccess &&
-                features12.storageBuffer8BitAccess && features12.timelineSemaphore &&
-                features12.bufferDeviceAddress && features13.synchronization2 &&
-                subgroup_supported && float_controls.shaderSignedZeroInfNanPreserveFloat32;
+            const bool required = feature_check.supported();
             if (required && caps != nullptr) {
                 std::copy_n(ids.deviceUUID, VK_UUID_SIZE, caps->device_uuid.begin());
                 std::copy_n(ids.driverUUID, VK_UUID_SIZE, caps->driver_uuid.begin());
@@ -490,16 +480,8 @@ namespace lfs::core::internal {
         application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
         application.pEngineName = "LichtFeld";
         application.apiVersion = VK_API_VERSION_1_3;
-        VkInstanceCreateInfo create_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-        create_info.pApplicationInfo = &application;
-        if (sync_validation && !layers.empty()) {
-            create_info.pNext = &validation_features;
-        }
-        create_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
-        create_info.ppEnabledLayerNames = layers.data();
-        create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-        create_info.ppEnabledExtensionNames = extensions.data();
-        vk_check(this, vkCreateInstance(&create_info, nullptr, &instance_),
+        const void* next = sync_validation && !layers.empty() ? &validation_features : nullptr;
+        vk_check(this, create_vulkan_instance(application, extensions, layers, next, 0, &instance_),
                  "vkCreateInstance");
         if (!extensions.empty()) {
             VkDebugUtilsMessengerCreateInfoEXT debug_info{
@@ -642,25 +624,13 @@ namespace lfs::core::internal {
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
 
-        VkPhysicalDeviceVulkan13Features features13{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-        VkPhysicalDeviceVulkan12Features features12{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-        VkPhysicalDeviceVulkan11Features features11{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
-        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VulkanDeviceFeatureEnableChain required_features;
+        auto& features = required_features.features;
+        auto& features11 = required_features.features11;
+        auto& features12 = required_features.features12;
+        auto& features13 = required_features.features13;
         features.features.shaderFloat64 = caps_.shader_float64;
-        features.features.shaderInt64 = VK_TRUE;
-        features.features.shaderInt16 = VK_TRUE;
-        features.pNext = &features11;
-        features11.storageBuffer16BitAccess = VK_TRUE;
-        features11.pNext = &features12;
-        features12.storageBuffer8BitAccess = VK_TRUE;
-        features12.timelineSemaphore = VK_TRUE;
-        features12.bufferDeviceAddress = VK_TRUE;
         features12.shaderFloat16 = caps_.shader_float16;
-        features12.pNext = &features13;
-        features13.synchronization2 = VK_TRUE;
         features13.pNext = caps_.shader_atomic_float ? &atomic_float : nullptr;
         atomic_float = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};

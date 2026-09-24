@@ -1,5 +1,5 @@
 #include "gs_pipeline.h"
-#include "core/vulkan_shader_requirements.hpp"
+#include "core/vulkan_helpers.hpp"
 #include "gs_renderer.h"
 #include "perf_timer.h"
 
@@ -663,9 +663,10 @@ void VulkanGSPipeline::cleanup() {
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
-    const auto missing = lfs::core::missing_viewer_shader_features(selected_physical_device);
-    if (!missing.empty())
-        lfs::rendering::throw_renderer_contract("VkSplat device lacks required shader features: " + missing,
+    const auto feature_check = lfs::core::check_vulkan_feature_requirements(
+        selected_physical_device, {.viewer_shaders = true});
+    if (!feature_check.supported())
+        lfs::rendering::throw_renderer_contract("VkSplat device lacks required shader features: " + feature_check.missing,
                                                 LFS_SOURCE_SITE_CURRENT());
     VkPhysicalDeviceSubgroupProperties subgroupProperties{};
     subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;

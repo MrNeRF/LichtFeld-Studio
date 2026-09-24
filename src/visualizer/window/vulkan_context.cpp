@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_context.hpp"
-#include "core/vulkan_shader_requirements.hpp"
+#include "core/vulkan_helpers.hpp"
 
 #include "core/crash_handler.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
@@ -164,56 +164,6 @@ namespace lfs::vis {
                                VK_API_VERSION_MAJOR(api_version),
                                VK_API_VERSION_MINOR(api_version),
                                VK_API_VERSION_PATCH(api_version));
-        }
-
-        struct RequiredFeatureSupport {
-            bool synchronization2 = false;
-            bool dynamic_rendering = false;
-            bool timeline_semaphore = false;
-        };
-
-        [[nodiscard]] RequiredFeatureSupport queryRequiredFeatureSupport(const VkPhysicalDevice device) {
-            VkPhysicalDeviceVulkan13Features features13{};
-            features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-
-            VkPhysicalDeviceVulkan12Features features12{};
-            features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-            features12.pNext = &features13;
-
-            VkPhysicalDeviceFeatures2 features2{};
-            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            features2.pNext = &features12;
-            vkGetPhysicalDeviceFeatures2(device, &features2);
-
-            RequiredFeatureSupport support{};
-            support.synchronization2 = features13.synchronization2 == VK_TRUE;
-            support.dynamic_rendering = features13.dynamicRendering == VK_TRUE;
-            support.timeline_semaphore = features12.timelineSemaphore == VK_TRUE;
-            return support;
-        }
-
-        [[nodiscard]] bool hasRequiredFeatures(const RequiredFeatureSupport& support) {
-            return support.synchronization2 &&
-                   support.dynamic_rendering &&
-                   support.timeline_semaphore;
-        }
-
-        void appendMissingFeature(std::string& missing, const bool present, std::string_view feature_name) {
-            if (present) {
-                return;
-            }
-            if (!missing.empty()) {
-                missing += ", ";
-            }
-            missing += feature_name;
-        }
-
-        [[nodiscard]] std::string missingRequiredFeatures(const RequiredFeatureSupport& support) {
-            std::string missing;
-            appendMissingFeature(missing, support.synchronization2, "synchronization2");
-            appendMissingFeature(missing, support.dynamic_rendering, "dynamicRendering");
-            appendMissingFeature(missing, support.timeline_semaphore, "timelineSemaphore");
-            return missing;
         }
 
         [[nodiscard]] bool validationRequestedByBuild() {
@@ -2283,16 +2233,9 @@ namespace lfs::vis {
             debug_create_info.pNext = &validation_features;
         }
 
-        VkInstanceCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        create_info.pNext = validation_enabled_ ? &debug_create_info : nullptr;
-        create_info.pApplicationInfo = &app_info;
-        create_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
-        create_info.ppEnabledLayerNames = layers.data();
-        create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-        create_info.ppEnabledExtensionNames = extensions.data();
-
-        const VkResult result = vkCreateInstance(&create_info, nullptr, &instance_);
+        const void* next = validation_enabled_ ? &debug_create_info : nullptr;
+        const VkResult result = lfs::core::create_vulkan_instance(
+            app_info, extensions, layers, next, 0, &instance_, true);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
         }
@@ -2549,16 +2492,12 @@ namespace lfs::vis {
                 continue;
             }
 
-            const auto missing_shaders = lfs::core::missing_viewer_shader_features(device);
-            if (!missing_shaders.empty()) {
-                LOG_WARN("Skipping Vulkan device '{}': viewer shaders require {}", props.deviceName, missing_shaders);
-                continue;
-            }
-            const RequiredFeatureSupport feature_support = queryRequiredFeatureSupport(device);
-            if (!hasRequiredFeatures(feature_support)) {
+            const auto feature_check = lfs::core::check_vulkan_feature_requirements(
+                device, {.viewer_shaders = true, .window_renderer = true});
+            if (!feature_check.supported()) {
                 LOG_WARN("Skipping Vulkan device '{}' because required Vulkan 1.2/1.3 features are missing: {}",
                          props.deviceName,
-                         missingRequiredFeatures(feature_support));
+                         feature_check.missing);
                 continue;
             }
 
@@ -2841,9 +2780,11 @@ namespace lfs::vis {
             vkGetPhysicalDeviceFeatures2(physical_device_, &opt_query);
         }
 
-        VkPhysicalDeviceVulkan13Features features13{};
-        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.synchronization2 = VK_TRUE;
+        lfs::core::VulkanDeviceFeatureEnableChain required_features;
+        auto& features13 = required_features.features13;
+        auto& features12 = required_features.features12;
+        auto& features11 = required_features.features11;
+        auto& features2 = required_features.features;
         features13.dynamicRendering = VK_TRUE;
         features13.subgroupSizeControl = supported_features13.subgroupSizeControl;
         features13.computeFullSubgroups = supported_features13.computeFullSubgroups;
@@ -2858,13 +2799,7 @@ namespace lfs::vis {
                                ? static_cast<void*>(&atomic_float_features)
                                : nullptr;
 
-        VkPhysicalDeviceVulkan12Features features12{};
-        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.pNext = &features13;
-        features12.timelineSemaphore = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
-        features12.bufferDeviceAddress = supported_features12.bufferDeviceAddress;
-        features12.storageBuffer8BitAccess = supported_features12.storageBuffer8BitAccess;
 
         // Optional feature structs are prepended to the Vulkan 1.2 chain.
         void* enabled_chain_head = features12.pNext;
@@ -2926,17 +2861,12 @@ namespace lfs::vis {
         // 16-bit storage for the fp16 splat raster path (half4 partials,
         // half-packed staging). Features are enabled when the device supports them;
         // runtime float16 capability is probed via VulkanGSRenderer::supportsFloat16Storage().
-        VkPhysicalDeviceVulkan11Features features11{};
-        features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         features11.storageBuffer16BitAccess = supported_features11.storageBuffer16BitAccess;
         features11.uniformAndStorageBuffer16BitAccess =
             supported_features11.uniformAndStorageBuffer16BitAccess;
         features11.pNext = enabled_chain_head;
         features12.pNext = &features11;
 
-        VkPhysicalDeviceFeatures2 features2{};
-        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = &features12;
         uint32_t queue_family_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
         std::vector<VkQueueFamilyProperties> queue_family_props(queue_family_count);
