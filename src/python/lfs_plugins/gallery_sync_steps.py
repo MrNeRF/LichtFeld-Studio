@@ -520,7 +520,10 @@ class DownloadOpenSteps:
             if previous and Path(previous.path).resolve() != Path(path).resolve() and Path(previous.path).exists():
                 # Never move an existing catalog entry to an unrelated copy.
                 raise ValueError(tr("error.link"))
-            project, _ = index.register_licht_asset(path, name=job["result"]["title"], inspection=inspection)
+            project, _ = index.register_licht_asset(
+                path, name=job["result"]["title"], inspection=inspection,
+                pin=index.folder_id_for_path(path) is None,
+            )
             if project is None:
                 raise ValueError(index.last_error or tr("error.storage"))
             self.mark_viewing_copy(index, project)

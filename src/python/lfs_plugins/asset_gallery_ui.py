@@ -15,7 +15,7 @@ from .gallery_messages import tr, localize_message
 from .gallery_controller import asset_sync_state, get_gallery_controller
 from .gallery_sync_facts import needs_attention
 from .gallery_actions import gallery_actions, gallery_quota
-from .asset_index import display_name, last_known_gallery_label, previous_scene_for
+from .asset_index import display_name, last_known_gallery_label, previous_scene_for, resolve_default_asset_directory
 
 SCOPE_PUBLISHED = "__gallery__"
 SCOPE_ATTENTION = "__gallery_attention__"
@@ -828,6 +828,14 @@ class GalleryAssetMixin:
 
         fields = dict(self._gallery_details(asset), upload_format=self._gallery_upload_format,
                       pull_folder=self._gallery_pull_folder, pull_name=self._gallery_pull_name)
+        pull_folders = []
+        if action == "pull":
+            default_path = str(resolve_default_asset_directory())
+            pull_folders.append({"name": tr("review.default_folder", name=Path(default_path).name or default_path), "path": default_path})
+            for folder in self._asset_index_folders().values():
+                path = str(folder.get("path") or "")
+                if path and not any(Path(row["path"]) == Path(path) for row in pull_folders):
+                    pull_folders.append({"name": str(folder.get("name") or Path(path).name), "path": path})
         asset = dict(asset)
         from .project_inspector import value
         details = getattr(self, "_inspection_by_asset", {}).get(asset["id"], {}).get("details")
@@ -843,13 +851,13 @@ class GalleryAssetMixin:
             fields=fields,
             includes=self._gallery_review_includes(publish_new=publish_new), quota=self._gallery_quota(),
             warning=self._gallery_quota_warning() if action != "pull" else "",
-            publish_new=publish_new, open_after=open_after, on_done=done)
+            publish_new=publish_new, open_after=open_after, on_done=done,
+            pull_folders=pull_folders)
 
     def _pull_gallery_asset(self, asset, *, open_after=False):
         scene = self._gallery_scene(asset)
         if not scene:
             return
-        folder = self._asset_index_folders().get(self._gallery_last_folder) or self._asset_index_folders().get(self._default_folder_id(), {})
-        self._gallery_pull_folder = folder.get("path", "")
+        self._gallery_pull_folder = str(resolve_default_asset_directory())
         self._gallery_pull_name = self._controller().safe_filename(scene.get("title", ""))
         self._open_gallery_review(dict(asset, remote_only=True), "pull", open_after=open_after)

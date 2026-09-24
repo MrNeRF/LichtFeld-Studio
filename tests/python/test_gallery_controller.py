@@ -630,6 +630,66 @@ def test_publish_review_save_choice_only_for_open_project(gallery, monkeypatch, 
     assert 'data-if="show_unlinked_hint">{{unlinked_copy}}' in rml
 
 
+def test_pull_review_folder_dropdown_browse_and_submit(gallery, monkeypatch, tmp_path):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    module = import_module("lfs_plugins.gallery_file_panel")
+    controller, state, _ = gallery
+    default = tmp_path / "default"
+    watched = tmp_path / "watched"
+    browsed = tmp_path / "browsed"
+    for directory in (default, watched, browsed):
+        directory.mkdir()
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    calls = []
+    monkeypatch.setattr(module.lf.ui, "open_folder_dialog", lambda title, start: calls.append((title, start)) or str(browsed), raising=False)
+    submitted = []
+    monkeypatch.setattr(controller, "pull_asset", lambda *args, **kwargs: submitted.append((args, kwargs)))
+    panel = GalleryFilePanel()
+    panel.show(controller=controller, asset={"id": "remote"}, scene=scene(), action="pull",
+               fields={"pull_folder": str(default), "pull_name": "copy.licht"},
+               pull_folders=[{"name": "default", "path": str(default)},
+                             {"name": "watched", "path": str(watched)}])
+    assert panel._pull_folders == [{"name": "default", "path": str(default)},
+                                   {"name": "watched", "path": str(watched)}]
+    panel._set("pull_folder", str(watched))
+    assert panel._fields["pull_folder"] == str(watched)
+    panel._browse_pull_folder()
+    assert calls[0][1] == str(watched)
+    assert panel._fields["pull_folder"] == str(browsed)
+    assert panel._pull_folders[-1]["path"] == str(browsed)
+    bindings, events = {}, {}
+
+    class Model:
+        def bind(self, name, getter, setter):
+            bindings[name] = getter, setter
+        def bind_func(self, *_args):
+            pass
+        def bind_record_list(self, *_args):
+            pass
+        def bind_event(self, name, callback):
+            events[name] = callback
+        def get_handle(self):
+            return None
+
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _name: Model()))
+    bindings["pull_folder"][1](str(default))
+    assert panel._fields["pull_folder"] == str(browsed)
+    events["choose_pull_folder"](None, None, [str(watched)])
+    assert panel._fields["pull_folder"] == str(watched)
+    events["choose_pull_folder"](None, None, [str(browsed)])
+    panel._state = state
+    panel._submit()
+    assert submitted[0][0][2] == str(browsed / "copy.licht")
+    rml = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources/gallery_file_panel.rml").read_text()
+    assert 'data-for="folder : pull_folders"' in rml
+    assert 'data-event-change="choose_pull_folder(ev.value)"' in rml
+    assert 'data-value="pull_folder"' in rml
+    assert 'data-attrif-selected="folder.path == pull_folder"' not in rml
+    assert 'data-event-click="browse_pull_folder"' in rml
+
+
 def test_publish_without_save_rechecks_saved_commit(gallery, monkeypatch, tmp_path):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_controller")
@@ -1209,7 +1269,8 @@ def test_catalog_projection_renders_before_account_snapshot_without_authorizing_
     # Once the account-scoped snapshot arrives it supersedes the projection.
     assert asset_sync_state({"id": "local", "exists": True})["relationship"] == "unlinked"
 
-def test_default_pull_registers_links_without_touching_open_document(gallery, monkeypatch, tmp_path):
+@pytest.mark.parametrize('folder_id, pinned', [('default', False), ('watched', False), (None, True)])
+def test_default_pull_registers_links_without_touching_open_document(gallery, monkeypatch, tmp_path, folder_id, pinned):
     panel, state, actions = gallery
     module = import_module('lfs_plugins.gallery_controller')
     path = str(tmp_path / 'pulled.licht')
@@ -1227,6 +1288,7 @@ def test_default_pull_registers_links_without_touching_open_document(gallery, mo
     registered = []
     project = SimpleNamespace(id='fresh-project', project_uuid='fresh-project', extra={})
     index = SimpleNamespace(load=lambda: True, update_asset=lambda *a, **kw: project, get_asset=lambda _: None,
+        folder_id_for_path=lambda _: folder_id,
         register_licht_asset=lambda p, **kw: registered.append((p, kw)) or (project, True))
     monkeypatch.setattr(import_module('lfs_plugins.asset_index'), 'AssetIndex', lambda: index)
     panel._register_download(job, state['identity'])
@@ -1234,6 +1296,7 @@ def test_default_pull_registers_links_without_touching_open_document(gallery, mo
                           'projectStamp': module.file_stamp(path)}
     panel._finish_import()
     assert registered[0][0] == path
+    assert registered[0][1].get('pin', False) is pinned
     assert actions == [('link', ('pull', 'fresh-project', 'fresh-commit'), {'project_path': path})]
     assert panel._download_open_steps.pulled_project is None
     job['linkOperation'] = {'id': 'link', 'state': 'ready'}

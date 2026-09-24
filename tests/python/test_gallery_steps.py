@@ -203,6 +203,7 @@ def open_case(gallery, monkeypatch, tmp_path):
                         lambda source: SimpleNamespace(manifest={"nodes": [{"count": 2}]}))
     project = SimpleNamespace(project_uuid="new-project")
     index = SimpleNamespace(load=lambda: True, get_asset=lambda identifier: None,
+                            folder_id_for_path=lambda path: "default",
                             register_licht_asset=lambda *args, **kwargs: (project, True))
     monkeypatch.setattr(import_module("lfs_plugins.asset_index"), "AssetIndex", lambda: index)
     stage = {"id": "stage", "state": "ready", "projectPath": str(opened), "projectId": "new-project",

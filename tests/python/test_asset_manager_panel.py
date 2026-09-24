@@ -3608,6 +3608,35 @@ def _gallery_fixture(panel_module):
     return panel,local,remote
 
 
+def test_gallery_pull_review_defaults_to_project_location_with_other_watched_folder(panel_module, monkeypatch, tmp_path):
+    from lfs_plugins import asset_gallery_ui, gallery_file_panel
+
+    panel, _local, remote = _gallery_fixture(panel_module)
+    default = tmp_path / "default"
+    other = tmp_path / "other"
+    default.mkdir()
+    other.mkdir()
+    panel._asset_index.folders = {
+        "default": {"id": "default", "name": "default", "path": str(default)},
+        "other": {"id": "other", "name": "other", "path": str(other)},
+    }
+    panel._gallery_last_folder = "other"
+    monkeypatch.setattr(asset_gallery_ui, "resolve_default_asset_directory", lambda: default)
+    monkeypatch.setattr(asset_gallery_ui, "tr", lambda key, **values: f"{values['name']} (default)" if key == "review.default_folder" else key)
+    panel._gallery_scene = lambda _asset: remote
+    panel._controller = lambda: SimpleNamespace(safe_filename=lambda _title: "download.licht", upload_format="sog")
+    reviews = []
+    monkeypatch.setattr(gallery_file_panel, "open_gallery_file_panel", lambda **kwargs: reviews.append(kwargs))
+
+    panel._pull_gallery_asset({"id": "remote:remote-only"})
+
+    assert reviews[0]["fields"]["pull_folder"] == str(default)
+    assert reviews[0]["pull_folders"] == [
+        {"name": "default (default)", "path": str(default)},
+        {"name": "other", "path": str(other)},
+    ]
+
+
 def test_gallery_details_prefill_uses_unpublished_catalog_draft(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project(name="project-a", gallery_details_draft={"title": "Gallery title", "description": "Prepared text"})
