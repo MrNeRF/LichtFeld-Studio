@@ -554,6 +554,48 @@ def test_asset_catalog_snapshot_is_reused_for_the_current_epoch(panel_module):
     assert library.calls == 2
 
 
+def test_filtered_rows_follow_in_place_gallery_update(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(catalog_epoch=lambda: 1)
+    panel._active_filter = "gallery"
+    first = panel._filtered_assets()
+    assert first == []
+
+    state = panel._gallery_state
+    state["scenes"].append({"id": "remote", "title": "Remote", "status": "ready"})
+    panel._gallery_changed(state)
+
+    assert [asset["id"] for asset in panel._filtered_assets()] == ["remote:remote"]
+
+
+def test_filtered_rows_invalidate_after_inspection_error(panel_module):
+    asset = _project()
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset}, catalog_epoch=lambda: 1)
+    first = panel._filtered_assets()
+
+    panel._on_inspection_result(asset["id"], "card", None, ValueError("unreadable"))
+
+    assert panel._filtered_assets() is not first
+
+
+def test_filtered_rows_invalidate_after_folder_records_change(panel_module):
+    asset = _project()
+    folder = {"id": "default", "name": "Old name"}
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset}, folders={"default": folder}, catalog_epoch=lambda: 1
+    )
+    panel._selected_folder_id = "default"
+    first = panel._filtered_assets()
+
+    folder["name"] = "New name"
+    panel._handle = _Handle()
+    panel._refresh_records(folders=True)
+
+    assert panel._filtered_assets() is not first
+
+
 def test_cached_catalog_preview_uses_persisted_card_metadata(panel_module, tmp_path):
     from lfs_plugins.asset_index import read_catalog_preview, SCHEMA_VERSION
 

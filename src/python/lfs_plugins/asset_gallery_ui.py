@@ -43,6 +43,7 @@ class GalleryAssetMixin:
         self._gallery_controller = None
         self._gallery_unsubscribe = None
         self._gallery_state = {"scenes": [], "links": {}, "jobs": [], "signed_in": False}
+        self._gallery_rows_generation = 0
         self._gallery_upload_format = "sog"
         self._gallery_pull_folder = ""
         self._gallery_pull_name = ""
@@ -79,6 +80,7 @@ class GalleryAssetMixin:
         if snapshot.get("message") in ("Gallery checked.", tr("info.checked")):
             snapshot = {**snapshot, "message": ""}
         self._gallery_state = snapshot
+        self._gallery_rows_generation += 1
         if previous_identity != snapshot.get("identity"):
             self._gallery_undo = None
             self._gallery_batch = []
