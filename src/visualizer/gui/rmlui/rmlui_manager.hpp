@@ -138,9 +138,9 @@ namespace lfs::vis::gui {
         void endVulkanFrame();
 
         LFS_VIS_API void beginFrameCursorTracking();
-        void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
-                               std::optional<RmlRect> active_overlay = std::nullopt);
-        void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
+        LFS_VIS_API void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
+                                           std::optional<RmlRect> active_overlay = std::nullopt);
+        LFS_VIS_API void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
         // Registers (or clears, on nullopt) the time a context's pending tooltip
         // is due to appear, so the idle loop can wake exactly at that moment.
         void setContextTooltipRevealDeadline(
@@ -150,7 +150,7 @@ namespace lfs::vis::gui {
         // or empty when none is counting down.
         [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
-        [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
+        [[nodiscard]] LFS_VIS_API bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
         [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,
                                                                   float window_y) const;
         [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
