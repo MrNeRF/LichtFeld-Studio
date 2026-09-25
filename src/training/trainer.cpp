@@ -1533,6 +1533,7 @@ namespace lfs::training {
         }
 
         try {
+            const lfs::core::TensorWorkQueue::Scope execution_scope(*training_queue_);
             const bool import_frozen_sidecar_controller = should_apply_ppisp_sidecar_on_init();
             const auto sidecar_path = params_.optimization.ppisp_sidecar_path;
             PPISPFileHeader sidecar_header{};
