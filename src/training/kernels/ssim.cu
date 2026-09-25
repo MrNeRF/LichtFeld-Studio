@@ -1788,7 +1788,7 @@ namespace lfs::training::kernels {
         const auto stream = lfs::core::getCurrentCUDAStream();
         workspace.dL_dmap.set_stream(stream);
         workspace.dL_dimg1.set_stream(stream);
-        workspace.dL_dmap.zero_();
+        workspace.dL_dmap.fill_(0.0f, stream);
 
         if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
             auto cropped_view = workspace.dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
@@ -1798,7 +1798,7 @@ namespace lfs::training::kernels {
         }
 
         // Use pre-allocated output buffer
-        workspace.dL_dimg1.zero_();
+        workspace.dL_dimg1.fill_(0.0f, stream);
 
         // Launch backward kernel
         dim3 grid((ctx.original_w + BLOCK_X - 1) / BLOCK_X,

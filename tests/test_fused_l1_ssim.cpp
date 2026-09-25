@@ -924,12 +924,13 @@ TEST_F(FusedL1SSIMTest, BackwardFillFollowsIndependentQueue) {
             auto [loss, context] = ssim_forward(image, truth, workspace, crop);
             queue.wait();
             if (independent) {
-                // A legacy-stream fill overtakes the queued workspace clear.
+                // Legacy clears and fills can overtake a pending workspace write.
                 queue.enqueue_host_callback([](void*) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(30));
                 },
                                             nullptr);
             }
+            workspace.dL_dmap.fill_(-0.5f, getCurrentCUDAStream());
             auto gradient = ssim_backward(context, workspace, 0.75f);
             queue.wait();
             const auto map = workspace.dL_dmap.cpu().to_vector();
