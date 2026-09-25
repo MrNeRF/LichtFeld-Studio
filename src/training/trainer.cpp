@@ -3061,6 +3061,7 @@ namespace lfs::training {
         if (!initialized_.load() || !strategy_) {
             return std::unexpected("trainer is not initialized");
         }
+        const lfs::core::TensorWorkQueue::Scope metrics_scope(*metrics_queue_);
         const auto params = getParams();
         const auto gt_config = getGTLoadConfigSnapshot();
         const auto image_loader = getActiveImageLoader();
@@ -3151,11 +3152,7 @@ namespace lfs::training {
             // arena acquisition so a refining iteration holding the arena can't
             // deadlock this reader (which holds render_mutex_ shared) — on
             // timeout the rasterizer throws and the metric is skipped this call.
-            void* reader_stream = metrics_queue_ ? metrics_queue_->native_handle()
-                                                 : lfs::core::getCurrentCUDAStream();
-            std::optional<lfs::core::TensorWorkQueue::Scope> metrics_guard;
-            if (metrics_queue_)
-                metrics_guard.emplace(*metrics_queue_);
+            void* reader_stream = metrics_queue_->native_handle();
             const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
             try {
                 beginModelRead(reader_stream);
