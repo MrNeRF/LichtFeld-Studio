@@ -1116,6 +1116,98 @@ namespace lfs::core::internal {
             return total;
         }
 
+        struct SortParams {
+            uint64_t values_offset;
+            uint64_t indices_offset;
+            uint64_t keys_a_offset;
+            uint64_t keys_b_offset;
+            uint64_t positions_a_offset;
+            uint64_t positions_b_offset;
+            uint64_t histogram_offset;
+            uint32_t lines;
+            uint32_t dim_size;
+            uint32_t inner;
+            uint32_t blocks_per_line;
+            uint32_t shift;
+            uint32_t parity;
+            uint32_t descending;
+            uint32_t total;
+        };
+        static_assert(sizeof(SortParams) == 7 * 8 + 8 * 4);
+
+        // Lines up to kSortCapacity (kernels.metal) sort in one threadgroup;
+        // longer ones take the radix sort, 4 bits per pass.
+        constexpr size_t kSortCapacity = 2048;
+        constexpr size_t kRadixBlock = kThreadgroupWidth * 8;
+        constexpr size_t kRadixDigits = 16;
+        constexpr uint32_t kRadixPasses = 8;
+
+        // Sorts the lines of an (outer, dim_size, inner) view in place and
+        // writes each element's source position along the line.
+        API_AVAILABLE(macos(26.0))
+        void sort_lines(const StorageRef values, const StorageRef indices, const size_t lines, const size_t dim_size,
+                        const size_t inner, const bool descending) {
+            LFS_ASSERT_MSG(values.dtype == DataType::Float32 && indices.dtype == DataType::Int64,
+                           "Metal sort requires Float32 values and Int64 indices");
+            if (lines == 0 || dim_size == 0)
+                return;
+            const auto context = acquire_context();
+            const auto values_at = context->locate(values);
+            const auto indices_at = context->locate(indices);
+            SortParams params{
+                .values_offset = values_at.offset,
+                .indices_offset = indices_at.offset,
+                .lines = checked_u32(lines, "Metal sort line count exceeds uint32"),
+                .dim_size = checked_u32(dim_size, "Metal sort size exceeds uint32"),
+                .inner = checked_u32(inner, "Metal sort inner size exceeds uint32"),
+                .descending = descending ? 1u : 0u,
+            };
+            if (dim_size <= kSortCapacity) {
+                const std::array uses{values, indices};
+                context->dispatch(uses, {.pipeline = context->pipeline("sort_shared"),
+                                         .buffers = {values_at.address, indices_at.address},
+                                         .params = param_bytes(params),
+                                         .grid = MTLSizeMake(lines, 1, 1),
+                                         .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+                return;
+            }
+            // Keys and positions ping-pong between A and B; the digit histograms
+            // follow, all in one scratch block.
+            const size_t total = lines * dim_size;
+            const size_t blocks_per_line = (dim_size + kRadixBlock - 1) / kRadixBlock;
+            const StorageRef scratch =
+                context->allocate((4 * total + lines * kRadixDigits * blocks_per_line) * sizeof(uint32_t));
+            const auto scratch_at = context->locate(scratch);
+            const uint64_t array_bytes = total * sizeof(uint32_t);
+            params.keys_a_offset = scratch_at.offset;
+            params.keys_b_offset = scratch_at.offset + array_bytes;
+            params.positions_a_offset = scratch_at.offset + 2 * array_bytes;
+            params.positions_b_offset = scratch_at.offset + 3 * array_bytes;
+            params.histogram_offset = scratch_at.offset + 4 * array_bytes;
+            params.blocks_per_line = checked_u32(blocks_per_line, "Metal sort block count exceeds uint32");
+            params.total = checked_u32(total, "Metal sort element count exceeds uint32");
+            const std::array uses{values, indices, scratch};
+            const auto dispatch = [&](const uint32_t phase, const size_t groups) {
+                context->dispatch(uses, {.pipeline = context->pipeline("radix_sort", {{0, phase}}),
+                                         .buffers = {values_at.address, indices_at.address, scratch_at.address},
+                                         .params = param_bytes(params),
+                                         .grid = MTLSizeMake(groups, 1, 1),
+                                         .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            };
+            const size_t element_groups = (total + kThreadgroupWidth - 1) / kThreadgroupWidth;
+            dispatch(0, element_groups);
+            for (uint32_t pass = 0; pass < kRadixPasses; ++pass) {
+                params.shift = pass * 4;
+                params.parity = pass & 1u;
+                dispatch(1, lines * blocks_per_line);
+                dispatch(2, lines);
+                dispatch(3, lines * blocks_per_line);
+            }
+            dispatch(4, element_groups);
+            dispatch(5, element_groups);
+            context->release(scratch);
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -1739,6 +1831,19 @@ namespace lfs::core::internal {
                                          ExecContext) {
         LFS_FACADE_TRACE(nonzero_bool);
         return compact_nonzero(kBytePredicate, input, output, program);
+    }
+
+    void MetalBackendOps::sort_1d(const StorageRef values, const StorageRef indices, const size_t count,
+                                  const SortProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sort_1d);
+        sort_lines(values, indices, 1, count, 1, program.descending);
+    }
+
+    void MetalBackendOps::sort_2d(const StorageRef values, const StorageRef indices, const SortProgram& program,
+                                  ExecContext) {
+        LFS_FACADE_TRACE(sort_2d);
+        sort_lines(values, indices, program.outer_size * program.inner_size, program.dim_size, program.inner_size,
+                   program.descending);
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

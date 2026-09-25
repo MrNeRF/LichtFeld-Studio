@@ -1537,6 +1537,251 @@ kernel void mask_op(device uchar* data_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Sorting Float32 lines with Int64 source positions, ported from sort.slang
+// and radix.slang. Keys map float bits to an order-preserving unsigned value
+// (both zeros equal, NaN after every number), inverted for descending order;
+// positions break ties, so both sorts are stable. A line of an (outer, dim,
+// inner) view is lines = outer * inner, element e at base + e * inner.
+
+constant uint kSortCapacity = 2048;
+constant uint kRadixDigits = 16;
+constant uint kRadixPerThread = 8;
+constant uint kRadixBlock = kReduceThreads * kRadixPerThread;
+
+struct SortParams {
+    ulong values_offset;
+    ulong indices_offset;
+    ulong keys_a_offset;
+    ulong keys_b_offset;
+    ulong positions_a_offset;
+    ulong positions_b_offset;
+    ulong histogram_offset;
+    uint lines;
+    uint dim_size;
+    uint inner;
+    uint blocks_per_line;
+    uint shift;
+    uint parity;
+    uint descending;
+    uint total;
+};
+
+static uint sortable_key(float value, bool descending) {
+    uint bits = as_type<uint>(value);
+    if ((bits & 0x7fffffffu) == 0u)
+        bits = 0u;
+    const uint key = (bits & 0x7fffffffu) > 0x7f800000u ? 0xffffffffu
+                     : (bits & 0x80000000u) != 0u       ? ~bits
+                                                        : bits | 0x80000000u;
+    return descending ? ~key : key;
+}
+
+static ulong sort_line_base(uint line, constant SortParams& params) {
+    const uint outer_index = line / params.inner;
+    return ulong(outer_index) * params.dim_size * params.inner + (line - outer_index * params.inner);
+}
+
+// One threadgroup sorts one line of at most kSortCapacity elements with a
+// bitonic network in threadgroup memory.
+kernel void sort_shared(device uchar* values_buffer [[buffer(0)]],
+                        device uchar* indices_buffer [[buffer(1)]],
+                        constant SortParams& params [[buffer(2)]],
+                        uint thread_index [[thread_index_in_threadgroup]],
+                        uint line [[threadgroup_position_in_grid]]) {
+    threadgroup uint keys[kSortCapacity];
+    threadgroup uint positions[kSortCapacity];
+    device float* values = (device float*)(values_buffer + params.values_offset);
+    device long* indices = (device long*)(indices_buffer + params.indices_offset);
+    const ulong base = sort_line_base(line, params);
+    constexpr uint per_thread = kSortCapacity / kReduceThreads;
+    for (uint slot = 0; slot < per_thread; ++slot) {
+        const uint element = thread_index + slot * kReduceThreads;
+        const bool live = element < params.dim_size;
+        keys[element] = live ? sortable_key(values[base + ulong(element) * params.inner], params.descending != 0) : 0xffffffffu;
+        positions[element] = live ? element : 0xffffffffu;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint size = 2; size <= kSortCapacity; size <<= 1) {
+        for (uint span = size >> 1; span > 0; span >>= 1) {
+            for (uint slot = 0; slot < per_thread; ++slot) {
+                const uint element = thread_index + slot * kReduceThreads;
+                const uint partner = element ^ span;
+                if (partner <= element)
+                    continue;
+                const uint key_a = keys[element], key_b = keys[partner];
+                const uint position_a = positions[element], position_b = positions[partner];
+                const bool greater = key_a > key_b || (key_a == key_b && position_a > position_b);
+                if (greater == ((element & size) == 0u)) {
+                    keys[element] = key_b;
+                    keys[partner] = key_a;
+                    positions[element] = position_b;
+                    positions[partner] = position_a;
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+    // Values permute through threadgroup memory, so the line is never read
+    // after it was partly overwritten.
+    for (uint slot = 0; slot < per_thread; ++slot) {
+        const uint element = thread_index + slot * kReduceThreads;
+        if (element < params.dim_size) {
+            indices[base + ulong(element) * params.inner] = long(positions[element]);
+            keys[element] = as_type<uint>(values[base + ulong(positions[element]) * params.inner]);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint slot = 0; slot < per_thread; ++slot) {
+        const uint element = thread_index + slot * kReduceThreads;
+        if (element < params.dim_size)
+            values[base + ulong(element) * params.inner] = as_type<float>(keys[element]);
+    }
+}
+
+// Packed 16-bit digit counters: digit d lives in component d / 2, half d % 2.
+static void add_packed(thread uint4& low, thread uint4& high, uint digit, uint amount) {
+    const uint lane = digit >> 1, value = amount << ((digit & 1u) * 16u);
+    if (lane < 4)
+        low[lane] += value;
+    else
+        high[lane - 4] += value;
+}
+
+static uint read_packed(uint4 low, uint4 high, uint digit) {
+    const uint lane = digit >> 1;
+    return ((lane < 4 ? low[lane] : high[lane - 4]) >> ((digit & 1u) * 16u)) & 0xffffu;
+}
+
+// Least-significant-digit radix sort over 4-bit digits for longer lines.
+// kOp is the phase: 0 extract keys and positions, 1 block histograms, 2 an
+// exclusive digit-major scan per line, 3 stable scatter from A to B or B to A
+// by pass parity, 4 gather values by position into keys B, 5 write values
+// and positions.
+kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
+                       device uchar* indices_buffer [[buffer(1)]],
+                       device uchar* scratch [[buffer(2)]],
+                       constant SortParams& params [[buffer(3)]],
+                       uint thread_index [[thread_index_in_threadgroup]],
+                       uint group [[threadgroup_position_in_grid]],
+                       uint position [[thread_position_in_grid]]) {
+    threadgroup atomic_uint shared_histogram[kRadixDigits];
+    threadgroup uint shared_scan[kReduceThreads];
+    threadgroup uint4 shared_low[kReduceThreads];
+    threadgroup uint4 shared_high[kReduceThreads];
+    device float* values = (device float*)(values_buffer + params.values_offset);
+    device uint* keys_a = (device uint*)(scratch + params.keys_a_offset);
+    device uint* keys_b = (device uint*)(scratch + params.keys_b_offset);
+    device uint* positions_a = (device uint*)(scratch + params.positions_a_offset);
+    device uint* positions_b = (device uint*)(scratch + params.positions_b_offset);
+    device uint* histogram = (device uint*)(scratch + params.histogram_offset);
+    if (kOp == 0 || kOp == 4 || kOp == 5) {
+        if (position >= params.total)
+            return;
+        const uint line = position / params.dim_size;
+        const uint element = position - line * params.dim_size;
+        const ulong base = sort_line_base(line, params);
+        if (kOp == 0) {
+            keys_a[position] = sortable_key(values[base + ulong(element) * params.inner], params.descending != 0);
+            positions_a[position] = element;
+        } else if (kOp == 4) {
+            keys_b[position] = as_type<uint>(values[base + ulong(positions_a[position]) * params.inner]);
+        } else {
+            values[base + ulong(element) * params.inner] = as_type<float>(keys_b[position]);
+            ((device long*)(indices_buffer + params.indices_offset))[base + ulong(element) * params.inner] =
+                long(positions_a[position]);
+        }
+        return;
+    }
+    if (kOp == 2) {
+        const uint entries = kRadixDigits * params.blocks_per_line;
+        device uint* line_histogram = histogram + ulong(group) * entries;
+        uint carry = 0;
+        for (uint chunk = 0; chunk < entries; chunk += kReduceThreads) {
+            const uint entry = chunk + thread_index;
+            const uint count = entry < entries ? line_histogram[entry] : 0u;
+            shared_scan[thread_index] = count;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint offset = 1; offset < kReduceThreads; offset <<= 1) {
+                const uint partial = thread_index >= offset ? shared_scan[thread_index - offset] : 0u;
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                shared_scan[thread_index] += partial;
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+            }
+            if (entry < entries)
+                line_histogram[entry] = carry + shared_scan[thread_index] - count;
+            carry += shared_scan[kReduceThreads - 1];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        return;
+    }
+    const bool from_a = params.parity == 0u;
+    const uint line = group / params.blocks_per_line;
+    const uint block = group - line * params.blocks_per_line;
+    const ulong line_offset = ulong(line) * params.dim_size;
+    const uint first = block * kRadixBlock + thread_index * kRadixPerThread;
+    uint digits[kRadixPerThread];
+    uint keys[kRadixPerThread];
+    uint origins[kRadixPerThread];
+    uint4 low = uint4(0), high = uint4(0);
+    for (uint slot = 0; slot < kRadixPerThread; ++slot) {
+        const uint element = first + slot;
+        digits[slot] = kRadixDigits;
+        if (element < params.dim_size) {
+            keys[slot] = from_a ? keys_a[line_offset + element] : keys_b[line_offset + element];
+            origins[slot] = from_a ? positions_a[line_offset + element] : positions_b[line_offset + element];
+            digits[slot] = (keys[slot] >> params.shift) & (kRadixDigits - 1u);
+            add_packed(low, high, digits[slot], 1u);
+        }
+    }
+    if (kOp == 1) {
+        if (thread_index < kRadixDigits)
+            atomic_store_explicit(&shared_histogram[thread_index], 0u, memory_order_relaxed);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint digit = 0; digit < kRadixDigits; ++digit) {
+            const uint count = read_packed(low, high, digit);
+            if (count != 0u)
+                atomic_fetch_add_explicit(&shared_histogram[digit], count, memory_order_relaxed);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (thread_index < kRadixDigits)
+            histogram[(ulong(line) * kRadixDigits + thread_index) * params.blocks_per_line + block] =
+                atomic_load_explicit(&shared_histogram[thread_index], memory_order_relaxed);
+        return;
+    }
+    // Ranks within the block come from a prefix over the packed counters.
+    shared_low[thread_index] = low;
+    shared_high[thread_index] = high;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint offset = 1; offset < kReduceThreads; offset <<= 1) {
+        const uint4 partial_low = thread_index >= offset ? shared_low[thread_index - offset] : uint4(0);
+        const uint4 partial_high = thread_index >= offset ? shared_high[thread_index - offset] : uint4(0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        shared_low[thread_index] += partial_low;
+        shared_high[thread_index] += partial_high;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    const uint4 exclusive_low = shared_low[thread_index] - low;
+    const uint4 exclusive_high = shared_high[thread_index] - high;
+    uint4 seen_low = uint4(0), seen_high = uint4(0);
+    for (uint slot = 0; slot < kRadixPerThread; ++slot) {
+        if (digits[slot] == kRadixDigits)
+            continue;
+        const uint rank = read_packed(exclusive_low, exclusive_high, digits[slot]) +
+                          read_packed(seen_low, seen_high, digits[slot]);
+        add_packed(seen_low, seen_high, digits[slot], 1u);
+        const ulong destination =
+            line_offset + histogram[(ulong(line) * kRadixDigits + digits[slot]) * params.blocks_per_line + block] + rank;
+        if (from_a) {
+            keys_b[destination] = keys[slot];
+            positions_b[destination] = origins[slot];
+        } else {
+            keys_a[destination] = keys[slot];
+            positions_a[destination] = origins[slot];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to

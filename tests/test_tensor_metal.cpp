@@ -5,6 +5,7 @@
 // CPU reference and must agree; operations not ported yet must say so.
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <gtest/gtest.h>
@@ -544,11 +545,40 @@ namespace {
         expect_close(integers_metal, integers_cpu, 0.0f, 0.0f);
     }
 
+    TEST_F(TensorMetal, SortsMatchCpu) {
+        // Short lines sort in one threadgroup, longer ones through the radix sort.
+        for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
+            SCOPED_TRACE(count);
+            std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 62).to_vector();
+            for (size_t i = 0; i < count; i += 11)
+                values[i] = i % 2 == 0 ? 0.0f : -0.0f;
+            for (size_t i = 5; i < count; i += 97)
+                values[i] = std::numeric_limits<float>::quiet_NaN();
+            const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
+            for (const bool descending : {false, true}) {
+                SCOPED_TRACE(descending);
+                const auto [sorted, indices] = to_metal(x_cpu).sort(0, descending);
+                const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+                expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                expect_close(indices, indices_cpu, 0.0f, 0.0f);
+            }
+        }
+        // Along an inner axis of a 3D tensor, short and long lines.
+        for (const int length : {33, 3000}) {
+            SCOPED_TRACE(length);
+            const Tensor volume = random_tensor(static_cast<size_t>(4 * length * 3), -3.0f, 3.0f, 63).reshape({4, length, 3});
+            const auto [sorted, indices] = to_metal(volume).sort(1);
+            const auto [sorted_cpu, indices_cpu] = volume.sort(1);
+            expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+            expect_close(indices, indices_cpu, 0.0f, 0.0f);
+        }
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
-        const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
+        const Tensor sh = to_metal(random_tensor(16, 0.0f, 1.0f, 9)).reshape({1, 16});
         try {
-            (void)x.sort().first.cpu();
-            ADD_FAILURE() << "sort should not be ported yet";
+            (void)internal::backend_ops(GpuBackend::Metal).kmeans_sh(sh, 1, 16, 1, 1, true, {});
+            ADD_FAILURE() << "kmeans_sh should not be ported yet";
         } catch (const std::exception& error) {
             EXPECT_NE(std::string(error.what()).find("Metal backend:"), std::string::npos) << error.what();
         }

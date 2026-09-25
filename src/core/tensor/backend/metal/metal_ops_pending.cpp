@@ -24,14 +24,6 @@ namespace lfs::core::internal {
         not_ported("compiled_expression");
     }
 
-    void MetalBackendOps::sort_1d(StorageRef, StorageRef, size_t, const SortProgram&, ExecContext) {
-        not_ported("sort_1d");
-    }
-
-    void MetalBackendOps::sort_2d(StorageRef, StorageRef, const SortProgram&, ExecContext) {
-        not_ported("sort_2d");
-    }
-
     void MetalBackendOps::project_points(StorageRef, StorageRef, size_t, const PointProjection&, const StorageRef*, size_t, const StorageRef*, const StorageRef*, size_t, ExecContext) {
         not_ported("project_points");
     }
