@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A push and its pull request build the same commit; keep only the newest run per branch.
+concurrency:
+  group: macos-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build-macos:
     runs-on: macos-15
