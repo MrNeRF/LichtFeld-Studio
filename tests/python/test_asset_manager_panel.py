@@ -2814,6 +2814,93 @@ def test_backend_initialization_completes_without_ui_scheduler(panel_module, mon
     assert isinstance(panel._asset_index, _LoadedIndex)
     assert panel._catalog_load_failed is False
     assert updates == [True]
+    service = panel._library_service
+    assert service is not None
+    service.close()
+    assert not service._worker.is_alive()
+
+
+@pytest.mark.parametrize(("remounted", "expected_service_count"), [(False, 1), (True, 2)])
+def test_stale_backend_initialization_closes_service_and_recovers_after_remount(
+    panel_module, monkeypatch, tmp_path, remounted, expected_service_count
+):
+    scheduled = []
+    services = []
+
+    class _LoadedIndex:
+        load_issues = []
+
+        def load(self):
+            return True
+
+        def snapshot(self):
+            return {"epoch": len(services)}
+
+    class _LibraryService:
+        def __init__(self, index):
+            self.index = index
+            self.closed = False
+            services.append(self)
+
+        def _call(self, method, *args, **kwargs):
+            return getattr(self.index, method)(*args, **kwargs)
+
+        def snapshot(self):
+            return self.index.snapshot()
+
+        def close(self):
+            self.closed = True
+
+    class _ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    project_operations = import_module("lfs_plugins.project_operations")
+    monkeypatch.setattr(project_operations.ProjectOperations, "recover", lambda _self: {})
+    monkeypatch.setattr(panel_module, "AssetIndex", _LoadedIndex)
+    monkeypatch.setattr(panel_module, "LibraryService", _LibraryService)
+    monkeypatch.setattr(panel_module, "BACKEND_AVAILABLE", True)
+    monkeypatch.setattr(
+        panel_module, "resolve_asset_manager_storage_path", lambda: tmp_path / "catalog"
+    )
+    monkeypatch.setattr(
+        panel_module, "resolve_default_asset_directory", lambda: tmp_path / "assets"
+    )
+    monkeypatch.setattr(panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel_module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(panel, "_repair_selection", lambda: None)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **_kwargs: None)
+    monkeypatch.setattr(panel, "_start_catalog_verify", lambda: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: None)
+    monkeypatch.setattr(panel, "_subscribe_catalog", lambda: None)
+    monkeypatch.setattr(panel, "_request_model_update", lambda: None)
+
+    panel._start_backend_initialization()
+    assert len(scheduled) == 1
+
+    panel._mount_generation += 1
+    panel._panel_mounted = remounted
+    scheduled.pop(0)()
+
+    assert services[0].closed is True
+    assert len(services) == expected_service_count
+    assert panel._library_service is None
+
+    if remounted:
+        assert panel._backend_load_active is True
+        assert len(scheduled) == 1
+        scheduled.pop(0)()
+        assert panel._backend_load_active is False
+        assert panel._library_service is services[1]
+        assert services[1].closed is False
+    else:
+        assert panel._backend_load_active is False
+
 
 def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
     started = threading.Event()

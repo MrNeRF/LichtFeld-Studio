@@ -620,6 +620,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             def complete() -> None:
                 if generation != self._mount_generation or not self._panel_mounted:
                     self._backend_load_active = False
+                    if service is not None:
+                        try:
+                            service.close()
+                        except Exception:
+                            _log.exception("Close stale Projects catalog service failed path=%s", storage_path)
+                    if self._panel_mounted and self._asset_index is None:
+                        self._start_backend_initialization()
                     return
                 self._backend_load_active = False
                 self._catalog_load_failed = not loaded
