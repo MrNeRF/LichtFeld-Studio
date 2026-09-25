@@ -92,6 +92,7 @@ namespace lfs::core::internal::metal {
         Context& operator=(const Context&) = delete;
 
         id<MTLDevice> device() const { return device_; }
+        uint64_t context_id() const { return context_id_; }
 
         // Pipelines are specialized by (function constant index, value) pairs.
         id<MTLComputePipelineState> pipeline(
@@ -108,6 +109,9 @@ namespace lfs::core::internal::metal {
         void dispatch(std::span<const StorageRef> uses, const Dispatch& dispatch);
 
         uint64_t flush();
+        // Commits the open batch and signals `event` with the last submitted
+        // serial once all submitted work completed; returns that serial.
+        uint64_t signal(id<MTLSharedEvent> event);
         void wait(uint64_t serial);
         uint64_t completed() const;
         void wait_idle();

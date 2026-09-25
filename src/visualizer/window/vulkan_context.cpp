@@ -564,6 +564,7 @@ namespace lfs::vis {
                                      vk_cmd_end_conditional_rendering_ != nullptr;
         external_memory_interop_enabled_ = interop;
         external_semaphore_interop_enabled_ = interop;
+        metal_objects_enabled_ = handles.metal_objects;
         external_memory_dedicated_allocation_enabled_ = interop;
         present_queue_ = graphics_queue_;
         compute_queue_ = graphics_queue_;
@@ -615,7 +616,8 @@ namespace lfs::vis {
                 .queue_mutex = &graphics_queue_mutex_,
                 .sparse_binding = sparse_binding_enabled_,
                 .external_memory = external_memory_interop_enabled_,
-                .external_semaphore = external_semaphore_interop_enabled_};
+                .external_semaphore = external_semaphore_interop_enabled_,
+                .metal_objects = metal_objects_enabled_};
             for (const auto family : {graphics_queue_family_, compute_queue_family_, tensor_backend_device_.queue_family}) {
                 if (std::find(target.queue_families.begin(), target.queue_families.begin() + target.queue_family_count, family) == target.queue_families.begin() + target.queue_family_count)
                     target.queue_families[target.queue_family_count++] = family;
@@ -2718,6 +2720,12 @@ namespace lfs::vis {
         if (enable_shader_atomic_float) {
             appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
+#ifdef __APPLE__
+        // Metal tensors import into the device without copies.
+        metal_objects_enabled_ = extensionAvailable(available_extensions, lfs::core::kVulkanMetalObjectsExtension);
+        if (metal_objects_enabled_)
+            appendUniqueExtension(extensions, lfs::core::kVulkanMetalObjectsExtension);
+#endif
 
         // Optional extensions with active consumers.
         const bool enable_push_descriptor =

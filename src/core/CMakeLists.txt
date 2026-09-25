@@ -185,6 +185,9 @@ if(APPLE)
         tensor/backend/metal/metal_ops.mm
         ${_lfs_metal_kernels_cpp}
     )
+    if(LFS_TENSOR_VULKAN)
+        list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_vulkan_interop.mm)
+    endif()
 endif()
 
 # Core module sources

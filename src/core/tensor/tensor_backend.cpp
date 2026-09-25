@@ -126,8 +126,13 @@ namespace lfs::core {
         internal::TensorVulkanInteropBackend& backend(GpuBackend backend) {
             std::lock_guard lock(mutex);
             auto& result = backends[static_cast<size_t>(backend)];
-            if (!result && backend == GpuBackend::Metal)
-                throw TensorError("Metal tensors cannot be shared with the Vulkan viewer yet");
+            if (!result && backend == GpuBackend::Metal) {
+#if defined(LFS_TENSOR_METAL) && defined(LFS_TENSOR_VULKAN)
+                result = internal::make_metal_vulkan_interop(device);
+#else
+                throw TensorError("Metal tensor interop is unavailable in this build");
+#endif
+            }
             if (!result) {
 #ifdef LFS_TENSOR_VULKAN
 #if LFS_HAS_CUDA

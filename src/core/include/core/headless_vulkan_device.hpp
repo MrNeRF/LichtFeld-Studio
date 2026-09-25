@@ -170,6 +170,14 @@ namespace lfs::core {
             const auto [queue_family, shader_float16, shader_atomic_float] = features_by_device[*selected];
             if (shader_atomic_float)
                 extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+#ifdef __APPLE__
+            // Metal tensors import into the device without copies.
+            const bool metal_objects = has_device_extension(physical, kVulkanMetalObjectsExtension);
+            if (metal_objects)
+                extensions.push_back(kVulkanMetalObjectsExtension);
+#else
+            constexpr bool metal_objects = false;
+#endif
             // Same predicate extension the windowed viewer enables. Without it an
             // off-screen export has to read the instance count back to the CPU
             // before it can bound the depth waves.
@@ -240,6 +248,7 @@ namespace lfs::core {
             device.queue_family_ = queue_family;
             device.shader_atomic_float_ = shader_atomic_float;
             device.shader_float16_ = shader_float16;
+            device.metal_objects_ = metal_objects;
             return device;
         }
 
@@ -251,6 +260,7 @@ namespace lfs::core {
             queue_family_ = other.queue_family_;
             shader_atomic_float_ = other.shader_atomic_float_;
             shader_float16_ = other.shader_float16_;
+            metal_objects_ = other.metal_objects_;
             other.instance_ = VK_NULL_HANDLE;
             other.physical_device_ = VK_NULL_HANDLE;
             other.device_ = VK_NULL_HANDLE;
@@ -281,6 +291,7 @@ namespace lfs::core {
                 .shader_atomic_float = shader_atomic_float_,
                 .memory_budget = false,
                 .shader_float16 = shader_float16_,
+                .metal_objects = metal_objects_,
             };
         }
 
@@ -301,6 +312,7 @@ namespace lfs::core {
         uint32_t queue_family_ = 0;
         bool shader_atomic_float_ = false;
         bool shader_float16_ = false;
+        bool metal_objects_ = false;
     };
 
 } // namespace lfs::core

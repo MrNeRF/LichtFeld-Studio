@@ -65,6 +65,7 @@ namespace lfs::core {
         bool cooperative_matrix = false;
         bool external_memory = false;
         bool external_semaphore = false;
+        bool metal_objects = false;
     };
 
     // Fails when the backend already has a context (adopt before the first

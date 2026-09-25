@@ -184,7 +184,8 @@ namespace {
             .queue_families = {handles.queue_family},
             .queue_family_count = 1,
             .external_memory = true,
-            .external_semaphore = true});
+            .external_semaphore = true,
+            .metal_objects = handles.metal_objects});
         Tensor source_storage = interop.empty({40}, DataType::Float32, source_backend);
         Tensor source = source_storage.slice(0, 4, 36);
         {
@@ -302,7 +303,8 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(Storage, TensorVulkanInteropOrdering,
                              testing::Values(std::pair{GpuBackend::CUDA, false},
                                              std::pair{GpuBackend::Vulkan, false},
-                                             std::pair{GpuBackend::Vulkan, true}));
+                                             std::pair{GpuBackend::Vulkan, true},
+                                             std::pair{GpuBackend::Metal, false}));
 
     // Degree-zero splats carry an empty SH tensor, which has no storage, so
     // quantizing their resident LOD pages must not record it as a read.

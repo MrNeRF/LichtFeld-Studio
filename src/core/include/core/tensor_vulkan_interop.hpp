@@ -40,6 +40,8 @@ namespace lfs::core {
         bool sparse_binding = false;
         bool external_memory = false;
         bool external_semaphore = false;
+        // VK_EXT_metal_objects: Metal tensors import into the device without copies.
+        bool metal_objects = false;
     };
 
     class LFS_CORE_API TensorVulkanInterop {

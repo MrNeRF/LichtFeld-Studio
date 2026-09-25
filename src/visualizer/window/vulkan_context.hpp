@@ -599,6 +599,7 @@ namespace lfs::vis {
         bool instance_surface_maintenance_enabled_ = false;
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
+        bool metal_objects_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
         bool sparse_binding_enabled_ = false;
         bool buffer_device_address_enabled_ = false;

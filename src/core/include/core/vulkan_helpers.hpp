@@ -12,6 +12,9 @@
 #include <vulkan/vulkan.h>
 
 namespace lfs::core {
+    // Named here: vulkan_metal.h declares it only under VK_USE_PLATFORM_METAL_EXT.
+    inline constexpr const char* kVulkanMetalObjectsExtension = "VK_EXT_metal_objects";
+
     struct VulkanFeatureRequirements {
         bool viewer_shaders = false;
         bool window_renderer = false;
@@ -254,6 +257,22 @@ namespace lfs::core {
             enabled_extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
             flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
         }
+#ifdef __APPLE__
+        // Since 1.4.1 MoltenVK places buffers in MTLHeaps, so buffers bound to
+        // memory imported from Metal (VK_EXT_metal_objects) would not alias it.
+        // Keep buffers on their memory's MTLBuffer, MoltenVK's earlier default.
+        constexpr uint32_t heap_placement = 0;
+        const VkLayerSettingEXT no_heaps{"MoltenVK", "MVK_CONFIG_USE_MTLHEAP", VK_LAYER_SETTING_TYPE_UINT32_EXT, 1,
+                                         &heap_placement};
+        VkLayerSettingsCreateInfoEXT settings{VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT};
+        if (vulkan_instance_extension_available(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) {
+            enabled_extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+            settings.pNext = next;
+            settings.settingCount = 1;
+            settings.pSettings = &no_heaps;
+            next = &settings;
+        }
+#endif
         VkInstanceCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         info.pNext = next;
