@@ -118,12 +118,17 @@ jobs:
           set(VCPKG_MAX_CONCURRENCY 2)
           EOF
 
+      # Release objects are built with -march=native; ccache keys the flag, not the CPU.
+      - name: Identify CPU for the compiler cache
+        id: cpu
+        run: echo "model=$(grep -m1 'model name' /proc/cpuinfo | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - name: Cache ccache
         uses: actions/cache@v6
         with:
           path: /github/home/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
+          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ steps.cpu.outputs.model }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ steps.cpu.outputs.model }}-
 
       - name: Cache vcpkg packages
         uses: actions/cache@v6
