@@ -183,9 +183,8 @@ namespace lfs::training {
             // fallback — matches the lib-wide rule and the begin_frame stream,
             // so a metrics-thread render lands its kernels and consumers on the
             // same stream as the arena frame.
-            const cudaStream_t fwd_stream = core::getCurrentCUDAStream()
-                                                ? core::getCurrentCUDAStream()
-                                                : means.stream();
+            const cudaStream_t fwd_stream = core::getCurrentCUDAStream();
+            core::prepare_inputs_for_stream({&means, &opacities, &scales, &quats, &sh0, &shN}, fwd_stream);
 
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
@@ -253,9 +252,11 @@ namespace lfs::training {
 
             if (use_bg_image) {
                 // Use per-pixel background image - passed directly to gsplat kernel
+                bg_image.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_image});
                 bg_image_ptr = bg_image.ptr<float>();
             } else if (bg_color.is_valid() && bg_color.numel() > 0) {
+                bg_color.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_color});
                 bg_color_ptr = bg_color.ptr<float>();
             }
@@ -650,15 +651,14 @@ namespace lfs::training {
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         auto arena_allocator = arena.get_allocator(ctx.frame_id, "gsplat.backward");
-        // Run the backward work + arena frame release on the exact stream the
-        // forward began the frame on (ctx.stream), so begin_frame and end_frame
-        // chain on the same stream rather than relying on the caller's guard
-        // matching. Falls back to the current/tensor stream only if unset.
-        const cudaStream_t stream = ctx.stream
-                                        ? ctx.stream
-                                        : (core::getCurrentCUDAStream()
-                                               ? core::getCurrentCUDAStream()
-                                               : ctx.means.stream());
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        core::bridgeStreams(ctx.stream, stream);
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
+                                                                            &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
+                                                                            &ctx.bg_image, &ctx.bg_color}) {
+            if (input->is_valid())
+                input->sync_to_stream(stream);
+        }
         try {
 
             const uint32_t N = ctx.N;
@@ -926,8 +926,12 @@ namespace lfs::training {
 
             // Isect/flatten ids stay in the TLS VMM cache for the next forward.
             // Arena still ends with the frame.
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }

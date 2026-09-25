@@ -426,10 +426,12 @@ namespace fast_lfs::rasterization {
         if (!forward_ctx.success) {
             return;
         }
-        // Release on the context's stream, not the caller's current one —
-        // robust against unwind paths on threads whose guard already popped.
+        // Join the retained forward storage before retiring this frame on the
+        // current execution queue, including inference and exception cleanup.
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(forward_ctx.frame_id, forward_ctx.stream);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::bridgeStreams(forward_ctx.stream, stream);
+        arena.end_frame(forward_ctx.frame_id, stream);
     }
 
     BackwardOutputs backward_raw(
@@ -471,9 +473,8 @@ namespace fast_lfs::rasterization {
         const float* edge_weight_map,
         float* edge_score_out) {
 
-        // The forward chose the stream and chained the arena frame on it; the
-        // backward shares the same context/arena frame and must match.
-        const cudaStream_t stream = forward_ctx.stream;
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::bridgeStreams(forward_ctx.stream, stream);
 
         BackwardOutputs outputs;
         outputs.success = false;

@@ -11,6 +11,8 @@
 #include "core/environment.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -1648,4 +1650,33 @@ TEST_F(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLi
         }
         ASSERT_EQ(model->size(), 1);
     }
+}
+
+TEST_F(GsplatRasterizerTest, BackwardUsesCurrentQueueAndJoinsForwardStorage) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope scope(producer);
+    auto camera = make_camera(32, 32);
+    auto splat = make_visible_splat(16);
+    auto bg = Tensor::zeros({3}, Device::GPU);
+    AdamConfig config;
+    config.initial_capacity = 32;
+    AdamOptimizer optimizer(*splat, config);
+    optimizer.allocate_gradients(32);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        auto result = gsplat_rasterize_forward(camera, *splat, bg);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        auto gradient = Tensor::ones_like(result->first.image);
+        auto alpha_gradient = Tensor::zeros_like(result->first.alpha);
+        {
+            TensorWorkQueue::Scope backward_scope(consumer);
+            gsplat_rasterize_backward(result->second, gradient, alpha_gradient,
+                                      *splat, optimizer, Tensor{});
+            EXPECT_EQ(optimizer.get_grad(ParamType::Means).stream(), consumer.native_handle());
+        }
+        optimizer.zero_grad(repeat);
+    }
+    consumer.wait();
+    producer.wait();
+    release_gsplat_rasterizer_thread_local_caches();
 }

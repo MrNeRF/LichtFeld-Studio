@@ -97,7 +97,7 @@ namespace lfs::training {
 
         // Memory arena frame ID (for releasing arena memory in backward)
         uint64_t frame_id = 0;
-        // Stream the forward chained the arena frame on; release/backward match.
+        // Forward producer queue; backward joins it before consuming retained storage.
         cudaStream_t stream = nullptr;
 
         // Tile-based training (0 = full image)
@@ -159,7 +159,8 @@ namespace lfs::training {
         // Stream-ordered arena end_frame keeps the frame chain intact (a
         // streamless end_frame would force a device sync on the calling — often
         // UI — thread every inference render).
-        const cudaStream_t stream = result->second.stream;
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        core::bridgeStreams(result->second.stream, stream);
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         arena.end_frame(result->second.frame_id, stream);
         return result->first;
