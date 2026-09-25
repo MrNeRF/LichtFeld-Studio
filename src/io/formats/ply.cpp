@@ -18,6 +18,7 @@
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
+#include "tinyply_body_check.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -4228,6 +4229,33 @@ namespace lfs::io {
         return complete_header && has_opacity && has_scale && has_rotation;
     }
 
+    std::optional<std::string> tinyply_body_shortfall(const tinyply::PlyFile& ply, const std::uint64_t body_bytes) {
+        // Each row needs its fixed-size properties and list length prefixes in binary,
+        // and at least a digit and a separator per value in ASCII.
+        std::uint64_t required = 0;
+        for (const auto& element : ply.get_elements()) {
+            std::uint64_t row_bytes = 0;
+            for (const auto& property : element.properties) {
+                const auto type = property.isList ? property.listType : property.propertyType;
+                row_bytes += ply.is_binary_file()
+                                 ? static_cast<std::uint64_t>(tinyply::PropertyTable.at(type).stride)
+                                 : 2u;
+            }
+            if (row_bytes != 0 &&
+                element.size > (std::numeric_limits<std::uint64_t>::max() - required) / row_bytes) {
+                return std::format("PLY header declares an impossibly large '{}' element ({} rows)",
+                                   element.name, element.size);
+            }
+            required += element.size * row_bytes;
+        }
+        if (required > body_bytes) {
+            return std::format("PLY file is truncated: the header declares at least {} body bytes, "
+                               "the file holds {}",
+                               required, body_bytes);
+        }
+        return std::nullopt;
+    }
+
     std::expected<lfs::core::PointCloud, std::string> load_ply_point_cloud(const std::filesystem::path& filepath,
                                                                            const LoadOptions& options) {
         constexpr uint8_t DEFAULT_COLOR = 255;
@@ -4251,6 +4279,12 @@ namespace lfs::io {
 
             tinyply::PlyFile ply;
             ply.parse_header(file);
+            const auto header_bytes = static_cast<std::uint64_t>(std::max<std::streamoff>(file.tellg(), 0));
+            const auto file_bytes = static_cast<std::uint64_t>(std::filesystem::file_size(filepath));
+            if (const auto shortfall =
+                    tinyply_body_shortfall(ply, file_bytes - std::min(header_bytes, file_bytes))) {
+                return std::unexpected(*shortfall);
+            }
 
             std::shared_ptr<tinyply::PlyData> vertices;
             try {

@@ -702,6 +702,34 @@ namespace {
         expect_point_cloud_failure(input, "at least one vertex");
     }
 
+    TEST_F(PlyErrorTaxonomyTest, TruncatedPointCloudBodyReturnsLegacyDataLoss) {
+        const fs::path input = path("point_cloud_truncated.ply");
+        std::string body;
+        for (int row = 0; row < 10; ++row) {
+            append_row(body, std::array<float, 3>{1.0f, 2.0f, 3.0f});
+        }
+        write_binary_file(input,
+                          make_binary_header(
+                              1000, "property float x\nproperty float y\nproperty float z\n"),
+                          body);
+
+        expect_point_cloud_failure(input, "truncated");
+    }
+
+    TEST_F(PlyErrorTaxonomyTest, OversizedPointCloudCountFailsWithoutReadingTheBody) {
+        const fs::path input = path("point_cloud_oversized.ply");
+        std::string body;
+        append_row(body, std::array<float, 3>{1.0f, 2.0f, 3.0f});
+        write_binary_file(input,
+                          make_binary_header(
+                              size_t{1} << 62, "property float x\nproperty float y\nproperty float z\n"),
+                          body);
+
+        const auto start = std::chrono::steady_clock::now();
+        expect_point_cloud_failure(input, "impossibly large");
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(5));
+    }
+
     TEST_F(PlyErrorTaxonomyTest, NonFinitePointCloudPositionReturnsLegacyDataLoss) {
         const fs::path input = path("point_cloud_non_finite_position.ply");
         std::string body;
