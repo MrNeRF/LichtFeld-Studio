@@ -3,6 +3,7 @@
 
 #include "metal_context.hpp"
 
+#include "../../internal/expression_emitter.hpp"
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/gpu_device_info.hpp"
@@ -184,6 +185,41 @@ namespace lfs::core::internal::metal {
         // An idle GPU starts at once; while it is busy, dispatches batch up.
         if (++open_dispatches_ >= kBatchDispatches || completed() >= submitted_.load(std::memory_order_relaxed))
             commit_locked();
+    }
+
+    namespace {
+        struct MetalExpression final : CompiledExpression {
+            id<MTLComputePipelineState> pipeline;
+        };
+    } // namespace
+
+    id<MTLComputePipelineState> Context::expression_pipeline(const ExpressionProgram& program,
+                                                             const ExpressionSignature& signature) {
+        const std::string key = std::format("metal-msl:{}:{}", device_.registryID, expression_key(program, signature));
+        const auto compile = [&] {
+            const std::string source = expression_msl(program, signature);
+            return std::vector<char>(source.begin(), source.end());
+        };
+        const auto load = [&](const std::span<const char> artifact) -> std::shared_ptr<CompiledExpression> {
+            MTLCompileOptions* const options = [MTLCompileOptions new];
+            options.mathMode = MTLMathModeSafe;
+            options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+            NSString* const source = [[NSString alloc] initWithBytes:artifact.data()
+                                                              length:artifact.size()
+                                                            encoding:NSUTF8StringEncoding];
+            NSError* error = nil;
+            id<MTLLibrary> const library = [device_ newLibraryWithSource:source options:options error:&error];
+            id<MTLFunction> const function = [library newFunctionWithName:@"lfs_expression"];
+            id<MTLComputePipelineState> const state =
+                function ? [device_ newComputePipelineStateWithFunction:function error:&error] : nil;
+            if (!state)
+                throw TensorError(std::format("Metal expression kernel failed to compile: {}",
+                                              error ? error.localizedDescription.UTF8String : "unknown error"));
+            auto kernel = std::make_shared<MetalExpression>();
+            kernel->pipeline = state;
+            return kernel;
+        };
+        return std::static_pointer_cast<MetalExpression>(expressions_.get(key, compile, load))->pipeline;
     }
 
     id<MTL4ComputeCommandEncoder> Context::open_encoder_locked() {
@@ -552,6 +588,12 @@ namespace lfs::core::internal {
             if (const auto context = metal::live_context())
                 context->wait(serial);
         }
+    }
+
+    ExpressionCacheStats metal_expression_cache_stats() {
+        if (@available(macOS 26.0, *))
+            return metal::acquire_context()->expressions().stats();
+        throw std::runtime_error("Metal expression backend is unavailable");
     }
 
 } // namespace lfs::core::internal

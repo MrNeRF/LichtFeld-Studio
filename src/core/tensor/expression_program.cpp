@@ -5,6 +5,9 @@
 #include "core/assert.hpp"
 #include "internal/expression_runtime.hpp"
 #include "internal/tensor_impl.hpp"
+#ifdef LFS_TENSOR_METAL
+#include "backend/metal/metal_context.hpp"
+#endif
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_pipelines.hpp"
@@ -498,6 +501,10 @@ namespace lfs::core::internal {
     }
 
     ExpressionCacheStats expression_cache_stats(const GpuBackend backend) {
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal)
+            return metal_expression_cache_stats();
+#endif
         if (backend == GpuBackend::CUDA)
 #if LFS_HAS_CUDA
             return cuda_expression_cache().stats();

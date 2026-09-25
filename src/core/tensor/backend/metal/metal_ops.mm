@@ -1335,6 +1335,24 @@ namespace lfs::core::internal {
         };
     } // namespace
 
+    // Fused expressions compile to MSL once per layout class; the launch
+    // arguments are the dispatch parameters.
+    void MetalBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext) {
+        LFS_FACADE_TRACE(compiled_expression);
+        const auto context = acquire_context();
+        const auto pipeline = context->expression_pipeline(*launch.program, launch.signature);
+        const uint32_t packing = expression_packing(launch.signature);
+        const uint64_t work = (uint64_t{launch.count} + packing - 1) / packing;
+        if (launch.prepare_only || work == 0)
+            return;
+        std::vector<StorageRef> uses(launch.reads.begin(), launch.reads.begin() + launch.read_count);
+        uses.insert(uses.end(), launch.writes.begin(), launch.writes.begin() + launch.write_count);
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {},
+                                 .params = std::as_bytes(std::span(launch.arguments.data(), launch.words)),
+                                 .grid = threads(work)});
+    }
+
     void MetalBackendOps::unary(const PointwiseProgram& program, const StorageRef input,
                                 const StorageRef output, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(unary);

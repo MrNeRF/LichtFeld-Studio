@@ -43,6 +43,7 @@ namespace lfs::core::internal {
                          const ExpressionSignature& signature);
     std::string expression_ptx(const ExpressionProgram& program, const ExpressionSignature& signature);
     std::vector<uint32_t> expression_spirv(const ExpressionProgram& program, const ExpressionSignature& signature);
+    std::string expression_msl(const ExpressionProgram& program, const ExpressionSignature& signature);
     std::string_view expression_ptx_opcode(ExprOp op);
     std::string_view expression_ptx_half(bool pack);
     std::string_view expression_ptx_header();

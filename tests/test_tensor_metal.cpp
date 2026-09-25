@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_fused.hpp"
 
 #include <gtest/gtest.h>
 
@@ -604,6 +605,101 @@ namespace {
         const Tensor normal = draw(GpuBackend::Metal, [] { return Tensor::randn({100000}, Device::GPU); });
         EXPECT_NEAR(normal.mean().item(), 0.0f, 0.02f);
         EXPECT_NEAR(normal.std().item(), 1.0f, 0.02f);
+    }
+
+    // Fused kernels compile to MSL with the lowerings of the SPIR-V emitter,
+    // so Metal and Vulkan compute the same values.
+    TEST_F(TensorMetal, FusedKernelsMatchVulkan) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        const auto run = [](const GpuBackend backend, const fused::Kernel& kernel, const std::vector<size_t>& domain,
+                            const std::vector<Tensor>& inputs) {
+            GpuBackendScope scope(backend);
+            std::vector<Tensor> bound;
+            for (const Tensor& input : inputs)
+                bound.push_back(input.numel() > 4 ? input.to(Device::GPU) : input);
+            std::vector<Tensor> outputs = kernel(domain, bound);
+            for (Tensor& output : outputs)
+                output = output.cpu();
+            return outputs;
+        };
+        const auto compare = [&](const fused::Kernel& kernel, const std::vector<size_t>& domain,
+                                 const std::vector<Tensor>& inputs, const float tolerance) {
+            const auto metal = run(GpuBackend::Metal, kernel, domain, inputs);
+            const auto vulkan = run(GpuBackend::Vulkan, kernel, domain, inputs);
+            ASSERT_EQ(metal.size(), vulkan.size());
+            for (size_t i = 0; i < metal.size(); ++i) {
+                SCOPED_TRACE(i);
+                expect_close(metal[i], vulkan[i], tolerance, tolerance);
+            }
+        };
+
+        const Tensor x = random_tensor(37 * 53, -3.0f, 3.0f, 65).reshape({37, 53});
+        const Tensor y = random_tensor(53, 0.1f, 2.0f, 66);
+        const Tensor gain = Tensor::from_vector(std::vector<float>{1.5f, -0.25f}, {2}, Device::CPU);
+        {
+            // Exact arithmetic, comparisons, integer and bit operations.
+            fused::Builder b(2);
+            const auto a = b.input(DataType::Float32, 2).load();
+            const auto c = b.input(DataType::Float32, 1).load();
+            const auto g = b.input(DataType::Float32, 1);
+            b.output(fused::fma(a, g.at({0}), c) - a / c + fused::min(a, c) * fused::max(a, 0.5f), DataType::Float32);
+            b.output(fused::where(a > c, fused::clamp(a, -1.0f, 1.0f), fused::floor(a * 3.0f) + fused::round(a)),
+                     DataType::Float32);
+            const auto row = b.iota(0), column = b.iota(1);
+            b.output((row * 7 - column) / 3 + (row - column) % 5 + (column << 2) - (row >> 1), DataType::Int32);
+            b.output((a.cast(DataType::Int32) / (column % 4)) ^ row, DataType::Int32);
+            const fused::Kernel kernel(b);
+            // Narrow outputs pack into words.
+            fused::Builder narrow(2);
+            const auto p = narrow.input(DataType::Float32, 2).load();
+            const auto q = narrow.input(DataType::Float32, 1).load();
+            narrow.output(fused::abs(p) + fused::sign(p) * fused::square(q) - fused::relu(-p), DataType::Float16);
+            narrow.output(fused::isfinite(p / (p - p)) || (p > 1.0f && q < 1.0f), DataType::Bool);
+            narrow.output((p * 10.0f + 128.0f).cast(DataType::Int32), DataType::UInt8);
+            const fused::Kernel narrow_kernel(narrow);
+            compare(narrow_kernel, {37, 53}, {x, y}, 0.0f);
+            compare(narrow_kernel, {7, 53}, {x.slice(0, 0, 7), y}, 0.0f);
+            compare(kernel, {37, 53}, {x, y, gain}, 0.0f);
+            // A second shape reuses the compiled layout class.
+            compare(kernel, {5, 53}, {x.slice(0, 0, 5), y, gain}, 0.0f);
+        }
+        {
+            // Transcendentals, to within their last bits.
+            fused::Builder b(2);
+            const auto a = b.input(DataType::Float32, 2).load();
+            const auto c = b.input(DataType::Float32, 1).load();
+            b.output(fused::exp(a) + fused::log(c) + fused::sqrt(c) + fused::sigmoid(a) + fused::tanh(a), DataType::Float32);
+            b.output(fused::sin(a) * fused::cos(a) + fused::atan2(a, c) + fused::pow(c, a) + fused::log1p(fused::abs(a)),
+                     DataType::Float32);
+            b.output(fused::asin(a / 3.0f) + fused::acos(a / 3.0f) + fused::gelu(a) + fused::swish(a) + fused::exp2(a) +
+                         fused::log2(c) + fused::log10(c) + fused::rsqrt(c) + fused::sinh(a) - fused::cosh(a),
+                     DataType::Float32);
+            const fused::Kernel kernel(b);
+            compare(kernel, {37, 53}, {x, y}, 2.0e-5f);
+        }
+        {
+            // Gathers under every bound and folds of a fixed and a run-time length.
+            fused::Builder b(2);
+            const auto source = b.input(DataType::Float32, 2);
+            const auto a = source.load();
+            const auto shifted = source.gather({b.iota(0) - 3, b.iota(1) * 2}, fused::Bounds::Zero) +
+                                 source.gather({b.iota(0) + 1, b.iota(1) - 5}, fused::Bounds::Clamp) +
+                                 source.gather({b.iota(0) - 40, b.iota(1) + 60}, fused::Bounds::Wrap);
+            b.output(shifted, DataType::Float32);
+            const fused::Kernel gathers(b);
+            compare(gathers, {37, 53}, {x}, 0.0f);
+            for (const size_t length : {size_t{16}, size_t{300}}) {
+                fused::Builder folds(2);
+                const auto values = folds.input(DataType::Float32, 2).load();
+                folds.output(folds.fold(fused::Fold::Sum, values, 1), DataType::Float32);
+                folds.output(folds.fold(fused::Fold::Max, values, 1), DataType::Float32);
+                folds.output(folds.fold(fused::Fold::Count, values > 0.0f, 1), DataType::Int32);
+                const fused::Kernel kernel(folds);
+                const Tensor wide = random_tensor(9 * length, -3.0f, 3.0f, 67).reshape({9, static_cast<int>(length)});
+                compare(kernel, {9, length}, {wide}, 1.0e-5f);
+            }
+        }
     }
 
     TEST_F(TensorMetal, UnportedOperationsSaySo) {

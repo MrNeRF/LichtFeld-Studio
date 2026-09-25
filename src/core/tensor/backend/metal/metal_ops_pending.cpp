@@ -20,10 +20,6 @@ namespace lfs::core::internal {
         }
     } // namespace
 
-    void MetalBackendOps::compiled_expression(const ExpressionLaunch&, ExecContext) {
-        not_ported("compiled_expression");
-    }
-
     void MetalBackendOps::project_points(StorageRef, StorageRef, size_t, const PointProjection&, const StorageRef*, size_t, const StorageRef*, const StorageRef*, size_t, ExecContext) {
         not_ported("project_points");
     }

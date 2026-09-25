@@ -3,6 +3,7 @@
 #pragma once
 #include "core/tensor/internal/private_access.hpp"
 
+#include "../../internal/expression_runtime.hpp"
 #include "../../internal/tensor_impl.hpp"
 #include "../gpu_backend_ops.hpp"
 
@@ -43,6 +44,8 @@ namespace lfs::core::internal {
     uint64_t metal_flush();
     uint64_t metal_completed_serial();
     void metal_wait(uint64_t serial);
+
+    ExpressionCacheStats metal_expression_cache_stats();
 
 } // namespace lfs::core::internal
 
@@ -94,6 +97,10 @@ namespace lfs::core::internal::metal {
         id<MTLComputePipelineState> pipeline(
             const char* function,
             std::initializer_list<std::pair<uint32_t, uint32_t>> constants = {});
+        // Pipelines of fused expressions, compiled from generated MSL.
+        id<MTLComputePipelineState> expression_pipeline(const ExpressionProgram& program,
+                                                        const ExpressionSignature& signature);
+        ExpressionCache& expressions() { return expressions_; }
 
         // Encodes one dispatch into the open batch, ordered after every earlier
         // dispatch, and stamps every storage it uses with the batch serial,
@@ -129,7 +136,8 @@ namespace lfs::core::internal::metal {
         // where_select binds four buffers and its parameters.
         static constexpr NSUInteger kArgumentSlots = 5;
         static constexpr size_t kParamsAlignment = 256;
-        static constexpr size_t kMaxParamsBytes = 512;
+        // Fused expressions pass up to ExpressionLayout::max_words argument words.
+        static constexpr size_t kMaxParamsBytes = ExpressionLayout::max_words * sizeof(uint32_t);
         // Batches in flight before recording waits for the oldest.
         static constexpr size_t kMaxFrames = 64;
 
@@ -189,6 +197,7 @@ namespace lfs::core::internal::metal {
 
         std::mutex pipeline_mutex_;
         std::unordered_map<PipelineKey, id<MTLComputePipelineState>, PipelineKeyHash> pipelines_;
+        ExpressionCache expressions_;
 
         // Batches are recorded into one command buffer, reused after each commit.
         std::mutex encode_mutex_;

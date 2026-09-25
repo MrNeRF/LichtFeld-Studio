@@ -171,6 +171,7 @@ if(APPLE)
         DEPENDS tensor/backend/metal/kernels.metal tensor/backend/metal/embed_kernels.cmake
         COMMENT "Embedding Metal tensor kernels")
     list(APPEND TENSOR_SOURCES
+        tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
         tensor/backend/metal/metal_ops_pending.cpp
