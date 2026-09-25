@@ -8,6 +8,7 @@
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -441,8 +442,12 @@ namespace lfs::training {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                                    ? sampled_idxs
                                                    : sampled_idxs.to(lfs::core::DataType::Int32);
+                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                idx_i32.sync_to_stream(stream);
+                                state->grad.set_stream(stream);
                                 lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                                    idx_i32.numel(), layout_rest_u32, stream);
                             }
                             return;
                         }
@@ -904,9 +909,12 @@ namespace lfs::training {
                         auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                            ? prune_indices
                                            : prune_indices.to(lfs::core::DataType::Int32);
+                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        idx_i32.sync_to_stream(stream);
+                        state->grad.set_stream(stream);
                         lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
-                            layout_rest);
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                            idx_i32.numel(), layout_rest, stream);
                     }
                     return;
                 }
@@ -1045,8 +1053,12 @@ namespace lfs::training {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                                    ? target_indices
                                                    : target_indices.to(lfs::core::DataType::Int32);
+                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                idx_i32.sync_to_stream(stream);
+                                state->grad.set_stream(stream);
                                 lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                                    idx_i32.numel(), layout_rest, stream);
                             }
                             return;
                         }
