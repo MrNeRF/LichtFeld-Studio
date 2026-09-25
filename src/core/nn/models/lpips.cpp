@@ -82,11 +82,13 @@ namespace lfs::core::nn::models {
                 slot.copy_from(src);
                 return;
             }
-            slot.set_stream(src.stream());
+            const auto stream = getCurrentCUDAStream();
+            src.sync_to_stream(stream);
+            slot.set_stream(stream);
 #if LFS_HAS_CUDA
             if (src.bytes() > 0) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(slot.data_ptr(), src.data_ptr(), src.bytes(),
-                                               cudaMemcpyDeviceToDevice, src.stream()));
+                                               cudaMemcpyDeviceToDevice, stream));
             }
 #else
             throw std::runtime_error("CUDA tensor recapture is unavailable in this build");
@@ -263,12 +265,12 @@ namespace lfs::core::nn::models {
             return like;
         if (workspace_.is_valid() && workspace_.bytes() >= bytes &&
             workspace_.dtype() == like.dtype() && workspace_.device() == like.device()) {
-            workspace_.set_stream(like.stream());
+            workspace_.set_stream(getCurrentCUDAStream());
             return workspace_;
         }
         const std::size_t elem = dtype_size(like.dtype());
         workspace_ = Tensor::empty(shape_of({(bytes + elem - 1) / elem}), like.device(), like.dtype());
-        workspace_.set_stream(like.stream());
+        workspace_.set_stream(getCurrentCUDAStream());
         return workspace_;
     }
 
@@ -380,15 +382,9 @@ namespace lfs::core::nn::models {
             return static_cast<int>(static_cast<std::size_t>(dimension) >> block);
         };
 
-        const cudaStream_t stream = x_in.stream();
-        lfs::core::CUDAStreamGuard stream_guard(stream);
-        if (y_in.stream() != stream) {
-            cudaEvent_t ready = nullptr;
-            LFS_CUDA_CHECK(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming));
-            LFS_CUDA_CHECK(cudaEventRecord(ready, y_in.stream()));
-            LFS_CUDA_CHECK(cudaStreamWaitEvent(stream, ready, 0));
-            LFS_CUDA_CHECK(cudaEventDestroy(ready));
-        }
+        const cudaStream_t stream = getCurrentCUDAStream();
+        x_in.sync_to_stream(stream);
+        y_in.sync_to_stream(stream);
         bind_weights_to_stream(stream);
 
         std::size_t taps_bytes = 0;
@@ -666,7 +662,9 @@ namespace lfs::core::nn::models {
             x = cast(x, compute_);
             y = cast(y, compute_);
         }
-        const cudaStream_t stream = x.stream();
+        const cudaStream_t stream = getCurrentCUDAStream();
+        x.sync_to_stream(stream);
+        y.sync_to_stream(stream);
         lfs::core::CUDAStreamGuard stream_guard(stream);
         bind_weights_to_stream(stream);
         ActivationArenaGuard arena_guard(arena_);
