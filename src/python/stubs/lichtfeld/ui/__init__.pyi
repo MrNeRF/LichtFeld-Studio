@@ -414,7 +414,9 @@ def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 
 def get_left_dock_width() -> float:
-    """Get the current left dock width in logical pixels"""
+    """
+    Get the left dock width the user chose, in logical pixels. The dock is narrower while the window is too small to fit it.
+    """
 
 def set_left_dock_width(width: float) -> None:
     """Set the left dock width in logical pixels"""

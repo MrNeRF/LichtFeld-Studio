@@ -62,11 +62,11 @@ namespace lfs::vis::gui {
     PanelLayoutProjectState
     PanelLayoutManager::captureProjectState() const {
         return {
-            .right_panel_width = right_panel_width_,
+            .right_panel_width = right_panel_preferred_width_,
             .scene_panel_ratio = scene_panel_ratio_,
             .python_console_width = python_console_width_,
             .bottom_dock_height = bottom_dock_height_,
-            .left_dock_width = left_dock_width_,
+            .left_dock_width = left_dock_preferred_width_,
             .show_sequencer = show_sequencer_,
             .active_tab_id = active_tab_id_,
             .bottom_dock_active_tab_id = bottom_dock_active_tab_id_,
@@ -78,7 +78,7 @@ namespace lfs::vis::gui {
         const PanelLayoutProjectState& state) {
         if (std::isfinite(state.right_panel_width) &&
             state.right_panel_width > 0.0f)
-            right_panel_width_ = state.right_panel_width;
+            right_panel_width_ = right_panel_preferred_width_ = state.right_panel_width;
         if (std::isfinite(state.scene_panel_ratio))
             scene_panel_ratio_ =
                 std::clamp(state.scene_panel_ratio, 0.01f, 0.99f);
@@ -89,7 +89,7 @@ namespace lfs::vis::gui {
             bottom_dock_height_ = state.bottom_dock_height;
         if (std::isfinite(state.left_dock_width) &&
             state.left_dock_width > 0.0f)
-            left_dock_width_ = state.left_dock_width;
+            left_dock_width_ = left_dock_preferred_width_ = state.left_dock_width;
         setShowSequencer(state.show_sequencer);
         active_tab_id_ = state.active_tab_id;
         setBottomDockActiveTab(state.bottom_dock_active_tab_id);
@@ -102,7 +102,7 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::setLeftDockWidth(const float width) {
         if (std::isfinite(width) && width > 0.0f)
-            left_dock_width_ = width;
+            left_dock_width_ = left_dock_preferred_width_ = width;
     }
 
     bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,
@@ -156,7 +156,7 @@ namespace lfs::vis::gui {
         const float max_w = maxRightPanelWidth(show_main_panel, ui_hidden, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, max_w);
 
-        right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
+        right_panel_width_ = std::clamp(right_panel_preferred_width_, min_w, max_w);
 
         auto& reg = PanelRegistry::instance();
         const bool float_blocks_right_panel =
@@ -420,7 +420,7 @@ namespace lfs::vis::gui {
         const float max_w = maxRightPanelWidth(show_main_panel, ui_hidden, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, max_w);
 
-        right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
+        right_panel_width_ = std::clamp(right_panel_preferred_width_, min_w, max_w);
 
         const bool python_console_visible = window_states["python_console"];
         const float available_for_split = screen.work_size.x - right_panel_width_ - PANEL_GAP;
@@ -805,7 +805,7 @@ namespace lfs::vis::gui {
         const float min_panel_w = std::min(LEFT_DOCK_MIN_WIDTH * dpi, max_panel_w);
         const float default_panel_w = LEFT_DOCK_DEFAULT_WIDTH * dpi;
         left_dock_width_ = std::clamp(
-            left_dock_width_ > 0.0f ? left_dock_width_ : default_panel_w,
+            left_dock_preferred_width_ > 0.0f ? left_dock_preferred_width_ : default_panel_w,
             min_panel_w,
             max_panel_w);
 
@@ -848,6 +848,7 @@ namespace lfs::vis::gui {
                                    input.mouse_x, screen.work_pos.x + min_panel_w,
                                    screen.work_pos.x + max_panel_w) -
                                screen.work_pos.x;
+            left_dock_preferred_width_ = left_dock_width_;
         } else if (left_dock_hovering_edge_ && dock_input.mouse_clicked[0]) {
             left_dock_resizing_ = true;
             left_dock_drag_ = {dock_layout.panel_x + panel_w, input.mouse_x};
@@ -920,7 +921,7 @@ namespace lfs::vis::gui {
         const float min_panel_w = std::min(LEFT_DOCK_MIN_WIDTH * dpi, max_panel_w);
         const float default_panel_w = LEFT_DOCK_DEFAULT_WIDTH * dpi;
         left_dock_width_ = std::clamp(
-            left_dock_width_ > 0.0f ? left_dock_width_ : default_panel_w,
+            left_dock_preferred_width_ > 0.0f ? left_dock_preferred_width_ : default_panel_w,
             min_panel_w,
             max_panel_w);
 
@@ -951,7 +952,7 @@ namespace lfs::vis::gui {
     void PanelLayoutManager::setRightPanelWidth(float width, const ScreenState& screen) {
         const float max_w = maxRightPanelWidth(true, false, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * lfs::python::get_shared_dpi_scale(), max_w);
-        right_panel_width_ = std::clamp(width, min_w, max_w);
+        right_panel_width_ = right_panel_preferred_width_ = std::clamp(width, min_w, max_w);
     }
 
     float PanelLayoutManager::maxRightPanelWidth(const bool show_main_panel,
@@ -1001,10 +1002,10 @@ namespace lfs::vis::gui {
         const float viewport_min_w = MIN_VIEWPORT_WIDTH * dpi;
         const float panel_budget = std::max(0.0f, screen.work_size.x - viewport_min_w - PANEL_GAP);
         const float right_min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, panel_budget);
-        const float right_pref_w = std::max(right_panel_width_, right_min_w);
+        const float right_pref_w = std::max(right_panel_preferred_width_, right_min_w);
 
         if (shouldReserveLeftDockWidth()) {
-            const float left_pref_w = std::max(0.0f, left_dock_width_);
+            const float left_pref_w = std::max(0.0f, left_dock_preferred_width_);
             const float left_soft_min_w = std::min(LEFT_DOCK_MIN_VISIBLE_WIDTH * dpi,
                                                    std::max(0.0f, panel_budget - right_min_w));
             float left_max_w = std::max(0.0f, panel_budget - right_min_w);

@@ -717,12 +717,13 @@ namespace lfs::python {
                 return invoke_on_viewer(
                     [] {
                         if (auto* const gui_manager = get_gui_manager())
-                            return gui_manager->panelLayout().getLeftDockWidth();
+                            return gui_manager->panelLayout().getLeftDockPreferredWidth();
                         return 0.0f;
                     },
                     0.0f);
             },
-            "Get the current left dock width in logical pixels");
+            "Get the left dock width the user chose, in logical pixels. The dock is "
+            "narrower while the window is too small to fit it.");
 
         m.def(
             "set_left_dock_width", [](const float width) {
