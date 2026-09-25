@@ -655,10 +655,14 @@ namespace lfs::training {
         core::bridgeStreams(ctx.stream, stream);
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
                                                                             &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
-                                                                            &ctx.bg_image, &ctx.bg_color}) {
+                                                                            &ctx.bg_image, &ctx.bg_color, &pixel_error_map, &edge_weight_map}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
+        if (edge_score_out.is_valid())
+            edge_score_out.set_stream(stream);
+        if (gaussian_model._densification_info.is_valid())
+            gaussian_model._densification_info.set_stream(stream);
         try {
 
             const uint32_t N = ctx.N;
@@ -904,7 +908,6 @@ namespace lfs::training {
 
             // Accumulate gradient norms when pixel-error map is not provided
             if (update_densification_info && pixel_error_map_ptr == nullptr) {
-                gaussian_model._densification_info.set_stream(stream);
                 kernels::launch_grad_norm_accumulate(
                     gaussian_model._densification_info.ptr<float>(),
                     v_means_ptr,
