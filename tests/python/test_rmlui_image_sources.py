@@ -20,6 +20,9 @@ def _install_lf_stub(monkeypatch):
         def on_mount(self, _doc):
             pass
 
+        def on_unmount(self, _doc):
+            pass
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
@@ -117,9 +120,16 @@ class _ElementStub:
 class _DocumentStub:
     def __init__(self, elements):
         self._elements = elements
+        self.removed_models = []
 
     def get_element_by_id(self, element_id):
         return self._elements.get(element_id)
+
+    def query_selector_all(self, _selector):
+        return []
+
+    def remove_data_model(self, name):
+        self.removed_models.append(name)
 
 
 class _HandleStub:
@@ -236,9 +246,11 @@ def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_module
     panel._ready_lock = Lock()
     panel._ready_queue = []
     panel._thumb_update_scheduled = False
+    panel._mounted = True
 
-    panel._on_thumb_ready("intro", "/tmp/intro.jpg")
-    panel._on_thumb_ready("next", "/tmp/next.jpg")
+    generation = panel._mount_generation
+    panel._on_thumb_ready("intro", "/tmp/intro.jpg", generation)
+    panel._on_thumb_ready("next", "/tmp/next.jpg", generation)
 
     assert panel._ready_queue == [
         ("intro", "/tmp/intro.jpg"),
@@ -251,3 +263,32 @@ def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_module
 
     assert panel._handle.request_update_count == 1
     assert panel._thumb_update_scheduled is False
+
+
+def test_getting_started_ignores_thumbnail_completion_after_unmount(panel_modules):
+    _, getting_started = panel_modules
+    callbacks = []
+    sys.modules["lichtfeld"].ui.schedule_on_ui_thread = callbacks.append
+
+    panel = getting_started.GettingStartedPanel()
+    old_handle = _HandleStub()
+    panel._handle = old_handle
+    panel._mounted = True
+    generation = panel._mount_generation
+
+    panel._on_thumb_ready("intro", "/tmp/intro.jpg", generation)
+    assert len(callbacks) == 1
+
+    doc = _DocumentStub({})
+    panel.on_unmount(doc)
+    panel.on_mount(doc)
+    new_handle = _HandleStub()
+    panel._handle = new_handle
+    callbacks.pop()()
+    panel._on_thumb_ready("late", "/tmp/late.jpg", generation)
+
+    assert doc.removed_models == ["getting_started"]
+    assert panel._ready_queue == []
+    assert panel._thumb_card_map == {}
+    assert old_handle.request_update_count == 0
+    assert new_handle.request_update_count == 0
