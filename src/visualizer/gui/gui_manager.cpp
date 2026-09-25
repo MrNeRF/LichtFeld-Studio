@@ -5317,8 +5317,9 @@ namespace lfs::vis::gui {
                 if (current_view != mesh_frame.scene_view) {
                     params.scene_reprojection = {
                         .enabled = true,
-                        .source_to_current = sceneReprojectionMatrix(
-                            mesh_frame.scene_view, mesh_frame.scene_projection, current_view),
+                        .current_to_source = sceneReprojectionHomography(
+                            mesh_frame.scene_view, mesh_frame.scene_projection, current_view,
+                            viewport.camera.getPivot()),
                     };
                 }
             }

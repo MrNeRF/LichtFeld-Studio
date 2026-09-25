@@ -72,20 +72,49 @@ TEST(SceneReprojectionTest, MovedCameraSeesSourcePixelsWhereItProjectsTheirPoint
     }
 }
 
-// Mirrors scene_reproject.frag: six fixed-point steps must recover the source
-// pixel for an orbit step far larger than one frame at interactive rates.
-TEST(SceneReprojectionTest, ShaderIterationFindsTheSourcePixel) {
+glm::vec2 applyHomography(const glm::mat3& h, const glm::vec2 ndc) {
+    const glm::vec3 source = h * glm::vec3(ndc, 1.0f);
+    EXPECT_GT(source.z, 0.0f);
+    return glm::vec2(source) / source.z;
+}
+
+TEST(SceneReprojectionTest, HomographyIsExactOnThePivotPlane) {
     const Camera source = orbitCamera(20.0f, 4.0f);
     const Camera current = orbitCamera(28.0f, 3.6f);
-    const glm::mat4 m = lfs::vis::sceneReprojectionMatrix(source.view, source.projection, current.view);
+    const glm::vec3 pivot(0.0f, 0.0f, 0.0f);
+    const glm::mat3 h = lfs::vis::sceneReprojectionHomography(source.view, source.projection, current.view, pivot);
+    const glm::mat3 camera_to_world = glm::transpose(glm::mat3(source.view));
+    for (const glm::vec2 offset : {glm::vec2(0.0f), glm::vec2(0.7f, -0.2f), glm::vec2(-0.5f, 0.4f)}) {
+        const glm::vec3 on_plane = pivot + camera_to_world * glm::vec3(offset, 0.0f);
+        const glm::vec2 expected = project(source, on_plane).ndc;
+        const glm::vec2 warped = applyHomography(h, project(current, on_plane).ndc);
+        EXPECT_NEAR(warped.x, expected.x, 1e-4f);
+        EXPECT_NEAR(warped.y, expected.y, 1e-4f);
+    }
+}
+
+TEST(SceneReprojectionTest, HomographyKeepsAnUnmovedCameraStill) {
+    const Camera camera = orbitCamera(20.0f, 4.0f);
+    const glm::mat3 h = lfs::vis::sceneReprojectionHomography(camera.view, camera.projection, camera.view,
+                                                              glm::vec3(0.0f));
+    for (const glm::vec2 ndc : {glm::vec2(0.0f), glm::vec2(0.9f, -0.9f), glm::vec2(-0.3f, 0.6f)}) {
+        const glm::vec2 warped = applyHomography(h, ndc);
+        EXPECT_NEAR(warped.x, ndc.x, 1e-5f);
+        EXPECT_NEAR(warped.y, ndc.y, 1e-5f);
+    }
+}
+
+TEST(SceneReprojectionTest, PivotBehindTheCameraFallsBackToARotationWarp) {
+    const Camera source = orbitCamera(20.0f, 4.0f);
+    const glm::mat3 rotation(glm::rotate(glm::mat4(1.0f), glm::radians(6.0f), glm::vec3(0, 1, 0)));
+    const glm::mat4 current_view = glm::mat4(rotation) * source.view;
+    const glm::vec3 behind = glm::vec3(glm::inverse(source.view) * glm::vec4(0.0f, 0.0f, 5.0f, 1.0f));
+    const glm::mat3 h = lfs::vis::sceneReprojectionHomography(source.view, source.projection, current_view, behind);
+    const Camera current{current_view, source.projection};
     for (const auto& point : kScenePoints) {
-        const auto from = project(source, point);
-        const glm::vec2 target = project(current, point).ndc;
-        glm::vec2 guess = target;
-        for (int i = 0; i < 6; ++i) {
-            guess += target - warp(m, guess, from.depth);
-        }
-        EXPECT_NEAR(guess.x, from.ndc.x, 1e-3f);
-        EXPECT_NEAR(guess.y, from.ndc.y, 1e-3f);
+        const glm::vec2 expected = project(source, point).ndc;
+        const glm::vec2 warped = applyHomography(h, project(current, point).ndc);
+        EXPECT_NEAR(warped.x, expected.x, 1e-3f);
+        EXPECT_NEAR(warped.y, expected.y, 1e-3f);
     }
 }

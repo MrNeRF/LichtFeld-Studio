@@ -106,11 +106,11 @@ namespace lfs::vis {
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
     };
 
-    // Warps a scene image rendered for an earlier camera to the current one with
-    // the splat depth while a newer render is still pending.
+    // Warps a scene image rendered for an earlier camera to the current one while a
+    // newer render is still pending.
     struct VulkanSceneReprojection {
         bool enabled = false;
-        glm::mat4 source_to_current{1.0f}; // see sceneReprojectionMatrix
+        glm::mat3 current_to_source{1.0f}; // see sceneReprojectionHomography
     };
 
     struct VulkanViewportPassParams {

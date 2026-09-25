@@ -113,10 +113,9 @@ namespace lfs::vis {
         };
 
         struct SceneReprojectPush {
-            glm::mat4 source_to_current{1.0f};
+            glm::mat4 current_to_source{1.0f};
             glm::vec4 viewport_rect{0.0f};
             glm::vec4 color_uv_region{1.0f};
-            glm::vec4 depth_uv_region{1.0f};
             glm::vec4 flip_y{0.0f};
         };
         static_assert(sizeof(SceneReprojectPush) <= 128, "push constants beyond the guaranteed 128 bytes");
@@ -1624,8 +1623,7 @@ namespace lfs::vis {
                    createPipeline(kScreenQuadVertSpv, kSceneReprojectFragSpv, "scene_reproject",
                                   scene_descriptor_layout, &scene_reproject_push, true,
                                   PipelineVertexLayout::ScreenQuad,
-                                  scene_reproject_pipeline_layout, scene_reproject_pipeline,
-                                  shape_overlay_descriptor_layout) &&
+                                  scene_reproject_pipeline_layout, scene_reproject_pipeline) &&
                    createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
@@ -2329,9 +2327,7 @@ namespace lfs::vis {
                 };
                 split_view_pass.record(command_buffer, panel_rect, adjusted, params.frame_slot);
             } else if (has_scene && params.scene_reprojection.enabled &&
-                       scene_reproject_pipeline != VK_NULL_HANDLE &&
-                       depth_blit_pass.hasDepth(params.frame_slot) &&
-                       frame.shape_overlay_descriptor_set != VK_NULL_HANDLE) {
+                       scene_reproject_pipeline != VK_NULL_HANDLE) {
                 recordReprojectedScene(command_buffer, rect, params);
             } else if (has_scene) {
                 const bool use_spatial =
@@ -2371,15 +2367,13 @@ namespace lfs::vis {
         void recordReprojectedScene(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                     const VulkanViewportPassParams& params) {
             auto& frame = resourcesForFrame(params.frame_slot);
-            const std::array<VkDescriptorSet, 2> sets{frame.scene_descriptor_set,
-                                                      frame.shape_overlay_descriptor_set};
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_reproject_pipeline);
             vkCmdBindDescriptorSets(command_buffer,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     scene_reproject_pipeline_layout,
                                     0,
-                                    static_cast<std::uint32_t>(sets.size()),
-                                    sets.data(),
+                                    1,
+                                    &frame.scene_descriptor_set,
                                     0,
                                     nullptr);
             const glm::ivec2 valid = params.scene_image_size;
@@ -2388,15 +2382,11 @@ namespace lfs::vis {
                     ? params.scene_image_alloc_size
                     : valid;
             const SceneReprojectPush push{
-                .source_to_current = params.scene_reprojection.source_to_current,
+                .current_to_source = glm::mat4(params.scene_reprojection.current_to_source),
                 .viewport_rect = {static_cast<float>(rect.x), static_cast<float>(rect.y),
                                   static_cast<float>(rect.width), static_cast<float>(rect.height)},
                 .color_uv_region = glm::vec4(outputUvScale(valid, alloc), outputUvClampMax(valid, alloc)),
-                .depth_uv_region = glm::vec4(params.depth_blit.uv_scale, params.depth_blit.uv_clamp_max),
-                .flip_y = {params.scene_image_flip_y ? 1.0f : 0.0f,
-                           params.depth_blit.flip_y ? 1.0f : 0.0f,
-                           0.0f,
-                           0.0f},
+                .flip_y = {params.scene_image_flip_y ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f},
             };
             vkCmdPushConstants(command_buffer,
                                scene_reproject_pipeline_layout,
