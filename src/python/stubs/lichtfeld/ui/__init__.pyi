@@ -2015,6 +2015,11 @@ def save_spz_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
     """
 
+def save_glb_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.
+    """
+
 def save_usd_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for USD files. Returns empty string if cancelled.
