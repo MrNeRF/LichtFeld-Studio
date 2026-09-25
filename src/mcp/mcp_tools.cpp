@@ -87,10 +87,11 @@ namespace lfs::mcp {
                     if (!text.empty() && ec == std::errc{} && last == end)
                         return std::make_optional<json>(parsed);
                 } else {
-                    double parsed = 0.0;
-                    const auto [last, ec] = std::from_chars(begin, end, parsed);
-                    if (!text.empty() && ec == std::errc{} && last == end && std::isfinite(parsed))
-                        return std::make_optional<json>(parsed);
+                    // Floating-point std::from_chars needs macOS 26, so read the text
+                    // as a JSON number, which is locale-independent as well.
+                    const json parsed = json::parse(text, nullptr, false);
+                    if (parsed.is_number() && std::isfinite(parsed.get<double>()))
+                        return std::make_optional<json>(parsed.get<double>());
                 }
                 return std::nullopt;
             }

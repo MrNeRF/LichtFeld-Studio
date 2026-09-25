@@ -1423,6 +1423,7 @@ namespace lfs::mcp {
                 .input_schema = {.type = "object",
                                  .properties = json{{"label", {{"type", "string"}}},
                                                     {"count", {{"type", "integer"}}},
+                                                    {"scale", {{"type", "number"}}},
                                                     {"parent", {{"type", "string"}}}},
                                  .required = {"label"}},
                 .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
@@ -1454,6 +1455,12 @@ namespace lfs::mcp {
         EXPECT_EQ(handler_calls, 2);
         EXPECT_EQ(last_arguments["label"], "5") << "a number for a string parameter was not spelled as text";
         EXPECT_EQ(last_arguments["count"], 7) << "a numeric string for an integer parameter was not converted";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5"}})["success"], true);
+        EXPECT_EQ(last_arguments["scale"], 2.5) << "a numeric string for a number parameter was not converted";
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5x"}})["error"]["details"]["parameter"],
+                  "scale");
+        EXPECT_EQ(handler_calls, 3);
     }
 
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {
