@@ -8,6 +8,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -644,9 +645,12 @@ namespace lfs::training {
                     auto idx_i32 = indices.dtype() == DataType::Int32
                                        ? indices
                                        : indices.to(DataType::Int32);
+                    const auto stream = lfs::core::getCurrentCUDAStream();
+                    idx_i32.sync_to_stream(stream);
+                    state->grad.set_stream(stream);
                     shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                        idx_i32.numel(), shN_layout_rest);
+                        idx_i32.numel(), shN_layout_rest, stream);
                 }
                 continue;
             }

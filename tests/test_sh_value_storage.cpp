@@ -10,6 +10,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
@@ -21,6 +22,8 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_config.h"
+#include "training/strategies/mcmc.hpp"
+#include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1536,4 +1539,34 @@ TEST_F(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedSt
     expect_tensors_bitwise_equal(decoded_old, decoded_new, "decoded mutated shN rows");
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST_F(ShValueStorageTest, GradientZeroJoinsProducerAndPublishesOnExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto splat = make_random_sh3(257);
+    MCMC strategy(splat);
+    param::OptimizationParameters options;
+    options.iterations = 100;
+    options.max_cap = 512;
+    strategy.initialize(options);
+    auto& gradient = strategy.get_optimizer().get_grad(ParamType::ShN);
+    gradient.fill_(0.5f);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 17, 128, 256}, {4}, Device::GPU);
+    {
+        TensorWorkQueue::Scope consumer_scope(consumer);
+        zero_adam_grads_at_indices(strategy.get_optimizer(), indices, 15);
+        EXPECT_EQ(gradient.stream(), getCurrentCUDAStream());
+    }
+    consumer.wait();
+    auto host = gradient.cpu().to_vector();
+    std::vector<float> expected(host.size(), 0.5f);
+    for (const size_t row : {0, 17, 128, 256}) {
+        for (size_t slot = 0; slot < 12; ++slot) {
+            const size_t offset = ((row / 32) * 12 * 32 + slot * 32 + row % 32) * 4;
+            std::fill_n(expected.begin() + offset, 4, 0.0f);
+        }
+    }
+    ASSERT_EQ(host, expected);
 }
