@@ -14,6 +14,12 @@
 
 namespace fast_lfs::optimizer::kernels::adam {
 
+    inline constexpr int kMaxContiguousBatch = 6;
+
+    struct JointContiguousBatch {
+        JointContiguousBatchEntry entries[kMaxContiguousBatch];
+    };
+
     // Non-fused joint Adam step for contiguous [n_prims, n_attr] params.
     // Grid = ceil(n_prims/256), block = 256 so blockIdx.x == bounds block index
     // (matches fused preprocess_backward / joint_adam::kBlockSizeDevice).
@@ -165,8 +171,7 @@ namespace fast_lfs::optimizer::kernels::adam {
 
     template <int BITS>
     __global__ void adam_step_joint_contiguous_batched_cu(
-        const JointContiguousBatchEntry* table,
-        const int n_entries,
+        const __grid_constant__ JointContiguousBatch batch,
         const bool* frozen_mask,
         const int frozen_mask_size,
         const float frozen_lr_scale,
@@ -193,10 +198,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         constexpr int kMaxAttr = 16;
 
         const int e = static_cast<int>(blockIdx.y);
-        if (e >= n_entries || table == nullptr) {
-            return;
-        }
-        const JointContiguousBatchEntry ent = table[e];
+        const JointContiguousBatchEntry& ent = batch.entries[e];
         float* const param = ent.param;
         uint8_t* const packed = ent.packed;
         float* const bounds = ent.bounds;

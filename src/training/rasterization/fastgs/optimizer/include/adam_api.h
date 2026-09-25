@@ -64,7 +64,8 @@ namespace fast_lfs::optimizer {
         float screen_share_limit = 0.0f,
         float screen_share_penalty = 0.0f);
 
-    // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
+    // One launch over a fixed-size value batch of contiguous joint params
+    // (means/sh0/scale/rot/opa).
     void adam_step_joint_contiguous_batched(
         const JointContiguousBatchEntry* host_entries,
         int n_entries,
