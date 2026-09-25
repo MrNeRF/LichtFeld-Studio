@@ -731,6 +731,19 @@ TEST_F(PanelLayoutRenderDemandTest, PanelsGrowBackWhenTheWindowGrowsAgain) {
     lfs::python::set_shared_dpi_scale(previous_dpi);
 }
 
+TEST_F(PanelLayoutRenderDemandTest, SceneTreeKeepsRowsOnShortWindowsAtHighUiScale) {
+    using lfs::vis::gui::PanelLayoutManager;
+    PanelLayoutManager layout;
+    constexpr float dpi = 2.0f;
+    constexpr float avail_h = 684.0f;
+    EXPECT_GE(layout.scenePanelHeight(avail_h, dpi), avail_h * 0.5f)
+        << "the default split left the scene tree without rows";
+    EXPECT_LE(layout.scenePanelHeight(300.0f, dpi), 150.0f) << "the scene took more than half a tiny panel";
+    EXPECT_FLOAT_EQ(layout.scenePanelHeight(1100.0f, 1.0f),
+                    1100.0f * layout.getScenePanelRatio() - PanelLayoutManager::SPLITTER_H * 0.5f)
+        << "the minimum overrode the user's split on a tall panel";
+}
+
 TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand) {
     using namespace lfs::vis::gui;
 

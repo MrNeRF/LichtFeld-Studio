@@ -211,11 +211,9 @@ namespace lfs::vis::gui {
 
         const float splitter_h = SPLITTER_H * dpi;
         const float tab_bar_h = TAB_BAR_H * dpi;
-        constexpr float MIN_H = 80.0f;
-        const float min_h = MIN_H * dpi;
         const float avail_h = panel_h - 2.0f * PAD;
 
-        const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
+        const float scene_h = scenePanelHeight(avail_h, dpi);
 
         if (demand.scene_header_live) {
             {
@@ -452,10 +450,8 @@ namespace lfs::vis::gui {
 
         const float splitter_h = SPLITTER_H * dpi;
         const float tab_bar_h = TAB_BAR_H * dpi;
-        constexpr float MIN_H = 80.0f;
-        const float min_h = MIN_H * dpi;
         const float avail_h = panel_h - 2.0f * PAD;
-        const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
+        const float scene_h = scenePanelHeight(avail_h, dpi);
 
         auto& reg = PanelRegistry::instance();
         {
@@ -938,6 +934,12 @@ namespace lfs::vis::gui {
                                                 },
                                                 draw_ctx);
         left_dock_visible_ = drawn_h > 0.0f;
+    }
+
+    float PanelLayoutManager::scenePanelHeight(const float avail_h, const float dpi) const {
+        // Never more than half the panel, so the properties below keep space on short windows.
+        const float min_h = std::min(SCENE_PANEL_MIN_HEIGHT * dpi, avail_h * 0.5f);
+        return std::max(min_h, avail_h * scene_panel_ratio_ - SPLITTER_H * dpi * 0.5f);
     }
 
     void PanelLayoutManager::setScenePanelHeight(float height, float panel_h) {

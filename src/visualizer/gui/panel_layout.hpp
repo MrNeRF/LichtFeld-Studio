@@ -158,6 +158,7 @@ namespace lfs::vis::gui {
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
+        [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
         void setScenePanelHeight(float height, float panel_height);
         float getPythonConsoleWidth() const { return python_console_width_; }
         float getBottomDockHeight() const { return bottom_dock_height_; }
@@ -183,6 +184,9 @@ namespace lfs::vis::gui {
                            std::string& focus_panel_name);
 
         static constexpr float SPLITTER_H = 6.0f;
+        // Scene tabs, filter chips, search and footer take about 130 dp; this keeps
+        // three tree rows visible under them.
+        static constexpr float SCENE_PANEL_MIN_HEIGHT = 200.0f;
         static constexpr float DOCK_GRIP_H = 8.0f;
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float STATUS_BAR_HEIGHT = 22.0f;

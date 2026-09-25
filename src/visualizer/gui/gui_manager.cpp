@@ -6333,8 +6333,7 @@ namespace lfs::vis::gui {
             const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             const float avail_h = ph - 16.0f;
-            const float scene_h = std::max(80.0f * current_ui_scale_,
-                                           avail_h * panel_layout_.getScenePanelRatio() - splitter_h * 0.5f);
+            const float scene_h = panel_layout_.scenePanelHeight(avail_h, current_ui_scale_);
 
             RightPanelLayout rp_layout;
             rp_layout.pos = glm::vec2(screen.work_pos.x + screen.work_size.x - rpw, screen.work_pos.y);
@@ -8381,9 +8380,7 @@ namespace lfs::vis::gui {
         const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
         const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dpi;
         const float avail_h = panel_h - 2.0f * kPanelPad;
-        const float scene_h =
-            std::max(80.0f * dpi,
-                     avail_h * panel_layout_.getScenePanelRatio() - splitter_h * 0.5f);
+        const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
         const float content_top = kPanelPad;
         const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
         const float tab_content_h =
