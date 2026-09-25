@@ -587,7 +587,7 @@ class ExportPanel(Panel):
                     {
                         "name": node.name,
                         "selected": node.name in self._selected_nodes,
-                        "count_text": f"({node.gaussian_count})",
+                        "count_text": f"({node.gaussian_count:,})",
                     }
                     for node in nodes
                 ],

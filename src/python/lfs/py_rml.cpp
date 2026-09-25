@@ -4,6 +4,7 @@
 
 #include "py_rml.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 
@@ -1085,7 +1086,7 @@ namespace lfs::python {
                                        if (args.empty())
                                            return {};
                                        return Rml::Variant(
-                                           Rml::String(std::to_string(args[0].Get<int>())));
+                                           Rml::String(lfs::core::format_count(args[0].Get<std::int64_t>())));
                                    });
 
         ctor.RegisterTransformFunc("format_percent",

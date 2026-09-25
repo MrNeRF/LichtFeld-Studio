@@ -38,9 +38,16 @@ def localized_count(
     return safe_format(lf.ui.tr(f"{key}.{form}"), count=count, **values)
 
 
+def _grouped(value: object) -> object:
+    return f"{value:,}" if isinstance(value, int) and not isinstance(value, bool) else value
+
+
 def safe_format(text: str, *args: object, **values: object) -> str:
-    """Format translator-controlled text without allowing malformed braces to escape."""
+    """Format translator-controlled text without allowing malformed braces to escape.
+
+    Integers are shown with digit groups, 1234 as 1,234.
+    """
     try:
-        return text.format(*args, **values)
+        return text.format(*(_grouped(arg) for arg in args), **{key: _grouped(value) for key, value in values.items()})
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return text

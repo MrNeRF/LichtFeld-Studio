@@ -391,7 +391,7 @@
     letter-spacing: 0.3dp;
 }
 
-.status-counter {
+.status-position {
     font-size: 12dp;
     margin-left: auto;
     letter-spacing: 0.2dp;

@@ -547,7 +547,7 @@ class RenderingPanel(Panel):
                        lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
 
         model.bind("simplify_target",
-                   lambda: str(self._compute_simplify_target_count()),
+                   lambda: f"{self._compute_simplify_target_count():,}",
                    lambda v: self._set_simplify_target_count(v))
         model.bind("simplify_lod_base",
                    lambda: f"{self._compute_simplify_lod_base():.1f}",

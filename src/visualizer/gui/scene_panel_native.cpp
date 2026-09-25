@@ -6,6 +6,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
@@ -56,8 +57,8 @@ namespace lfs::vis::gui {
             if (count == 1)
                 return std::format("{} {}", count, singular);
             if (!plural.empty())
-                return std::format("{} {}", count, plural);
-            return std::format("{} {}s", count, singular);
+                return std::format("{} {}", lfs::core::format_count(count), plural);
+            return std::format("{} {}s", lfs::core::format_count(count), singular);
         }
 
         [[nodiscard]] std::string formatBytes(const size_t value) {
@@ -191,11 +192,11 @@ namespace lfs::vis::gui {
                 return LOC(lichtfeld::Strings::Scene::HISTORY_EMPTY);
 
             if (total_gpu_bytes < total_bytes) {
-                return LOCF("runtime.history_summary_gpu", undo_items.size(), redo_items.size(),
+                return LOCF("runtime.history_summary_gpu", lfs::core::format_count(undo_items.size()), lfs::core::format_count(redo_items.size()),
                             formatBytes(total_bytes), formatBytes(total_gpu_bytes));
             }
 
-            return LOCF("runtime.history_summary", undo_items.size(), redo_items.size(),
+            return LOCF("runtime.history_summary", lfs::core::format_count(undo_items.size()), lfs::core::format_count(redo_items.size()),
                         formatBytes(total_bytes));
         }
 
@@ -317,10 +318,10 @@ namespace lfs::vis::gui {
             if (entry_count == 0)
                 return LOCF("runtime.cli_no_logs", level_label);
             if (displayed_entry_count < entry_count) {
-                return LOCF("runtime.cli_logs_latest", entry_count,
-                            entry_word, displayed_entry_count, level_label);
+                return LOCF("runtime.cli_logs_latest", lfs::core::format_count(entry_count),
+                            entry_word, lfs::core::format_count(displayed_entry_count), level_label);
             }
-            return LOCF("runtime.cli_logs_summary", entry_count, entry_word, level_label);
+            return LOCF("runtime.cli_logs_summary", lfs::core::format_count(entry_count), entry_word, level_label);
         }
 
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {
@@ -996,7 +997,7 @@ namespace lfs::vis::gui {
         changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
         changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
         changed |= setCachedText(logging_note_el_,
-                                 LOCF(lichtfeld::Strings::Scene::LOG_NOTE, MAX_RENDERED_LOG_ENTRIES));
+                                 LOCF(lichtfeld::Strings::Scene::LOG_NOTE, lfs::core::format_count(MAX_RENDERED_LOG_ENTRIES)));
         changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
         const std::array log_option_keys{
             lichtfeld::Strings::Scene::LOG_TRACE, lichtfeld::Strings::Scene::LOG_DEBUG,
@@ -1038,7 +1039,7 @@ namespace lfs::vis::gui {
             return changed;
 
         changed |= setCachedText(selection_action_count_el_,
-                                 LOCF(lichtfeld::Strings::Scene::SELECTED_COUNT, state.count));
+                                 LOCF(lichtfeld::Strings::Scene::SELECTED_COUNT, lfs::core::format_count(state.count)));
         changed |= setCachedAttribute(selection_visibility_el_, "data-tooltip",
                                       state.all_visible ? "scene.hide_selected" : "scene.show_selected");
         changed |= setCachedAttribute(selection_visibility_icon_el_, "src",
@@ -1257,7 +1258,7 @@ namespace lfs::vis::gui {
         SDL_SetClipboardText(log_text.c_str());
         const char* const entry_word_key =
             entry_count == 1 ? "runtime.log_entry_word" : "runtime.log_entries_word";
-        setLoggingFeedback(LOCF("runtime.logs_copied", entry_count,
+        setLoggingFeedback(LOCF("runtime.logs_copied", lfs::core::format_count(entry_count),
                                 LOC(entry_word_key)),
                            FeedbackTone::Success);
     }
@@ -1289,7 +1290,7 @@ namespace lfs::vis::gui {
         }
 
         const std::string exported_count = LOCF(
-            entry_count == 1 ? "runtime.log_entry_count" : "runtime.log_entries_count", entry_count);
+            entry_count == 1 ? "runtime.log_entry_count" : "runtime.log_entries_count", lfs::core::format_count(entry_count));
         setLoggingFeedback(LOCF("runtime.logs_exported", exported_count, lfs::core::path_to_utf8(path.filename())),
                            FeedbackTone::Success);
     }

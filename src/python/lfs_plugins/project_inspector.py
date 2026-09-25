@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
+from .localization import safe_format
+
 
 def value(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
@@ -271,10 +273,10 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
     if iteration is None:
         iteration = value(latest, "iteration", None)
     model = {
-        "saved": f"Save {saves.index(current_save) + 1} of {save_count}" if current_save and current_save["numbered"] else "",
+        "saved": f"Save {saves.index(current_save) + 1:,} of {save_count:,}" if current_save and current_save["numbered"] else "",
         "saved_at": format_time(value(latest_save, "saved_at_unix_ns", value(card, "saved_at_unix_ns", 0))),
         "opened": format_time(value(entry, "last_opened_at_unix_ns", value(entry, "opened_at_unix_ns", 0))),
-        "iteration": str(iteration) if iteration is not None else "",
+        "iteration": f"{int(iteration):,}" if iteration is not None else "",
         "strategy": str(value(params, "active_strategy", "") or ""),
         "resumable": bool(latest and value(latest, "binds_scene_graph", False)),
         "gaussians": f"{int(value(latest, 'gaussians', 0) or 0):,}" if latest and value(latest, "gaussians", 0) else "",
@@ -295,15 +297,15 @@ def details_rows(entry: Any, details: Any, *, format_size: Callable[[Any], str],
         "physical_size": format_size(physical),
         "dead_bytes": format_size(dead_bytes),
         "reclaimable_percent": f"{ratio * 100.0:.1f}%",
-        "saves": str(save_count),
+        "saves": f"{save_count:,}",
         "autosave_newer": bool(value(details, "autosave_sidecar_present", False)),
         "chapter_count": str(len(list(value(details, "chapters", []) or []))),
         "has_metrics": has_samples,
-        "metric_samples": str(int(value(metrics, "loss_samples", 0) or 0) + int(value(metrics, "psnr_samples", 0) or 0)) if has_samples else "",
+        "metric_samples": f"{int(value(metrics, 'loss_samples', 0) or 0) + int(value(metrics, 'psnr_samples', 0) or 0):,}" if has_samples else "",
     }
     if embedded:
         complete = "complete" if model["embedded_complete"] else "incomplete"
-        model["dataset"] = f"embedded, {embedded_images} images, {embedded_normals} normals and {embedded_sparse} sparse, {complete}"
+        model["dataset"] = f"embedded, {embedded_images:,} images, {embedded_normals:,} normals and {embedded_sparse:,} sparse, {complete}"
     elif external_path:
         model["dataset"] = f"{external_path} ({'reachable' if external_reachable else 'missing'})"
     if has_samples:
@@ -503,7 +505,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         generation = group["generation"]
         removed = next((part for part in pending if part.get("kind") == "save" and
                         int(part.get("generation", 0)) in {generation, group["source_generation"]}), None)
-        label = (tr("projects.contents.save").format(number=sum(item["numbered"] for item in saves[:index]), total=len(numbered))
+        label = (safe_format(tr("projects.contents.save"), number=sum(item["numbered"] for item in saves[:index]), total=len(numbered))
                  if group["numbered"] else tr("projects.contents.saved_state"))
         date = format_time(value(save, "saved_at_unix_ns", 0))
         if date: label += ", " + date
@@ -517,7 +519,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         if strategy: label += ", " + strategy
         if gaussians:
             count = f"{gaussians / 1_000_000:.1f} M" if gaussians >= 1_000_000 else f"{gaussians:,}"
-            label += ", " + tr("projects.contents.gaussians").format(count=count)
+            label += ", " + safe_format(tr("projects.contents.gaussians"), count=count)
         available = generation != current and removed is None
         r = row("save:" + str(group["source_generation"]), "save", label, group["bytes"],
                 "restore" if available else "", "projects.contents.restore" if available else "",
@@ -548,7 +550,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         if not value(cp, "retained", True): continue
         uuid = str(value(cp, "instance_uuid", ""))
         iteration = int(value(cp, "iteration", 0))
-        label = tr("projects.contents.checkpoint").format(iteration=iteration)
+        label = safe_format(tr("projects.contents.checkpoint"), iteration=iteration)
         if strategy: label += ", " + strategy
         resumable = bool(value(cp, "header_reachable", True)) and bool(value(value(details, "scene_graph", None), "training_node_id", None))
         row("checkpoint:" + uuid, "checkpoint", label, sizes.get(uuid, 0),
@@ -557,7 +559,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
     embedded = bool(value(params, "embedded_dataset_present", False))
     if embedded:
         count = int(value(params, "embedded_images", 0))
-        r = row("dataset:embedded", "dataset", tr("projects.contents.dataset_embedded").format(count=count),
+        r = row("dataset:embedded", "dataset", safe_format(tr("projects.contents.dataset_embedded"), count=count),
                 sum(int(value(part, "bytes", 0)) for part in value(plan, "embedded_dataset", []) or []), remove=True, images=count)
         r["remove_disabled"] = not bool(value(value(plan, "drop_embedded_dataset", None), "allowed", False))
         r["remove_label"] = tr("projects.contents.dataset_kept") if r["remove_disabled"] else tr("projects.contents.remove")
@@ -577,7 +579,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
     metrics = value(details, "metrics", None)
     samples = int(value(metrics, "loss_samples", 0)) + int(value(metrics, "psnr_samples", 0))
     if samples:
-        row("metrics", "metrics", tr("projects.contents.metrics").format(count=samples), size_of("METR"), remove=True)
+        row("metrics", "metrics", safe_format(tr("projects.contents.metrics"), count=samples), size_of("METR"), remove=True)
     license_obj = value(details, "license", None)
     identifier = str(value(license_obj, "identifier", "") or "")
     license_bytes = len(identifier.encode("utf-8")) + len(str(value(license_obj, "notice", "") or "").encode("utf-8"))
@@ -602,7 +604,7 @@ def contents_rows(entry: Any, details: Any, plan: Any = None, *,
         compact = row("compact", "compact", tr("projects.contents.reclaimable").format(percent=f"{ratio * 100:.0f}"),
                       value(storage, "dead_bytes", 0), "compact", "projects.contents.compact")
         if pending:
-            compact["detail"] = tr("projects.contents.compact_removals").format(count=len(pending))
+            compact["detail"] = safe_format(tr("projects.contents.compact_removals"), count=len(pending))
     for r in rows:
         r["has_action"] = bool(r["action"])
         r["has_secondary"] = bool(r["secondary"])

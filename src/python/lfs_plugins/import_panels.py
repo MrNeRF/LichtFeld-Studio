@@ -607,12 +607,12 @@ class NewProjectPanel(_ImportDialogPanel):
     def _images_count_text(self) -> str:
         if self._dataset_info is None:
             return ""
-        return f"({int(getattr(self._dataset_info, 'image_count', 0))} images)"
+        return f"({int(getattr(self._dataset_info, 'image_count', 0)):,} images)"
 
     def _mask_count_text(self) -> str:
         if self._dataset_info is None or not getattr(self._dataset_info, "has_masks", False):
             return ""
-        return f"({int(getattr(self._dataset_info, 'mask_count', 0))} masks)"
+        return f"({int(getattr(self._dataset_info, 'mask_count', 0)):,} masks)"
 
     def _show_min_track_length(self) -> bool:
         if self._dataset_info is None:
@@ -944,7 +944,7 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
     def _checkpoint_metadata(self) -> str:
         if self._header is None:
             return ""
-        return f"(iter {int(self._header.iteration)}, {int(self._header.num_gaussians)} gaussians)"
+        return f"(iter {int(self._header.iteration):,}, {int(self._header.num_gaussians):,} gaussians)"
 
     def _stored_path_class(self) -> str:
         if self._stored_dataset_path and not self._stored_dataset_exists:

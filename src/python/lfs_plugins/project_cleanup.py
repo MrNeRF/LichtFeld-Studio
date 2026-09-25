@@ -7,6 +7,8 @@ import threading
 
 import lichtfeld as lf
 
+from .localization import safe_format
+
 _active = None
 
 
@@ -116,7 +118,7 @@ class ProjectCleanup:
             self.plan = plan
             old_checkpoints = sum(not checkpoint.scng_bound for checkpoint in plan.retained_checkpoints)
             estimate = max(0, plan.physical_size - plan.drop_checkpoints.projected_size)
-            message = lf.ui.tr("project_cleanup.summary").format(saves=saves, checkpoints=old_checkpoints, size=_size(estimate))
+            message = safe_format(lf.ui.tr("project_cleanup.summary"), saves=saves, checkpoints=old_checkpoints, size=_size(estimate))
             lf.ui.form_dialog_update(self.key,
                 [{"label": lf.ui.tr("project_cleanup.clean_here"), "style": "warning"}, {"label": lf.ui.tr("project_cleanup.copy")},
                  {"label": lf.ui.tr("common.cancel")}], self.body(message))

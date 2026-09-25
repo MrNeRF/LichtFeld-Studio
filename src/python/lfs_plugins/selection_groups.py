@@ -245,7 +245,7 @@ class SelectionGroupsPanel(Panel):
                 "active": group.id == active_id,
                 "lock_sprite": f"icon-{'locked' if group.locked else 'unlocked'}",
                 "color_css": f"rgb({r},{g},{b})",
-                "label": f"{group.name} ({group.count})",
+                "label": f"{group.name} ({group.count:,})",
             })
 
         self._handle.update_record_list("groups", records)

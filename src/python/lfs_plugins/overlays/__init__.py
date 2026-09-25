@@ -335,7 +335,7 @@ class _OverlayDocumentController:
         return f"{_clamp_progress(state.get('progress', 0.0)) * 100:.0f}%"
 
     def _import_counts(self):
-        return f"{self._import_state.get('num_images', 0)} images, {self._import_state.get('num_points', 0)} points"
+        return f"{self._import_state.get('num_images', 0):,} images, {self._import_state.get('num_points', 0):,} points"
 
     def _video_progress_value(self):
         return str(_clamp_progress(self._video_state.get("progress", 0.0)))
@@ -344,7 +344,7 @@ class _OverlayDocumentController:
         return f"{_clamp_progress(self._video_state.get('progress', 0.0)) * 100:.0f}%"
 
     def _video_frame_text(self):
-        return f"Frame {self._video_state.get('current_frame', 0)} / {self._video_state.get('total_frames', 0)}"
+        return f"Frame {self._video_state.get('current_frame', 0):,} / {self._video_state.get('total_frames', 0):,}"
 
     def _on_overlay_action(self, _handle, _ev, args):
         if not args:

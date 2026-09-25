@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
@@ -123,7 +124,7 @@ namespace lfs::vis::gui {
         }
 
         std::string formatStepLabel(const size_t step) {
-            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), step);
+            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
 
         // Width the element's content box would need to show everything on one line.
@@ -1200,13 +1201,13 @@ namespace lfs::vis::gui {
                                               : "status_bar.mcp_turn_on"));
             setModelBool("mcp_server_enabled", model_.mcp_server_enabled, status.enabled);
             setModelString("mcp_total_text", model_.mcp_total_text,
-                           std::format("{} {}", status.request_count,
+                           std::format("{} {}", lfs::core::format_count(status.request_count),
                                        LOC("status_bar.mcp_requests")));
             setModelString("mcp_success_text", model_.mcp_success_text,
-                           std::format("{} {}", status.success_count,
+                           std::format("{} {}", lfs::core::format_count(status.success_count),
                                        LOC("status_bar.mcp_successes")));
             setModelString("mcp_error_text", model_.mcp_error_text,
-                           std::format("{} {}", status.error_count,
+                           std::format("{} {}", lfs::core::format_count(status.error_count),
                                        LOC("status_bar.mcp_errors")));
         }
 
@@ -1386,7 +1387,7 @@ namespace lfs::vis::gui {
             };
             setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
                                                           progress_miner_pref_));
-            setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
+            setModelString("step_value", model_.step_value, std::format("{}/{}", lfs::core::format_count(cur), lfs::core::format_count(total)));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
                            std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g)));

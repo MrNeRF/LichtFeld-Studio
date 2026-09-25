@@ -6,6 +6,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/number_format.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/string_keys.hpp"
@@ -819,7 +820,7 @@ namespace lfs::vis::gui {
 
         if (iteration_label_) {
             setText(iteration_label_, cached_iteration_text_,
-                    std::format("{} {}", cached_iteration_label_, s.iteration));
+                    std::format("{} {}", cached_iteration_label_, lfs::core::format_count(s.iteration)));
         }
 
         if (throughput_label_) {
@@ -1037,9 +1038,9 @@ namespace lfs::vis::gui {
                           formatBytes(s.process.pinned_host_peak)));
         write("vulkan_blocks", formatBytes(s.process.vulkan_vma_block_bytes));
         write("allocator_peak", formatBytes(s.accounted_peak_bytes));
-        write("events", std::format("{} alloc / {} free", s.allocation_events, s.free_events));
+        write("events", std::format("{} alloc / {} free", lfs::core::format_count(s.allocation_events), lfs::core::format_count(s.free_events)));
         write("iter_events",
-              std::format("{} alloc / {} free", s.iter_allocation_events, s.iter_free_events));
+              std::format("{} alloc / {} free", lfs::core::format_count(s.iter_allocation_events), lfs::core::format_count(s.iter_free_events)));
 
         if (device_label_) {
             const std::string device_text = s.process.device_name.empty()
@@ -1460,8 +1461,8 @@ namespace lfs::vis::gui {
 
         if (anno_summary_value_) {
             std::string text = total_entries > entries.size()
-                                   ? std::format("{} / {}", entries.size(), total_entries)
-                                   : std::format("{}", entries.size());
+                                   ? std::format("{} / {}", lfs::core::format_count(entries.size()), lfs::core::format_count(total_entries))
+                                   : lfs::core::format_count(entries.size());
             setText(anno_summary_value_, cached_anno_summary_, std::move(text));
         }
 
@@ -1532,7 +1533,7 @@ namespace lfs::vis::gui {
                                       : total_live;
 
         if (allocs_summary_value_) {
-            std::string text = std::format("{} · {}", entries.size(), formatBytes(total_live));
+            std::string text = std::format("{} · {}", lfs::core::format_count(entries.size()), formatBytes(total_live));
             setText(allocs_summary_value_, cached_allocs_summary_, std::move(text));
         }
 

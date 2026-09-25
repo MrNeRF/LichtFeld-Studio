@@ -151,10 +151,8 @@ def tr(key: str, **kwargs: Any) -> str:
     except Exception:
         result = key
     if kwargs:
-        try:
-            return result.format(**kwargs)
-        except Exception:
-            pass
+        from .localization import safe_format
+        return safe_format(result, **kwargs)
     return result
 
 
@@ -2279,7 +2277,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 "projects.status.showing_projects", self._last_asset_match_count
             )
         except Exception:
-            return str(self._last_asset_match_count)
+            return f"{self._last_asset_match_count:,}"
 
     def get_asset_search_empty(self) -> bool:
         return bool(self._search_query.strip()) and not self._filtered_assets()

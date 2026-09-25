@@ -188,6 +188,20 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         assert {"Cancel", "Export"} <= rml_texts
 
 
+def test_formatted_counts_group_their_digits():
+    spec = importlib.util.spec_from_file_location(
+        "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
+    )
+    helpers = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(helpers)
+
+    assert helpers.safe_format("{count} images", count=1234567) == "1,234,567 images"
+    assert helpers.safe_format("{0} of {1}", 999, 30000) == "999 of 30,000"
+    assert helpers.safe_format("{size} left", size="1.5 GB") == "1.5 GB left"
+    assert helpers.safe_format("{flag}", flag=True) == "True"
+
+
 def test_counted_messages_use_supported_plural_forms():
     spec = importlib.util.spec_from_file_location(
         "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
@@ -442,7 +456,7 @@ def test_localized_toolbar_and_hud_labels_are_cached():
 
     hud = (ROOT / "src" / "visualizer" / "gui" / "vram_hud_overlay.cpp").read_text(encoding="utf-8")
     assert "cached_iteration_label_ = LOC(" in hud
-    assert 'std::format("{} {}", cached_iteration_label_, s.iteration)' in hud
+    assert 'std::format("{} {}", cached_iteration_label_, lfs::core::format_count(s.iteration))' in hud
 
     for path in sorted(LOCALES.glob("*.json")):
         assert not str(_load(path.stem)["status"]["iteration"]).endswith((":", "：")), path.name

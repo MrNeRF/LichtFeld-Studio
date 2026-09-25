@@ -46,6 +46,7 @@
 #include "python/gil.hpp"
 
 #include "core/executable_path.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
@@ -1112,9 +1113,9 @@ namespace {
         else if (!pane.packages_error.empty())
             status = LOC("status.error");
         else if (pane.packages_search_filter.empty())
-            status = std::format("({})", pane.packages.size());
+            status = std::format("({})", lfs::core::format_count(pane.packages.size()));
         else
-            status = std::format("({} / {})", pane.packages_visible_count, pane.packages.size());
+            status = std::format("({} / {})", lfs::core::format_count(pane.packages_visible_count), lfs::core::format_count(pane.packages.size()));
         set_text(pane, pane.packages_status_label, status);
 
         set_text(pane,

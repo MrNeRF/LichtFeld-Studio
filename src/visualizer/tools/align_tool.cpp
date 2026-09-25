@@ -3,6 +3,7 @@
 
 #include "tools/align_tool.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
@@ -499,7 +500,7 @@ namespace lfs::vis::tools {
         const auto option_lines = in_review
                                       ? wrapHint(*overlay, LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help"), hud_size, max_width)
                                       : std::vector<std::string>{};
-        const auto count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, picked_points.size());
+        const auto count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, lfs::core::format_count(picked_points.size()));
         const auto* status = services().getAlignStatusMessage();
         float width = overlay->measureText(count_text, t.fonts.large_size).x;
         for (const auto& line : lines)
