@@ -1,8 +1,8 @@
-#include "image_execution.hpp"
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/environment.hpp"
@@ -12,7 +12,7 @@
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
-#include "io/nvcodec_image_loader.hpp"
+#include "image_execution.hpp"
 
 #include <algorithm>
 #include <atomic>
