@@ -1557,13 +1557,13 @@ namespace lfs::vis::gui {
 
         // FPS: prefer scene-render rate when scene frames are in the measurement
         // window; when only GUI frames are presented, show that rate as ui-fps
-        // so a GUI-only spin is not invisible. True idle (no samples) stays 0.
+        // so a GUI-only spin is not invisible. True idle (no samples) stays a dim 0.
         const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
                                                         : (rm ? rm->getAverageFPS() : 0.0f);
         const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
         const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
-        const float fps = ui_only_fps ? presented_fps : scene_fps;
-        ThemeColor fps_col = ui_only_fps
+        const float fps = std::round(ui_only_fps ? presented_fps : scene_fps);
+        ThemeColor fps_col = ui_only_fps || fps <= 0.0f
                                  ? p.text_dim
                                  : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
