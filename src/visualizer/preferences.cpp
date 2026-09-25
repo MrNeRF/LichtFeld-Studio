@@ -532,7 +532,7 @@ namespace lfs::vis {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         impl_->values["trackpad"] = {
-            {"enabled", state.enabled},
+            {"device", navigationDeviceName(state.device)},
             {"swipe_pans", state.swipe_pans},
             {"swipe_speed", clampNavigationSpeed(state.swipe_speed, defaults.swipe_speed)},
             {"zoom_speed", clampNavigationSpeed(state.zoom_speed, defaults.zoom_speed)},
@@ -546,8 +546,8 @@ namespace lfs::vis {
         const auto it = impl_->values.find("trackpad");
         if (it == impl_->values.end() || !it->is_object())
             return result;
-        if (const auto enabled = it->find("enabled"); enabled != it->end() && enabled->is_boolean())
-            result.enabled = enabled->get<bool>();
+        if (const auto device = it->find("device"); device != it->end() && device->is_string())
+            result.device = parseNavigationDevice(device->get<std::string>()).value_or(result.device);
         if (const auto pans = it->find("swipe_pans"); pans != it->end() && pans->is_boolean())
             result.swipe_pans = pans->get<bool>();
         if (const auto speed = it->find("swipe_speed"); speed != it->end() && speed->is_number())

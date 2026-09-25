@@ -1679,11 +1679,13 @@ namespace lfs::vis {
         const auto tool_mode = getCurrentToolMode();
         const input::Action scroll_action = bindings_.getActionForScroll(tool_mode, mods, held_keys_);
 
-        // Trackpad mode reads two-finger swipes as navigation: a swipe orbits
-        // (looks around in FPV/Drone) and Shift+swipe pans, or the reverse when
-        // swipes pan; Ctrl+swipe zooms. Chord bindings (R roll) and Alt
-        // depth-box swipes keep their bindings, and Ctrl+swipe still resizes
-        // the selection brush (pinch zooms there).
+        // Trackpad navigation reads two-finger swipes as navigation: a swipe
+        // orbits (looks around in FPV/Drone) and Shift+swipe pans, or the
+        // reverse when swipes pan; Ctrl+swipe zooms. Chord bindings (R roll)
+        // and Alt depth-box swipes keep their bindings, and Ctrl+swipe still
+        // resizes the selection brush (pinch zooms there). Automatic mode does
+        // this only while two fingers rest on the trackpad, so a mouse wheel
+        // or a resting thumb keeps the wheel bindings.
         enum class Swipe {
             None,
             Orbit,
@@ -1693,7 +1695,10 @@ namespace lfs::vis {
         Swipe swipe = Swipe::None;
         const bool chord = !held_keys_.empty() &&
                            scroll_action != bindings_.getActionForScroll(tool_mode, mods);
-        if (trackpad_.enabled && !chord) {
+        const bool trackpad_swipe =
+            trackpad_.device == NavigationDevice::Trackpad ||
+            (trackpad_.device == NavigationDevice::Automatic && trackpad_touches_ >= 2);
+        if (trackpad_swipe && !chord) {
             if (mods == input::MODIFIER_NONE)
                 swipe = trackpad_.swipe_pans ? Swipe::Pan : Swipe::Orbit;
             else if (mods == input::MODIFIER_SHIFT)
@@ -1806,6 +1811,10 @@ namespace lfs::vis {
                        std::pow(scale, kPinchZoomExponent * trackpadSpeedFactor(trackpad_.zoom_speed)));
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
+    }
+
+    void InputController::handleTrackpadTouch(const bool down) {
+        trackpad_touches_ = down ? trackpad_touches_ + 1 : std::max(trackpad_touches_ - 1, 0);
     }
 
     void InputController::zoomViewport(Viewport& target_viewport, const float delta) {

@@ -246,6 +246,7 @@
             <select class="preferences-select" data-value="pointing_device">
               <option value="mouse">@tr:preferences.pointing_device_mouse</option>
               <option value="trackpad">@tr:preferences.pointing_device_trackpad</option>
+              <option value="automatic" data-if="automatic_navigation_available">@tr:preferences.pointing_device_automatic</option>
             </select>
           </div>
           <div class="preferences-row">

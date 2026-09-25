@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Sterowanie myszą lub gładzikiem w widoku. Ikona na pasku stanu też przełącza.",
     "pointing_device_mouse": "Mysz (komputer)",
     "pointing_device_trackpad": "Gładzik (laptop)",
+    "pointing_device_automatic": "Automatycznie (oba)",
     "trackpad_swipe_pans": "Przesunięcie dwoma palcami przesuwa widok",
     "trackpad_swipe_tooltip": "Wyłączone: przesunięcie obraca po orbicie, Shift+przesunięcie przesuwa. Włączone: odwrotnie. Uszczypnięcie lub Ctrl+przesunięcie przybliża.",
     "trackpad_swipe_speed": "Szybkość przesunięcia",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Nawigacja myszą: przeciąganie środkowym przyciskiem obraca, prawym przesuwa, kółko przybliża. Kliknij, aby przełączyć na gładzik",
-    "input_trackpad_tooltip": "Nawigacja gładzikiem: przesunięcie dwoma palcami obraca, Shift+przesunięcie przesuwa, uszczypnięcie lub Ctrl+przesunięcie przybliża. Kliknij, aby przełączyć na mysz"
+    "input_mouse_tooltip": "Nawigacja myszą: przeciąganie środkowym przyciskiem obraca, prawym przesuwa, kółko przybliża. Kliknij, aby zmienić",
+    "input_trackpad_tooltip": "Nawigacja gładzikiem: przesunięcie dwoma palcami obraca, Shift+przesunięcie przesuwa, uszczypnięcie lub Ctrl+przesunięcie przybliża. Kliknij, aby zmienić",
+    "input_automatic_tooltip": "Nawigacja automatyczna: gesty gładzika na gładziku, przybliżanie kółkiem na myszy. Kliknij, aby zmienić"
   },
   "runtime": {
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",

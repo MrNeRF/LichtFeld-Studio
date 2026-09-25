@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Controles de ratón o trackpad para la vista. El icono de la barra de estado también lo cambia.",
     "pointing_device_mouse": "Ratón (escritorio)",
     "pointing_device_trackpad": "Trackpad (portátil)",
+    "pointing_device_automatic": "Automático (ambos)",
     "trackpad_swipe_pans": "Deslizar con dos dedos desplaza",
     "trackpad_swipe_tooltip": "Desactivado: deslizar orbita y Mayús+deslizar desplaza. Activado: al revés. Pellizcar o Ctrl+deslizar hace zoom.",
     "trackpad_swipe_speed": "Velocidad de deslizamiento",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Navegación con ratón: arrastrar con el botón central orbita, con el derecho desplaza, la rueda hace zoom. Haz clic para cambiar al trackpad",
-    "input_trackpad_tooltip": "Navegación con trackpad: deslizar con dos dedos orbita, Mayús+deslizar desplaza, pellizcar o Ctrl+deslizar hace zoom. Haz clic para cambiar al ratón"
+    "input_mouse_tooltip": "Navegación con ratón: arrastrar con el botón central orbita, con el derecho desplaza, la rueda hace zoom. Haz clic para cambiar",
+    "input_trackpad_tooltip": "Navegación con trackpad: deslizar con dos dedos orbita, Mayús+deslizar desplaza, pellizcar o Ctrl+deslizar hace zoom. Haz clic para cambiar",
+    "input_automatic_tooltip": "Navegación automática: gestos de trackpad en el trackpad, zoom con la rueda en el ratón. Haz clic para cambiar"
   },
   "runtime": {
     "training_save_no_memory": "No se pudo guardar el proyecto: {}",

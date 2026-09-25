@@ -677,6 +677,9 @@ namespace lfs::vis {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
             LOG_INFO("GNOME Wayland session detected; preferring X11/Xwayland for native window decorations");
         }
+        // Report macOS trackpad contacts as touch events so automatic navigation
+        // can tell trackpad swipes from mouse wheels.
+        SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
 
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reportSdlVideoInitFailure();
@@ -1145,6 +1148,17 @@ namespace lfs::vis {
             // macOS sends trackpad pinches without a window, so no window filter.
             if (input_controller_) {
                 input_controller_->handlePinch(event.pinch.scale);
+            }
+            break;
+
+        case SDL_EVENT_FINGER_DOWN:
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED:
+            // Trackpad touches are indirect and arrive without a window too.
+            if (input_controller_) {
+                const SDL_TouchDeviceType type = SDL_GetTouchDeviceType(event.tfinger.touchID);
+                if (type == SDL_TOUCH_DEVICE_INDIRECT_ABSOLUTE || type == SDL_TOUCH_DEVICE_INDIRECT_RELATIVE)
+                    input_controller_->handleTrackpadTouch(event.type == SDL_EVENT_FINGER_DOWN);
             }
             break;
 

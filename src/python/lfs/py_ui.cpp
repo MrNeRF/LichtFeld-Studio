@@ -5346,7 +5346,7 @@ namespace lfs::python {
             [] {
                 const auto state = vis::loadTrackpadPreferences();
                 nb::dict result;
-                result["enabled"] = state.enabled;
+                result["device"] = std::string(vis::navigationDeviceName(state.device));
                 result["swipe_pans"] = state.swipe_pans;
                 result["swipe_speed"] = state.swipe_speed;
                 result["zoom_speed"] = state.zoom_speed;
@@ -5356,9 +5356,12 @@ namespace lfs::python {
 
         m.def(
             "set_trackpad_preferences",
-            [](const bool enabled, const bool swipe_pans, const float swipe_speed, const float zoom_speed) {
+            [](const std::string& device, const bool swipe_pans, const float swipe_speed, const float zoom_speed) {
+                const auto parsed = vis::parseNavigationDevice(device);
+                if (!parsed)
+                    throw nb::value_error("device must be 'mouse', 'trackpad' or 'automatic'");
                 vis::saveTrackpadPreferences({
-                    .enabled = enabled,
+                    .device = *parsed,
                     .swipe_pans = swipe_pans,
                     .swipe_speed = swipe_speed,
                     .zoom_speed = zoom_speed,
@@ -5369,8 +5372,8 @@ namespace lfs::python {
                         controller->setTrackpadPreferences(state);
                 });
             },
-            nb::arg("enabled"), nb::arg("swipe_pans"), nb::arg("swipe_speed"), nb::arg("zoom_speed"),
-            "Persist and apply trackpad navigation preferences (speeds 1-100, 50 is the default)");
+            nb::arg("device"), nb::arg("swipe_pans"), nb::arg("swipe_speed"), nb::arg("zoom_speed"),
+            "Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)");
 
         m.def(
             "get_project_manager_preferences",
