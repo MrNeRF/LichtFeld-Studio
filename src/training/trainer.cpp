@@ -9221,6 +9221,7 @@ namespace lfs::training {
                     "Cannot seek {} to byte zero",
                     source_name));
         }
+        const lfs::core::TensorWorkQueue::Scope load_scope(*training_queue_);
         auto result = lfs::training::load_checkpoint(
             source, source_bytes, *strategy_, params_,
             bilateral_grid_.get(), ppisp_.get(),
