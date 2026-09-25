@@ -47,6 +47,7 @@ namespace lfs::core::tensor_ops {
 
     namespace {
         std::atomic_bool force_cub_workspace_failure{false};
+        std::atomic_bool force_nan_check_host_allocation_failure{false};
 
         struct ieee_round_float_op {
             __host__ __device__ float operator()(const float value) const {
@@ -114,6 +115,10 @@ namespace lfs::core::tensor_ops {
 
     void set_cub_workspace_failure_for_testing(const bool fail) {
         force_cub_workspace_failure.store(fail, std::memory_order_release);
+    }
+
+    void set_nan_check_host_allocation_failure_for_testing(const bool fail) {
+        force_nan_check_host_allocation_failure.store(fail, std::memory_order_release);
     }
 
     float direct_sum_scalar(const float* data, const size_t n, const cudaStream_t stream) {
@@ -3625,13 +3630,35 @@ namespace lfs::core::tensor_ops {
 
             void init() {
                 if (!initialized) {
-                    d_result = static_cast<int*>(
+                    int* next_device_result = static_cast<int*>(
                         CudaMemoryPool::instance().allocate(sizeof(int), nullptr));
-                    if (!d_result) {
+                    if (!next_device_result) {
                         LFS_CUDA_CHECK(cudaErrorMemoryAllocation);
                         return;
                     }
-                    LFS_CUDA_CHECK(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
+
+                    int* next_host_result = nullptr;
+                    // Publish the TLS cache only after both allocations succeed.
+                    // A checked CUDA call can throw even after assigning its output.
+                    try {
+                        LFS_ASSERT_MSG(
+                            !force_nan_check_host_allocation_failure.load(
+                                std::memory_order_acquire),
+                            "NaN check pinned allocation failure injected");
+                        LFS_CUDA_CHECK(cudaMallocHost(&next_host_result, sizeof(int)));
+                    } catch (...) {
+                        if (next_host_result) {
+                            const cudaError_t cleanup_status = cudaFreeHost(next_host_result);
+                            if (cleanup_status != cudaSuccess) {
+                                (void)cudaGetLastError();
+                            }
+                        }
+                        safe_cuda_pool_deallocate(next_device_result, nullptr);
+                        throw;
+                    }
+
+                    d_result = next_device_result;
+                    h_result_pinned = next_host_result;
                     initialized = true;
                 }
             }

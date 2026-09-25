@@ -103,7 +103,63 @@ namespace {
         return {p, p + cpu.bytes()};
     }
 
+    void fill_contiguous_gradients(AdamOptimizer& optimizer, const float scale) {
+        optimizer.get_grad(ParamType::Means).fill_(scale);
+        optimizer.get_grad(ParamType::Sh0).fill_(scale * 2.0f);
+        optimizer.get_grad(ParamType::Scaling).fill_(scale * 3.0f);
+        optimizer.get_grad(ParamType::Rotation).fill_(scale * 4.0f);
+        optimizer.get_grad(ParamType::Opacity).fill_(scale * 5.0f);
+    }
+
+    void expect_contiguous_params_equal(const SplatData& actual, const SplatData& expected) {
+        EXPECT_EQ(tensor_bytes(actual.means_raw()), tensor_bytes(expected.means_raw()));
+        EXPECT_EQ(tensor_bytes(actual.sh0_raw()), tensor_bytes(expected.sh0_raw()));
+        EXPECT_EQ(tensor_bytes(actual.scaling_raw()), tensor_bytes(expected.scaling_raw()));
+        EXPECT_EQ(tensor_bytes(actual.rotation_raw()), tensor_bytes(expected.rotation_raw()));
+        EXPECT_EQ(tensor_bytes(actual.opacity_raw()), tensor_bytes(expected.opacity_raw()));
+    }
+
 } // namespace
+
+class GutJointAdamBatch : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutJointAdamBatch, BackToBackLaunchesKeepTheirOwnParameters) {
+    CodecsOnGuard guard;
+    constexpr size_t n = 300;
+    constexpr size_t cap = 512;
+    constexpr int iteration = 1001;
+
+    auto splat_a = make_mixed_splat(n, 0);
+    auto splat_b = make_mixed_splat(n, 0);
+    auto expected_a = splat_a.clone();
+    auto expected_b = splat_b.clone();
+
+    AdamOptimizer optimizer_a(splat_a, make_cfg(cap));
+    AdamOptimizer optimizer_b(splat_b, make_cfg(cap));
+    AdamOptimizer reference_a(expected_a, make_cfg(cap));
+    AdamOptimizer reference_b(expected_b, make_cfg(cap));
+    optimizer_a.allocate_gradients(cap);
+    optimizer_b.allocate_gradients(cap);
+    reference_a.allocate_gradients(cap);
+    reference_b.allocate_gradients(cap);
+
+    fill_contiguous_gradients(optimizer_a, 0.01f);
+    fill_contiguous_gradients(optimizer_b, 0.02f);
+    fill_contiguous_gradients(reference_a, 0.01f);
+    fill_contiguous_gradients(reference_b, 0.02f);
+
+    ASSERT_NO_THROW(optimizer_a.step(iteration));
+    ASSERT_NO_THROW(optimizer_b.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_NO_THROW(reference_a.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(reference_b.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    expect_contiguous_params_equal(splat_a, expected_a);
+    expect_contiguous_params_equal(splat_b, expected_b);
+}
 
 class GutShNJointAdam : public lfs::test::CudaBackendTest {};
 

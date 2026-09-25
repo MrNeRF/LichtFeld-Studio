@@ -56,6 +56,8 @@ namespace lfs::training {
 
         // Forward context (contains buffer pointers, frame_id, etc.)
         fast_lfs::rasterization::ForwardContext forward_ctx = {};
+        // Last queue using the frame, retained beyond execution-scope lifetime.
+        cudaStream_t completion_stream = nullptr;
 
         int active_sh_bases = 0;
         int width = 0;
@@ -80,6 +82,7 @@ namespace lfs::training {
         void set_forward_context(fast_lfs::rasterization::ForwardContext ctx) noexcept {
             release_forward_context();
             forward_ctx = ctx;
+            completion_stream = ctx.stream;
             owns_forward_context_ = ctx.success;
         }
 
@@ -88,13 +91,15 @@ namespace lfs::training {
                 return;
             }
             owns_forward_context_ = false;
-            fast_lfs::rasterization::release_forward_context(forward_ctx);
+            fast_lfs::rasterization::release_forward_context(forward_ctx, completion_stream);
             forward_ctx = {};
+            completion_stream = nullptr;
         }
 
         void mark_forward_context_released() noexcept {
             owns_forward_context_ = false;
             forward_ctx = {};
+            completion_stream = nullptr;
         }
 
     private:
@@ -114,6 +119,7 @@ namespace lfs::training {
             w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
             forward_ctx = std::exchange(other.forward_ctx, {});
+            completion_stream = std::exchange(other.completion_stream, nullptr);
             active_sh_bases = std::exchange(other.active_sh_bases, 0);
             width = std::exchange(other.width, 0);
             height = std::exchange(other.height, 0);

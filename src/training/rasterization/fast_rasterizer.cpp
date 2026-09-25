@@ -354,6 +354,12 @@ namespace lfs::training {
             }));
         }
 
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&means, &raw_scales, &raw_rotations, &raw_opacities, &sh0, &shN,
+                                                                            &bg_color, &bg_image, &viewpoint_camera.world_view_transform(),
+                                                                            &viewpoint_camera.cam_position()}) {
+            if (input->is_valid())
+                input->sync_to_stream(lfs::core::getCurrentCUDAStream());
+        }
         // Pre-allocate output tensors (reused across iterations)
         auto& image = fast_rasterizer_thread_caches.image;
         auto& alpha = fast_rasterizer_thread_caches.alpha;
@@ -365,9 +371,7 @@ namespace lfs::training {
         // Thread-local outputs can survive a Trainer. A same-sized render on the
         // next Trainer must not reuse tensors whose stream handle was destroyed
         // during the previous Trainer's shutdown.
-        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
-                                               ? lfs::core::getCurrentCUDAStream()
-                                               : means.stream();
+        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream();
 
         // Reallocate when either the shape or owning stream changes. Calling
         // Tensor::set_stream on a cache backed by a destroyed stream would try
@@ -397,6 +401,9 @@ namespace lfs::training {
             if (normal.stream() != raster_stream)
                 normal.set_stream(raster_stream);
         }
+
+        if (gaussian_model._max_screen_share.is_valid())
+            gaussian_model._max_screen_share.set_stream(raster_stream);
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
@@ -550,7 +557,7 @@ namespace lfs::training {
 
         // Prepare render output
         RenderOutput render_output;
-        const cudaStream_t stream = image.stream();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
 
         // background is composed inside blend_cu (single write).
         // No separate full-image compose pass.
@@ -637,7 +644,13 @@ namespace lfs::training {
         auto& cached_grad_alpha = fast_rasterizer_thread_caches.grad_alpha;
         auto& cached_ga_h = fast_rasterizer_thread_caches.grad_alpha_height;
         auto& cached_ga_w = fast_rasterizer_thread_caches.grad_alpha_width;
-        const cudaStream_t stream = grad_image.stream();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        ctx.completion_stream = stream;
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &pixel_error_map}) {
+            if (input->is_valid())
+                input->sync_to_stream(stream);
+        }
         if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
             cached_grad_alpha.stream() != stream) {
             cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::GPU);
@@ -777,6 +790,8 @@ namespace lfs::training {
         } else if (ctx.shN.is_valid()) {
             bwd_shN_ptr = ctx.shN.ptr<float>();
         }
+        if (update_densification_info)
+            gaussian_model._densification_info.set_stream(stream);
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,

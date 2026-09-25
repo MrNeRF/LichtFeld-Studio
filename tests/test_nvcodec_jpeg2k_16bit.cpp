@@ -8,6 +8,8 @@
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
@@ -434,7 +436,7 @@ TEST_F(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
     }
 }
 
-TEST_F(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
+TEST_F(NvCodecImageLoaderJpeg2k8Bit, MaskEncodingJoinsProducerOnExecutionStream) {
 
     auto input = lfs::core::Tensor::zeros(
         {size_t{8}, size_t{8}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
@@ -447,12 +449,19 @@ TEST_F(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
         GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
     }
 
-    cudaStream_t stream = nullptr;
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
-    EXPECT_THROW(
-        (void)loader->encode_grayscale_to_jpeg2k(input, stream, true, true),
-        std::runtime_error);
-    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    lfs::core::TensorWorkQueue producer(lfs::core::GpuBackend::CUDA);
+    lfs::core::TensorWorkQueue consumer(lfs::core::GpuBackend::CUDA);
+    {
+        lfs::core::TensorWorkQueue::Scope scope(producer);
+        input.set_stream(static_cast<cudaStream_t>(producer.native_handle()));
+        input.fill_(0.75f);
+    }
+    const auto encoded = loader->encode_grayscale_to_jpeg2k(input, consumer.native_handle(), true, true);
+    ASSERT_FALSE(encoded.empty());
+    const auto decoded = loader->decode_jpeg2k_16bit_from_memory_gpu(encoded, consumer.native_handle(), true, true);
+    EXPECT_EQ(decoded.stream(), consumer.native_handle());
+    for (const auto sample : decoded.cpu().to_vector())
+        EXPECT_FLOAT_EQ(sample, 191.0f);
 }
 
 class NvCodecImageLoaderJpeg : public lfs::test::CudaBackendTest {};

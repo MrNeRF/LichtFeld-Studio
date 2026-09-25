@@ -253,7 +253,10 @@ namespace lfs::training {
         buf_output_ = lfs::core::Tensor::empty({1, FC_OUTPUT_DIM}, lfs::core::Device::GPU);
         fc_input_buffer_ = lfs::core::Tensor::zeros({1, FC1_INPUT_DIM}, lfs::core::Device::GPU);
         constexpr float DEFAULT_PRIOR = 1.0f;
-        cudaMemcpy(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM, &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        LFS_CUDA_CHECK(cudaMemcpyAsync(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM,
+                                       &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
 
         grad_fc3_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
         grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);

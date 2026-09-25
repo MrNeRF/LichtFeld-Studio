@@ -424,19 +424,7 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = sampled_idxs.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(sampled_idxs.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + sampled_idxs.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < sampled_idxs.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, sampled_idxs);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
@@ -605,9 +593,11 @@ namespace lfs::training {
             return;
         }
 
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        _edge_view_scores.set_stream(stream);
         kernels::launch_normalize_by_positive_median(
             _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            _edge_view_scores.stream(), &_edge_median_scratch);
+            stream, &_edge_median_scratch);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
@@ -889,19 +879,7 @@ namespace lfs::training {
                 return;
 
             if (state->is_joint()) {
-                auto idx_cpu = prune_indices.cpu();
-                std::vector<int64_t> host_idx;
-                host_idx.reserve(static_cast<size_t>(num_pruned));
-                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                    const auto* p = idx_cpu.ptr<int64_t>();
-                    host_idx.assign(p, p + num_pruned);
-                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                    const auto* p = idx_cpu.ptr<int32_t>();
-                    for (int64_t i = 0; i < num_pruned; ++i)
-                        host_idx.push_back(static_cast<int64_t>(p[i]));
-                }
-                if (!host_idx.empty())
-                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                _optimizer->reset_state_at_indices(param_type, prune_indices);
                 if (param_type == ParamType::ShN) {
                     const auto layout_rest =
                         static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
@@ -1035,19 +1013,7 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = target_indices.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(target_indices.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + target_indices.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < target_indices.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, target_indices);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32

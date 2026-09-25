@@ -128,7 +128,7 @@ namespace lfs::training {
             const uint32_t image_width = (tile_width > 0) ? static_cast<uint32_t>(tile_width) : full_image_width;
             const uint32_t image_height = (tile_height > 0) ? static_cast<uint32_t>(tile_height) : full_image_height;
 
-            const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
+            auto world_view_transform = viewpoint_camera.world_view_transform();
 
             // Prepared undistortion already supplies pinhole intrinsics and undistorted images.
             // Ignore the retained camera model and coefficients to avoid applying distortion twice.
@@ -179,13 +179,10 @@ namespace lfs::training {
 
             core::pin_operands({&means, &opacities, &scales, &quats, &sh0, &shN});
 
-            // Current-stream-first (the caller's guard), tensor stream as
-            // fallback — matches the lib-wide rule and the begin_frame stream,
-            // so a metrics-thread render lands its kernels and consumers on the
-            // same stream as the arena frame.
-            const cudaStream_t fwd_stream = core::getCurrentCUDAStream()
-                                                ? core::getCurrentCUDAStream()
-                                                : means.stream();
+            // Camera and model inputs share the forward execution queue.
+            const cudaStream_t fwd_stream = core::getCurrentCUDAStream();
+            core::prepare_inputs_for_stream({&means, &opacities, &scales, &quats, &sh0, &shN, &world_view_transform}, fwd_stream);
+            const float* viewmat_ptr = world_view_transform.ptr<float>();
 
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
@@ -253,9 +250,11 @@ namespace lfs::training {
 
             if (use_bg_image) {
                 // Use per-pixel background image - passed directly to gsplat kernel
+                bg_image.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_image});
                 bg_image_ptr = bg_image.ptr<float>();
             } else if (bg_color.is_valid() && bg_color.numel() > 0) {
+                bg_color.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_color});
                 bg_color_ptr = bg_color.ptr<float>();
             }
@@ -580,6 +579,7 @@ namespace lfs::training {
             ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
 
             // Store camera pointers
+            ctx.world_view_transform = std::move(world_view_transform);
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
@@ -650,15 +650,18 @@ namespace lfs::training {
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         auto arena_allocator = arena.get_allocator(ctx.frame_id, "gsplat.backward");
-        // Run the backward work + arena frame release on the exact stream the
-        // forward began the frame on (ctx.stream), so begin_frame and end_frame
-        // chain on the same stream rather than relying on the caller's guard
-        // matching. Falls back to the current/tensor stream only if unset.
-        const cudaStream_t stream = ctx.stream
-                                        ? ctx.stream
-                                        : (core::getCurrentCUDAStream()
-                                               ? core::getCurrentCUDAStream()
-                                               : ctx.means.stream());
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        core::bridgeStreams(ctx.stream, stream);
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
+                                                                            &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.world_view_transform, &pixel_error_map, &edge_weight_map}) {
+            if (input->is_valid())
+                input->sync_to_stream(stream);
+        }
+        if (edge_score_out.is_valid())
+            edge_score_out.set_stream(stream);
+        if (gaussian_model._densification_info.is_valid())
+            gaussian_model._densification_info.set_stream(stream);
         try {
 
             const uint32_t N = ctx.N;
@@ -904,7 +907,6 @@ namespace lfs::training {
 
             // Accumulate gradient norms when pixel-error map is not provided
             if (update_densification_info && pixel_error_map_ptr == nullptr) {
-                gaussian_model._densification_info.set_stream(stream);
                 kernels::launch_grad_norm_accumulate(
                     gaussian_model._densification_info.ptr<float>(),
                     v_means_ptr,
@@ -926,8 +928,12 @@ namespace lfs::training {
 
             // Isect/flatten ids stay in the TLS VMM cache for the next forward.
             // Arena still ends with the frame.
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }

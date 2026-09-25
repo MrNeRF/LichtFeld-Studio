@@ -12,6 +12,7 @@
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
+#include "image_execution.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1173,6 +1174,8 @@ namespace lfs::io {
         void* cuda_stream,
         DecodeFormat format,
         bool output_uint8) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         const bool is_grayscale = (format == DecodeFormat::Grayscale);
         const int num_channels = is_grayscale ? 1 : 3;
@@ -1449,6 +1452,9 @@ namespace lfs::io {
         const bool synchronize,
         std::vector<lfs::core::Tensor*>* reusable_hwc,
         std::vector<lfs::core::Tensor*>* reusable_outputs) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
+
         using namespace lfs::core;
         if (jpeg_spans.empty()) {
             return {};
@@ -1813,6 +1819,8 @@ namespace lfs::io {
         const lfs::core::Tensor& image,
         const int quality,
         void* cuda_stream) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
 
@@ -1822,6 +1830,7 @@ namespace lfs::io {
 
         std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
 
+        image.sync_to_stream(static_cast<cudaStream_t>(cuda_stream));
         const auto& shape = image.shape();
         if (shape.rank() != 3) {
             throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
@@ -1930,6 +1939,8 @@ namespace lfs::io {
         const lfs::core::Tensor& image,
         void* cuda_stream,
         bool high_throughput) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
 
@@ -1939,6 +1950,7 @@ namespace lfs::io {
 
         std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
 
+        image.sync_to_stream(static_cast<cudaStream_t>(cuda_stream));
         const auto& shape = image.shape();
         if (shape.rank() != 3) {
             throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
@@ -2065,15 +2077,10 @@ namespace lfs::io {
         void* cuda_stream,
         bool high_throughput,
         bool eight_bit) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
-
-        // The eight-bit staging expression uses Tensor pointwise operations,
-        // whose execution stream is not the caller-supplied codec stream.
-        // Current mask-cache callers deliberately use the legacy stream.
-        LFS_ASSERT_MSG(
-            !eight_bit || cuda_stream == nullptr,
-            "eight-bit JPEG2000 staging currently requires the legacy CUDA stream");
 
         if (!impl_->encoder) {
             throw std::runtime_error("JPEG2000 encoder not available");
@@ -2081,6 +2088,7 @@ namespace lfs::io {
 
         std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
 
+        image.sync_to_stream(static_cast<cudaStream_t>(cuda_stream));
         const auto& shape = image.shape();
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
@@ -2212,6 +2220,8 @@ namespace lfs::io {
         void* cuda_stream,
         const bool synchronize,
         const bool allow_uint8) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
 
@@ -2403,6 +2413,8 @@ namespace lfs::io {
         const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,
         void* cuda_stream,
         const bool synchronize) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
 
@@ -2594,6 +2606,8 @@ namespace lfs::io {
         const lfs::core::Tensor& image,
         const int quality,
         void* cuda_stream) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         using namespace lfs::core;
 
@@ -2603,6 +2617,7 @@ namespace lfs::io {
 
         std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
 
+        image.sync_to_stream(static_cast<cudaStream_t>(cuda_stream));
         const auto& shape = image.shape();
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor for grayscale, got " +
@@ -2711,6 +2726,8 @@ namespace lfs::io {
         const int height,
         const int quality,
         void* cuda_stream) {
+        cuda_stream = image_execution_stream(cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
         if (gpu_ptrs.empty()) {
             return {};

@@ -198,6 +198,8 @@ namespace lfs::training {
 
         // Low-level state manipulation
         void reset_state_at_indices(ParamType type, const std::vector<int64_t>& indices);
+        // Keeps CUDA-resident indices on device; accepts int32 or int64 tensors.
+        void reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices);
         void extend_state_for_new_params(ParamType type, size_t n_new);
         void extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices);
 

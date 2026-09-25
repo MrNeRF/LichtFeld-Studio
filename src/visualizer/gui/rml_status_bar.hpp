@@ -135,7 +135,7 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
-        void bindReactiveStore();
+        LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
         RmlUIManager* rml_manager_ = nullptr;

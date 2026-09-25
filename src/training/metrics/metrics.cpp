@@ -745,7 +745,7 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
-                        const cudaStream_t lpips_stream = pred_lpips.stream();
+                        const cudaStream_t lpips_stream = lfs::core::getCurrentCUDAStream();
                         const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
                         auto value = _lpips_metric->forward(
                             pred_lpips, target_lpips,
@@ -826,7 +826,7 @@ namespace lfs::training {
                             if (static_cast<int>(prior.shape()[1]) != render_h ||
                                 static_cast<int>(prior.shape()[2]) != render_w) {
                                 prior = lfs::core::lanczos_resize_float_chw(
-                                    prior, render_h, render_w, 2, r_output.normal.stream());
+                                    prior, render_h, render_w, 2, lfs::core::getCurrentCUDAStream());
                             }
                             if (const auto angle = mean_normal_angle_deg(
                                     r_output.normal, prior, r_output.alpha)) {

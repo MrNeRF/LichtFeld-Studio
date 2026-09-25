@@ -7,6 +7,8 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -687,4 +689,60 @@ TEST_F(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
     means_st = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_st, nullptr);
     EXPECT_TRUE(means_st->is_joint());
+}
+
+TEST_F(DualRepOptimizer, StepAndGradientResetUseExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto model = make_sh_splat(32);
+    model.set_active_sh_degree(3);
+    AdamOptimizer optimizer(model, make_cfg(32));
+    optimizer.allocate_gradients(32);
+    for (auto type : {ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                      ParamType::Scaling, ParamType::Rotation, ParamType::Opacity})
+        optimizer.get_grad(type).fill_(0.125f);
+    {
+        TensorWorkQueue::Scope consumer_scope(consumer);
+        optimizer.step(1001);
+        for (auto type : {ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                          ParamType::Scaling, ParamType::Rotation, ParamType::Opacity}) {
+            const auto* state = optimizer.get_state(type);
+            ASSERT_NE(state, nullptr);
+            EXPECT_EQ(state->exp_avg.stream(), consumer.native_handle());
+            EXPECT_EQ(state->joint_bounds.stream(), consumer.native_handle());
+        }
+    }
+    optimizer.zero_grad(2);
+    for (auto type : {ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                      ParamType::Scaling, ParamType::Rotation, ParamType::Opacity}) {
+        EXPECT_EQ(optimizer.get_grad(type).stream(), producer.native_handle());
+        EXPECT_EQ(optimizer.get_grad(type).abs().max().item<float>(), 0.0f);
+    }
+}
+
+TEST_F(DualRepOptimizer, FusedStepBindingsJoinExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto model = make_sh_splat(32);
+    model.set_active_sh_degree(3);
+    AdamOptimizer optimizer(model, make_cfg(32));
+    optimizer.allocate_gradients(32);
+    {
+        TensorWorkQueue::Scope consumer_scope(consumer);
+        const auto bindings = optimizer.prepare_fastgs_fused_adam(
+            1001, static_cast<cudaStream_t>(consumer.native_handle()));
+        ASSERT_TRUE(bindings.enabled);
+        EXPECT_EQ(model.means().stream(), consumer.native_handle());
+        EXPECT_EQ(model.shN().stream(), consumer.native_handle());
+        for (auto type : {ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                          ParamType::Scaling, ParamType::Rotation, ParamType::Opacity}) {
+            const auto* state = optimizer.get_state(type);
+            ASSERT_NE(state, nullptr);
+            EXPECT_EQ(state->exp_avg.stream(), consumer.native_handle());
+            EXPECT_EQ(state->joint_bounds.stream(), consumer.native_handle());
+        }
+        consumer.wait();
+    }
 }

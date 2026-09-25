@@ -24,6 +24,30 @@
 #include <unistd.h>
 #endif
 
+namespace tensor_hardening {
+    cudaError_t launch_delay_kernel(cudaStream_t stream, uint64_t cycles);
+}
+
+namespace lfs::io {
+    struct PipelinedImageLoaderTestAccess {
+        static void publish_pair(PipelinedImageLoader& loader, lfs::core::Tensor image, lfs::core::Tensor mask) {
+            const auto generation = loader.loader_generation_.load();
+            {
+                std::lock_guard lock(loader.pending_pairs_mutex_);
+                auto& pair = loader.pending_pairs_[0];
+                pair.loader_generation = generation;
+                pair.mask_expected = true;
+                loader.accepted_sequences_.fetch_add(1);
+                loader.in_flight_.fetch_add(1);
+            }
+            const auto image_stream = image.stream();
+            const auto mask_stream = mask.stream();
+            loader.try_complete_pair(0, generation, std::move(image), {}, image_stream);
+            loader.try_complete_pair(0, generation, {}, std::move(mask), mask_stream);
+        }
+    };
+} // namespace lfs::io
+
 namespace {
 
     using lfs::io::ImageRequest;
@@ -398,4 +422,57 @@ TEST_F(PipelinedLoaderLedger, ShutdownRacesReconcileEveryQueueStage) {
         ASSERT_EQ(cudaFreeAsync(probe, nullptr), cudaSuccess);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
+}
+
+class PipelinedPairOrdering : public lfs::test::CudaBackendTest {};
+
+TEST_F(PipelinedPairOrdering, MaskCompletionDoesNotBlockTheImageProducer) {
+    using namespace lfs::core;
+    TensorWorkQueue image_queue(GpuBackend::CUDA), mask_queue(GpuBackend::CUDA), consumer(GpuBackend::CUDA);
+    PipelinedLoaderConfig config;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    PipelinedImageLoader loader(config);
+    Tensor image, mask, produced_mask;
+    {
+        TensorWorkQueue::Scope scope(image_queue);
+        image = Tensor::ones({3, 8, 8}, Device::GPU);
+    }
+    {
+        TensorWorkQueue::Scope scope(mask_queue);
+        mask = Tensor::zeros({8, 8}, Device::GPU);
+        produced_mask = Tensor::ones({8, 8}, Device::GPU);
+    }
+    auto* mask_destination = mask.ptr<float>();
+    const auto* mask_source = produced_mask.ptr<float>();
+    image_queue.wait();
+    mask_queue.wait();
+    {
+        TensorWorkQueue::Scope scope(mask_queue);
+        ASSERT_EQ(tensor_hardening::launch_delay_kernel(
+                      static_cast<cudaStream_t>(mask_queue.native_handle()), 600000000),
+                  cudaSuccess);
+        ASSERT_EQ(cudaMemcpyAsync(mask_destination, mask_source, mask.bytes(), cudaMemcpyDeviceToDevice,
+                                  static_cast<cudaStream_t>(mask_queue.native_handle())),
+                  cudaSuccess);
+    }
+    TensorFence mask_done(GpuBackend::CUDA);
+    mask_queue.record(mask_done);
+    lfs::io::PipelinedImageLoaderTestAccess::publish_pair(loader, std::move(image), std::move(mask));
+    TensorFence next_image(GpuBackend::CUDA);
+    image_queue.record(next_image);
+    next_image.wait();
+    EXPECT_FALSE(mask_done.ready()) << "Publishing a mask must not serialize subsequent RGB decode";
+    auto ready = loader.get();
+    {
+        TensorWorkQueue::Scope scope(consumer);
+        ASSERT_TRUE(ready.image_ready);
+        ASSERT_TRUE(ready.mask_ready);
+        consumer.wait_for(*ready.image_ready);
+        consumer.wait_for(*ready.mask_ready);
+        EXPECT_FLOAT_EQ(ready.tensor.sum().item<float>(), 192.f);
+        EXPECT_FLOAT_EQ(ready.mask->sum().item<float>(), 64.f);
+    }
+    consumer.wait();
+    mask_queue.wait();
 }
