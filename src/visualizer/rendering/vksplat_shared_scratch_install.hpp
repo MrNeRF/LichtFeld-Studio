@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <optional>
 
@@ -26,43 +24,10 @@ namespace lfs::vis {
         return true;
     }
 
-    // Turn-taking on the shared training scratch while the camera moves during
-    // training. Training runs one step after every viewer frame. When a step made
-    // the viewer wait, the viewer keeps the scratch for as long as it waited
-    // (capped), so both get about half of the time and training never stops.
-    class NavigationArenaShare {
-    public:
-        using Clock = std::chrono::steady_clock;
-        static constexpr std::chrono::milliseconds kMaxViewerKeep{66};
-        // A navigation frame may wait this long for a training step that is about
-        // to finish instead of dropping the frame.
-        static constexpr std::uint32_t kRenderWaitMs = 5;
-
-        void noteDeclined(const Clock::time_point now) {
-            if (!declined_since_) {
-                declined_since_ = now;
-            }
-        }
-
-        void noteBegan(const Clock::time_point now) {
-            if (!declined_since_) {
-                return;
-            }
-            const Clock::duration waited = std::min<Clock::duration>(now - *declined_since_, kMaxViewerKeep);
-            keep_until_ = std::max(keep_until_, now + waited);
-            declined_since_.reset();
-        }
-
-        [[nodiscard]] std::uint32_t trainingFramesBeforeNextRender(const Clock::time_point now) const {
-            return now < keep_until_ ? 0u : 1u;
-        }
-
-        void reset() { *this = {}; }
-
-    private:
-        std::optional<Clock::time_point> declined_since_;
-        Clock::time_point keep_until_{};
-    };
+    // While the camera moves during training, training runs one step after every
+    // viewer frame. The viewport reprojects the last frame between fresh renders,
+    // so the viewer never needs a longer turn.
+    inline constexpr std::uint32_t kTrainingFramesPerNavigationRender = 1;
 
     // Releases a viewer arena frame. With a turn given, the next window is
     // reserved before the release and training gets that many frames first;

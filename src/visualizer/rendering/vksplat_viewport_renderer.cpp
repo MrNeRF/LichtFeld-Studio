@@ -226,9 +226,9 @@ namespace lfs::vis {
         public:
             RasterizerArenaRenderGuard(
                 lfs::core::RasterizerMemoryArena::RenderHandoffToken* const handoff_token,
-                NavigationArenaShare* const navigation_share)
+                const bool camera_navigating)
                 : handoff_token_(handoff_token),
-                  navigation_share_(navigation_share) {
+                  camera_navigating_(camera_navigating) {
                 arena_ = &lfs::core::GlobalArenaManager::instance().get_arena();
                 arena_->set_rendering_active(true);
                 render_pending_ = true;
@@ -237,24 +237,16 @@ namespace lfs::vis {
                     // holds the frame, or its last frame still runs on the GPU,
                     // this declines and the reservation below keeps the next
                     // training frame out until the next viewport frame retries.
-                    // Navigation frames wait a few ms for a step about to finish.
                     // An unbounded wait would deadlock on refining iterations,
                     // where the trainer holds the frame while blocked on the
                     // exclusive render lock our caller's shared lock excludes.
                     const auto token = handoff_token ? *handoff_token : 0;
-                    auto frame_id = arena_->try_begin_render_frame_for(
-                        navigation_share ? NavigationArenaShare::kRenderWaitMs : 1, token);
+                    auto frame_id = arena_->try_begin_render_frame_for(1, token);
                     if (!frame_id) {
                         if (handoff_token) {
                             *handoff_token = arena_->request_render_handoff(token);
                         }
-                        if (navigation_share) {
-                            navigation_share->noteDeclined(NavigationArenaShare::Clock::now());
-                        }
                         throw std::runtime_error("rasterizer arena is busy");
-                    }
-                    if (navigation_share) {
-                        navigation_share->noteBegan(NavigationArenaShare::Clock::now());
                     }
                     if (handoff_token && token != 0) {
                         *handoff_token = 0;
@@ -289,9 +281,7 @@ namespace lfs::vis {
                 if (frame_active_) {
                     releaseViewerArenaFrame(
                         *arena_, frame_id_, handoff_token_,
-                        navigation_share_ ? std::optional(navigation_share_->trainingFramesBeforeNextRender(
-                                                NavigationArenaShare::Clock::now()))
-                                          : std::nullopt);
+                        camera_navigating_ ? std::optional(kTrainingFramesPerNavigationRender) : std::nullopt);
                 }
             }
 
@@ -309,7 +299,7 @@ namespace lfs::vis {
         private:
             lfs::core::RasterizerMemoryArena* arena_ = nullptr;
             lfs::core::RasterizerMemoryArena::RenderHandoffToken* handoff_token_ = nullptr;
-            NavigationArenaShare* navigation_share_ = nullptr;
+            bool camera_navigating_ = false;
             std::uint64_t frame_id_ = 0;
             bool frame_active_ = false;
             bool render_pending_ = false;
@@ -2043,7 +2033,6 @@ namespace lfs::vis {
             // The last navigation frame kept the next window; hand it back now
             // instead of letting training wait out the lease.
             cancelArenaHandoff();
-            navigation_share_.reset();
         }
         camera_navigating_ = navigating;
     }
@@ -8391,7 +8380,7 @@ namespace lfs::vis {
         if (synchronize_input_read && shared_scratch_.block) {
             try {
                 renewArenaHandoff();
-                overlay_arena_guard.emplace(&arena_handoff_token_, camera_navigating_ ? &navigation_share_ : nullptr);
+                overlay_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
             } catch (const std::exception& e) {
                 if (context_)
                     context_->noteFailure(e);
@@ -9202,7 +9191,7 @@ namespace lfs::vis {
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
                     if (!shared_arena_guard) {
-                        shared_arena_guard.emplace(&arena_handoff_token_, camera_navigating_ ? &navigation_share_ : nullptr);
+                        shared_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
                     }
                     // Pause can detach after ensureSharedScratchArena checked
                     // installation but before this frame acquired ownership.

@@ -434,7 +434,6 @@ TEST_F(ArenaMetricsContentionTest, NavigationTurnTakingUnderLoad) {
     const bool finished = completes_within(20s, [&] {
         TrainingLoop training(arena, tenants);
         EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
-        lfs::vis::NavigationArenaShare share;
         RasterizerMemoryArena::RenderHandoffToken token = 0;
         std::uint64_t steps_at_last_frame = training.steps();
         auto last_release = Clock::now();
@@ -442,13 +441,11 @@ TEST_F(ArenaMetricsContentionTest, NavigationTurnTakingUnderLoad) {
         const auto navigation_end = Clock::now() + 1500ms;
         while (Clock::now() < navigation_end) {
             arena.set_rendering_active(true);
-            const auto frame = arena.try_begin_render_frame_for(lfs::vis::NavigationArenaShare::kRenderWaitMs, token);
+            const auto frame = arena.try_begin_render_frame_for(1, token);
             arena.set_rendering_active(false);
             if (!frame) {
                 token = arena.request_render_handoff(token);
-                share.noteDeclined(Clock::now());
             } else {
-                share.noteBegan(Clock::now());
                 token = 0;
                 tenants.enter();
                 const std::uint64_t steps = training.steps();
@@ -461,7 +458,7 @@ TEST_F(ArenaMetricsContentionTest, NavigationTurnTakingUnderLoad) {
                 std::this_thread::sleep_for(1ms);
                 tenants.leave();
                 lfs::vis::releaseViewerArenaFrame(arena, *frame, &token,
-                                                  std::optional(share.trainingFramesBeforeNextRender(Clock::now())));
+                                                  std::optional(lfs::vis::kTrainingFramesPerNavigationRender));
                 last_release = Clock::now();
             }
             std::this_thread::sleep_for(3ms);
@@ -527,44 +524,6 @@ TEST_F(ArenaMetricsContentionTest, ReadyParkedRefreshAlwaysBeginsUnderLoad) {
     EXPECT_EQ(tenants.most.load(), 1) << "refresh and training used the arena at the same time";
     EXPECT_EQ(declined_after_ready, 0u) << "a render declined right after the arena reported it ready";
     EXPECT_GE(renders, 20u) << "the idle refresh was starved";
-}
-
-// Catches turn-taking that starves training when the viewer never waited, keeps
-// the scratch longer than the viewer waited, or lets a later frame that did not
-// wait shrink the viewer's window.
-TEST(NavigationArenaShareTest, ViewerKeepsTheScratchForAsLongAsTrainingMadeItWait) {
-    using std::chrono::milliseconds;
-    lfs::vis::NavigationArenaShare share;
-    const auto t0 = lfs::vis::NavigationArenaShare::Clock::time_point{} + std::chrono::seconds(10);
-    share.noteBegan(t0);
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(1)), 1u);
-
-    share.noteDeclined(t0 + milliseconds(17));
-    share.noteDeclined(t0 + milliseconds(33));
-    share.noteBegan(t0 + milliseconds(67));
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(68)), 0u);
-    share.noteBegan(t0 + milliseconds(84));
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(116)), 0u);
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(t0 + milliseconds(117)), 1u);
-}
-
-// Catches an uncapped keep window: one long training step (a refinement) must
-// not make the viewer hold the scratch for just as long afterwards.
-TEST(NavigationArenaShareTest, LongTrainingStepsLeaveTheViewerOnlyACappedWindow) {
-    lfs::vis::NavigationArenaShare share;
-    const auto t0 = lfs::vis::NavigationArenaShare::Clock::time_point{} + std::chrono::seconds(10);
-    const auto began = t0 + std::chrono::milliseconds(400);
-    share.noteDeclined(t0);
-    share.noteBegan(began);
-    const auto keep = lfs::vis::NavigationArenaShare::kMaxViewerKeep;
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep - std::chrono::milliseconds(1)), 0u);
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep), 1u);
-
-    share.noteDeclined(began + keep);
-    share.reset();
-    share.noteBegan(began + keep + std::chrono::milliseconds(30));
-    EXPECT_EQ(share.trainingFramesBeforeNextRender(began + keep + std::chrono::milliseconds(31)), 1u)
-        << "a wait from before the reset still counted";
 }
 
 TEST_F(ArenaMetricsContentionTest, ArenaContentionNeverDropsValidCachedFrame) {
