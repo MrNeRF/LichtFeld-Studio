@@ -1315,6 +1315,22 @@ namespace lfs::app {
     // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
     // non-interactive process blocks it forever.
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal) {
+            if (viewer_only && lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+                if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
+                    return true;
+                if (lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
+                    LOG_WARN("The Metal tensor backend needs macOS 26 and a Metal 4 GPU; the viewer runs "
+                             "on the Vulkan tensor backend");
+                    return true;
+                }
+            }
+            reportFatalStartupError(
+                "LichtFeld Studio - No usable GPU",
+                "The selected Metal tensor backend requires a Vulkan GPU and a viewer-only session.",
+                show_dialog);
+            return false;
+        }
         if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
             if (viewer_only &&
                 lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {

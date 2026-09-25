@@ -3170,12 +3170,14 @@ NB_MODULE(lichtfeld, m) {
                 selected = lfs::core::GpuBackend::CUDA;
             } else if (backend == "vulkan") {
                 selected = lfs::core::GpuBackend::Vulkan;
+            } else if (backend == "metal") {
+                selected = lfs::core::GpuBackend::Metal;
             } else {
                 throw lfs::Exception(lfs::make_error({
                     .code = lfs::ErrorCode::InvalidArgument,
                     .domain = lfs::ErrorDomain::Python,
                     .user_message =
-                        "tensor_backend_selftest backend must be \"cuda\" or \"vulkan\"",
+                        "tensor_backend_selftest backend must be \"cuda\", \"vulkan\" or \"metal\"",
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));
             }

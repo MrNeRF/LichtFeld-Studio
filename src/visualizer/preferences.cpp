@@ -624,12 +624,17 @@ namespace lfs::vis {
     void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["tensor_backend"] = {
+        const char* backend = "vulkan";
 #if LFS_HAS_CUDA
-            {"backend", state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda"},
-#else
-            {"backend", "vulkan"},
+        if (state.backend == core::GpuBackend::CUDA)
+            backend = "cuda";
 #endif
+#ifdef __APPLE__
+        if (state.backend == core::GpuBackend::Metal)
+            backend = "metal";
+#endif
+        impl_->values["tensor_backend"] = {
+            {"backend", backend},
             {"vulkan_device", state.options.vulkan_device},
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},
@@ -645,9 +650,14 @@ namespace lfs::vis {
         const auto it = impl_->values.find("tensor_backend");
         if (it == impl_->values.end() || !it->is_object())
             return result;
-        if (const auto backend = it->find("backend"); backend != it->end() &&
-                                                      backend->is_string() && *backend == "vulkan")
-            result.backend = core::GpuBackend::Vulkan;
+        if (const auto backend = it->find("backend"); backend != it->end() && backend->is_string()) {
+            if (*backend == "vulkan")
+                result.backend = core::GpuBackend::Vulkan;
+#ifdef __APPLE__
+            else if (*backend == "metal")
+                result.backend = core::GpuBackend::Metal;
+#endif
+        }
         if (const auto device = it->find("vulkan_device"); device != it->end() && device->is_string())
             result.options.vulkan_device = device->get<std::string>();
         if (const auto mode = it->find("vulkan_validation"); mode != it->end() && mode->is_number_integer()) {

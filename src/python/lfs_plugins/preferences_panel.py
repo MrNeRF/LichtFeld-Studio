@@ -178,6 +178,10 @@ class PreferencesPanel(Panel):
             "tensor_cuda_available",
             lambda: bool(lf.ui.get_tensor_backend_preferences()["cuda_available"]),
         )
+        model.bind_func(
+            "tensor_metal_available",
+            lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]),
+        )
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
@@ -397,6 +401,7 @@ class PreferencesPanel(Panel):
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
         state.pop("cuda_available", None)
+        state.pop("metal_available", None)
         if key == "vulkan_validation":
             value = int(value)
         elif key in ("force_fp32_half", "force_no_atomic_float"):

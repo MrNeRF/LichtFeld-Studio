@@ -735,11 +735,15 @@ class Tensor:
 
     @property
     def device(self) -> str:
-        """Device: 'cpu', 'cuda', or 'vulkan' according to the tensor backend"""
+        """
+        Device: 'cpu', 'cuda', 'vulkan' or 'metal' according to the tensor backend
+        """
 
     @property
     def backend(self) -> str:
-        """Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors"""
+        """
+        Backend: 'cpu' for CPU tensors, 'cuda', 'vulkan' or 'metal' for GPU tensors
+        """
 
     @property
     def dtype(self) -> str:

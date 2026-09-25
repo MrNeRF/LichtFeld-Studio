@@ -5499,19 +5499,24 @@ namespace lfs::python {
             result["force_fp32_half"] = state.options.force_fp32_half;
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
             result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
+            result["metal_available"] = core::gpu_backend_available(core::GpuBackend::Metal);
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
-                  if (backend != "cuda" && backend != "vulkan")
-                      throw nb::value_error("Backend must be cuda or vulkan");
+                  if (backend != "cuda" && backend != "vulkan" && backend != "metal")
+                      throw nb::value_error("Backend must be cuda, vulkan or metal");
                   if constexpr (!LFS_HAS_CUDA) {
                     if (backend == "cuda")
                       throw nb::value_error("CUDA is not compiled into this build");
                   }
+                  if (backend == "metal" && !core::gpu_backend_available(core::GpuBackend::Metal))
+                      throw nb::value_error("Metal needs macOS 26 and a Metal 4 GPU");
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{
-                      .backend = backend == "vulkan" ? core::GpuBackend::Vulkan : core::GpuBackend::CUDA,
+                      .backend = backend == "vulkan"  ? core::GpuBackend::Vulkan
+                                 : backend == "metal" ? core::GpuBackend::Metal
+                                                      : core::GpuBackend::CUDA,
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };

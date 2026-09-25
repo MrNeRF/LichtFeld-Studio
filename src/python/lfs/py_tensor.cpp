@@ -235,6 +235,9 @@ namespace lfs::python {
         if (backend == lfs::core::GpuBackend::Vulkan) {
             return "vulkan";
         }
+        if (backend == lfs::core::GpuBackend::Metal) {
+            return "metal";
+        }
         return "cuda";
     }
 
@@ -1789,9 +1792,9 @@ namespace lfs::python {
             .def_prop_ro("ndim", &PyTensor::ndim, "Number of dimensions")
             .def_prop_ro("numel", &PyTensor::numel, "Total number of elements")
             .def_prop_ro("device", &PyTensor::device,
-                         "Device: 'cpu', 'cuda', or 'vulkan' according to the tensor backend")
+                         "Device: 'cpu', 'cuda', 'vulkan' or 'metal' according to the tensor backend")
             .def_prop_ro("backend", &PyTensor::backend,
-                         "Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors")
+                         "Backend: 'cpu' for CPU tensors, 'cuda', 'vulkan' or 'metal' for GPU tensors")
             .def_prop_ro("dtype", &PyTensor::dtype, "Data type")
             .def_prop_ro("is_contiguous", &PyTensor::is_contiguous, "Whether memory is contiguous")
             .def_prop_ro("is_cuda", &PyTensor::is_cuda, "Whether tensor is on CUDA")

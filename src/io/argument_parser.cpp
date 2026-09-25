@@ -2239,7 +2239,7 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
         if (arg == kSelftestFlag) {
             if (i + 1 >= argc) {
                 return std::unexpected(
-                    "Usage: LichtFeld-Studio --tensor-backend-selftest <cuda|vulkan>");
+                    "Usage: LichtFeld-Studio --tensor-backend-selftest <cuda|vulkan|metal>");
             }
             value = argv[i + 1];
         } else if (arg.starts_with(kSelftestPrefix)) {
@@ -2258,8 +2258,11 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
         if (normalized == "vulkan") {
             return TensorBackendSelftestMode{core::GpuBackend::Vulkan};
         }
+        if (normalized == "metal") {
+            return TensorBackendSelftestMode{core::GpuBackend::Metal};
+        }
         return std::unexpected(
-            std::format("Invalid --tensor-backend-selftest backend '{}'. Use: cuda, vulkan",
+            std::format("Invalid --tensor-backend-selftest backend '{}'. Use: cuda, vulkan, metal",
                         value));
     }
 
