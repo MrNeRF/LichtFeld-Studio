@@ -159,7 +159,7 @@
       },
 
       "vignette": {
-        "enabled": true,
+        "enabled": false,
         "intensity": 0.20,
         "radius": 0.78,
         "softness": 0.48
@@ -337,7 +337,7 @@
       },
 
       "vignette": {
-        "enabled": true,
+        "enabled": false,
         "intensity": 0.10,
         "radius": 0.80,
         "softness": 0.52
