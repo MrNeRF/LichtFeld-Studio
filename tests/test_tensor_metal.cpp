@@ -405,6 +405,109 @@ namespace {
                      transposed.movement(MovementOp::Pad, pad_args), 0.0f, 0.0f);
     }
 
+    std::vector<int> pseudo_indices(const size_t count, const size_t extent, const unsigned seed) {
+        std::mt19937 generator(seed);
+        std::uniform_int_distribution<int> distribution(0, static_cast<int>(extent) - 1);
+        std::vector<int> indices(count);
+        for (int& index : indices)
+            index = distribution(generator);
+        return indices;
+    }
+
+    Tensor int_tensor(const std::vector<int>& values, const TensorShape& shape) {
+        return Tensor::from_vector(values, shape, Device::CPU);
+    }
+
+    TEST_F(TensorMetal, IndexingMatchesCpu) {
+        // One element, a partial threadgroup and several threadgroups; take
+        // counts negative indices from the end and clamps.
+        for (const size_t count : {size_t{1}, size_t{7}, size_t{4099}}) {
+            SCOPED_TRACE(count);
+            const Tensor source = random_tensor(count, -5.0f, 5.0f, 45);
+            std::vector<int> picks = pseudo_indices(count + 3, count, 46);
+            for (size_t i = 0; i < picks.size(); i += 5)
+                picks[i] = -picks[i] - 1;
+            const Tensor with_negatives = int_tensor(picks, {picks.size()});
+            expect_close(to_metal(source).take(to_metal(with_negatives)), source.take(with_negatives), 0.0f, 0.0f);
+            const Tensor valid = int_tensor(pseudo_indices(count + 3, count, 47), {count + 3});
+            expect_close(to_metal(source).gather(0, to_metal(valid)), source.gather(0, valid), 0.0f, 0.0f);
+            expect_close(to_metal(source).index_select(0, to_metal(valid)), source.index_select(0, valid), 0.0f, 0.0f);
+        }
+
+        const Tensor matrix = random_tensor(37 * 65, -5.0f, 5.0f, 48).reshape({37, 65});
+        const Tensor columns = int_tensor(pseudo_indices(37 * 9, 65, 49), {37, 9});
+        expect_close(to_metal(matrix).gather(1, to_metal(columns)), matrix.gather(1, columns), 0.0f, 0.0f);
+        const Tensor rows = int_tensor(pseudo_indices(11, 37, 50), {11});
+        const Tensor inner = int_tensor(pseudo_indices(5, 65, 51), {5});
+        for (const DataType dtype : {DataType::Float32, DataType::Int32, DataType::UInt8}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const Tensor typed = (matrix + 5.0f).to(dtype);
+            expect_close(to_metal(typed).index_select(0, to_metal(rows)), typed.index_select(0, rows), 0.0f, 0.0f);
+            expect_close(to_metal(typed).index_select(1, to_metal(inner)), typed.index_select(1, inner), 0.0f, 0.0f);
+        }
+
+        // Clamp and wrap, then an asserted out-of-range index surfaces at the
+        // next readback and is cleared.
+        const Tensor line = random_tensor(50, -5.0f, 5.0f, 52);
+        const Tensor wild = int_tensor({-3, 0, 49, 50, 77, -120, 12}, {7});
+        for (const BoundaryMode mode : {BoundaryMode::Clamp, BoundaryMode::Wrap}) {
+            expect_close(to_metal(line).index_select(0, to_metal(wild), mode), line.index_select(0, wild, mode), 0.0f, 0.0f);
+            expect_close(to_metal(line).gather(0, to_metal(wild), mode), line.gather(0, wild, mode), 0.0f, 0.0f);
+        }
+        EXPECT_THROW((void)to_metal(line).index_select(0, to_metal(wild), BoundaryMode::Assert).cpu(), std::exception);
+        const Tensor fine = int_tensor({1, 2, 3}, {3});
+        expect_close(to_metal(line).index_select(0, to_metal(fine)), line.index_select(0, fine), 0.0f, 0.0f);
+    }
+
+    TEST_F(TensorMetal, ScattersMatchCpu) {
+        constexpr size_t count = 4099;
+        const Tensor base = random_tensor(count, -5.0f, 5.0f, 53);
+        const Tensor source = random_tensor(count, -5.0f, 5.0f, 54);
+        const Tensor targets = int_tensor(pseudo_indices(count, count, 55), {count});
+
+        // Duplicate targets: the last source position wins, exactly as on the CPU.
+        Tensor scattered = to_metal(base);
+        scattered.scatter_(0, to_metal(targets), to_metal(source));
+        Tensor scattered_cpu = base.clone();
+        scattered_cpu.scatter_(0, targets, source);
+        expect_close(scattered, scattered_cpu, 0.0f, 0.0f);
+
+        Tensor added = to_metal(base);
+        added.index_add_(0, to_metal(targets), to_metal(source));
+        Tensor added_cpu = base.clone();
+        added_cpu.index_add_(0, targets, source);
+        expect_close(added, added_cpu, 1.0e-5f, 1.0e-5f);
+        const Tensor integers = (base * 10.0f).to(DataType::Int32);
+        Tensor added_integers = to_metal(integers);
+        added_integers.index_add_(0, to_metal(targets), to_metal((source * 10.0f).to(DataType::Int32)));
+        Tensor added_integers_cpu = integers.clone();
+        added_integers_cpu.index_add_(0, targets, (source * 10.0f).to(DataType::Int32));
+        expect_close(added_integers, added_integers_cpu, 0.0f, 0.0f);
+
+        const Tensor matrix = random_tensor(19 * 33, -5.0f, 5.0f, 56).reshape({19, 33});
+        const Tensor row_targets = int_tensor({4, 0, 18, 7, 11}, {5});
+        const Tensor row_source = random_tensor(5 * 33, -5.0f, 5.0f, 57).reshape({5, 33});
+        Tensor copied = to_metal(matrix);
+        copied.index_copy_(0, to_metal(row_targets), to_metal(row_source));
+        Tensor copied_cpu = matrix.clone();
+        copied_cpu.index_copy_(0, row_targets, row_source);
+        expect_close(copied, copied_cpu, 0.0f, 0.0f);
+        const Tensor column_targets = int_tensor({2, 30, 15}, {3});
+        Tensor filled = to_metal(matrix);
+        filled.index_fill_(1, to_metal(column_targets), -2.5f);
+        Tensor filled_cpu = matrix.clone();
+        filled_cpu.index_fill_(1, column_targets, -2.5f);
+        expect_close(filled, filled_cpu, 0.0f, 0.0f);
+
+        const Tensor flat_targets = int_tensor({3, -1, 7, 3}, {4});
+        const Tensor flat_values = random_tensor(4, -5.0f, 5.0f, 58);
+        Tensor put = to_metal(matrix.flatten());
+        put.index_put_(to_metal(flat_targets.slice(0, 0, 3)), to_metal(flat_values.slice(0, 0, 3)));
+        Tensor put_cpu = matrix.flatten().clone();
+        put_cpu.index_put_(flat_targets.slice(0, 0, 3), flat_values.slice(0, 0, 3));
+        expect_close(put, put_cpu, 0.0f, 0.0f);
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
         const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
         try {

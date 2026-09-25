@@ -890,6 +890,144 @@ namespace lfs::core::internal {
                                      .grid = threads(count)});
         }
 
+        // index_op modes.
+        constexpr uint32_t kGatherMode = 0, kTakeMode = 1, kIndexSelectMode = 2, kScatterAssignMode = 3,
+                           kScatterAddMode = 4, kIndexPutMode = 5, kIndexFillMode = 6, kWinnerMode = 7,
+                           kIndexCastMode = 8;
+
+        struct IndexParams {
+            uint64_t input_offset;
+            uint64_t index_offset;
+            uint64_t value_offset;
+            uint64_t winner_offset;
+            uint64_t fault_address;
+            uint32_t outer;
+            uint32_t dim_size;
+            uint32_t inner;
+            uint32_t index_size;
+            uint32_t total;
+            uint32_t rank;
+            uint32_t index_rank;
+            uint32_t dim;
+            uint32_t fill_low;
+            uint32_t fill_high;
+            uint32_t input_size;
+            uint32_t op_id;
+            std::array<uint32_t, MAX_TENSOR_RANK> input_dims;
+            std::array<uint32_t, MAX_TENSOR_RANK> index_dims;
+        };
+        static_assert(sizeof(IndexParams) == 40 + 12 * 4 + 2 * 32);
+
+        // One index_op dispatch; the tensor it reads or writes is input, the
+        // gathered output or scattered source is values.
+        struct IndexLaunch {
+            uint32_t mode;
+            DataType dtype;
+            size_t total;
+            StorageRef input{};
+            StorageRef indices{};
+            StorageRef values{};
+            StorageRef winners{};
+            uint32_t boundary = 0;
+            uint32_t unary = 0;
+            IndexParams params{};
+        };
+
+        API_AVAILABLE(macos(26.0))
+        void encode_index(Context& context, IndexLaunch launch) {
+            if (launch.total == 0)
+                return;
+            std::vector<StorageRef> uses;
+            std::array<uint64_t, 4> addresses{};
+            const auto bind = [&](const StorageRef& storage, const size_t slot, uint64_t& offset) {
+                if (storage.data == nullptr)
+                    return;
+                const auto at = context.locate(storage);
+                addresses[slot] = at.address;
+                offset = at.offset;
+                uses.push_back(storage);
+            };
+            bind(launch.input, 0, launch.params.input_offset);
+            bind(launch.indices, 1, launch.params.index_offset);
+            bind(launch.values, 2, launch.params.value_offset);
+            bind(launch.winners, 3, launch.params.winner_offset);
+            launch.params.fault_address = context.fault_address();
+            launch.params.total = checked_u32(launch.total, "Metal index operation count exceeds uint32");
+            const auto dtype = static_cast<uint32_t>(launch.dtype);
+            const auto pipeline = context.pipeline(
+                "index_op", {{0, launch.mode}, {1, dtype}, {2, dtype},
+                             {5, static_cast<uint32_t>(dtype_size(launch.dtype))},
+                             {17, launch.boundary}, {18, launch.unary}});
+            context.dispatch(uses, {.pipeline = pipeline,
+                                    .buffers = {addresses[0], addresses[1], addresses[2], addresses[3]},
+                                    .params = param_bytes(launch.params),
+                                    .grid = threads(launch.total)});
+        }
+
+        struct Geometry {
+            size_t outer = 1;
+            size_t dim_size = 0;
+            size_t inner = 1;
+        };
+
+        Geometry geometry(const StridedLayout& layout, const int dim) {
+            LFS_ASSERT_MSG(dim >= 0 && static_cast<size_t>(dim) < layout.rank, "index dimension is out of range");
+            Geometry result{.dim_size = layout.dims[static_cast<size_t>(dim)]};
+            for (size_t axis = 0; axis < layout.rank; ++axis) {
+                if (static_cast<int>(axis) < dim)
+                    result.outer *= layout.dims[axis];
+                else if (static_cast<int>(axis) > dim)
+                    result.inner *= layout.dims[axis];
+            }
+            return result;
+        }
+
+        // Scatter-family launches cover outer * index_size * inner source elements.
+        IndexLaunch scatter_launch(const uint32_t mode, const StorageRef output, const StorageRef indices,
+                                   const StorageRef source, const StridedLayout& output_layout, const int dim,
+                                   const size_t index_size) {
+            const Geometry shape = geometry(output_layout, dim);
+            return IndexLaunch{
+                .mode = mode,
+                .dtype = output.dtype,
+                .total = shape.outer * index_size * shape.inner,
+                .input = output,
+                .indices = indices,
+                .values = source,
+                .params = {.outer = checked_u32(shape.outer, "Metal scatter outer size exceeds uint32"),
+                           .dim_size = checked_u32(shape.dim_size, "Metal scatter dimension exceeds uint32"),
+                           .inner = checked_u32(shape.inner, "Metal scatter inner size exceeds uint32"),
+                           .index_size = checked_u32(index_size, "Metal scatter index count exceeds uint32")},
+            };
+        }
+
+        // Assignment with duplicate targets is deterministic: a first pass finds
+        // the last position of every target, and only that position writes.
+        API_AVAILABLE(macos(26.0))
+        void scatter_assign(Context& context, IndexLaunch launch) {
+            if (launch.total == 0)
+                return;
+            launch.winners = context.allocate(launch.params.dim_size * sizeof(int32_t));
+            encode_fill(context, launch.winners, launch.params.dim_size * sizeof(int32_t), 0xffffffffu, sizeof(int32_t));
+            IndexLaunch winners = launch;
+            winners.mode = kWinnerMode;
+            winners.total = launch.params.index_size;
+            winners.values = {};
+            encode_index(context, winners);
+            launch.mode = kScatterAssignMode;
+            encode_index(context, launch);
+            context.release(launch.winners);
+        }
+
+        API_AVAILABLE(macos(26.0))
+        void scatter_add(Context& context, IndexLaunch launch) {
+            LFS_ASSERT_MSG(launch.dtype == DataType::Float32 || launch.dtype == DataType::Int32 ||
+                               launch.dtype == DataType::UInt8 || launch.dtype == DataType::Bool,
+                           "Metal scatter add supports Float32, Int32 and byte tensors");
+            launch.mode = kScatterAddMode;
+            encode_index(context, launch);
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -1346,6 +1484,121 @@ namespace lfs::core::internal {
                                  .buffers = {input_at.address, output_at.address},
                                  .params = param_bytes(params),
                                  .grid = threads(input_layout.element_count)});
+    }
+
+    void MetalBackendOps::index_cast(const StorageRef input, const StorageRef output, const size_t count,
+                                     const size_t extent, ExecContext) {
+        LFS_FACADE_TRACE(index_cast);
+        encode_index(*acquire_context(),
+                     {.mode = kIndexCastMode, .dtype = DataType::Int32, .total = count, .input = input, .values = output,
+                      .params = {.dim_size = checked_u32(extent, "Metal index extent exceeds uint32")}});
+    }
+
+    void MetalBackendOps::gather(const StorageRef input, const StorageRef indices, const StorageRef output,
+                                 const StridedLayout& input_layout, const StridedLayout& index_layout,
+                                 const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(gather);
+        LFS_ASSERT_MSG(input_layout.rank > 0 && input_layout.rank <= MAX_TENSOR_RANK &&
+                           index_layout.rank <= MAX_TENSOR_RANK,
+                       "gather rank exceeds MAX_TENSOR_RANK");
+        encode_index(*acquire_context(),
+                     {.mode = kGatherMode, .dtype = input.dtype, .total = program.total_elements, .input = input,
+                      .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode),
+                      .params = {.rank = static_cast<uint32_t>(input_layout.rank),
+                                 .index_rank = static_cast<uint32_t>(index_layout.rank),
+                                 .dim = static_cast<uint32_t>(program.dim),
+                                 .input_dims = shader_dims(input_layout),
+                                 .index_dims = shader_dims(index_layout)}});
+    }
+
+    void MetalBackendOps::gather_fused_unary(const StorageRef input, const StorageRef indices, const StorageRef output,
+                                             const PointwiseOp unary, const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(gather_fused_unary);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                       "Metal fused gather supports only Float32");
+        const uint32_t unary_code = unary == PointwiseOp::Abs ? 1u : unary == PointwiseOp::Sqrt ? 2u
+                                                                 : unary == PointwiseOp::Neg    ? 3u
+                                                                                                : 0u;
+        LFS_ASSERT_MSG(unary_code != 0, "unsupported fused gather unary operation");
+        encode_index(*acquire_context(),
+                     {.mode = kTakeMode, .dtype = DataType::Float32, .total = program.index_size, .input = input,
+                      .indices = indices, .values = output, .unary = unary_code,
+                      .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
+    }
+
+    void MetalBackendOps::take(const StorageRef input, const StorageRef indices, const StorageRef output,
+                               const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(take);
+        encode_index(*acquire_context(),
+                     {.mode = kTakeMode, .dtype = input.dtype, .total = program.index_size, .input = input,
+                      .indices = indices, .values = output,
+                      .params = {.input_size = checked_u32(program.input_size, "Metal take input size exceeds uint32")}});
+    }
+
+    void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,
+                                       const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(index_select);
+        const Geometry shape = geometry(input_layout, program.dim);
+        encode_index(*acquire_context(),
+                     {.mode = kIndexSelectMode, .dtype = input.dtype,
+                      .total = shape.outer * program.index_size * shape.inner, .input = input, .indices = indices,
+                      .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode),
+                      .params = {.outer = checked_u32(shape.outer, "Metal index_select outer size exceeds uint32"),
+                                 .dim_size = checked_u32(shape.dim_size, "Metal index_select dimension exceeds uint32"),
+                                 .inner = checked_u32(shape.inner, "Metal index_select inner size exceeds uint32"),
+                                 .index_size = checked_u32(program.index_size, "Metal index_select index count exceeds uint32")}});
+    }
+
+    void MetalBackendOps::scatter(const StorageRef output, const StorageRef indices, const StorageRef source,
+                                  const StridedLayout& output_layout, const StridedLayout& index_layout,
+                                  const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(scatter);
+        LFS_ASSERT_MSG(output_layout.rank > 0 && output_layout.rank <= MAX_TENSOR_RANK,
+                       "scatter rank exceeds MAX_TENSOR_RANK");
+        const auto context = acquire_context();
+        const IndexLaunch launch = scatter_launch(kScatterAssignMode, output, indices, source, output_layout, program.dim,
+                                                  index_layout.dims[static_cast<size_t>(program.dim)]);
+        if (program.scatter_mode == static_cast<int>(ScatterMode::Add))
+            scatter_add(*context, launch);
+        else
+            scatter_assign(*context, launch);
+    }
+
+    void MetalBackendOps::index_copy(const StorageRef output, const StorageRef indices, const StorageRef source,
+                                     const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(index_copy);
+        scatter_assign(*acquire_context(), scatter_launch(kScatterAssignMode, output, indices, source, output_layout,
+                                                          program.dim, program.index_size));
+    }
+
+    void MetalBackendOps::index_add(const StorageRef output, const StorageRef indices, const StorageRef source,
+                                    const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(index_add);
+        LFS_ASSERT_MSG(output.dtype == DataType::Float32 || output.dtype == DataType::Int32,
+                       "Metal index_add supports only Float32 and Int32");
+        scatter_add(*acquire_context(), scatter_launch(kScatterAddMode, output, indices, source, output_layout,
+                                                       program.dim, program.index_size));
+    }
+
+    void MetalBackendOps::index_fill(const StorageRef output, const StorageRef indices,
+                                     const StridedLayout& output_layout, const IndexProgram& program,
+                                     const ScalarOperand value, ExecContext) {
+        LFS_FACADE_TRACE(index_fill);
+        IndexLaunch launch = scatter_launch(kIndexFillMode, output, indices, {}, output_layout, program.dim,
+                                            program.index_size);
+        const uint64_t pattern = fill_pattern(output.dtype, value);
+        launch.params.fill_low = static_cast<uint32_t>(pattern);
+        launch.params.fill_high = static_cast<uint32_t>(pattern >> 32);
+        encode_index(*acquire_context(), launch);
+    }
+
+    void MetalBackendOps::index_put(const StorageRef output, const StorageRef indices, const StorageRef values,
+                                    const IndexProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(index_put);
+        encode_index(*acquire_context(),
+                     {.mode = kIndexPutMode, .dtype = output.dtype, .total = program.index_size, .input = output,
+                      .indices = indices, .values = values,
+                      .params = {.input_size = checked_u32(program.input_size, "Metal index_put size exceeds uint32")}});
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

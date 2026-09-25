@@ -100,6 +100,10 @@ namespace lfs::core::internal::metal {
         // which host access and completion wait for.
         void dispatch(std::span<const StorageRef> uses, const Dispatch& dispatch);
 
+        // Kernels record the first out-of-range index here; the next wait
+        // raises it as a BoundsViolation and clears it.
+        uint64_t fault_address() const { return fault_.gpuAddress; }
+
         uint64_t flush();
         void wait(uint64_t serial);
         uint64_t completed() const;
@@ -176,6 +180,7 @@ namespace lfs::core::internal::metal {
         void commit_locked();
         void wait_signaled(uint64_t serial);
         void check_failures() const;
+        void check_fault();
         void trim_locked();
 
         id<MTLDevice> device_;
@@ -204,6 +209,8 @@ namespace lfs::core::internal::metal {
         // The queue signals every batch's serial on event_ after the batch.
         id<MTLSharedEvent> event_;
         std::shared_ptr<Failure> failure_;
+
+        id<MTLBuffer> fault_;
 
         // Every buffer the context creates stays resident for the queue.
         std::mutex memory_mutex_;

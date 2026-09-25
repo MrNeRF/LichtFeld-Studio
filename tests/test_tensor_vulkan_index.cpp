@@ -837,11 +837,14 @@ namespace {
 
     std::string index_bounds_name(const testing::TestParamInfo<std::tuple<GpuBackend, int>>& info) {
         constexpr const char* names[]{"Gather", "Scatter", "IndexCopy", "IndexAdd", "ScatterAdd", "ScatterScalar"};
-        return std::string(std::get<0>(info.param) == GpuBackend::CUDA ? "Cuda" : "Vulkan") + names[std::get<1>(info.param)];
+        const GpuBackend backend = std::get<0>(info.param);
+        return std::string(backend == GpuBackend::CUDA     ? "Cuda"
+                           : backend == GpuBackend::Vulkan ? "Vulkan"
+                                                           : "Metal") +
+               names[std::get<1>(info.param)];
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorIndexBounds,
-                             testing::Combine(testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan),
-                                              testing::Range(0, 6)),
+                             testing::Combine(testing::ValuesIn(kGpuBackends), testing::Range(0, 6)),
                              index_bounds_name);
 } // namespace

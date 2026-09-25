@@ -4,6 +4,7 @@
 #include "metal_context.hpp"
 
 #include "core/assert.hpp"
+#include "core/error.hpp"
 #include "core/gpu_device_info.hpp"
 
 #include <algorithm>
@@ -79,6 +80,12 @@ namespace lfs::core::internal::metal {
         if (!queue_ || !command_buffer_ || !arguments_ || !residency_ || !event_)
             throw TensorError(std::format("Metal 4 queue setup failed: {}",
                                           error ? error.localizedDescription.UTF8String : "unknown error"));
+        fault_ = [device_ newBufferWithLength:4 * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+        if (!fault_)
+            throw TensorError("Metal fault record allocation failed");
+        std::memset(fault_.contents, 0, fault_.length);
+        [residency_ addAllocation:fault_];
+        [residency_ commit];
         [queue_ addResidencySet:residency_];
         context_id_ = next_context_id.fetch_add(1);
 
@@ -279,6 +286,35 @@ namespace lfs::core::internal::metal {
         while (completed() < serial && ![event_ waitUntilSignaledValue:serial timeoutMS:100])
             check_failures();
         check_failures();
+        check_fault();
+    }
+
+    void Context::check_fault() {
+        auto* const words = static_cast<uint32_t*>(fault_.contents);
+        if (words[0] == 0)
+            return;
+        std::array<uint32_t, 4> record{};
+        std::memcpy(record.data(), words, sizeof(record));
+        std::memset(words, 0, sizeof(record));
+        // Code 2 stores the signed index in words 1-2 and the extent in word 3.
+        const bool wide = record[0] == 2;
+        const int64_t value = wide ? std::bit_cast<int64_t>((uint64_t{record[2]} << 32) | record[1])
+                                   : int64_t{std::bit_cast<int32_t>(record[1])};
+        const uint32_t bound = wide ? record[3] : record[2];
+        const uint32_t op_id = wide ? 0 : record[3];
+        throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+            .code = ErrorCode::BoundsViolation,
+            .domain = lfs::ErrorDomain::Tensor,
+            .user_message = "A tensor index was out of range on the Metal backend",
+            .detail = std::format("device fault code {}: index {} is outside the extent {} (operation {})",
+                                  record[0], value, bound, op_id),
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = lfs::SmallFields{}
+                          .add("op_id", static_cast<std::int64_t>(op_id))
+                          .add("value", value)
+                          .add("bound", static_cast<std::int64_t>(bound))
+                          .add("fault_code", static_cast<std::int64_t>(record[0])),
+        }));
     }
 
     uint64_t Context::completed() const {

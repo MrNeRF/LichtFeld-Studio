@@ -1259,6 +1259,231 @@ kernel void scan(device uchar* data_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Indexing with Int32 indices, ported from index.slang. kOp is the mode:
+// 0 gather (output shaped like the index tensor), 1 take (flat, clamped),
+// 2 index_select, 3 scatter assign, where the last position of each target
+// wins, 4 scatter add, 5 index_put (flat, clamped), 6 index_fill, 7 winners
+// (the last position of each target, for mode 3), 8 checked Int64-to-Int32
+// index conversion. kBoundary is 0 assert (records a device fault and writes
+// zero), 1 clamp or 2 wrap; kUnary applies abs (1), sqrt (2) or neg (3) after
+// a take. Elements move as kElementSize bytes; adds read kInputDType.
+
+constant uint kBoundary [[function_constant(17)]];
+constant uint kUnary [[function_constant(18)]];
+
+struct IndexParams {
+    ulong input_offset;
+    ulong index_offset;
+    ulong value_offset;
+    ulong winner_offset;
+    device atomic_uint* fault;
+    uint outer;
+    uint dim_size;
+    uint inner;
+    uint index_size;
+    uint total;
+    uint rank;
+    uint index_rank;
+    uint dim;
+    uint fill_low;
+    uint fill_high;
+    uint input_size;
+    uint op_id;
+    uint input_dims[8];
+    uint index_dims[8];
+};
+
+// The first fault wins; the host reads the record after its next wait.
+static void record_fault(constant IndexParams& params, uint code, uint word1, uint word2, uint word3) {
+    uint expected = 0;
+    while (!atomic_compare_exchange_weak_explicit(params.fault, &expected, code, memory_order_relaxed,
+                                                  memory_order_relaxed)) {
+        if (expected != 0)
+            return;
+    }
+    device uint* words = (device uint*)params.fault;
+    words[1] = word1;
+    words[2] = word2;
+    words[3] = word3;
+}
+
+static void record_index_fault(constant IndexParams& params, int index, uint extent) {
+    record_fault(params, 1, as_type<uint>(index), extent, params.op_id);
+}
+
+static void store_zero(device uchar* destination, ulong index) {
+    if (kElementSize == 8)
+        ((device ulong*)destination)[index] = 0;
+    else if (kElementSize == 4)
+        ((device uint*)destination)[index] = 0;
+    else if (kElementSize == 2)
+        ((device ushort*)destination)[index] = 0;
+    else
+        destination[index] = 0;
+}
+
+static void store_fill(device uchar* destination, ulong index, uint low, uint high) {
+    if (kElementSize == 8)
+        ((device ulong*)destination)[index] = (ulong(high) << 32) | low;
+    else if (kElementSize == 4)
+        ((device uint*)destination)[index] = low;
+    else if (kElementSize == 2)
+        ((device ushort*)destination)[index] = ushort(low);
+    else
+        destination[index] = uchar(low);
+}
+
+// Negative indices count from the end, then the result is clamped.
+static uint clamp_flat(int index, uint size) {
+    if (index < 0)
+        index += int(size);
+    return index < 0 ? 0u : index >= int(size) ? size - 1u : uint(index);
+}
+
+static int wrap_index(int index, uint extent) {
+    if (index >= 0)
+        return int(uint(index) % extent);
+    const uint remainder = uint(-index) % extent;
+    return remainder == 0u ? 0 : int(extent - remainder);
+}
+
+// Applies the boundary mode; false when an asserted index is out of range.
+static bool bound_index(thread int& index, uint extent, constant IndexParams& params) {
+    if (kBoundary == 1) {
+        index = max(0, min(int(extent) - 1, index));
+    } else if (kBoundary == 2) {
+        index = wrap_index(index, extent);
+    } else if (index < 0 || index >= int(extent)) {
+        record_index_fault(params, index, extent);
+        return false;
+    }
+    return true;
+}
+
+static bool gather_source(uint tid, device const int* indices, constant IndexParams& params, thread ulong& source) {
+    if (kOp == 1) {
+        source = clamp_flat(indices[tid], params.input_size);
+        return true;
+    }
+    if (kOp == 2) {
+        const uint outer_index = tid / (params.index_size * params.inner);
+        const uint position = tid / params.inner % params.index_size;
+        int selected = indices[position];
+        if (!bound_index(selected, params.dim_size, params))
+            return false;
+        source = (ulong(outer_index) * params.dim_size + uint(selected)) * params.inner + tid % params.inner;
+        return true;
+    }
+    int gathered = indices[tid];
+    if (!bound_index(gathered, params.input_dims[params.dim], params))
+        return false;
+    // Output coordinates follow the index tensor; the input is contiguous.
+    uint remaining = tid;
+    uint coordinates[8];
+    for (int axis = int(params.index_rank) - 1; axis >= 0; --axis) {
+        coordinates[axis] = remaining % params.index_dims[axis];
+        remaining /= params.index_dims[axis];
+    }
+    source = 0;
+    for (uint axis = 0; axis < params.rank; ++axis) {
+        const uint coordinate = axis == params.dim ? uint(gathered) : axis < params.index_rank ? coordinates[axis] : 0u;
+        if (coordinate >= params.input_dims[axis])
+            return false;
+        source = source * params.input_dims[axis] + coordinate;
+    }
+    return true;
+}
+
+static void add_element(device uchar* base, ulong byte_offset, ulong index, device const uchar* values, uint tid) {
+    if (kInputDType == LFS_DT_Float32) {
+        atomic_fetch_add_explicit((device atomic_float*)(base + byte_offset) + index,
+                                  ((device const float*)values)[tid], memory_order_relaxed);
+    } else if (kInputDType == LFS_DT_Int32) {
+        atomic_fetch_add_explicit((device atomic_int*)(base + byte_offset) + index,
+                                  ((device const int*)values)[tid], memory_order_relaxed);
+    } else {
+        // Bytes add through their aligned word.
+        const ulong position = byte_offset + index;
+        device atomic_uint* word = (device atomic_uint*)base + (position >> 2);
+        const uint shift = uint(position & 3) * 8;
+        uint expected = atomic_load_explicit(word, memory_order_relaxed);
+        uint replacement;
+        do {
+            const uint sum = ((expected >> shift) + values[tid]) & 255u;
+            replacement = (expected & ~(255u << shift)) | (sum << shift);
+        } while (!atomic_compare_exchange_weak_explicit(word, &expected, replacement, memory_order_relaxed,
+                                                        memory_order_relaxed));
+    }
+}
+
+kernel void index_op(device uchar* input_buffer [[buffer(0)]],
+                     device const uchar* index_buffer [[buffer(1)]],
+                     device uchar* value_buffer [[buffer(2)]],
+                     device uchar* winner_buffer [[buffer(3)]],
+                     constant IndexParams& params [[buffer(4)]],
+                     uint tid [[thread_position_in_grid]]) {
+    if (tid >= params.total)
+        return;
+    device uchar* input = input_buffer + params.input_offset;
+    device const int* indices = (device const int*)(index_buffer + params.index_offset);
+    device uchar* values = value_buffer + params.value_offset;
+    device atomic_int* winners = (device atomic_int*)(winner_buffer + params.winner_offset);
+    if (kOp <= 2) {
+        ulong source = 0;
+        if (!gather_source(tid, indices, params, source))
+            store_zero(values, tid);
+        else if (kUnary == 0)
+            copy_element(input, source, values, tid);
+        else
+            ((device float*)values)[tid] = kUnary == 1 ? abs(((device const float*)input)[source])
+                                           : kUnary == 2 ? sqrt(((device const float*)input)[source])
+                                                         : -((device const float*)input)[source];
+        return;
+    }
+    if (kOp == 5) {
+        copy_element(values, tid, input, clamp_flat(indices[tid], params.input_size));
+        return;
+    }
+    if (kOp == 7) {
+        const int target = indices[tid];
+        if (target < 0 || target >= int(params.dim_size))
+            record_index_fault(params, target, params.dim_size);
+        else
+            atomic_fetch_max_explicit(winners + target, int(tid), memory_order_relaxed);
+        return;
+    }
+    if (kOp == 8) {
+        const long index = ((device const long*)input)[tid];
+        if (index < 0 || index >= long(params.dim_size)) {
+            // Code 2 stores the signed index in words 1-2 and the extent in word 3.
+            record_fault(params, 2, uint(index), uint(ulong(index) >> 32), params.dim_size);
+            ((device int*)values)[tid] = -1;
+        } else {
+            ((device int*)values)[tid] = int(index);
+        }
+        return;
+    }
+    // Modes 3, 4 and 6 cover outer * index_size * inner source elements.
+    const uint position = tid / params.inner % params.index_size;
+    const int target = indices[position];
+    if (target < 0 || target >= int(params.dim_size)) {
+        if (kOp != 3)
+            record_index_fault(params, target, params.dim_size);
+        return;
+    }
+    const ulong destination = (ulong(tid / (params.index_size * params.inner)) * params.dim_size + uint(target)) * params.inner +
+                              tid % params.inner;
+    if (kOp == 3) {
+        if (atomic_load_explicit(winners + target, memory_order_relaxed) == int(position))
+            copy_element(values, tid, input, destination);
+    } else if (kOp == 6) {
+        store_fill(input, destination, params.fill_low, params.fill_high);
+    } else {
+        add_element(input_buffer, params.input_offset, destination, values, tid);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to

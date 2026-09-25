@@ -24,10 +24,6 @@ namespace lfs::core::internal {
         not_ported("compiled_expression");
     }
 
-    void MetalBackendOps::index_cast(StorageRef, StorageRef, size_t, size_t, ExecContext) {
-        not_ported("index_cast");
-    }
-
     void MetalBackendOps::sort_1d(StorageRef, StorageRef, size_t, const SortProgram&, ExecContext) {
         not_ported("sort_1d");
     }
@@ -122,42 +118,6 @@ namespace lfs::core::internal {
 
     void MetalBackendOps::normal(StorageRef, StorageRef, const RandomProgram&, ExecContext) {
         not_ported("normal");
-    }
-
-    void MetalBackendOps::gather(StorageRef, StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const IndexProgram&, ExecContext) {
-        not_ported("gather");
-    }
-
-    void MetalBackendOps::gather_fused_unary(StorageRef, StorageRef, StorageRef, PointwiseOp, const IndexProgram&, ExecContext) {
-        not_ported("gather_fused_unary");
-    }
-
-    void MetalBackendOps::take(StorageRef, StorageRef, StorageRef, const IndexProgram&, ExecContext) {
-        not_ported("take");
-    }
-
-    void MetalBackendOps::index_select(StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext) {
-        not_ported("index_select");
-    }
-
-    void MetalBackendOps::scatter(StorageRef, StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const IndexProgram&, ExecContext) {
-        not_ported("scatter");
-    }
-
-    void MetalBackendOps::index_copy(StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext) {
-        not_ported("index_copy");
-    }
-
-    void MetalBackendOps::index_add(StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext) {
-        not_ported("index_add");
-    }
-
-    void MetalBackendOps::index_fill(StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ScalarOperand, ExecContext) {
-        not_ported("index_fill");
-    }
-
-    void MetalBackendOps::index_put(StorageRef, StorageRef, StorageRef, const IndexProgram&, ExecContext) {
-        not_ported("index_put");
     }
 
     void MetalBackendOps::masked_fill(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
