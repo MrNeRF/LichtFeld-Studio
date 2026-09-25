@@ -14,6 +14,9 @@
 #include "vk_memory.hpp"
 #include "vk_recorder.hpp"
 
+#include <algorithm>
+#include <array>
+
 namespace lfs::core::internal {
 
     namespace {
@@ -136,7 +139,29 @@ namespace lfs::core::internal {
 
     void VulkanBackendOps::copy_device_to_host(const CopyRequest& request) {
         LFS_FACADE_TRACE(service_copy_device_to_host);
-        acquire_vulkan_context()->memory().copy_device_to_host(request);
+        if (request.bytes == 0)
+            return;
+        constexpr size_t chunk_bytes = 8 * 1024 * 1024;
+        std::array<VulkanReadbackBuffer, 2> buffers;
+        std::array<size_t, 2> offsets{};
+        auto* destination = static_cast<std::byte*>(request.dst.data) + request.dst.byte_offset;
+        const auto finish = [&](size_t slot) {
+            buffers[slot].wait();
+            const bool copied = buffers[slot].poll(destination + offsets[slot]);
+            LFS_ASSERT_MSG(copied, "Completed Vulkan readback must be ready");
+        };
+        size_t chunk = 0;
+        for (size_t offset = 0; offset < request.bytes; offset += chunk_bytes, ++chunk) {
+            const size_t slot = chunk % buffers.size();
+            if (chunk >= buffers.size())
+                finish(slot);
+            auto source = request.src;
+            source.byte_offset += offset;
+            offsets[slot] = offset;
+            buffers[slot].enqueue(source, std::min(chunk_bytes, request.bytes - offset), request.context);
+        }
+        for (size_t slot = 0; slot < std::min(chunk, buffers.size()); ++slot)
+            finish(slot);
     }
 
     void VulkanBackendOps::copy_device_to_device(const CopyRequest& request) {

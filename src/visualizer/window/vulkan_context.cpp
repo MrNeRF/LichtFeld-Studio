@@ -2779,6 +2779,25 @@ namespace lfs::vis {
         supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supported_features2.pNext = &supported_features11;
         vkGetPhysicalDeviceFeatures2(physical_device_, &supported_features2);
+        VkPhysicalDeviceSubgroupProperties subgroup_properties{};
+        subgroup_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 subgroup_query{};
+        subgroup_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        subgroup_query.pNext = &subgroup_properties;
+        vkGetPhysicalDeviceProperties2(physical_device_, &subgroup_query);
+        const bool cooperative_matrix_extension =
+            extensionAvailable(available_extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR supported_cooperative_matrix{};
+        supported_cooperative_matrix.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        bool enable_cooperative_matrix = false;
+        if (cooperative_matrix_extension && subgroup_properties.subgroupSize == 32) {
+            VkPhysicalDeviceFeatures2 cooperative_query{};
+            cooperative_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            cooperative_query.pNext = &supported_cooperative_matrix;
+            vkGetPhysicalDeviceFeatures2(physical_device_, &cooperative_query);
+            enable_cooperative_matrix = supported_cooperative_matrix.cooperativeMatrix == VK_TRUE &&
+                                        lfs::core::supports_sh3_cooperative_matrix(instance_, physical_device_);
+        }
         const bool sh_value_quant_explicit =
             lfs::core::environment::value("LFS_SH_VALUE_QUANT").has_value();
         if (!sh_value_quant_explicit &&
@@ -2818,9 +2837,23 @@ namespace lfs::vis {
                                : nullptr;
 
         features12.shaderFloat16 = supported_features12.shaderFloat16;
+        features12.vulkanMemoryModel = supported_features12.vulkanMemoryModel;
+        features12.vulkanMemoryModelDeviceScope =
+            supported_features12.vulkanMemoryModel == VK_TRUE &&
+                    supported_features12.vulkanMemoryModelDeviceScope == VK_TRUE
+                ? VK_TRUE
+                : VK_FALSE;
 
         // Optional feature structs are prepended to the Vulkan 1.2 chain.
         void* enabled_chain_head = features12.pNext;
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperative_matrix_features{};
+        cooperative_matrix_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        if (enable_cooperative_matrix) {
+            appendUniqueExtension(extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+            cooperative_matrix_features.cooperativeMatrix = VK_TRUE;
+            cooperative_matrix_features.pNext = enabled_chain_head;
+            enabled_chain_head = &cooperative_matrix_features;
+        }
 
         VkPhysicalDeviceHostImageCopyFeaturesEXT host_image_copy_features{};
         host_image_copy_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
@@ -2947,6 +2980,10 @@ namespace lfs::vis {
                 atomic_float_features.shaderBufferFloat32AtomicAdd == VK_TRUE;
             tensor_backend_device_.shader_float64 = features2.features.shaderFloat64 == VK_TRUE;
             tensor_backend_device_.shader_float16 = features12.shaderFloat16 == VK_TRUE;
+            tensor_backend_device_.vulkan_memory_model = features12.vulkanMemoryModel == VK_TRUE;
+            tensor_backend_device_.vulkan_memory_model_device_scope =
+                features12.vulkanMemoryModelDeviceScope == VK_TRUE;
+            tensor_backend_device_.cooperative_matrix = enable_cooperative_matrix;
             tensor_backend_device_.complete =
                 tensor_backend_device_.queue != VK_NULL_HANDLE &&
                 features2.features.shaderInt64 == VK_TRUE && features2.features.shaderInt16 == VK_TRUE &&

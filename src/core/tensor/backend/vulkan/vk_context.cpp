@@ -445,6 +445,9 @@ namespace lfs::core::internal {
         caps_.shader_atomic_float = adopted.shader_atomic_float && !force_no_atomic_float();
         caps_.shader_float64 = caps_.shader_float64 && adopted.shader_float64;
         caps_.shader_float16 = caps_.shader_float16 && adopted.shader_float16;
+        caps_.vulkan_memory_model = adopted.vulkan_memory_model;
+        caps_.vulkan_memory_model_device_scope = adopted.vulkan_memory_model_device_scope;
+        caps_.cooperative_matrix = adopted.cooperative_matrix && caps_.subgroup_size == 32;
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
         caps_.external_memory = adopted.external_memory;
@@ -625,10 +628,22 @@ namespace lfs::core::internal {
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
         caps_.shader_float64 = query.features.shaderFloat64;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
+        caps_.vulkan_memory_model = query12.vulkanMemoryModel;
+        caps_.vulkan_memory_model_device_scope = query12.vulkanMemoryModelDeviceScope;
         caps_.shader_atomic_float =
             extensions_available.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME) &&
             atomic_float.shaderBufferFloat32AtomicAdd &&
             !force_no_atomic_float();
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_query{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        const bool coop_ext = extensions_available.contains(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        if (coop_ext) {
+            query13.pNext = &coop_query;
+            vkGetPhysicalDeviceFeatures2(physical_device_, &query);
+            caps_.cooperative_matrix = coop_query.cooperativeMatrix != 0 && caps_.subgroup_size == 32 &&
+                                       supports_sh3_cooperative_matrix(instance_, physical_device_);
+            query13.pNext = &atomic_float;
+        }
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
 
@@ -639,10 +654,22 @@ namespace lfs::core::internal {
         auto& features13 = required_features.features13;
         features.features.shaderFloat64 = caps_.shader_float64;
         features12.shaderFloat16 = caps_.shader_float16;
+        features12.vulkanMemoryModel = caps_.vulkan_memory_model ? VK_TRUE : VK_FALSE;
+        features12.vulkanMemoryModelDeviceScope =
+            caps_.vulkan_memory_model && caps_.vulkan_memory_model_device_scope ? VK_TRUE : VK_FALSE;
         features13.pNext = caps_.shader_atomic_float ? &atomic_float : nullptr;
         atomic_float = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
         atomic_float.shaderBufferFloat32AtomicAdd = caps_.shader_atomic_float;
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_enable{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        coop_enable.cooperativeMatrix = caps_.cooperative_matrix ? VK_TRUE : VK_FALSE;
+        if (caps_.cooperative_matrix) {
+            if (caps_.shader_atomic_float)
+                atomic_float.pNext = &coop_enable;
+            else
+                features13.pNext = &coop_enable;
+        }
 
         std::vector<const char*> enabled_extensions;
         if (caps_.memory_budget) {
@@ -651,6 +678,8 @@ namespace lfs::core::internal {
         if (caps_.shader_atomic_float) {
             enabled_extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
+        if (caps_.cooperative_matrix)
+            enabled_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
 #if LFS_HAS_CUDA && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
             VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
@@ -714,8 +743,9 @@ namespace lfs::core::internal {
         std::vector<char> initial_data;
         if (const auto paths = UserPaths::resolve()) {
             const std::string feature_key = std::format(
-                "f16{}_atomic{}_budget{}", caps_.shader_float16,
-                caps_.shader_atomic_float, caps_.memory_budget);
+                "f16{}_atomic{}_budget{}_coop{}_vmm{}", caps_.shader_float16,
+                caps_.shader_atomic_float, caps_.memory_budget, caps_.cooperative_matrix,
+                caps_.vulkan_memory_model && caps_.vulkan_memory_model_device_scope);
             const std::filesystem::path directory =
                 paths->cacheDir() / "tensor_vulkan";
             std::error_code error;

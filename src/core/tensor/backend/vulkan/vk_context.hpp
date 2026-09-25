@@ -42,6 +42,9 @@ namespace lfs::core::internal {
         bool shader_float64 = false;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
+        bool cooperative_matrix = false;
+        bool vulkan_memory_model = false;
+        bool vulkan_memory_model_device_scope = false;
         bool float_controls_fp16 = false;
         bool memory_budget = false;
         bool host_visible_device_local = false;
@@ -64,6 +67,9 @@ namespace lfs::core::internal {
         bool memory_budget = false;
         bool shader_float64 = false;
         bool shader_float16 = false;
+        bool vulkan_memory_model = false;
+        bool vulkan_memory_model_device_scope = false;
+        bool cooperative_matrix = false;
         bool external_memory = false;
         bool external_semaphore = false;
     };

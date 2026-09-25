@@ -51,9 +51,8 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true; // empty/absent — nothing to migrate
             }
-            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
-                return true;
-            }
+            // Plain device tensors are not the renderer's pool. Both backends
+            // are ready only once the caller allocator has supplied them.
             return tensor.is_external_storage() &&
                    tensor.external_storage_kind() == "vulkan_external_buffer";
         }

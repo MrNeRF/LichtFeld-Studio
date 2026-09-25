@@ -19,9 +19,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_export.hpp"
 #include "core/tensor_sh.hpp"
 #include "cuda/kmeans.hpp"
-#include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include <algorithm>
@@ -1334,42 +1334,6 @@ namespace lfs::io {
             return tensor.gpu().contiguous();
         }
 
-        int nearest_centroid_1d(const std::vector<float>& centroids, float value, int hint = -1) {
-            auto it = centroids.begin();
-            if (hint < 0 || !std::isfinite(value)) {
-                it = std::lower_bound(centroids.begin(), centroids.end(), value);
-            } else {
-                // Lloyd updates usually move a label only a few bins. Recover
-                // the same lower_bound (including duplicate-centroid ties)
-                // from its previous label instead of restarting binary search.
-                it += hint;
-                while (it != centroids.begin() && *(it - 1) >= value)
-                    --it;
-                while (it != centroids.end() && *it < value)
-                    ++it;
-            }
-            int best = static_cast<int>(std::distance(centroids.begin(), it));
-            if (best >= static_cast<int>(centroids.size())) {
-                best = static_cast<int>(centroids.size()) - 1;
-            }
-
-            float best_dist = std::abs(value - centroids[best]);
-            if (best > 0) {
-                const float prev_dist = std::abs(value - centroids[best - 1]);
-                if (prev_dist < best_dist) {
-                    best = best - 1;
-                    best_dist = prev_dist;
-                }
-            }
-            if (best + 1 < static_cast<int>(centroids.size())) {
-                const float next_dist = std::abs(value - centroids[best + 1]);
-                if (next_dist < best_dist) {
-                    best = best + 1;
-                }
-            }
-            return best;
-        }
-
         class SogArchive final : public SogSink {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
@@ -1499,128 +1463,6 @@ namespace lfs::io {
                 return {};
             }
         };
-
-        struct Cluster1dResult {
-            std::vector<float> centroids;
-            std::vector<uint8_t> labels;
-        };
-
-        Cluster1dResult cluster1d(const float* data, int num_rows, int num_columns, int iterations, bool pooled = false) {
-            constexpr int K = 256;
-            const size_t total_points = static_cast<size_t>(num_rows) * static_cast<size_t>(num_columns);
-
-            float min_val = std::numeric_limits<float>::infinity();
-            float max_val = -std::numeric_limits<float>::infinity();
-            for (int col = 0; col < num_columns; ++col) {
-                for (int row = 0; row < num_rows; ++row) {
-                    const float value = data[row * num_columns + col];
-                    min_val = std::min(min_val, value);
-                    max_val = std::max(max_val, value);
-                }
-            }
-
-            std::vector<float> centroid_vals(K);
-            const float step = (K > 1) ? (max_val - min_val) / (K - 1) : 0.0f;
-            for (int i = 0; i < K; ++i) {
-                centroid_vals[i] = min_val + i * step;
-            }
-
-            Cluster1dResult result;
-            result.labels.assign(total_points, 0);
-
-            struct LocalAccum {
-                std::array<double, K> sums{};
-                std::array<int64_t, K> counts{};
-            };
-
-            const unsigned int hw_threads = std::max(1u, std::thread::hardware_concurrency());
-            const size_t worker_count = std::max<size_t>(
-                1, std::min<size_t>(hw_threads, (total_points + 65535) / 65536));
-
-            bool use_hints = false;
-            auto accumulate_range = [&](size_t begin, size_t end, const bool write_labels, LocalAccum& accum) {
-                for (size_t linear = begin; linear < end; ++linear) {
-                    const int col = static_cast<int>(linear / static_cast<size_t>(num_rows));
-                    const int row = static_cast<int>(linear - static_cast<size_t>(col) * static_cast<size_t>(num_rows));
-                    const float value = data[row * num_columns + col];
-                    const int label = nearest_centroid_1d(centroid_vals, value,
-                                                          use_hints ? result.labels[linear] : -1);
-
-                    if (write_labels || pooled) {
-                        result.labels[linear] = static_cast<uint8_t>(label);
-                    }
-                    accum.sums[label] += static_cast<double>(value);
-                    accum.counts[label]++;
-                }
-            };
-
-            const int effective_iterations = std::max(0, iterations);
-            for (int iter = 0; iter < effective_iterations; ++iter) {
-                std::vector<LocalAccum> accumulators(worker_count);
-                const bool write_labels = (iter == effective_iterations - 1);
-
-                if (worker_count == 1) {
-                    accumulate_range(0, total_points, write_labels, accumulators[0]);
-                } else if (pooled) {
-                    // Preserve the reference reduction ranges and order, while
-                    // sharing existing workers across simultaneous SSOG units.
-                    tbb::parallel_for(size_t{0}, worker_count, [&](size_t worker) {
-                        accumulate_range(total_points * worker / worker_count,
-                                         total_points * (worker + 1) / worker_count,
-                                         write_labels, accumulators[worker]);
-                    });
-                } else {
-                    std::vector<std::thread> workers;
-                    workers.reserve(worker_count);
-                    for (size_t worker = 0; worker < worker_count; ++worker) {
-                        const size_t begin = total_points * worker / worker_count;
-                        const size_t end = total_points * (worker + 1) / worker_count;
-                        workers.emplace_back(accumulate_range, begin, end, write_labels, std::ref(accumulators[worker]));
-                    }
-                    for (auto& worker : workers) {
-                        worker.join();
-                    }
-                }
-
-                for (int c = 0; c < K; ++c) {
-                    double sum = 0.0;
-                    int64_t count = 0;
-                    for (const auto& accum : accumulators) {
-                        sum += accum.sums[c];
-                        count += accum.counts[c];
-                    }
-                    if (count > 0) {
-                        centroid_vals[c] = static_cast<float>(sum / static_cast<double>(count));
-                    }
-                }
-                use_hints = pooled && std::is_sorted(centroid_vals.begin(), centroid_vals.end()) &&
-                            std::all_of(centroid_vals.begin(), centroid_vals.end(), [](float v) { return std::isfinite(v); });
-            }
-
-            std::vector<int> order(K);
-            for (int i = 0; i < K; ++i)
-                order[i] = i;
-            std::sort(order.begin(), order.end(), [&](int a, int b) {
-                return centroid_vals[a] < centroid_vals[b];
-            });
-
-            std::vector<float> ordered_centroids(K);
-            for (int i = 0; i < K; ++i) {
-                ordered_centroids[i] = centroid_vals[order[i]];
-            }
-
-            std::vector<int> inv_order(K);
-            for (int i = 0; i < K; ++i) {
-                inv_order[order[i]] = i;
-            }
-
-            result.centroids = ordered_centroids;
-            for (uint8_t& label : result.labels) {
-                label = static_cast<uint8_t>(inv_order[label]);
-            }
-
-            return result;
-        }
 
     } // anonymous namespace
 
@@ -1800,7 +1642,11 @@ namespace lfs::io {
                                          .source_rest = k,
                                          .destination_rest = k});
                 }
+            }
 
+            const auto start_sh_kmeans = [&]() {
+                if (sh_degree == 0)
+                    return;
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
@@ -1825,11 +1671,13 @@ namespace lfs::io {
                             std::chrono::duration<double, std::milli>(finished - export_started).count()};
                     });
                 t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
-            }
+            };
+            if (options.presorted)
+                start_sh_kmeans();
 
             const auto morton_started = std::chrono::steady_clock::now();
             auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
-            auto sort_indices_tensor = options.presorted ? Tensor{} : morton_sort_indices_for_positions(means_cuda);
+            auto sort_indices_tensor = options.presorted ? Tensor{} : core::morton_sort_indices(means_cuda);
             if (!options.presorted && !sort_indices_tensor.is_valid()) {
                 join_sh_kmeans_if_started();
                 return make_error(ErrorCode::ENCODING_FAILED,
@@ -1968,6 +1816,9 @@ namespace lfs::io {
             const auto* sh0_ptr = sh0.ptr<float>();
             auto opacity = splat_data.opacity_raw().to_pageable_host();
             const auto* opacity_ptr = opacity.ptr<float>();
+            // Single-file host inputs precede palette submissions on the compute queue.
+            if (!options.presorted)
+                start_sh_kmeans();
 
             if (!report_progress(0.10f, "Positions")) {
                 join_sh_kmeans_if_started();
@@ -2170,7 +2021,7 @@ namespace lfs::io {
             }
 
             const auto cluster_scales_started = std::chrono::steady_clock::now();
-            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
+            auto scale_result = lfs::core::cluster_scalar(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_scales_ms = milliseconds(cluster_scales_started, std::chrono::steady_clock::now());
             std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
             const auto scales_pack_started = std::chrono::steady_clock::now();
@@ -2196,7 +2047,7 @@ namespace lfs::io {
             }
 
             const auto cluster_sh0_started = std::chrono::steady_clock::now();
-            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
+            auto color_result = lfs::core::cluster_scalar(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_sh0_ms = milliseconds(cluster_sh0_started, std::chrono::steady_clock::now());
 
             std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
@@ -2273,7 +2124,7 @@ namespace lfs::io {
                 }
 
                 const auto codebook_started = std::chrono::steady_clock::now();
-                auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
+                auto codebook_result = lfs::core::cluster_scalar(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
                 kmeans_sh_ms = sh_kmeans_data.milliseconds +
                                milliseconds(codebook_started, std::chrono::steady_clock::now());
 

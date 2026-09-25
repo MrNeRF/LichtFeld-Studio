@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "../src/io/cuda/morton_encoding.hpp"
 #include "app/include/app/converter.hpp"
 #include "core/argument_parser.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_export.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/formats/ssog.hpp"
@@ -453,7 +453,7 @@ TEST(SsogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
             std::vector<int> rows(n);
             std::iota(rows.begin(), rows.end(), 0);
             sort_ssog_leaf(positions.ptr<float>(), rows);
-            auto gpu = morton_sort_indices_for_positions(positions.cuda()).cpu();
+            auto gpu = lfs::core::morton_sort_indices(positions.cuda()).cpu();
             ASSERT_TRUE(gpu.is_valid());
             EXPECT_TRUE(std::equal(rows.begin(), rows.end(), gpu.ptr<int>())) << "n=" << n << " mode=" << mode;
         }

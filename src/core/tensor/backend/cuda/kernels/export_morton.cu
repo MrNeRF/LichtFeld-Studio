@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "morton_encoding.hpp"
+#include "core/morton.hpp"
+#include "core/tensor.hpp"
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -13,7 +14,7 @@
 #include <thrust/sort.h>
 #include <thrust/transform_reduce.h>
 
-namespace lfs::io {
+namespace lfs::core::export_cuda {
 
     namespace {
 
@@ -195,4 +196,4 @@ namespace lfs::io {
         return indices;
     }
 
-} // namespace lfs::io
+} // namespace lfs::core::export_cuda

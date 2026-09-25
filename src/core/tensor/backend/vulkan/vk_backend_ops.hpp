@@ -81,6 +81,19 @@ namespace lfs::core::internal {
         void histogram_u8(StorageRef, StorageRef, size_t, ExecContext) override;
         void affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, ExecContext) override;
         void sh_codec(StorageRef, StorageRef, const ShCodecProgram&, ExecContext) override;
+        Tensor morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext context) override;
+        std::tuple<Tensor, Tensor> kmeans_sh(const Tensor& shN, int n_points, int sh_coeffs, int k,
+                                             int iterations, bool fast, ExecContext context) override;
+        void assign_sh3(const Tensor& shN, const Tensor& centroids, const Tensor& norms, Tensor& labels,
+                        bool fast, bool have_labels, ExecContext context) override;
+        void decimate_candidates(const Tensor& position, const Tensor& rotation, const Tensor& scale,
+                                 const Tensor& opacity, const Tensor& dc, const Tensor& sh, int rest,
+                                 std::vector<uint32_t>& idx, std::vector<float>& cost, ExecContext context) override;
+        DecimateMerge decimate_merge(const Tensor& position, const Tensor& rotation, const Tensor& scale,
+                                     const Tensor& opacity, const Tensor& dc, const Tensor& sh, int rest,
+                                     const std::vector<int>& member_group, const std::vector<uint32_t>& minimum,
+                                     const std::vector<uint32_t>& members, const std::vector<uint32_t>& offsets,
+                                     size_t removed, ExecContext context) override;
         void max_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) override;
         void adaptive_avg_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) override;
         void bias_add(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;

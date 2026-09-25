@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "../cuda/morton_encoding.hpp"
+#include "core/morton.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -23,7 +23,7 @@ namespace lfs::io {
             }
         for (int axis = 0; axis < 3; ++axis) {
             const float extent = high[axis] - low[axis];
-            multiplier[axis] = morton_multiplier(extent);
+            multiplier[axis] = core::morton_multiplier(extent);
         }
         struct KeyRow {
             uint64_t key;
@@ -34,7 +34,7 @@ namespace lfs::io {
         for (int row : rows) {
             uint64_t key = 0;
             for (int axis = 0; axis < 3; ++axis) {
-                key |= morton_spread(morton_coordinate(positions[size_t(row) * 3 + axis], low[axis], multiplier[axis])) << axis;
+                key |= core::morton_spread(core::morton_coordinate(positions[size_t(row) * 3 + axis], low[axis], multiplier[axis])) << axis;
             }
             keys.push_back({key, row});
         }

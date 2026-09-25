@@ -668,61 +668,6 @@ namespace lfs::core::internal {
         }
     }
 
-    void VulkanMemory::copy_device_to_host(const CopyRequest& request) {
-        if (request.bytes == 0) {
-            return;
-        }
-        std::lock_guard staging_lock(staging_mutex_);
-        auto* destination = static_cast<std::byte*>(request.dst.data) +
-                            request.dst.byte_offset;
-        StagingSlice pending{};
-        uint64_t pending_value = 0;
-        size_t pending_offset = 0;
-        for (size_t offset = 0; offset < request.bytes; offset += kTransferChunk) {
-            const StagingSlice slice = acquire_staging(std::min(kTransferChunk, request.bytes - offset), 16);
-            auto source = request.src;
-            source.byte_offset += offset;
-            const std::array reads{source};
-            const uint64_t value = context_.recorders().record(
-                reads, {}, [&](const VkCommandBuffer command) {
-                    const VkBufferCopy region{
-                        .srcOffset = offset_for(request.src) + offset,
-                        .dstOffset = slice.offset,
-                        .size = slice.size,
-                    };
-                    vkCmdCopyBuffer(command, buffer_for(request.src), slice.buffer, 1,
-                                    &region);
-                    const VkMemoryBarrier2 host_read{
-                        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                        .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
-                    };
-                    const VkDependencyInfo dependency{
-                        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                        .memoryBarrierCount = 1,
-                        .pMemoryBarriers = &host_read,
-                    };
-                    vkCmdPipelineBarrier2(command, &dependency);
-                },
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, slice.size);
-            staging_retire_value_ = std::max(staging_retire_value_, value);
-            context_.recorders().flush_current();
-            // The GPU fills this slice while the host copies the preceding completed slice.
-            if (pending_value != 0) {
-                context_.wait(pending_value);
-                std::memcpy(destination + pending_offset, pending.mapped, pending.size);
-            }
-            pending = slice;
-            pending_value = value;
-            pending_offset = offset;
-        }
-        context_.wait(pending_value);
-        context_.check_fault_buffer();
-        std::memcpy(destination + pending_offset, pending.mapped, pending.size);
-    }
-
     void VulkanMemory::copy_device_to_device(const CopyRequest& request) {
         if (request.bytes == 0) {
             return;

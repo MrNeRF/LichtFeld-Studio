@@ -50,8 +50,10 @@ class ViewerSpirv(unittest.TestCase):
             modules['rmlui/' + name] = struct.unpack('<%dI' % (len(blob) // 4), blob)
         # Allowed capabilities map to explicit device requirements or tensor per-op gates.
         allowed = {1, 9, 11, 22, 49, 50, 61, 62, 63, 64, 65, 4434, 4466, 5347, 6033}
+        per_module = {'tensor/kWords_export_kmeans_screen': {5345, 5346, 6022}}
         for name, words in modules.items():
             with self.subTest(module=name):
                 caps = capabilities(words)
                 self.assertNotIn(10, caps, 'Float64 is not a viewer capability')
-                self.assertFalse(caps - allowed, 'unreviewed optional capabilities: %s' % (caps - allowed))
+                unexpected = caps - allowed - per_module.get(name, set())
+                self.assertFalse(unexpected, 'unreviewed optional capabilities: %s' % unexpected)

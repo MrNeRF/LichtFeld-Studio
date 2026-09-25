@@ -169,9 +169,9 @@ namespace {
     }
 
     TEST_F(TensorVulkanRuntime, StagingRingWrapWaitsBeforeReusingSlices) {
-        // Two 1 MiB staging slices per iteration force the 64 MiB ring to wrap.
+        // The uploads exceed the 64 MiB staging ring.
         const std::vector<int> expected(256 * 1024, 0x13579bdf);
-        for (int iteration = 0; iteration < 34; ++iteration) {
+        for (int iteration = 0; iteration < 68; ++iteration) {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const Tensor vulkan = Tensor::from_vector(
                 expected, {expected.size()}, Device::GPU);
@@ -650,9 +650,12 @@ namespace {
         // half intrinsic, and a capability the loader table does not know.
         const std::set<std::string_view> known{"Shader", "Int64", "Int16",
                                                "PhysicalStorageBufferAddresses",
+                                               "GroupNonUniform", "GroupNonUniformShuffle", "GroupNonUniformArithmetic",
                                                "SignedZeroInfNanPreserve", "Float16",
-                                               "AtomicFloat32AddEXT"};
-        const std::set<std::string_view> half_modules{"pointwise_half", "sh_codec", "sh_encode"};
+                                               "AtomicFloat32AddEXT", "CooperativeMatrixKHR",
+                                               "VulkanMemoryModel", "VulkanMemoryModelDeviceScope"};
+        const std::set<std::string_view> half_modules{"pointwise_half", "sh_codec", "sh_encode",
+                                                      "export_kmeans_pack", "export_kmeans_screen"};
         const std::span<const internal::EmbeddedShader> shaders = internal::embedded_shaders();
         ASSERT_FALSE(shaders.empty());
         for (const internal::EmbeddedShader& shader : shaders) {
@@ -661,16 +664,16 @@ namespace {
             EXPECT_GT(shader.code.size(), 5u) << module;
             EXPECT_EQ(shader.code[0], 0x07230203u) << module;
             EXPECT_EQ(shader.entry_point, "main") << module;
-            EXPECT_EQ(shader.local_size, (std::array<uint32_t, 3>{256, 1, 1})) << module;
+            EXPECT_EQ(shader.local_size, (std::array<uint32_t, 3>{module == "export_kmeans_screen" ? 32u : 256u, 1, 1})) << module;
             EXPECT_EQ(shader.push_constant_size % 4, 0u) << module;
             for (const std::string_view capability : shader.capabilities) {
                 EXPECT_TRUE(known.contains(capability)) << module << " declares " << capability;
             }
             const bool half = std::ranges::find(shader.capabilities, "Float16") != shader.capabilities.end();
             EXPECT_EQ(half, half_modules.contains(module)) << module;
-            EXPECT_EQ(std::ranges::find(shader.capabilities, "AtomicFloat32AddEXT") !=
-                          shader.capabilities.end(),
-                      module == "index_atomic")
+            const bool atomic_add = std::ranges::find(shader.capabilities, "AtomicFloat32AddEXT") !=
+                                    shader.capabilities.end();
+            EXPECT_EQ(atomic_add, module == "index_atomic" || module == "export_kmeans_accumulate")
                 << module;
             EXPECT_TRUE(std::ranges::equal(shader.float_widths, shader.signed_zero_inf_nan_preserve))
                 << module;
@@ -1059,6 +1062,48 @@ namespace {
                     EXPECT_EQ(output[i], 0xA5);
             }
         }
+        if (backend == GpuBackend::Vulkan) {
+            EXPECT_TRUE(shutdown_gpu_backend(backend).has_value());
+            EXPECT_TRUE(internal::vulkan_validation_messages_for_testing().empty());
+        }
+    }
+
+    TEST_P(TensorHostTransfer, ConcurrentChunkedRoundTripsKeepRequestStorageSeparate) {
+        const auto backend = GetParam();
+        if (!gpu_backend_available(backend))
+            GTEST_SKIP() << "Backend unavailable";
+        constexpr size_t count = 24 * 1024 * 1024 + 17;
+        constexpr size_t workers = 3;
+        std::latch start(workers);
+        std::array<std::string, workers> failures;
+        std::vector<std::thread> threads;
+        for (size_t worker = 0; worker < workers; ++worker) {
+            threads.emplace_back([&, worker] {
+                start.count_down();
+                start.wait();
+                try {
+                    GpuBackendScope scope(backend);
+                    for (size_t round = 0; round < 3; ++round) {
+                        auto source = Tensor::empty_pageable_host({count + 3}, DataType::UInt8);
+                        auto* bytes = source.ptr<uint8_t>();
+                        for (size_t i = 0; i < source.numel(); ++i)
+                            bytes[i] = static_cast<uint8_t>(i * 37 + worker * 17 + round);
+                        const auto gpu = source.slice(0, 3, count + 3).gpu();
+                        const auto downloaded = round % 2 ? gpu.cpu() : gpu.to_pageable_host();
+                        if (std::memcmp(downloaded.data_ptr(), bytes + 3, count) != 0) {
+                            failures[worker] = "round " + std::to_string(round);
+                            return;
+                        }
+                    }
+                } catch (const std::exception& error) {
+                    failures[worker] = error.what();
+                }
+            });
+        }
+        for (auto& thread : threads)
+            thread.join();
+        for (size_t worker = 0; worker < workers; ++worker)
+            EXPECT_TRUE(failures[worker].empty()) << worker << ": " << failures[worker];
         if (backend == GpuBackend::Vulkan) {
             EXPECT_TRUE(shutdown_gpu_backend(backend).has_value());
             EXPECT_TRUE(internal::vulkan_validation_messages_for_testing().empty());

@@ -56,12 +56,18 @@ function(_tensor_add_slang_kernel name src)
     set(_raw "${LFS_TENSOR_SPV_DIR}/${name}.raw.spv")
     set(_spv "${LFS_TENSOR_SPV_DIR}/${name}.spv")
     set(_manifest "${LFS_TENSOR_SPV_DIR}/${name}.json")
+    set(_profile glsl_460)
+    if(name STREQUAL "export_kmeans_screen")
+        # Half tensor-core tiles for SH3 assignment. Devices without the
+        # capability use the scalar assignment shader.
+        set(_profile glsl_460+cooperative_matrix)
+    endif()
     add_custom_command(
         OUTPUT ${_spv} ${_manifest}
         BYPRODUCTS ${_raw}
         COMMAND ${LFS_TENSOR_SLANGC} ${_source}
                 -entry main -stage compute -O -fp-mode precise
-                -line-directive-mode none -target spirv -profile glsl_460
+                -line-directive-mode none -target spirv -profile ${_profile}
                 -emit-spirv-directly
                 -I ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders
                 -o ${_raw}
@@ -112,6 +118,16 @@ _tensor_add_slang_kernel(filter_points filter_points.slang)
 _tensor_add_slang_kernel(affine_splat_geometry affine_splat_geometry.slang)
 _tensor_add_slang_kernel(sh_codec sh_codec.slang)
 _tensor_add_slang_kernel(sh_encode sh_encode.slang)
+_tensor_add_slang_kernel(export_morton export_morton.slang)
+_tensor_add_slang_kernel(export_radix export_radix.slang)
+_tensor_add_slang_kernel(export_kmeans export_kmeans.slang)
+_tensor_add_slang_kernel(export_kmeans_accumulate export_kmeans_accumulate.slang)
+_tensor_add_slang_kernel(export_kmeans_pack export_kmeans_pack.slang)
+_tensor_add_slang_kernel(export_kmeans_screen export_kmeans_screen.slang)
+_tensor_add_slang_kernel(export_kmeans_group export_kmeans_group.slang)
+_tensor_add_slang_kernel(export_decimate export_decimate.slang)
+_tensor_add_slang_kernel(export_decimate_cost export_decimate_cost.slang)
+_tensor_add_slang_kernel(export_decimate_merge export_decimate_merge.slang)
 _tensor_add_slang_kernel(rad_page rad_page.slang
     ${CMAKE_CURRENT_SOURCE_DIR}/include/core/rad_packed_page.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/core/rad_dequant_math.hpp)

@@ -2,14 +2,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# CUDA library for IO-specific kernels (morton encoding, k-means)
+# CUDA library for dataset image conversion. Export kernels live in the tensor library.
 if(LFS_HAS_CUDA)
 add_library(lfs_io_cuda STATIC
-        cuda/morton_encoding.hpp
-        cuda/morton_encoding.cu
-        cuda/kmeans.hpp
-        cuda/kmeans.cu
-        cuda/splat_decimate.cu
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
 )
@@ -464,12 +459,10 @@ if(NOT BUILD_PORTABLE)
 endif()
 
 message(STATUS "I/O module configured with SOG support")
-message(STATUS "  IO CUDA library: lfs_io_cuda (morton, k-means)")
+message(STATUS "  IO CUDA library: lfs_io_cuda (image conversion)")
 message(STATUS "  WebP decoder library: ${WEBP_DECODE_LIB}")
 message(STATUS "  Archive library: ${ARCHIVE_LIB}")
 
-# Reference decimation needs IEEE arithmetic despite the IO CUDA fast-math defaults.
-set_source_files_properties(cuda/splat_decimate.cu PROPERTIES
-    COMPILE_OPTIONS "--fmad=false;--ftz=false;--prec-div=true;--prec-sqrt=true")
+# Host decimation matches the double oracle without contracted FMAs.
 set_source_files_properties(splat_decimate.cpp PROPERTIES
     COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")

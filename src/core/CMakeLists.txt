@@ -64,6 +64,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_sh.cpp
         tensor/backend/cuda/cuda_ops_labels.cpp
         tensor/backend/cuda/cuda_ops_filters.cpp
+        tensor/backend/cuda/cuda_ops_export.cpp
         tensor/backend/cuda/cuda_ops_index_mask.cpp
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
@@ -91,6 +92,7 @@ set(TENSOR_SOURCES
         tensor/tensor_sh.cpp
         tensor/tensor_labels.cpp
         tensor/tensor_filters.cpp
+        tensor/tensor_export.cpp
         tensor/tensor_readback.cpp
         tensor/backend/tensor_upload.cpp
         tensor/tensor_rad.cpp
@@ -143,11 +145,15 @@ if(LFS_TENSOR_VULKAN)
         tensor/backend/vulkan/vk_ops_rad.cpp
         tensor/backend/vulkan/vk_ops_labels.cpp
         tensor/backend/vulkan/vk_ops_filters.cpp
+        tensor/backend/vulkan/vk_ops_export.cpp
         tensor/backend/vulkan/vk_services.cpp
     )
     if(LFS_HAS_CUDA)
         list(APPEND TENSOR_SOURCES tensor/backend/vulkan/vk_cuda_bridge.cpp)
     endif()
+    # Host edge refinement uses the same independent double rounding as decimation.
+    set_source_files_properties(tensor/backend/vulkan/vk_ops_export.cpp PROPERTIES
+        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")
 endif()
 
 # Core module sources

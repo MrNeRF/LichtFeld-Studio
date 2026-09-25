@@ -25,6 +25,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_export.hpp"
 #include "core/uuid.hpp"
 #include "io/cuda/kmeans.hpp"
 #include "io/exporter.hpp"
@@ -825,7 +826,7 @@ TEST_F(SogFormatTest, StreamedSh3AssignmentMatchesReferenceTiles) {
     using namespace lfs::io;
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> value(-1.0f, 1.0f);
-    for (const size_t n : {1, 127, 128, 129, 4097}) {
+    for (const size_t n : {1, 63, 64, 65, 127, 128, 129, 4097}) {
         for (const size_t k : {1, 31, 32, 33, 4097, 65536}) {
             SCOPED_TRACE(std::format("n={} k={}", n, k));
             auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
@@ -901,5 +902,77 @@ TEST_F(SogFormatTest, StreamedSh3ScreeningMatchesReferenceNearTiesAndHalfLimits)
         assign_sh3_labels(points, centroids, norms, screened, true, true);
         const auto seeded = screened.cpu();
         EXPECT_TRUE(std::equal(expected.ptr<int>(), expected.ptr<int>() + n, seeded.ptr<int>()));
+    }
+}
+
+TEST_F(SogFormatTest, StreamedSh3NormRangesMatchCpuReference) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    constexpr size_t n = 257, k = 1025;
+    std::mt19937 rng(517);
+    std::uniform_real_distribution<float> random(-1.0f, 1.0f);
+    auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+    auto centroids = Tensor::empty({k, 45}, Device::CPU);
+    auto norms = Tensor::zeros({k}, Device::CPU);
+    for (size_t i = 0; i < k; ++i) {
+        const float scale = std::ldexp(1.0f, int(i % 21) - 10);
+        for (size_t d = 0; d < 45; ++d) {
+            const float v = i == 0 || i % 113 == 0 ? 0.0f : scale * random(rng);
+            centroids.ptr<float>()[i * 45 + d] = v;
+            norms.ptr<float>()[i] = std::fma(v, v, norms.ptr<float>()[i]);
+        }
+    }
+    std::vector<int> seeds(n), expected(n, int(k));
+    for (size_t i = 0; i < n; ++i) {
+        const size_t source = (i * 37) % k;
+        seeds[i] = int(source);
+        const float scale = std::ldexp(1.0f, int(source % 21) - 10);
+        for (size_t d = 0; d < 45; ++d)
+            points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4] =
+                i ? centroids.ptr<float>()[source * 45 + d] + 0.001f * scale * random(rng) : 0.0f;
+        float best = 1e30f;
+        for (size_t j = 0; j < k; ++j) {
+            float dot = 0;
+            for (size_t d = 0; d < 45; ++d)
+                dot = std::fma(points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4],
+                               centroids.ptr<float>()[j * 45 + d], dot);
+            const float score = std::fma(-2.0f, dot, norms.ptr<float>()[j]);
+            if (score < best) {
+                best = score;
+                expected[i] = int(j);
+            }
+        }
+    }
+    points = points.gpu();
+    centroids = centroids.gpu();
+    norms = norms.gpu();
+    for (const bool have_seed : {false, true}) {
+        auto labels = Tensor::from_vector(seeds, {n}, Device::GPU);
+        assign_sh3_labels(points, centroids, norms, labels, true, have_seed);
+        EXPECT_EQ(labels.to_vector_int(), expected) << "seeded=" << have_seed;
+    }
+}
+
+TEST_F(SogFormatTest, HierarchicalSh3KeepsSeparatedGroups) {
+    using namespace lfs::core;
+    constexpr size_t n = 8193, k = 4096;
+    auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+    const auto value = [](size_t row, size_t dim) {
+        return ((row % 16) & (size_t{1} << (dim % 4))) ? 0.125f * float(dim % 5 + 1)
+                                                       : -0.125f * float(dim % 5 + 1);
+    };
+    for (size_t row = 0; row < n; ++row)
+        for (size_t dim = 0; dim < 45; ++dim)
+            points.ptr<float>()[sh_swizzled_index(row, dim / 4, 15) * 4 + dim % 4] = value(row, dim);
+    auto [palette, labels] = kmeans_sh(points.gpu(), int(n), 15, int(k), 3, true);
+    const auto host = palette.cpu();
+    const auto ids = labels.to_vector_int();
+    ASSERT_EQ(ids.size(), n);
+    for (size_t row = 0; row < n; ++row) {
+        ASSERT_GE(ids[row], 0);
+        ASSERT_LT(ids[row], int(k));
+        for (size_t dim = 0; dim < 45; ++dim)
+            ASSERT_FLOAT_EQ(host.ptr<float>()[size_t(ids[row]) * 45 + dim], value(row, dim))
+                << "row=" << row << " dim=" << dim;
     }
 }

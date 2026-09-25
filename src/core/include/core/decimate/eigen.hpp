@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-namespace lfs::io::decimate {
+namespace lfs::core::decimate {
     DEC_HD inline void decompose(double* a, double* scales, double* quaternion) {
         double v[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         for (int iter = 0; iter < 24; ++iter) {
@@ -96,4 +96,4 @@ namespace lfs::io::decimate {
         quaternion[2] = y * inv;
         quaternion[3] = z * inv;
     }
-} // namespace lfs::io::decimate
+} // namespace lfs::core::decimate

@@ -257,6 +257,9 @@ namespace lfs::vis {
             bool shader_atomic_float = false;
             bool shader_float64 = false;
             bool shader_float16 = false;
+            bool vulkan_memory_model = false;
+            bool vulkan_memory_model_device_scope = false;
+            bool cooperative_matrix = false;
             bool complete = false;
         };
         [[nodiscard]] const TensorBackendDevice& tensorBackendDevice() const { return tensor_backend_device_; }

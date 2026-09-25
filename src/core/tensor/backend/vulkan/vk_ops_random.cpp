@@ -108,7 +108,7 @@ namespace lfs::core::internal {
             const std::array writes{scratch};
             record_random(context, kWeightStatistics, push, reads, writes, 1);
             WeightStatistics statistics{};
-            context.memory().copy_device_to_host(CopyRequest{
+            backend_ops(GpuBackend::Vulkan).copy_device_to_host(CopyRequest{
                 .src = scratch,
                 .dst = raw_storage_ref(&statistics),
                 .bytes = sizeof(statistics),

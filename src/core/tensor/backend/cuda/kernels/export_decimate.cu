@@ -1,14 +1,16 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "morton_encoding.hpp"
-#include "splat_decimate_math.hpp"
+#include "core/decimate/math.hpp"
+#include "core/morton.hpp"
+#include "export_entry.hpp"
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <thrust/device_ptr.h>
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 
-namespace lfs::io::decimate {
+namespace lfs::core::export_cuda {
+    using namespace lfs::core::decimate;
     namespace {
         using core::DataType;
         using core::Device;
@@ -378,4 +380,4 @@ namespace lfs::io::decimate {
         check(cudaDeviceSynchronize());
         return out;
     }
-} // namespace lfs::io::decimate
+} // namespace lfs::core::export_cuda

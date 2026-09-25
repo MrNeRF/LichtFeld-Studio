@@ -798,6 +798,9 @@ namespace lfs::core {
             .memory_budget = handles.memory_budget,
             .shader_float64 = handles.shader_float64,
             .shader_float16 = handles.shader_float16,
+            .vulkan_memory_model = handles.vulkan_memory_model,
+            .vulkan_memory_model_device_scope = handles.vulkan_memory_model_device_scope,
+            .cooperative_matrix = handles.cooperative_matrix,
             .external_memory = handles.external_memory,
             .external_semaphore = handles.external_semaphore,
         });

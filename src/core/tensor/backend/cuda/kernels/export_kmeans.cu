@@ -5,7 +5,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "kmeans.hpp"
+#include "core/tensor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cuda_fp16.h>
@@ -23,10 +23,14 @@
 #include <unordered_map>
 #include <vector>
 
-namespace lfs::io {
+namespace lfs::core::export_cuda {
 
     using lfs::core::DataType;
     using lfs::core::Device;
+    using lfs::core::Tensor;
+
+    void assign_sh3_labels(const Tensor& shN_swizzled, const Tensor& centroids,
+                           const Tensor& centroid_norms, Tensor& labels, bool fast, bool have_labels);
 
     namespace {
 
@@ -1588,4 +1592,4 @@ namespace lfs::io {
         }
     }
 
-} // namespace lfs::io
+} // namespace lfs::core::export_cuda

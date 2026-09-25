@@ -44,7 +44,6 @@ namespace lfs::core::internal {
         void read_readback(StorageRef storage, void* destination, size_t bytes);
         void deallocate(StorageRef storage) noexcept;
         void copy_host_to_device(const CopyRequest& request);
-        void copy_device_to_host(const CopyRequest& request);
         void copy_device_to_device(const CopyRequest& request);
         void memset(const FillRequest& request);
         [[nodiscard]] uint64_t copy_to_readback(StorageRef src, StorageRef dst, size_t bytes);

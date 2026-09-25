@@ -28,6 +28,9 @@ set(LFS_TENSOR_CUDA_SOURCES
     backend/cuda/kernels/tensor_projection.cu
     backend/cuda/kernels/tensor_point_region.cu
     backend/cuda/kernels/tensor_filters.cu
+    backend/cuda/kernels/export_morton.cu
+    backend/cuda/kernels/export_kmeans.cu
+    backend/cuda/kernels/export_decimate.cu
 )
 
 if(LFS_TENSOR_CUDA_SOURCES)
@@ -83,4 +86,8 @@ if(LFS_TENSOR_CUDA_SOURCES)
             COMPILE_FLAGS "-O0"
         )
     endif()
+    # Edge costs are double and compared to the host oracle. use_fast_math on
+    # this library must not flush or contract those operations.
+    set_source_files_properties(backend/cuda/kernels/export_decimate.cu PROPERTIES
+        COMPILE_OPTIONS "--fmad=false;--ftz=false;--prec-div=true;--prec-sqrt=true")
 endif()

@@ -97,6 +97,31 @@ namespace lfs::core {
         return vkCreateDevice(physical_device, &info, nullptr, device);
     }
 
+    // The screened SH3 export assignment multiplies 16x16x16 FP16 tiles into an FP32
+    // accumulator at subgroup scope in a compute shader.
+    inline bool supports_sh3_cooperative_matrix(const VkInstance instance, const VkPhysicalDevice physical) {
+        VkPhysicalDeviceCooperativeMatrixPropertiesKHR stages{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR};
+        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &stages};
+        vkGetPhysicalDeviceProperties2(physical, &properties);
+        if (!(stages.cooperativeMatrixSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT))
+            return false;
+        const auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
+            vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
+        uint32_t count = 0;
+        if (!query || query(physical, &count, nullptr) != VK_SUCCESS || count == 0)
+            return false;
+        std::vector<VkCooperativeMatrixPropertiesKHR> shapes(count, {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
+        if (query(physical, &count, shapes.data()) != VK_SUCCESS)
+            return false;
+        shapes.resize(count);
+        return std::ranges::any_of(shapes, [](const VkCooperativeMatrixPropertiesKHR& p) {
+            return p.MSize == 16 && p.NSize == 16 && p.KSize == 16 && p.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                   p.BType == VK_COMPONENT_TYPE_FLOAT16_KHR && p.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+                   p.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR && !p.saturatingAccumulation &&
+                   p.scope == VK_SCOPE_SUBGROUP_KHR;
+        });
+    }
+
     inline uint32_t find_vulkan_memory_type(const VkPhysicalDeviceMemoryProperties& memory,
                                             uint32_t type_filter,
                                             VkMemoryPropertyFlags properties) {

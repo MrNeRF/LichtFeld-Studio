@@ -1863,6 +1863,9 @@ namespace lfs::vis {
             .memory_budget = false,
             .shader_float64 = device.shader_float64,
             .shader_float16 = device.shader_float16,
+            .vulkan_memory_model = device.vulkan_memory_model,
+            .vulkan_memory_model_device_scope = device.vulkan_memory_model_device_scope,
+            .cooperative_matrix = device.cooperative_matrix,
             .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
             .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
         };

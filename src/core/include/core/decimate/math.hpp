@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "splat_decimate_internal.hpp"
+#include "core/decimate/types.hpp"
 #include <cmath>
 
 #ifdef __CUDACC__
@@ -10,7 +10,7 @@
 #define DEC_HD
 #endif
 
-namespace lfs::io::decimate {
+namespace lfs::core::decimate {
     // Reference covariance/mass cache entries are Float32Array, even though
     // formulas run in double. Keep these rounding points on both backends;
     // derived samples and self-densities retain their original double precision.
@@ -185,7 +185,7 @@ namespace lfs::io::decimate {
         for (int a = 0; a < v.rest * 3; ++a)
             out.sh[size_t(row) * v.rest * 3 + a] = v.sh[size_t(i) * v.rest * 3 + a];
     }
-} // namespace lfs::io::decimate
+} // namespace lfs::core::decimate
 
-#include "splat_decimate_eigen.hpp"
+#include "core/decimate/eigen.hpp"
 #undef DEC_HD

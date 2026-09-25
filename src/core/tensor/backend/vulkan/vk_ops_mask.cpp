@@ -111,9 +111,9 @@ namespace lfs::core::internal {
             return scan;
         }
 
-        uint32_t read_total(VulkanContext& context, const StorageRef total) {
+        uint32_t read_total(const StorageRef total) {
             uint32_t value = 0;
-            context.memory().copy_device_to_host(CopyRequest{
+            backend_ops(GpuBackend::Vulkan).copy_device_to_host(CopyRequest{
                 .src = total,
                 .dst = raw_storage_ref(&value),
                 .bytes = sizeof(value),
@@ -140,7 +140,7 @@ namespace lfs::core::internal {
             const std::array writes{output};
             record_mask(*context, kNonzeroMode, DataType::Int64, predicate, push, reads, writes,
                         dispatch_groups(*context, program.count));
-            const uint32_t total = read_total(*context, offset_storage_ref(scan, (program.count - 1) * sizeof(uint32_t)));
+            const uint32_t total = read_total(offset_storage_ref(scan, (program.count - 1) * sizeof(uint32_t)));
             context->memory().deallocate(scan);
             return total;
         }
