@@ -2498,7 +2498,8 @@ namespace lfs::training {
             return;
         }
 
-        const cudaStream_t stream = image_loss.stream();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        image_loss.sync_to_stream(stream);
         // Keep the tensors' producer metadata aligned with the existing kernel
         // queue so asynchronous readback waits only for that producer.
         heatmap->latest_loss_gpu.set_stream(stream);
@@ -5463,7 +5464,8 @@ namespace lfs::training {
                        "edge-weight map byte size overflow");
         const lfs::core::TensorShape map_shape{height, width};
         const size_t map_bytes = height * width * sizeof(float);
-        const cudaStream_t stream = gt_image.stream();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        gt_image.sync_to_stream(stream);
 
         if (auto it = edge_weight_cache_.find(camera_uid);
             it != edge_weight_cache_.end() &&
@@ -5570,6 +5572,7 @@ namespace lfs::training {
             lfs::core::Device::GPU,
             lfs::core::DataType::Float32);
 
+        bg_image_base_.sync_to_stream(lfs::core::getCurrentCUDAStream());
         // Use bilinear resize kernel
         kernels::launch_bilinear_resize_chw(
             bg_image_base_.ptr<float>(),
@@ -5577,7 +5580,7 @@ namespace lfs::training {
             channels,
             src_h, src_w,
             height, width,
-            resized.stream());
+            lfs::core::getCurrentCUDAStream());
 
         // Cache only if this physical bucket can fit under the hard byte ceiling.
         // Returned Tensor copies retain storage safely if an older entry is evicted.
@@ -5619,11 +5622,12 @@ namespace lfs::training {
                 lfs::core::DataType::Float32);
         }
 
+        random_bg_buffer_.set_stream(lfs::core::getCurrentCUDAStream());
         kernels::launch_random_background(
             random_bg_buffer_.ptr<float>(),
             height, width,
             static_cast<uint64_t>(iteration),
-            random_bg_buffer_.stream());
+            lfs::core::getCurrentCUDAStream());
 
         return random_bg_buffer_;
     }
@@ -6377,7 +6381,8 @@ namespace lfs::training {
                         const lfs::core::TensorShape roi_shape{
                             static_cast<size_t>(output.height),
                             static_cast<size_t>(output.width)};
-                        const cudaStream_t roi_stream = output.image.stream();
+                        const cudaStream_t roi_stream = lfs::core::getCurrentCUDAStream();
+                        output.image.sync_to_stream(roi_stream);
                         if (!roi_weight_map_.is_valid() ||
                             roi_weight_map_.shape() != roi_shape) {
                             roi_weight_map_ = lfs::core::Tensor::empty(
@@ -6797,7 +6802,10 @@ namespace lfs::training {
                                     rendered_alpha = rendered_alpha.contiguous();
                                 }
 
-                                const cudaStream_t depth_stream = rendered_depth.stream();
+                                const cudaStream_t depth_stream = lfs::core::getCurrentCUDAStream();
+                                rendered_depth.sync_to_stream(depth_stream);
+                                rendered_alpha.sync_to_stream(depth_stream);
+                                target_depth.sync_to_stream(depth_stream);
 
                                 if (target_depth.ndim() == 2 && rendered_depth.ndim() == 2 &&
                                     (target_depth.shape()[0] != rendered_depth.shape()[0] ||
@@ -6921,7 +6929,10 @@ namespace lfs::training {
                                     rendered_alpha = rendered_alpha.contiguous();
                                 }
 
-                                const cudaStream_t normal_stream = rendered_normal.stream();
+                                const cudaStream_t normal_stream = lfs::core::getCurrentCUDAStream();
+                                rendered_normal.sync_to_stream(normal_stream);
+                                rendered_alpha.sync_to_stream(normal_stream);
+                                target_normal.sync_to_stream(normal_stream);
                                 const int render_h = static_cast<int>(rendered_normal.shape()[1]);
                                 const int render_w = static_cast<int>(rendered_normal.shape()[2]);
 
@@ -7101,7 +7112,10 @@ namespace lfs::training {
                                 cam->focal_x() > 0.0f && cam->focal_y() > 0.0f;
 
                             if (consistency_shapes_match) {
-                                const cudaStream_t consistency_stream = rendered_normal.stream();
+                                const cudaStream_t consistency_stream = lfs::core::getCurrentCUDAStream();
+                                rendered_normal.sync_to_stream(consistency_stream);
+                                rendered_depth.sync_to_stream(consistency_stream);
+                                rendered_alpha.sync_to_stream(consistency_stream);
 
                                 if (!tile_grad_normal.is_valid()) {
                                     if (!normal_loss_grad_.is_valid() ||
