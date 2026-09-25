@@ -81,6 +81,12 @@ namespace nvjpeg {
             cudaEvent_t event_;
             nvjpegEncoderState_t state_;
             std::optional<cudaStream_t> stream_ = std::nullopt;
+            // Reused across samples: destroying encoder params calls cudaFree, which
+            // blocks every CUDA call in the process until the device is idle.
+            nvjpegEncoderParams_t encode_params_ = nullptr;
+            cudaStream_t encode_params_stream_ = nullptr;
+            bool encode_params_encoding_set_ = false;
+            bool encode_params_sampling_set_ = false;
 
             PerThreadResources(const nvimgcodecFrameworkDesc_t* framework, const char* plugin_id, nvjpegHandle_t handle,
                                const nvimgcodecExecutionParams_t* exec_params)
@@ -88,6 +94,27 @@ namespace nvjpeg {
 
             {
                 XM_CHECK_CUDA(cudaEventCreateWithFlags(&event_, cudaEventDisableTiming));
+            }
+
+            // Every sample sets quality and Huffman mode; encoding and sampling
+            // factors only when known. Params that carry an override the sample
+            // does not set are recreated so the sample sees nvJPEG's defaults.
+            nvjpegEncoderParams_t params(cudaStream_t cuda_stream, bool sets_encoding, bool sets_sampling) {
+                const bool stale_override = (encode_params_encoding_set_ && !sets_encoding) ||
+                                            (encode_params_sampling_set_ && !sets_sampling);
+                if (encode_params_ && (encode_params_stream_ != cuda_stream || stale_override)) {
+                    XM_NVJPEG_LOG_DESTROY(nvjpegEncoderParamsDestroy(encode_params_));
+                    encode_params_ = nullptr;
+                }
+                if (!encode_params_) {
+                    XM_CHECK_NVJPEG(nvjpegEncoderParamsCreate(handle_, &encode_params_, cuda_stream));
+                    encode_params_stream_ = cuda_stream;
+                    encode_params_encoding_set_ = false;
+                    encode_params_sampling_set_ = false;
+                }
+                encode_params_encoding_set_ |= sets_encoding;
+                encode_params_sampling_set_ |= sets_sampling;
+                return encode_params_;
             }
 
             nvjpegEncoderState_t& state(cudaStream_t cuda_stream) {
@@ -107,6 +134,9 @@ namespace nvjpeg {
             }
 
             ~PerThreadResources() {
+                if (encode_params_) {
+                    XM_NVJPEG_LOG_DESTROY(nvjpegEncoderParamsDestroy(encode_params_));
+                }
                 if (stream_) {
                     XM_NVJPEG_LOG_DESTROY(nvjpegEncoderStateDestroy(state_));
                 }
@@ -386,12 +416,13 @@ namespace nvjpeg {
 
             auto& state = t.state(image_info.cuda_stream);
 
-            nvjpegEncoderParams_t encode_params_;
-            XM_CHECK_NVJPEG(nvjpegEncoderParamsCreate(handle_, &encode_params_, image_info.cuda_stream));
-            std::unique_ptr<std::remove_pointer<nvjpegEncoderParams_t>::type, decltype(&nvjpegEncoderParamsDestroy)> encode_params(
-                encode_params_, &nvjpegEncoderParamsDestroy);
-
             int num_channels = std::max(image_info.num_planes, image_info.plane_info[0].num_channels);
+            auto out_chroma_subsampling_nvimgcodec = num_channels == 1 ? NVIMGCODEC_SAMPLING_GRAY : out_image_info.chroma_subsampling;
+            nvjpegChromaSubsampling_t out_chroma_subsampling = nvimgcodec_to_nvjpeg_css(out_chroma_subsampling_nvimgcodec);
+            nvjpegEncoderParams_t encode_params = t.params(image_info.cuda_stream,
+                                                           out_jpeg_image_info.encoding != NVIMGCODEC_JPEG_ENCODING_UNKNOWN,
+                                                           out_chroma_subsampling != NVJPEG_CSS_UNKNOWN);
+
             auto sample_format = image_info.sample_format;
             auto color_spec = image_info.color_spec;
             nvimgcodecChromaSubsampling_t chroma_subsampling = image_info.chroma_subsampling;
@@ -422,12 +453,12 @@ namespace nvjpeg {
                 quality = 75;
             }
             NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, " - quality: " << quality);
-            XM_CHECK_NVJPEG(nvjpegEncoderParamsSetQuality(encode_params.get(), quality, image_info.cuda_stream));
+            XM_CHECK_NVJPEG(nvjpegEncoderParamsSetQuality(encode_params, quality, image_info.cuda_stream));
 
             if (out_jpeg_image_info.encoding != NVIMGCODEC_JPEG_ENCODING_UNKNOWN) {
                 nvjpegJpegEncoding_t encoding = nvimgcodec_to_nvjpeg_encoding(out_jpeg_image_info.encoding);
                 NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, " - encoding: " << encoding);
-                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetEncoding(encode_params.get(), encoding, image_info.cuda_stream));
+                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetEncoding(encode_params, encoding, image_info.cuda_stream));
             }
 
             auto jpeg_encode_params = static_cast<nvimgcodecJpegEncodeParams_t*>(params->struct_next);
@@ -435,25 +466,23 @@ namespace nvjpeg {
                 jpeg_encode_params = static_cast<nvimgcodecJpegEncodeParams_t*>(jpeg_encode_params->struct_next);
             if (jpeg_encode_params) {
                 NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, " - optimized huffman: " << jpeg_encode_params->optimized_huffman);
-                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetOptimizedHuffman(encode_params.get(), jpeg_encode_params->optimized_huffman, image_info.cuda_stream));
+                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetOptimizedHuffman(encode_params, jpeg_encode_params->optimized_huffman, image_info.cuda_stream));
             } else {
-                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetOptimizedHuffman(encode_params.get(), 0, image_info.cuda_stream));
+                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetOptimizedHuffman(encode_params, 0, image_info.cuda_stream));
             }
-            auto out_chroma_subsampling_nvimgcodec = num_channels == 1 ? NVIMGCODEC_SAMPLING_GRAY : out_image_info.chroma_subsampling;
-            nvjpegChromaSubsampling_t out_chroma_subsampling = nvimgcodec_to_nvjpeg_css(out_chroma_subsampling_nvimgcodec);
             if (out_chroma_subsampling != NVJPEG_CSS_UNKNOWN) {
-                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetSamplingFactors(encode_params.get(), out_chroma_subsampling, NULL));
+                XM_CHECK_NVJPEG(nvjpegEncoderParamsSetSamplingFactors(encode_params, out_chroma_subsampling, NULL));
             }
             if (((color_spec == NVIMGCODEC_COLORSPEC_SYCC) &&
                  ((sample_format == NVIMGCODEC_SAMPLEFORMAT_P_YUV) || (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y) || (sample_format == NVIMGCODEC_SAMPLEFORMAT_I_Y))) ||
                 ((color_spec == NVIMGCODEC_COLORSPEC_GRAY) && (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y || sample_format == NVIMGCODEC_SAMPLEFORMAT_I_Y))) {
                 nvjpegChromaSubsampling_t input_chroma_subsampling = nvimgcodec_to_nvjpeg_css(chroma_subsampling);
-                XM_CHECK_NVJPEG(nvjpegEncodeYUV(handle_, state, encode_params.get(), &input_image, input_chroma_subsampling,
+                XM_CHECK_NVJPEG(nvjpegEncodeYUV(handle_, state, encode_params, &input_image, input_chroma_subsampling,
                                                 image_info.plane_info[0].width, image_info.plane_info[0].height, image_info.cuda_stream));
             } else {
                 nvjpegInputFormat_t input_format = static_cast<nvjpegInputFormat_t>(nvjpeg_format);
                 assert(input_format >= NVJPEG_INPUT_RGB && input_format <= NVJPEG_INPUT_BGRI);
-                XM_CHECK_NVJPEG(nvjpegEncodeImage(handle_, state, encode_params.get(), &input_image, input_format,
+                XM_CHECK_NVJPEG(nvjpegEncodeImage(handle_, state, encode_params, &input_image, input_format,
                                                   image_info.plane_info[0].width, image_info.plane_info[0].height, image_info.cuda_stream));
             }
 

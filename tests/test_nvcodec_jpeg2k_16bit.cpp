@@ -511,6 +511,46 @@ TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     EXPECT_GE(psnr, 45.0);
 }
 
+TEST(NvCodecImageLoaderJpeg, RepeatedEncodesMatchAFreshEncoder) {
+    const auto path = fs::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/lichtfeld-icon.png";
+    auto [pixels, width, height, channels] = lfs::core::load_image(path);
+    ASSERT_NE(pixels, nullptr) << path;
+    ASSERT_GE(channels, 3);
+    const size_t plane = static_cast<size_t>(width) * static_cast<size_t>(height);
+    std::vector<float> chw(3 * plane);
+    for (size_t i = 0; i < plane; ++i) {
+        for (size_t c = 0; c < 3; ++c) {
+            chw[c * plane + i] = pixels[i * static_cast<size_t>(channels) + c] / 255.0f;
+        }
+    }
+    lfs::core::free_image(pixels);
+    const auto source = lfs::core::Tensor::from_blob(
+                            chw.data(),
+                            lfs::core::TensorShape({size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)}),
+                            lfs::core::Device::CPU, lfs::core::DataType::Float32)
+                            .to(lfs::core::Device::CUDA);
+
+    lfs::io::NvCodecImageLoader::Options options;
+    options.decoder_pool_size = 1;
+    std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+    std::unique_ptr<lfs::io::NvCodecImageLoader> fresh_loader;
+    try {
+        loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+        fresh_loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+
+    const auto high = loader->encode_to_jpeg(source, 95, nullptr);
+    const auto low = loader->encode_to_jpeg(source, 60, nullptr);
+    const auto high_again = loader->encode_to_jpeg(source, 95, nullptr);
+    ASSERT_FALSE(high.empty());
+    ASSERT_FALSE(low.empty());
+    EXPECT_NE(high, low);
+    EXPECT_EQ(high, high_again);
+    EXPECT_EQ(low, fresh_loader->encode_to_jpeg(source, 60, nullptr));
+}
+
 TEST(NvCodecImageLoaderJpeg, BatchedDecodeMatchesReferenceWithinTolerance) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {
