@@ -186,10 +186,11 @@ jobs:
           LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
         # The runner has no NVIDIA driver; the toolkit's stub libcuda lets the extension load without a GPU.
         run: |
+          grep -m1 'model name' /proc/cpuinfo || true
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+            build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
