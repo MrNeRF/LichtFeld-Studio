@@ -571,13 +571,15 @@ namespace lfs::training::sh_value {
                 throw std::runtime_error(
                     "gather_shN_to_canonical: expected q16 or fp32 swizzled shN");
             }
+            splat.shN().sync_to_stream(stream);
             core::shN_swizzled_gather_to_linear_i64(
                 splat.shN().ptr<float>(),
                 indices.ptr<std::int64_t>(),
                 ptr,
                 K,
                 rest,
-                rest);
+                rest,
+                stream);
         };
         write_dest(dest.ptr<float>());
         if (!in_place) {
@@ -612,13 +614,16 @@ namespace lfs::training::sh_value {
                 "scatter_canonical_into_shN: expected q16 or fp32 swizzled shN");
         }
         Tensor dest_i32 = indices.dtype() == DataType::Int32 ? indices : indices.to(DataType::Int32);
+        dest_i32.sync_to_stream(stream);
+        splat.shN().set_stream(stream);
         core::shN_swizzled_scatter_linear(
             splat.shN().ptr<float>(),
             dest_i32.ptr<int>(),
             canonical.ptr<float>(),
             indices.numel(),
             rest,
-            rest);
+            rest,
+            stream);
     }
 
     void append_canonical_to_shN(core::SplatData& splat,
@@ -683,6 +688,7 @@ namespace lfs::training::sh_value {
                 "append_canonical_to_shN: expected q16 or fp32 swizzled shN");
         }
         auto& shN_buf = splat.shN();
+        shN_buf.set_stream(stream);
         const std::size_t needed_floats = core::sh_swizzled_float_count(new_n, rest);
         const std::size_t cap_floats = core::sh_swizzled_float_count(prim_capacity(splat), rest);
         if (shN_buf.capacity() < needed_floats) {
@@ -702,7 +708,7 @@ namespace lfs::training::sh_value {
             shN_buf.append_zeros(needed_floats - shN_buf.numel());
         }
         core::shN_swizzled_gather_from_linear(
-            shN_buf.ptr<float>(), dest_offset, canonical.ptr<float>(), K, rest, rest);
+            shN_buf.ptr<float>(), dest_offset, canonical.ptr<float>(), K, rest, rest, stream);
     }
 
     void zero_shN_at_indices(core::SplatData& splat, const Tensor& dest_indices) {
@@ -957,13 +963,16 @@ namespace lfs::training::sh_value {
         const std::size_t logical_floats = core::sh_swizzled_float_count(n_dst, rest);
         auto fresh = Tensor::zeros_direct(
             TensorShape({logical_floats}), cap_floats, Device::GPU, DataType::Float32);
+        splat.shN().sync_to_stream(stream);
+        idx_i32.sync_to_stream(stream);
         core::shN_swizzled_gather_self(
             splat.shN().ptr<float>(),
             fresh.ptr<float>(),
             idx_i32.ptr<int>(),
             n_dst,
             0,
-            rest);
+            rest,
+            stream);
         fresh.set_name("splat.shN");
         splat.shN() = std::move(fresh);
     }

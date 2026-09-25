@@ -1570,3 +1570,40 @@ TEST_F(ShValueStorageTest, GradientZeroJoinsProducerAndPublishesOnExecutionQueue
     }
     ASSERT_EQ(host, expected);
 }
+
+TEST_F(ShValueStorageTest, CanonicalMutationsFollowExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto splat = make_random_sh3(257);
+    const auto original = splat.shN_canonical().cpu().to_vector();
+    auto indices = Tensor::from_vector(std::vector<int>{256, 0, 128, 17}, {4}, Device::GPU);
+    auto destinations = Tensor::from_vector(std::vector<int>{3, 64, 129, 255}, {4}, Device::GPU);
+    Tensor gathered;
+    TensorWorkQueue::Scope consumer_scope(consumer);
+    sh_value::gather_shN_to_canonical(splat, indices, gathered);
+    std::vector<float> expected;
+    for (const size_t row : {256, 0, 128, 17}) {
+        expected.insert(expected.end(), original.begin() + row * 45, original.begin() + (row + 1) * 45);
+    }
+    EXPECT_EQ(gathered.cpu().to_vector(), expected);
+    sh_value::scatter_canonical_into_shN(splat, destinations, gathered);
+    EXPECT_EQ(splat.shN().stream(), getCurrentCUDAStream());
+    auto scattered = original;
+    size_t source = 0;
+    for (const size_t row : {3, 64, 129, 255}) {
+        std::copy_n(expected.begin() + source++ * 45, 45, scattered.begin() + row * 45);
+    }
+    EXPECT_EQ(splat.shN_canonical().cpu().to_vector(), scattered);
+    sh_value::append_canonical_to_shN(splat, gathered, 257);
+    auto tail = Tensor::from_vector(std::vector<int>{257, 258, 259, 260}, {4}, Device::GPU);
+    Tensor appended;
+    sh_value::gather_shN_to_canonical(splat, tail, appended, 261);
+    EXPECT_EQ(appended.cpu().to_vector(), expected);
+    sh_value::compact_shN_gather(splat, tail, 261, 300);
+    auto first = Tensor::from_vector(std::vector<int>{0, 1, 2, 3}, {4}, Device::GPU);
+    Tensor compacted;
+    sh_value::gather_shN_to_canonical(splat, first, compacted, 4);
+    EXPECT_EQ(compacted.cpu().to_vector(), expected);
+    consumer.wait();
+}
